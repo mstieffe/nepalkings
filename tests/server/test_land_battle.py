@@ -100,6 +100,18 @@ def _make_conquer_config(db_session, user, land):
     return cfg
 
 
+def _mark_first_conquer_done(user):
+    """Opt a test user out of the tutorial-safe AI defence path.
+
+    Fresh users on an unowned tier-1 land are routed to a fixed, counter-free
+    AI template so the tutorial first conquest is winnable. Mechanics tests that
+    assert real counter/prelude template behaviour must opt out by marking the
+    first conquer complete.
+    """
+    from onboarding_service import mark_step
+    mark_step(user, 'finish_first_conquer_battle', commit=True)
+
+
 def _make_defence_config(db_session, user, land):
     """Build a minimal defence config for player-owned land."""
     cfg = LandConfig(user_id=user.id, config_type='defence', land_id=land.id)
@@ -404,6 +416,7 @@ class TestConquerStartBattle:
             user = _make_user(db, username=f'atk_prelude_{spell_name.replace(" ", "_")}')
             land = _make_land(db, tier=1)
             _make_conquer_config(db, user, land)
+            _mark_first_conquer_done(user)
             template = _scripted_ai_template(prelude_spell_name=spell_name)
 
             client = app.test_client()
@@ -449,6 +462,7 @@ class TestConquerStartBattle:
             assert expected_prelude is not None
             db.session.commit()
             _make_conquer_config(db, user, land)
+            _mark_first_conquer_done(user)
 
             client = app.test_client()
             headers = _auth_headers(app, user)
@@ -1227,6 +1241,7 @@ class TestConquerPreludeTargeting:
             atk_cfg.prelude_spell_name = 'Invader Swap'
             atk_cfg.prelude_spell_data = {}
             db.session.commit()
+            _mark_first_conquer_done(attacker)
 
             template = _scripted_ai_template(prelude_spell_name='Poison')
             client = app.test_client()
@@ -1917,6 +1932,7 @@ class TestConquerCounterSpells:
             attacker = _make_user(db, username=f'atk_counter_{spell_name.replace(" ", "_")}')
             land = _make_land(db, tier=1)
             _make_conquer_config(db, attacker, land)
+            _mark_first_conquer_done(attacker)
             template = _scripted_ai_template(counter_spell_name=spell_name)
 
             client = app.test_client()

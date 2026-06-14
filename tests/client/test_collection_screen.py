@@ -400,23 +400,54 @@ class TestCollectionCoach:
         screen._icon_home = SimpleNamespace(rect=pygame.Rect(200, 20, 40, 40))
         return screen
 
-    def test_coach_requires_starter_then_main_then_side(self):
-        screen = self._screen(completed=['finish_first_duel'])
+    def test_coach_routes_to_kingdom_before_conquest_then_reward_then_duel(self):
+        screen = self._screen()
         step = screen._current_collection_coach_step()
         assert step['id'] == 'collection_starter_cards'
         assert step['action'] == 'next'
         assert step['button_label'] == 'Got it'
+        assert 'Cards become useful through recipes' in step['body']
+        assert 'K can make a King' in step['body']
+        assert 'J+7 can make a Farm' in step['body']
 
         screen.state.user_dict['onboarding']['menu_hints_seen'].append('collection_starter_cards')
-        assert screen._current_collection_coach_step()['id'] == 'collection_open_main_booster'
+        step = screen._current_collection_coach_step()
+        assert step['id'] == 'post_boosters_kingdom'
+        assert step['button_label'] == 'Go to Kingdom'
+        assert step['navigate_screen'] == 'kingdom'
+
+        screen.state.user_dict['onboarding']['completed_steps'].append(
+            'finish_first_conquer_battle')
+        step = screen._current_collection_coach_step()
+        assert step['id'] == 'collection_open_main_booster'
 
         screen.state.user_dict['onboarding']['completed_steps'].append('open_first_main_booster')
+        step = screen._current_collection_coach_step()
+        assert step['id'] == 'ready_first_duel'
+        assert step['button_label'] == 'Start Duel'
+        assert step['navigate_screen'] == 'duel_menu'
+
+        screen.state.user_dict['onboarding']['completed_steps'].append('finish_first_duel')
         assert screen._current_collection_coach_step()['id'] == 'collection_open_side_booster'
 
-        # Both boosters opened: the collection coach is finished (the journey
-        # coach routes the player onward to the Kingdom).
         screen.state.user_dict['onboarding']['completed_steps'].append('open_first_side_booster')
         assert screen._current_collection_coach_step() is None
+
+    def test_coach_opens_main_reward_pack_after_conquest_if_intro_seen(self):
+        screen = self._screen(completed=[
+            'finish_first_conquer_battle',
+        ])
+        screen.state.user_dict['onboarding']['next_action'] = {
+            'screen': 'collection',
+            'label': 'Open Reward Pack',
+            'target_id': 'collection_open_main_booster',
+        }
+        screen.state.user_dict['onboarding']['menu_hints_seen'].append(
+            'collection_starter_cards')
+
+        step = screen._current_collection_coach_step()
+
+        assert step['id'] == 'collection_open_main_booster'
 
     def test_open_booster_result_marks_local_onboarding_step(self, monkeypatch):
         from game.screens.collection_screen import CollectionScreen

@@ -29,8 +29,7 @@ class TestRegister:
 
     def test_register_grants_buildable_starter_deck(self, client):
         """New accounts get a curated starter deck that can build a minimal
-        conquer attack (King + Rice Farm + Gorkha Warriors), independent of
-        booster luck."""
+        conquer attack and first prelude, independent of booster luck."""
         import server_settings as settings
         from ai.figure_recipes import find_buildable_figures
         from models import CollectionCard, User
@@ -46,6 +45,8 @@ class TestRegister:
                       'value': c.value, 'card_type': 'main'} for c in cards]
         names = {b['name'] for b in find_buildable_figures(main_hand, [], [])}
         assert {'Djungle King', 'Small Rice Farm', 'Gorkha Warriors'} <= names
+        hearts_8s = [c for c in cards if c.suit == 'Hearts' and c.rank == '8']
+        assert len(hearts_8s) == 2
 
     def test_register_duplicate_username_fails(self, client):
         client.post('/auth/register', data=_register_data('dup', 'pass1234'))

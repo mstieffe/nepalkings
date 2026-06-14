@@ -215,6 +215,7 @@ class HexTile:
         'kingdom_tier_name', 'kingdom_bonuses', 'kingdom_name',
         'kingdom_id', 'kingdom_shield_remaining', 'kingdom_shield_reason',
         'kingdom_is_shielded',
+        'is_recommended_tutorial_land',
         'conquer_cooldown_remaining', 'cx', 'cy',
     )
 
@@ -240,6 +241,8 @@ class HexTile:
         self.kingdom_shield_remaining = land_dict.get('kingdom_shield_remaining', 0) or 0
         self.kingdom_shield_reason = land_dict.get('kingdom_shield_reason')
         self.kingdom_is_shielded = bool(land_dict.get('kingdom_is_shielded', False))
+        self.is_recommended_tutorial_land = bool(
+            land_dict.get('is_recommended_tutorial_land', False))
         self.conquer_cooldown_remaining = land_dict.get(
             'conquer_cooldown_remaining', 0)
         self.cx = cx
@@ -960,6 +963,10 @@ class HexMap:
             bw = self._border_w
             pygame.draw.polygon(self.window, border_clr, corners,
                                 max(1, int(bw * self.zoom / 1.0)))
+            if getattr(tile, 'is_recommended_tutorial_land', False):
+                pulse = 2 + int((pygame.time.get_ticks() // 260) % 2)
+                pygame.draw.polygon(self.window, (255, 226, 96), corners,
+                                    max(pulse, int((bw + 2) * self.zoom)))
             if tile is self.selected_tile:
                 pygame.draw.polygon(self.window, settings.HEX_SELECT_BORDER, corners,
                                     max(1, int((self._border_w + 1) * self.zoom)))

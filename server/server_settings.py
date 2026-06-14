@@ -134,10 +134,12 @@ STARTER_BOOSTER_PACKS_SIDE = 2              # Free side-card packs on registrati
 # field a complete, battle-ready first conquer attack, independent of booster
 # luck. The server pre-assembles these into the first conquer config (see
 # _preassemble_tutorial_conquer_attack in routes/kingdom.py). All Hearts main
-# cards; the deck deterministically covers three figures plus three tactics:
+# cards; the deck deterministically covers three figures, one prelude spell,
+# and three tactics:
 #   Djungle King (K)            -> villager_red x2, warrior_red x1
 #   Small Rice Farm (J + 7)     -> food_red x7      (needs villager_red x1)
 #   Gorkha Warriors (A + 7)     -> attacker         (needs warrior_red x1, food_red x7)
+#   Draw 2 MainCards            -> one number card  (8)
 #   3x Dagger                   -> one number card each (8, 9, 10)
 # Resource math balances (villager_red +1, warrior_red 0, food_red 0).
 # Format: (rank, suit, value).
@@ -147,6 +149,7 @@ STARTER_FIGURE_CARDS = [
     ('J', 'Hearts', 1),
     ('7', 'Hearts', 7),
     ('7', 'Hearts', 7),
+    ('8', 'Hearts', 8),
     ('8', 'Hearts', 8),
     ('9', 'Hearts', 9),
     ('10', 'Hearts', 10),
@@ -774,4 +777,3 @@ from kingdom_progression import (  # noqa: F401  (public re-export)
 )
 
 # AI defence generation rules and safe fallbacks live in ai/defence/config.py.
-

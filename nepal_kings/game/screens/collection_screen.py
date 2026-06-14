@@ -1421,27 +1421,58 @@ class CollectionScreen(MenuScreenMixin, Screen):
                 or self._trade_dialogue or self._profile_dialogue):
             return None
         completed = self._onboarding_completed_steps()
+        next_action = self._first_session_next_action()
         if 'collection_starter_cards' not in self._menu_coach_seen():
             return {
                 'id': 'collection_starter_cards',
                 'rect': self._panel_rect,
-                'title': 'Your Starting Cards',
-                'body': 'Your starter cards already form an army: a King makes villagers and warriors, farms turn villagers into food, and warriors spend food to fight. That chain is your economy.',
+                'title': 'Cards Are Ingredients',
+                'body': 'Cards become useful through recipes. Some recipes create figures that stay on the field; others create spells or battle tactics. For example, K can make a King, and J+7 can make a Farm.',
                 'action': 'next',
                 'button_label': 'Got it',
-                'max_lines': 5,
+                'max_lines': 6,
             }
-        if 'open_first_main_booster' not in completed:
+        if ((next_action or {}).get('screen') == 'kingdom'
+                and 'finish_first_conquer_battle' not in completed):
+            home_icon = getattr(self, '_icon_home', None)
+            target_rect = getattr(home_icon, 'rect', None) or self._panel_rect
+            return {
+                'id': 'post_boosters_kingdom',
+                'rect': target_rect,
+                'title': 'Go To Kingdom',
+                'body': 'Your starter attack is ready. Go to Kingdom and pick the recommended land for your first conquest.',
+                'action': 'next',
+                'button_label': 'Go to Kingdom',
+                'navigate_screen': 'kingdom',
+                'max_lines': 4,
+            }
+        if ((next_action or {}).get('target_id') == 'collection_open_main_booster'
+                and 'open_first_main_booster' not in completed):
             return {
                 'id': 'collection_open_main_booster',
                 'rect': self._btn_open_main_rect,
                 'title': 'Open A Main Booster',
-                'body': 'Open a main booster. Main cards build figures, spells, and tactics.',
+                'body': 'Open a main booster. Main cards are ingredients for figure, spell, and tactic recipes.',
                 'action': 'click',
                 'mark_on_click': True,
                 'max_lines': 4,
             }
-        if 'open_first_side_booster' not in completed:
+        if ((next_action or {}).get('screen') == 'duel'
+                and 'finish_first_duel' not in completed):
+            home_icon = getattr(self, '_icon_home', None)
+            target_rect = getattr(home_icon, 'rect', None) or self._panel_rect
+            return {
+                'id': 'ready_first_duel',
+                'rect': target_rect,
+                'title': 'Try A Quick Duel',
+                'body': 'Your reward pack is open. Start a quick duel against AI Strategos to learn the full card game.',
+                'action': 'next',
+                'button_label': 'Start Duel',
+                'navigate_screen': 'duel_menu',
+                'max_lines': 4,
+            }
+        if ('finish_first_duel' in completed
+                and 'open_first_side_booster' not in completed):
             return {
                 'id': 'collection_open_side_booster',
                 'rect': self._btn_open_side_rect,

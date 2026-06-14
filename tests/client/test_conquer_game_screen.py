@@ -299,7 +299,7 @@ def test_conquer_battle_coach_click_step_marks_seen_and_passes_click_through():
     ConquerGameScreen, screen = _battle_coach_screen()
     seen = []
     screen._conquer_battle_coach_step = {
-        'id': 'conquer_battle_field_actions',
+        'id': 'conquer_battle_tactics',
         'rect': pygame.Rect(320, 150, 260, 180),
         'action': 'click',
     }
@@ -312,7 +312,7 @@ def test_conquer_battle_coach_click_step_marks_seen_and_passes_click_through():
     handled = ConquerGameScreen._handle_conquer_battle_coach_events(screen, [down, up])
 
     assert handled is False
-    assert seen == ['conquer_battle_field_actions']
+    assert seen == ['conquer_battle_tactics']
 
 
 def test_conquer_battle_tactics_step_follows_timeline():
@@ -323,6 +323,19 @@ def test_conquer_battle_tactics_step_follows_timeline():
 
     assert step['id'] == 'conquer_battle_tactics'
     assert step['action'] == 'next'
+
+
+def test_conquer_battle_tactic_recap_follows_tactics_step():
+    ConquerGameScreen, screen = _battle_coach_screen(menu_seen=[
+        'conquer_battle_timeline_intro',
+        'conquer_battle_tactics',
+    ])
+
+    step = ConquerGameScreen._current_conquer_battle_coach_step(screen)
+
+    assert step['id'] == 'conquer_battle_tactic_recap'
+    assert 'Gamble a weak tactic' in step['body']
+    assert 'Combine two red/red or black/black Daggers' in step['body']
 
 
 def test_conquer_battle_tactics_step_independent_of_timeline_kind():

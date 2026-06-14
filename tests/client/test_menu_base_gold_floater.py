@@ -437,11 +437,11 @@ def test_main_menu_area_coach_leads_with_journey():
     screen._icon_home = SimpleNamespace(rect=pygame.Rect(760, 20, 42, 42))
     screen._icon_guide = SimpleNamespace(rect=pygame.Rect(760, 70, 42, 42))
 
-    # Action-first: the coach leads straight into the journey (open your
-    # booster packs) — no generic area tour up front.
+    # Action-first: the coach leads straight into the journey (first
+    # conquest) — no generic area tour up front.
     step = screen._current_area_coach_step()
-    assert step['id'] == 'open_boosters_first'
-    assert step['rect'] == screen.button_collection.rect
+    assert step['id'] == 'post_boosters_kingdom'
+    assert step['rect'] == screen.button_kingdom.rect
 
 
 def _journey_ready_menu_screen(completed_steps):
@@ -473,24 +473,24 @@ def _journey_ready_menu_screen(completed_steps):
     return screen
 
 
-def test_main_menu_journey_coach_routes_boosters_then_conquer_then_duel():
-    # Fresh account: open boosters first.
+def test_main_menu_journey_coach_routes_conquer_then_reward_pack_then_duel():
+    # Fresh account: first conquest comes before Collection.
     screen = _journey_ready_menu_screen(completed_steps=[])
-    step = screen._current_area_coach_step()
-    assert step['id'] == 'open_boosters_first'
-    assert step['rect'] == screen.button_collection.rect
-
-    # Boosters opened: route to the first conquest, not a duel.
-    screen.state.user_dict['onboarding']['completed_steps'] = [
-        'open_first_main_booster', 'open_first_side_booster',
-    ]
     step = screen._current_area_coach_step()
     assert step['id'] == 'post_boosters_kingdom'
     assert step['rect'] == screen.button_kingdom.rect
 
-    # First land conquered: now invite the player to their first duel.
+    # First land conquered: open a single main booster as the reward beat.
+    screen.state.user_dict['onboarding']['completed_steps'] = [
+        'finish_first_conquer_battle',
+    ]
+    step = screen._current_area_coach_step()
+    assert step['id'] == 'open_main_booster_reward'
+    assert step['rect'] == screen.button_collection.rect
+
+    # Reward pack opened: now invite the player to their first duel.
     screen.state.user_dict['onboarding']['completed_steps'].append(
-        'finish_first_conquer_battle')
+        'open_first_main_booster')
     step = screen._current_area_coach_step()
     assert step['id'] == 'ready_first_duel'
     assert step['rect'] == screen.button_duel.rect
@@ -504,12 +504,11 @@ def test_main_menu_journey_coach_routes_boosters_then_conquer_then_duel():
 def test_guide_prompt_does_not_loop_after_first_duel():
     screen = _journey_ready_menu_screen(completed_steps=[
         'open_first_main_booster',
-        'open_first_side_booster',
         'finish_first_conquer_battle',
         'finish_first_duel',
     ])
     screen.state.user_dict['onboarding']['menu_hints_seen'] = [
-        'user_items', 'rankings', 'home',
+        'duel', 'kingdom', 'collection', 'rankings',
     ]
 
     step = screen._current_area_coach_step()
@@ -522,11 +521,11 @@ def test_guide_prompt_does_not_loop_after_first_duel():
 def test_guide_prompt_can_return_to_unfinished_reward_walkthrough_before_duel():
     screen = _journey_ready_menu_screen(completed_steps=[
         'open_first_main_booster',
-        'open_first_side_booster',
         'finish_first_conquer_battle',
     ])
     screen.state.user_dict['onboarding']['menu_hints_seen'] = [
-        'user_items', 'rankings', 'home', 'guide', 'ready_first_duel',
+        'duel', 'kingdom', 'collection', 'rankings',
+        'guide', 'ready_first_duel',
     ]
 
     step = screen._current_area_coach_step()
@@ -540,9 +539,7 @@ def test_kingdom_coach_progresses_from_map_to_conquer_button():
     screen = object.__new__(KingdomScreen)
     screen.state = SimpleNamespace(user_dict={'onboarding': {
         'menu_hints_seen': [],
-        'completed_steps': [
-            'finish_first_duel', 'open_first_main_booster', 'open_first_side_booster'
-        ],
+        'completed_steps': [],
     }})
     screen._onboarding_guide_open = False
     screen._welcome_present_dialogue = None
@@ -566,6 +563,40 @@ def test_kingdom_coach_progresses_from_map_to_conquer_button():
     assert step['rect'] == conquer_rect
 
 
+def test_kingdom_coach_routes_from_first_land_to_reward_pack_then_duel():
+    import pygame
+    from game.screens.kingdom_screen import KingdomScreen
+
+    screen = object.__new__(KingdomScreen)
+    screen.state = SimpleNamespace(user_dict={'onboarding': {
+        'menu_hints_seen': ['kingdom_after_conquer_map'],
+        'completed_steps': ['finish_first_conquer_battle'],
+    }})
+    screen._onboarding_guide_open = False
+    screen._welcome_present_dialogue = None
+    screen.dialogue_box = None
+    screen._thread = None
+    screen._new_msg_picker = None
+    screen._detail_box = None
+    screen._hex_map = object()
+    screen._loading = False
+    screen._error = None
+    screen._map_viewport_rect = pygame.Rect(50, 60, 300, 220)
+    screen._header_rect = pygame.Rect(40, 20, 420, 80)
+
+    step = screen._current_kingdom_coach_step()
+    assert step['id'] == 'open_main_booster_reward'
+    assert step['button_label'] == 'Open Pack'
+    assert step['navigate_screen'] == 'collection'
+
+    screen.state.user_dict['onboarding']['completed_steps'].append(
+        'open_first_main_booster')
+    step = screen._current_kingdom_coach_step()
+    assert step['id'] == 'ready_first_duel'
+    assert step['button_label'] == 'Start Duel'
+    assert step['navigate_screen'] == 'duel_menu'
+
+
 def test_kingdom_coach_shifts_to_post_battle_map_and_config_steps():
     import pygame
     from game.screens.kingdom_screen import KingdomScreen
@@ -576,7 +607,6 @@ def test_kingdom_coach_shifts_to_post_battle_map_and_config_steps():
         'completed_steps': [
             'finish_first_duel',
             'open_first_main_booster',
-            'open_first_side_booster',
             'finish_first_conquer_battle',
         ],
     }})
@@ -631,13 +661,11 @@ def test_conquer_coach_highlights_edit_controls_in_order():
     from game.screens.conquer_screen import ConquerScreen
 
     screen = object.__new__(ConquerScreen)
-    # Conquer comes BEFORE the first duel in onboarding, so the config coach
-    # must be ready with only the boosters opened (no finish_first_duel).
+    # Conquer comes before boosters in onboarding, so the config coach must be
+    # ready for a fresh account.
     screen.state = SimpleNamespace(user_dict={'onboarding': {
         'menu_hints_seen': [],
-        'completed_steps': [
-            'open_first_main_booster', 'open_first_side_booster'
-        ],
+        'completed_steps': [],
     }})
     screen._onboarding_guide_open = False
     screen._welcome_present_dialogue = None
@@ -664,6 +692,7 @@ def test_conquer_coach_highlights_edit_controls_in_order():
         'conquer_config_field',
         'conquer_config_build_edit',
         'conquer_config_battle_plan',
+        'conquer_config_prelude_spell',
         'conquer_config_to_battle',
     ]
     seen = []
@@ -671,7 +700,11 @@ def test_conquer_coach_highlights_edit_controls_in_order():
         screen.state.user_dict['onboarding']['menu_hints_seen'] = list(seen)
         step = screen._current_conquer_coach_step()
         assert step['id'] == step_id
-        if step_id in {'conquer_config_build_edit', 'conquer_config_battle_plan'}:
+        if step_id in {
+            'conquer_config_build_edit',
+            'conquer_config_battle_plan',
+            'conquer_config_prelude_spell',
+        }:
             assert step['action'] == 'next'
             assert step['button_label'] == 'Got it'
         if step_id == 'conquer_config_to_battle':

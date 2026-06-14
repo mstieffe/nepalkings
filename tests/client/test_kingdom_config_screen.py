@@ -327,9 +327,9 @@ class TestKingdomConfigInteractions:
         screen._kingdom = _kingdom_payload()
         screen._buttons = [('upgrade_skill', 'gold_production', pygame.Rect(90, 90, 120, 30))]
         screen._current_kingdom_config_coach_step = lambda: {
-            'id': 'kingdom_config_header',
+            'id': 'kingdom_config_essentials',
             'rect': pygame.Rect(10, 10, 200, 60),
-            'title': 'Header',
+            'title': 'Essentials',
             'body': 'Body',
         }
         screen._handle_menu_coach_events = MagicMock(return_value=True)

@@ -1306,14 +1306,9 @@ class ConquerScreen(MenuScreenMixin, Screen):
         self._draw_menu_coach(self._current_conquer_coach_step())
 
     def _conquer_coach_ready(self):
-        # Conquer comes BEFORE the first duel in the onboarding journey, so
-        # this must not require finish_first_duel — only that the player has
-        # opened their starter boosters (which the conquer config relies on).
-        completed = self._onboarding_completed_steps()
-        return (
-            'open_first_main_booster' in completed
-            and 'open_first_side_booster' in completed
-        )
+        # The starter conquer config is preassembled server-side, so the first
+        # battle can happen before the player opens any boosters.
+        return 'finish_first_conquer_battle' not in self._onboarding_completed_steps()
 
     def _conquer_field_coach_rect(self):
         rects = [rect for rect in getattr(self, '_field_rects', {}).values() if rect]
@@ -1350,7 +1345,7 @@ class ConquerScreen(MenuScreenMixin, Screen):
                 'id': 'conquer_config_field',
                 'rect': field_rect,
                 'title': 'Your Attack Is Ready',
-                'body': 'Your army is built: a King, a Rice Farm, and Gorkha Warriors. Suits cycle — Hearts beat Clubs, Clubs beat Diamonds, Diamonds beat Spades, Spades beat Hearts.',
+                'body': 'These are figures: card recipes placed onto fields. The King produces people; the Farm turns one villager into food. Together they power your Warriors.',
                 'action': 'next',
                 'max_lines': 6,
             }
@@ -1359,7 +1354,7 @@ class ConquerScreen(MenuScreenMixin, Screen):
                 'id': 'conquer_config_build_edit',
                 'rect': self._btn_build,
                 'title': 'Build Your Own (Later)',
-                'body': 'Built for you this time. Later, tap Build to assemble figures from your own cards.',
+                'body': 'Built for you this time. Later, Build lets you choose recipes yourself and place figures into castle, village, and military fields.',
                 'action': 'next',
                 'button_label': 'Got it',
                 'max_lines': 4,
@@ -1370,20 +1365,32 @@ class ConquerScreen(MenuScreenMixin, Screen):
                 'id': 'conquer_config_battle_plan',
                 'rect': battle_plan_rect,
                 'title': 'Battle Plan Set',
-                'body': 'Your three tactics (Daggers) are set. Later, tap here to choose your own battle plan.',
+                'body': 'Tactics are battle recipes. Daggers add their value to a round, and same-colour Daggers can combine into one stronger Double Dagger.',
                 'action': 'next',
                 'button_label': 'Got it',
                 'max_lines': 4,
+            }
+        prelude_rect = self._conquer_combined_rect(
+            self._prelude_panel_rect, self._prelude_spell_rect, self._btn_prelude_edit)
+        if prelude_rect and 'conquer_config_prelude_spell' not in seen:
+            return {
+                'id': 'conquer_config_prelude_spell',
+                'rect': prelude_rect,
+                'title': 'Prelude Spell Ready',
+                'body': 'Spells are recipes too, but they create effects instead of figures. A prelude spell fires before round one; this one draws two extra main cards.',
+                'action': 'next',
+                'button_label': 'Got it',
+                'max_lines': 5,
             }
         if self._btn_battle and 'conquer_config_to_battle' not in seen:
             return {
                 'id': 'conquer_config_to_battle',
                 'rect': self._btn_battle,
                 'title': 'Start Conquer Battle',
-                'body': 'Start Battle now. Cards can be looted if you lose; the rest return. The next screen explains the timeline, tactics, ledger, and result.',
+                'body': 'Start Battle now. First the prelude draws cards, then each round asks you to Play, Gamble, or Combine tactics. Cards can be looted if you lose; the rest return.',
                 'action': 'next',
                 'button_label': 'Got it',
-                'max_lines': 5,
+                'max_lines': 6,
             }
         return None
 

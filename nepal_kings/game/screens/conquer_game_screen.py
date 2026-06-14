@@ -2011,6 +2011,7 @@ class ConquerGameScreen(GameScreen):
         return (
             'conquer_battle_timeline_intro',
             'conquer_battle_tactics',
+            'conquer_battle_tactic_recap',
             'conquer_battle_finish',
         )
 
@@ -2037,10 +2038,10 @@ class ConquerGameScreen(GameScreen):
                     'rect': (rects or self._conquer_battle_intro_fallback_rects())[0],
                     'rects': rects or self._conquer_battle_intro_fallback_rects(),
                     'title': 'Battle Timeline',
-                    'body': 'This row is the battle order: setup, spells, tactics, then result. Figure and spell choices happen on the field below.',
+                    'body': 'This row shows setup, prelude, three tactic rounds, and result. The prelude draws cards automatically; then you decide how to use tactics.',
                     'action': 'next',
                     'button_label': 'Got it',
-                    'max_lines': 4,
+                    'max_lines': 5,
                 }
             if step_id == 'conquer_battle_tactics':
                 rects = (self._conquer_battle_tactic_action_rects()
@@ -2051,10 +2052,23 @@ class ConquerGameScreen(GameScreen):
                     'rect': rects[0],
                     'rects': rects,
                     'title': 'Play A Tactic',
-                    'body': 'Play one tactic each round. Your Daggers are on the left — select one and press Play.',
+                    'body': 'Your goal is to win the round totals. Play commits a tactic value. Gamble trades one tactic for two new ones. Combine joins same-colour Daggers into one bigger tactic.',
                     'action': 'next',
                     'button_label': 'Got it',
-                    'max_lines': 4,
+                    'max_lines': 6,
+                }
+            if step_id == 'conquer_battle_tactic_recap':
+                rects = self._conquer_battle_tactics_target_rects()
+                rects = rects or self._conquer_battle_intro_fallback_rects()
+                return {
+                    'id': step_id,
+                    'rect': rects[0],
+                    'rects': rects,
+                    'title': 'Play, Gamble, Combine',
+                    'body': 'Use all three tools: Play a strong value, Gamble a weak tactic once per round, and Combine two red/red or black/black Daggers when one big hit can win.',
+                    'action': 'next',
+                    'button_label': 'Got it',
+                    'max_lines': 5,
                 }
             if step_id == 'conquer_battle_finish':
                 rects = self._conquer_battle_finish_rects() or self._conquer_battle_timeline_target_rects()

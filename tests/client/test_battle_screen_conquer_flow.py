@@ -479,7 +479,8 @@ class TestBattleScreenConquerFlow:
         })
 
         assert captured['kwargs']['title'] == 'Land Conquered!'
-        assert 'You have conquered' in captured['message']
+        # Matches both the first-conquest celebration and the repeat-win copy.
+        assert 'conquered' in captured['message'].lower()
 
     def test_try_resolve_server_finished_battle_handles_finished_conquer_draw(self):
         BattleScreen = _battle_screen_class()

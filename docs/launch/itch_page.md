@@ -36,11 +36,11 @@ by battle, and duel other rulers for the crown.
 **Nepal Kings** is a tactical card game you can play solo or against other
 rulers — right in your browser, free.
 
-Open booster packs, build an army of figures from the cards you collect, and
-march on the map: each land is defended by the AI, and taking it is a short,
-sharp battle of figures, bonuses, and tactics. Win, and the land — and its
-production — is yours. Lose, and you regroup and try again. Your kingdom grows
-one conquest at a time.
+Your starter army is ready for a first conquest, and booster packs grow the
+collection you will customize later. March on the map: each land is defended
+by the AI, and taking it is a short, sharp battle of figures, bonuses, and
+tactics. Win, and the land — and its production — is yours. Lose, and you
+regroup and try again. Your kingdom grows one conquest at a time.
 
 When you want a sterner test, step into a **duel**: a head-to-head clash some
 players call *the chess of cards*. Roles split into attacker and defender, you
@@ -61,8 +61,8 @@ another player.
 
 **Tips for new rulers**
 
-1. Open your welcome booster packs first — they become your figures.
-2. Conquer a nearby land to learn battles in a few minutes.
+1. Follow the Kingdom prompt and conquer the marked tier-1 land first.
+2. Open a main booster after the win to grow your collection.
 3. Then try a Quick duel to learn the full tactical card game.
 
 Made by a solo developer. Feedback very welcome — leave a comment!

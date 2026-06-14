@@ -107,6 +107,7 @@ class KingdomScreen(MenuScreenMixin, Screen):
         self._detail_box = None       # LandDetailBox (modal)
         self._map_data = None         # raw server response
         self._cooldown = 0            # conquer cooldown seconds
+        self._recommended_tutorial_land_id = None
         self._loading = False
         self._loading_started_at_ms = 0
         self._loading_message = 'Loading kingdom map...'
@@ -326,6 +327,7 @@ class KingdomScreen(MenuScreenMixin, Screen):
         data = result['data']
         self._map_data = data
         self._cooldown = data.get('conquer_cooldown_remaining', 0)
+        self._recommended_tutorial_land_id = data.get('recommended_tutorial_land_id')
         lands = data.get('lands', [])
         if self._hex_map is None:
             self._hex_map = HexMap(lands, self.window, viewport_rect=self._map_viewport_rect)
@@ -371,9 +373,11 @@ class KingdomScreen(MenuScreenMixin, Screen):
         # the screen is open never points past the new list.
         self._clamp_kingdom_chip_index()
 
-        # On enter/reload, focus on the center of the player's largest
-        # connected kingdom so the map opens where most owned lands are.
-        self._focus_largest_kingdom_component()
+        # During first-session conquest, focus the forgiving recommended
+        # target. Otherwise open where the player's kingdom is strongest.
+        if not (self._recommended_tutorial_land_id
+                and self._hex_map.focus_land(self._recommended_tutorial_land_id)):
+            self._focus_largest_kingdom_component()
 
         self._loading = False
         logger.debug(f'Kingdom map loaded: {len(lands)} lands')
@@ -720,11 +724,7 @@ class KingdomScreen(MenuScreenMixin, Screen):
         self._draw_menu_coach(self._current_kingdom_coach_step())
 
     def _kingdom_coach_ready(self):
-        completed = self._onboarding_completed_steps()
-        return (
-            'open_first_main_booster' in completed
-            and 'open_first_side_booster' in completed
-        )
+        return True
 
     def _detail_conquer_button_rect(self):
         detail_box = getattr(self, '_detail_box', None)
@@ -749,7 +749,7 @@ class KingdomScreen(MenuScreenMixin, Screen):
                 'id': 'kingdom_conquer_button',
                 'rect': conquer_button_rect,
                 'title': 'Open Conquer Setup',
-                'body': "Tap Conquer to review your attack — we've already assembled a starter army for you.",
+                'body': "Tap Conquer to review your first setup. We've assembled example recipes so you can see how an attack is built.",
                 'action': 'click',
                 'mark_on_click': True,
                 'max_lines': 4,
@@ -759,11 +759,16 @@ class KingdomScreen(MenuScreenMixin, Screen):
         if not self._hex_map or self._loading or self._error:
             return None
         if not first_conquer_complete and 'kingdom_pick_land' not in seen:
+            has_recommended = bool(getattr(self, '_recommended_tutorial_land_id', None))
             return {
                 'id': 'kingdom_pick_land',
                 'rect': self._map_viewport_rect,
-                'title': 'Pick A Land',
-                'body': 'Each hex is a land. Tap one you do not own to inspect it, then choose Conquer.',
+                'title': 'Pick The Marked Land' if has_recommended else 'Pick A Land',
+                'body': (
+                    'Tap the gold-marked tier-1 land. It is tuned for your starter attack and the tactic tools you are about to learn.'
+                    if has_recommended else
+                    'Each hex is a land. Tap one you do not own to inspect it, then choose Conquer.'
+                ),
                 'action': 'click',
                 'mark_on_click': False,
                 'max_lines': 4,
@@ -780,6 +785,33 @@ class KingdomScreen(MenuScreenMixin, Screen):
                 'action': 'next',
                 'max_lines': 5,
             }
+        next_action = self._first_session_next_action()
+        if ((next_action or {}).get('screen') == 'collection'
+                and 'open_first_main_booster' not in completed):
+            return {
+                'id': 'open_main_booster_reward',
+                'rect': getattr(self, '_header_rect', None) or self._map_viewport_rect,
+                'title': 'Open Your Reward Pack',
+                'body': 'You have your first land. Open one main booster now to see new recipe ingredients.',
+                'action': 'next',
+                'button_label': 'Open Pack',
+                'navigate_screen': 'collection',
+                'max_lines': 4,
+            }
+        if ((next_action or {}).get('screen') == 'duel'
+                and 'finish_first_duel' not in completed):
+            return {
+                'id': 'ready_first_duel',
+                'rect': getattr(self, '_header_rect', None) or self._map_viewport_rect,
+                'title': 'Try A Quick Duel',
+                'body': 'Your first conquest is complete. Start a quick duel against AI Strategos when you are ready.',
+                'action': 'next',
+                'button_label': 'Start Duel',
+                'navigate_screen': 'duel_menu',
+                'max_lines': 4,
+            }
+        if 'finish_first_duel' not in completed:
+            return None
         production_rect = self._collect_all_rect or self._header_rect
         if production_rect and 'kingdom_production_intro' not in seen:
             return {

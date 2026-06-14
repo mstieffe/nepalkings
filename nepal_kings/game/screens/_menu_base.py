@@ -1197,6 +1197,38 @@ class MenuScreenMixin:
     def _onboarding_completed_steps(self):
         return set((self._onboarding() or {}).get('completed_steps') or [])
 
+    def _first_session_journey_phase(self):
+        completed = self._onboarding_completed_steps()
+        if 'finish_first_duel' in completed:
+            return 'complete'
+        if 'finish_first_conquer_battle' not in completed:
+            return 'first_conquest'
+        if 'open_first_main_booster' not in completed:
+            return 'open_main_booster_reward'
+        return 'first_duel'
+
+    def _first_session_next_action(self):
+        phase = self._first_session_journey_phase()
+        if phase == 'first_conquest':
+            return {
+                'screen': 'kingdom',
+                'label': 'Conquer First Land',
+                'target_id': 'recommended_tutorial_land',
+            }
+        if phase == 'open_main_booster_reward':
+            return {
+                'screen': 'collection',
+                'label': 'Open Reward Pack',
+                'target_id': 'collection_open_main_booster',
+            }
+        if phase == 'first_duel':
+            return {
+                'screen': 'duel',
+                'label': 'Start Quick Duel',
+                'target_id': 'beginner_duel',
+            }
+        return None
+
     def _mark_onboarding_step_completed_local(self, step_id):
         if not step_id:
             return
@@ -1400,7 +1432,12 @@ class MenuScreenMixin:
         return False
 
     def _after_menu_coach_next(self, step_id):
-        pass
+        step = getattr(self, '_menu_coach_step', None) or {}
+        if step.get('id') != step_id:
+            return
+        navigate_screen = step.get('navigate_screen')
+        if navigate_screen and getattr(self, 'state', None) is not None:
+            self.state.screen = navigate_screen
 
     def _current_onboarding_guide_coach_step(self):
         if not getattr(self, '_onboarding_guide_open', False):

@@ -3511,7 +3511,8 @@ class GameScreen(Screen):
                                not in set(_onboarding.get('completed_steps') or []))
             if _first_conquest:
                 message = (f'Your first land is yours! You conquered {land_label}, '
-                           'and this kingdom now produces resources over time.')
+                           'and this kingdom now produces resources over time. '
+                           'Next, return to your kingdom, then try a Quick duel.')
             else:
                 message = f'You have conquered {land_label}!'
             if gold_rate:
@@ -5159,11 +5160,11 @@ class GameScreen(Screen):
         seen = set((self._duel_onboarding() or {}).get('duel_hints_seen') or [])
         steps = [
             {'id': 'field', 'button': self.field_button, 'subscreen': 'field', 'title': 'Playing Board',
-             'body': 'The field shows the figures you and your opponent have built. Each round consists of 6 turns to build, cast spells or change cards before battle.'},
+             'body': 'The field shows figures built from card recipes. Each round gives 6 setup turns to build figures, cast spells, or change cards before battle.'},
             {'id': 'build', 'button': self.build_button, 'subscreen': 'build_figure', 'title': 'Build Figures',
-             'body': 'Build turns cards into figures on the board. Figures produce resources, have skills, attack, and defend.'},
+             'body': 'Build spends recipe cards to create figures. For example, a King is a castle figure and a Farm is a village figure. Figures produce, consume, attack, and defend.'},
             {'id': 'cast_spell', 'button': self.cast_spell_button, 'subscreen': 'cast_spell', 'title': 'Cast Spells',
-             'body': 'Spells are powerful turn options to influence the game. Use them to alter cards and figures of yours or your opponent.'},
+             'body': 'Spells are recipes too, but they create one-time effects instead of figures. Use them to draw, protect, damage, or alter cards and figures.'},
             {'id': 'change_cards', 'rects': self._duel_change_cards_rects(), 'subscreen': 'field', 'title': 'Change Cards',
              'separate_highlights': True,
              'body': 'Use the round-arrow buttons beside your hands to swap selected cards when your hand needs better options.'},
@@ -5189,7 +5190,7 @@ class GameScreen(Screen):
             {'id': 'battle_move_panel', 'rects': self._duel_battle_move_panel_rects(), 'subscreen': 'battle', 'title': 'Play Battle Moves',
              'body': 'In battle, click one of your move icons to open its actions. Each player plays one move per round for 3 rounds.'},
             {'id': 'battle_move_actions', 'rects': self._duel_battle_move_action_rects(), 'subscreen': 'battle', 'title': 'Move Actions',
-             'body': 'Use plays the move. Gamble sacrifices it for 2 random moves. Daggers can combine with same-colour daggers, and Double Daggers can dismantle.',
+             'body': 'Use plays the move. Gamble trades it for 2 random moves. Combine same-colour Daggers into a Double Dagger; Dismantle splits one back.',
              'requires_seen': 'battle_move_panel'},
             {'id': 'battle_figure_diff', 'rects': self._duel_battle_figure_diff_rects(), 'subscreen': 'battle', 'title': 'Figure Difference',
              'body': 'This middle value compares the battling figures before battle moves are added. Positive is good for you; negative favours the opponent.'},

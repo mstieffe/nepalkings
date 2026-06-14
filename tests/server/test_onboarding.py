@@ -49,9 +49,44 @@ def test_register_sets_welcome_present_pending(client):
     data = resp.get_json()
     assert resp.status_code == 200
     onboarding = data['user']['onboarding']
+    assert onboarding['coach_version'] == 'first_session_v3'
+    assert onboarding['journey_phase'] == 'first_conquest'
+    assert onboarding['next_action'] == {
+        'screen': 'kingdom',
+        'label': 'Conquer First Land',
+        'target_id': 'recommended_tutorial_land',
+    }
     assert onboarding['welcome_pending'] is True
     assert onboarding['welcome_seen'] is False
     assert onboarding['starter_present']['booster_packs'] >= 0
+
+
+def test_journey_metadata_progresses_with_first_session_steps(db, two_users):
+    from onboarding_service import mark_step, serialize_onboarding_state
+    u1, _ = two_users
+
+    onboarding = serialize_onboarding_state(u1)
+    assert onboarding['journey_phase'] == 'first_conquest'
+    assert onboarding['next_action']['screen'] == 'kingdom'
+
+    mark_step(u1, 'finish_first_conquer_battle')
+    onboarding = serialize_onboarding_state(u1)
+    assert onboarding['journey_phase'] == 'open_main_booster_reward'
+    assert onboarding['next_action'] == {
+        'screen': 'collection',
+        'label': 'Open Reward Pack',
+        'target_id': 'collection_open_main_booster',
+    }
+
+    mark_step(u1, 'open_first_main_booster')
+    onboarding = serialize_onboarding_state(u1)
+    assert onboarding['journey_phase'] == 'first_duel'
+    assert onboarding['next_action']['screen'] == 'duel'
+
+    mark_step(u1, 'finish_first_duel')
+    onboarding = serialize_onboarding_state(u1)
+    assert onboarding['journey_phase'] == 'complete'
+    assert onboarding['next_action'] is None
 
 
 def test_existing_user_has_no_pending_welcome(client, two_users):
@@ -291,10 +326,10 @@ def test_menu_hint_marks_are_persisted(client, auth_headers_user1):
     assert data['onboarding']['menu_hints_seen'] == [
         'duel',
         'guide_first_duel_reward',
-        'collection_starter_cards',
-        'collection_open_main_booster',
         'conquer_battle_timeline_intro',
         'kingdom_after_conquer_map',
+        'collection_starter_cards',
+        'collection_open_main_booster',
         'kingdom_config_shields_style',
     ]
 

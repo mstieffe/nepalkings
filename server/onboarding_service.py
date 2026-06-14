@@ -18,22 +18,22 @@ def _utcnow():
 
 CORE_STEPS = [
     {
-        'id': 'open_first_main_booster',
-        'title': 'Open a main booster',
-        'description': 'Grow the main-card collection used for figures and spells.',
-        'reward': {'booster_packs_side': 1},
-    },
-    {
-        'id': 'open_first_side_booster',
-        'title': 'Open a side booster',
-        'description': 'Side cards enable advanced figures and spells.',
-        'reward': {'gold': 50},
-    },
-    {
         'id': 'finish_first_conquer_battle',
         'title': 'Finish a conquer battle',
         'description': 'Resolve one land battle in kingdom mode.',
         'reward': {'maps': 1},
+    },
+    {
+        'id': 'open_first_main_booster',
+        'title': 'Open a main booster',
+        'description': 'Open a reward pack after your first conquest.',
+        'reward': {'booster_packs_side': 1},
+    },
+    {
+        'id': 'finish_first_duel',
+        'title': 'Finish your first duel',
+        'description': 'Play a short duel from start to finish.',
+        'reward': {'booster_packs': 1},
     },
     {
         'id': 'collect_first_kingdom_production',
@@ -42,10 +42,10 @@ CORE_STEPS = [
         'reward': {'gold': 50},
     },
     {
-        'id': 'finish_first_duel',
-        'title': 'Finish your first duel',
-        'description': 'Play a short duel from start to finish.',
-        'reward': {'booster_packs': 1},
+        'id': 'open_first_side_booster',
+        'title': 'Open a side booster',
+        'description': 'Side cards enable advanced figures and spells.',
+        'reward': {'gold': 50},
     },
     {
         'id': 'sell_first_card',
@@ -199,16 +199,18 @@ DUEL_HINT_IDS = (
 MENU_HINT_IDS = (
     'duel', 'kingdom', 'collection', 'rankings', 'guide',
     'guide_first_duel_reward',
-    'open_boosters_first', 'ready_first_duel',
-    'new_game', 'beginner_duel', 'send_first_duel_challenge',
-    'collection_starter_cards', 'collection_open_main_booster',
-    'collection_open_side_booster',
     'post_boosters_kingdom', 'kingdom_pick_land',
     'kingdom_conquer_button', 'conquer_config_field',
     'conquer_config_build_edit', 'conquer_config_battle_plan',
-    'conquer_config_to_battle',
+    'conquer_config_prelude_spell', 'conquer_config_to_battle',
     'conquer_battle_timeline_intro', 'conquer_battle_tactics',
-    'conquer_battle_finish', 'kingdom_after_conquer_map',
+    'conquer_battle_tactic_recap', 'conquer_battle_finish',
+    'kingdom_after_conquer_map', 'open_main_booster_reward',
+    'open_boosters_first',
+    'collection_starter_cards', 'collection_open_main_booster',
+    'ready_first_duel',
+    'new_game', 'beginner_duel', 'send_first_duel_challenge',
+    'collection_open_side_booster',
     'kingdom_production_intro',
     'kingdom_defence_intro', 'defence_intro', 'defence_battle_plan',
     'defence_final_response', 'defence_save',
@@ -216,6 +218,7 @@ MENU_HINT_IDS = (
     'kingdom_config_shields_style',
 )
 FINAL_TUTORIAL_MENU_HINT_ID = 'kingdom_config_shields_style'
+COACH_VERSION = 'first_session_v3'
 
 
 def ensure_onboarding_state_column():
@@ -517,6 +520,45 @@ def _step_payload(step, completed, claimed):
     return payload
 
 
+def _journey_metadata(completed_steps):
+    completed = set(completed_steps or [])
+    if 'finish_first_duel' in completed:
+        return {
+            'coach_version': COACH_VERSION,
+            'journey_phase': 'complete',
+            'next_action': None,
+        }
+    if 'finish_first_conquer_battle' not in completed:
+        return {
+            'coach_version': COACH_VERSION,
+            'journey_phase': 'first_conquest',
+            'next_action': {
+                'screen': 'kingdom',
+                'label': 'Conquer First Land',
+                'target_id': 'recommended_tutorial_land',
+            },
+        }
+    if 'open_first_main_booster' not in completed:
+        return {
+            'coach_version': COACH_VERSION,
+            'journey_phase': 'open_main_booster_reward',
+            'next_action': {
+                'screen': 'collection',
+                'label': 'Open Reward Pack',
+                'target_id': 'collection_open_main_booster',
+            },
+        }
+    return {
+        'coach_version': COACH_VERSION,
+        'journey_phase': 'first_duel',
+        'next_action': {
+            'screen': 'duel',
+            'label': 'Start Quick Duel',
+            'target_id': 'beginner_duel',
+        },
+    }
+
+
 def _starter_present_payload(user):
     return {
         'gold': int(user.gold or 0),
@@ -550,7 +592,9 @@ def serialize_onboarding_state(user):
     facts_payload = dict(facts)
     facts_payload['completed_steps'] = sorted(facts['completed_steps'])
     facts_payload['early_completed'] = sorted(facts['early_completed'])
+    journey = _journey_metadata(facts['completed_steps'])
     return {
+        **journey,
         'welcome_pending': bool(state.get('welcome_pending')),
         'welcome_seen': bool(state.get('welcome_seen')),
         'completed_steps': sorted(facts['completed_steps']),

@@ -5,6 +5,7 @@
 import math
 import secrets
 import logging
+from copy import deepcopy
 from datetime import datetime, timezone, timedelta
 from flask import Blueprint, jsonify, request, g
 
@@ -33,10 +34,36 @@ from analytics import track
 
 kingdom = Blueprint('kingdom', __name__)
 logger = logging.getLogger('nepalkings.routes.kingdom')
+_TUTORIAL_ATTACK_SUIT = 'Hearts'
+_SUIT_ADVANTAGE = {
+    'Spades': 'Hearts',
+    'Hearts': 'Clubs',
+    'Clubs': 'Diamonds',
+    'Diamonds': 'Spades',
+}
 
 
 def _utcnow():
     return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _first_conquer_complete_for_user(user):
+    if not user:
+        return True
+    try:
+        from onboarding_service import _state as _onboarding_state
+        state = _onboarding_state(user)
+        if 'finish_first_conquer_battle' in set(state.get('completed_steps') or []):
+            return True
+    except Exception:
+        logger.debug('Could not read onboarding state for first-conquer gate',
+                     exc_info=True)
+    return LandAttackLog.query.filter(
+        db.or_(
+            LandAttackLog.attacker_user_id == user.id,
+            LandAttackLog.defender_user_id == user.id,
+        )
+    ).first() is not None
 
 
 # ── Castle figure cap (per-tier) ────────────────────────────────────────────
@@ -857,6 +884,72 @@ def kingdom_config_shield_purchase(kingdom_id):
 
 # ── GET /kingdom/map ────────────────────────────────────────────────────────
 
+def _ai_template_battle_suit(template):
+    try:
+        figures = list(template.get('figures') or [])
+        battle_idx = int(template.get('battle_figure_index') or 0)
+        return (figures[battle_idx].get('suit') if figures else None)
+    except Exception:
+        return None
+
+
+def _recommended_tutorial_land_id(user, lands, now=None):
+    if _first_conquer_complete_for_user(user):
+        return None
+    now = now or _utcnow()
+    attacker_beats = _SUIT_ADVANTAGE.get(_TUTORIAL_ATTACK_SUIT)
+    attacker_loses_to = {
+        suit for suit, beaten in _SUIT_ADVANTAGE.items()
+        if beaten == _TUTORIAL_ATTACK_SUIT
+    }
+    candidates = []
+    for land in lands:
+        if land.owner_user_id is not None:
+            continue
+        if int(land.tier or 1) != 1:
+            continue
+        if land.conquer_cooldown_until and land.conquer_cooldown_until > now:
+            continue
+        try:
+            template = get_ai_defence_template_for_land(land)
+        except Exception:
+            template = {}
+        defender_suit = _ai_template_battle_suit(template)
+        if defender_suit == attacker_beats:
+            matchup_score = 0
+        elif defender_suit in attacker_loses_to:
+            matchup_score = 3
+        else:
+            matchup_score = 1
+        suit_score = 0 if land.suit_bonus_suit == attacker_beats else 1
+        candidates.append((
+            matchup_score,
+            suit_score,
+            -float(land.gold_rate or 0),
+            int(land.id or 0),
+        ))
+    if not candidates:
+        return None
+    candidates.sort()
+    return candidates[0][-1]
+
+
+def _should_use_tutorial_safe_ai_defence(user, land):
+    return (
+        land is not None
+        and land.owner_user_id is None
+        and int(land.tier or 1) == 1
+        and not _first_conquer_complete_for_user(user)
+    )
+
+
+def _tutorial_safe_ai_defence_template():
+    from ai.defence.config import AI_DEFENCE_SAFE_FALLBACKS
+    template = deepcopy(AI_DEFENCE_SAFE_FALLBACKS[1])
+    template['ai_name'] = 'Tutorial Border Watch'
+    return template
+
+
 def _bulk_defence_incomplete_by_land(land_ids, user_id):
     """Return ``land_id -> incomplete`` for the user's defence configs.
 
@@ -1131,6 +1224,7 @@ def get_kingdom_map():
     lands_data = []
     my_land_ids = [land.id for land in lands if land.owner_user_id == user.id]
     defence_incomplete_by_land = _bulk_defence_incomplete_by_land(my_land_ids, user.id)
+    recommended_tutorial_land_id = _recommended_tutorial_land_id(user, lands, now=now)
     skill_bonuses_by_kingdom = {}
     shield_status_by_kingdom = {}
 
@@ -1189,6 +1283,10 @@ def get_kingdom_map():
                 if persistent_kingdom else _default_style_dict()
             )
         land_dict['is_mine'] = is_mine
+        land_dict['is_recommended_tutorial_land'] = (
+            recommended_tutorial_land_id is not None
+            and land.id == recommended_tutorial_land_id
+        )
         land_cooldown_remaining = 0
         if land.conquer_cooldown_until:
             land_cooldown_remaining = max(
@@ -1221,6 +1319,7 @@ def get_kingdom_map():
         'my_lands_count': my_lands_count,
         'my_kingdom': my_kingdom,
         'my_kingdoms': my_persistent_kingdoms,
+        'recommended_tutorial_land_id': recommended_tutorial_land_id,
         'conquer_cooldown_remaining': cooldown_remaining,
         **leaderboards,
     })
@@ -1958,6 +2057,7 @@ def _get_or_create_conquer_config(user_id, land_id):
 # Families pre-assembled into a new player's very first conquer attack, in
 # build order (King first so its production covers the farm/warriors).
 _TUTORIAL_ATTACK_FAMILIES = ('Djungle King', 'Small Rice Farm', 'Gorkha Warriors')
+_TUTORIAL_PRELUDE_SPELL_NAME = 'Draw 2 MainCards'
 
 
 def _preassemble_tutorial_conquer_attack(user, cfg, land):
@@ -1966,24 +2066,23 @@ def _preassemble_tutorial_conquer_attack(user, cfg, land):
     conquest never hits the figure-builder cliff.
 
     Builds Djungle King + Small Rice Farm + Gorkha Warriors from the reserved
-    Hearts cards, selects the Warriors as the battle figure, and adds three
-    Daggers (the 8/9/10 Hearts) as the battle plan. Best-effort and gated to
-    the tutorial; any unmet precondition skips silently (player builds manually).
+    Hearts cards, selects the Warriors as the battle figure, adds Draw 2
+    MainCards as a prelude spell, and adds three Daggers (the 8/9/10 Hearts) as
+    the battle plan. Best-effort and gated to the tutorial; any unmet
+    precondition skips silently (player builds manually).
     """
     from ai.figure_recipes import FIGURE_RECIPES
-    from onboarding_service import _state as _onboarding_state
 
     # Gate 1: only a freshly-created, untouched conquer config.
     if (list(cfg.figures) or list(cfg.battle_moves)
             or cfg.battle_figure_id is not None
+            or cfg.prelude_spell_name is not None
+            or list(cfg.prelude_spell_card_ids or [])
             or cfg.counter_spell_name is not None):
         return False
 
     # Gate 2: still in the tutorial (no first conquer battle finished yet).
-    state = _onboarding_state(user)
-    if 'finish_first_conquer_battle' in set(state.get('completed_steps') or []):
-        return False
-    if LandAttackLog.query.filter_by(attacker_user_id=user.id).first() is not None:
+    if _first_conquer_complete_for_user(user):
         return False
 
     # Gate 3: don't spread starter cards across lands — only the config we
@@ -2012,15 +2111,20 @@ def _preassemble_tutorial_conquer_attack(user, cfg, land):
     if not all(name in recipes for name in _TUTORIAL_ATTACK_FAMILIES):
         return False
 
-    # Reserve the exact cards the figures need (7s for figures, leaving 8/9/10
-    # for Daggers). Validate everything is available BEFORE mutating anything.
+    # Reserve the exact cards the figures need (7s for figures, one 8 for the
+    # prelude, then 8/9/10 for Daggers). Validate everything is available
+    # BEFORE mutating anything.
     king_key = _take('K')
     farm_key = _take('J')
     farm_num = _take('7')
     war_key = _take('A')
     war_num = _take('7')
+    prelude_card = _take('8')
     dagger_cards = [_take('8'), _take('9'), _take('10')]
-    needed = [king_key, farm_key, farm_num, war_key, war_num, *dagger_cards]
+    needed = [
+        king_key, farm_key, farm_num, war_key, war_num,
+        prelude_card, *dagger_cards,
+    ]
     if any(c is None for c in needed):
         return False
 
@@ -2069,6 +2173,10 @@ def _preassemble_tutorial_conquer_attack(user, cfg, land):
     warriors = _build_figure(recipes['Gorkha Warriors'], war_key, war_num)
 
     cfg.battle_figure_id = warriors.id
+    cfg.prelude_spell_name = _TUTORIAL_PRELUDE_SPELL_NAME
+    cfg.prelude_spell_data = None
+    cfg.prelude_spell_card_ids = [prelude_card.id]
+    _lock_collection_cards([prelude_card.id], 'conquer_prelude', cfg.id)
 
     for round_index, card in enumerate(dagger_cards):
         move = LandConfigBattleMove(
@@ -5148,7 +5256,10 @@ def conquer_start_battle():
 
     if is_ai_land:
         defender_user = _get_or_create_ai_user()
-        template = get_ai_defence_template_for_land(land)
+        if _should_use_tutorial_safe_ai_defence(user, land):
+            template = _tutorial_safe_ai_defence_template()
+        else:
+            template = get_ai_defence_template_for_land(land)
         if not template:
             return jsonify({'success': False,
                             'message': 'No AI defence available for this land'}), 400

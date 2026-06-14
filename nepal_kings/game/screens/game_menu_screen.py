@@ -495,45 +495,44 @@ class GameMenuScreen(MenuScreenMixin, Screen):
         completed = self._onboarding_completed_steps()
         return bool(onboarding and 'finish_first_duel' not in completed)
 
-    def _boosters_unopened(self):
+    def _main_reward_booster_unopened(self):
         completed = self._onboarding_completed_steps()
-        return ('open_first_main_booster' not in completed
-                or 'open_first_side_booster' not in completed)
+        return 'open_first_main_booster' not in completed
 
     def _first_conquer_incomplete(self):
         return ('finish_first_conquer_battle'
                 not in self._onboarding_completed_steps())
 
     def _current_journey_coach_step(self):
-        """Guided first-session path: boosters → first conquest → first duel.
+        """Guided first-session path: first conquest → reward pack → first duel.
 
         Conquest comes first by design: a conquer battle is a single short
         fight against the AI, so new players reach their first real battle
-        within minutes — the full duel unlocks as the next step after.
+        within minutes. The collection opens as a reward beat after the win.
         """
         seen = self._menu_coach_seen()
-        if self._boosters_unopened():
-            return {
-                'id': 'open_boosters_first',
-                'rect': self.button_collection.rect,
-                'title': 'Open Your Booster Packs',
-                'body': 'Open your welcome packs. Tap Collection, then open one main and one side booster.',
-                'action': 'click',
-                'mark_on_click': True,
-                'max_lines': 4,
-            }
         if self._first_conquer_incomplete():
             if 'post_boosters_kingdom' not in seen:
                 return {
                     'id': 'post_boosters_kingdom',
                     'rect': self.button_kingdom.rect,
                     'title': 'Conquer Your First Land',
-                    'body': 'Conquer your first land. Open your Kingdom and pick a nearby land to challenge.',
+                    'body': 'Open your Kingdom and conquer the marked land. Your starter attack is already prepared.',
                     'action': 'click',
                     'mark_on_click': True,
                     'max_lines': 4,
                 }
             return None  # the kingdom screens guide the rest
+        if self._main_reward_booster_unopened():
+            return {
+                'id': 'open_main_booster_reward',
+                'rect': self.button_collection.rect,
+                'title': 'Open Your Reward Pack',
+                'body': 'You won land. Open one main booster now to see how your collection grows after a conquest.',
+                'action': 'click',
+                'mark_on_click': True,
+                'max_lines': 5,
+            }
         if self._first_duel_incomplete():
             if 'ready_first_duel' not in seen:
                 return {
@@ -556,8 +555,9 @@ class GameMenuScreen(MenuScreenMixin, Screen):
             return None
         seen = self._menu_coach_seen()
 
-        # Lead with the actionable journey the welcome promised: open boosters
-        # -> conquer a land -> first duel. Action-first, not a generic tour.
+        # Lead with the actionable journey the welcome promised: conquer a
+        # land -> open a reward pack -> first duel. Action-first, not a
+        # generic tour.
         journey = self._current_journey_coach_step()
         if journey is not None:
             return journey
@@ -651,8 +651,8 @@ class GameMenuScreen(MenuScreenMixin, Screen):
             'welcome',
             [
                 f'Hello {username}!',
-                'Welcome to Nepal Kings — build your kingdom, conquer lands from the AI, and duel other rulers in a tactical card game.',
-                "Let's start with a short tutorial. We'll visit your Collection, open your booster packs, and conquer your first land together.",
+                'Welcome to Nepal Kings! Collect cards, build figures, cast spells and conquer lands to expand your kingdom.',
+                "Let's start with a short tutorial. We'll conquer your first land, open a reward pack, and try a quick duel together.",
             ],
             items,
             footer_when_done='Your welcome present is ready to use.',

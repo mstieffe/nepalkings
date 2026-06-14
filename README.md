@@ -7,10 +7,10 @@
 **Build your kingdom, conquer the land, and duel for the crown.**
 
 **Nepal Kings** is a tactical card game you can play solo or against other
-rulers. Open booster packs, build figures from your collection, and conquer
-AI-held lands one battle at a time to grow your kingdom — then test yourself
-in head-to-head duels when you are ready. Some call the duel *the chess of
-cards*.
+rulers. Your starter army is ready for a first conquest, booster packs grow
+your collection, and AI-held lands fall one battle at a time as your kingdom
+expands — then test yourself in head-to-head duels when you are ready. Some
+call the duel *the chess of cards*.
 
 - **Single-player first.** The full conquest loop — conquer lands, defend
   them, collect their production, and expand your kingdom — plays entirely

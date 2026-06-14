@@ -2366,7 +2366,20 @@ class BattleScreen(SubScreen):
             land_label = "Tier {} land".format(land_tier) if land_tier else "this land"
             title = "Land Conquered!"
             icon = 'victory'
-            message = "You have conquered {}!".format(land_label)
+            _state = getattr(self, 'state', None)
+            onboarding = (getattr(_state, 'user_dict', None) or {}).get('onboarding') or {}
+            first_conquest = (
+                'finish_first_conquer_battle'
+                not in set(onboarding.get('completed_steps') or [])
+            )
+            if first_conquest:
+                message = (
+                    "Your first land is yours! You conquered {}.\n\n"
+                    "It now produces resources over time. Next, return to your kingdom, "
+                    "then try a Quick duel when you are ready."
+                ).format(land_label)
+            else:
+                message = "You have conquered {}!".format(land_label)
             if gold_rate:
                 message += "\n\nGold production increased by {:.1f} gold/hour.".format(gold_rate)
             loot_gained = result.get('loot_gained_cards') or result.get('loot_lost_cards') or []
