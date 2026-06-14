@@ -440,9 +440,13 @@ def _facts(user, state=None):
         completed.add('collect_first_kingdom_production')
     if _saved_defence_count(user_id) >= 1:
         completed.add('save_first_defence_config')
+    # The first-session tutorial completes on the kingdom core loop: conquer a
+    # land, collect its production, and finish the kingdom-config tour. The duel
+    # is intentionally NOT required here -- it is offered as an optional next
+    # step with its own skippable coaching the first time it is played.
     if (FINAL_TUTORIAL_MENU_HINT_ID in set(state.get('menu_hints_seen') or [])
             and 'finish_first_conquer_battle' in completed
-            and duel_finishes >= 1):
+            and 'collect_first_kingdom_production' in completed):
         completed.add('finish_tutorial')
 
     early_completed = set()
@@ -521,13 +525,15 @@ def _step_payload(step, completed, claimed):
 
 
 def _journey_metadata(completed_steps):
+    """First-session guided path.
+
+    The mandatory tutorial is the kingdom core loop: conquer a land -> open the
+    reward pack -> collect the land's production -> finish the kingdom-config
+    tour. The duel is deliberately excluded from this path; it is offered as an
+    optional next step (with its own skippable coaching the first time it is
+    played), not as a tutorial gate.
+    """
     completed = set(completed_steps or [])
-    if 'finish_first_duel' in completed:
-        return {
-            'coach_version': COACH_VERSION,
-            'journey_phase': 'complete',
-            'next_action': None,
-        }
     if 'finish_first_conquer_battle' not in completed:
         return {
             'coach_version': COACH_VERSION,
@@ -548,14 +554,30 @@ def _journey_metadata(completed_steps):
                 'target_id': 'collection_open_main_booster',
             },
         }
+    if 'collect_first_kingdom_production' not in completed:
+        return {
+            'coach_version': COACH_VERSION,
+            'journey_phase': 'collect_production',
+            'next_action': {
+                'screen': 'kingdom',
+                'label': 'Collect Production',
+                'target_id': 'kingdom_production_intro',
+            },
+        }
+    if 'finish_tutorial' not in completed:
+        return {
+            'coach_version': COACH_VERSION,
+            'journey_phase': 'finish_kingdom_tour',
+            'next_action': {
+                'screen': 'kingdom',
+                'label': 'Finish Kingdom Tour',
+                'target_id': 'kingdom_config_intro',
+            },
+        }
     return {
         'coach_version': COACH_VERSION,
-        'journey_phase': 'first_duel',
-        'next_action': {
-            'screen': 'duel',
-            'label': 'Start Quick Duel',
-            'target_id': 'beginner_duel',
-        },
+        'journey_phase': 'complete',
+        'next_action': None,
     }
 
 

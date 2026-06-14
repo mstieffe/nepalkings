@@ -2798,6 +2798,19 @@ class TestAITemplateCardRewards:
             db.session.refresh(land)
             assert land.owner_user_id == user.id
 
+    def test_first_conquest_seeds_kingdom_production(self, app, db):
+        """The first conquest fills the new kingdom's gold vault as a payoff."""
+        with app.app_context():
+            result, user, land, game, cfg = self._start_battle_and_resolve(
+                app, db, attacker_wins=True)
+            db.session.refresh(land)
+            assert land.kingdom_id is not None
+            from models import Kingdom
+            from kingdom_service import kingdom_vault_cap
+            kingdom = db.session.get(Kingdom, land.kingdom_id)
+            cap = kingdom_vault_cap(kingdom)
+            assert float(kingdom.pending_gold or 0.0) >= cap - 1e-6
+
     def test_attacker_wins_sets_land_conquer_protection(self, app, db):
         """Successful conquest sets a temporary land-level conquer protection timestamp."""
         with app.app_context():

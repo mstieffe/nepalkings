@@ -563,7 +563,7 @@ def test_kingdom_coach_progresses_from_map_to_conquer_button():
     assert step['rect'] == conquer_rect
 
 
-def test_kingdom_coach_routes_from_first_land_to_reward_pack_then_duel():
+def test_kingdom_coach_routes_from_first_land_to_reward_pack_then_production():
     import pygame
     from game.screens.kingdom_screen import KingdomScreen
 
@@ -583,18 +583,21 @@ def test_kingdom_coach_routes_from_first_land_to_reward_pack_then_duel():
     screen._error = None
     screen._map_viewport_rect = pygame.Rect(50, 60, 300, 220)
     screen._header_rect = pygame.Rect(40, 20, 420, 80)
+    screen._collect_all_rect = pygame.Rect(340, 32, 110, 34)
 
     step = screen._current_kingdom_coach_step()
     assert step['id'] == 'open_main_booster_reward'
     assert step['button_label'] == 'Open Pack'
     assert step['navigate_screen'] == 'collection'
 
+    # The duel is no longer wedged into the mandatory kingdom tour; after the
+    # reward pack the loop pays off with production collection.
     screen.state.user_dict['onboarding']['completed_steps'].append(
         'open_first_main_booster')
     step = screen._current_kingdom_coach_step()
-    assert step['id'] == 'ready_first_duel'
-    assert step['button_label'] == 'Start Duel'
-    assert step['navigate_screen'] == 'duel_menu'
+    assert step['id'] == 'kingdom_production_intro'
+    assert step['action'] == 'click'
+    assert step['rect'] == screen._collect_all_rect
 
 
 def test_kingdom_coach_shifts_to_post_battle_map_and_config_steps():
@@ -605,7 +608,6 @@ def test_kingdom_coach_shifts_to_post_battle_map_and_config_steps():
     screen.state = SimpleNamespace(user_dict={'onboarding': {
         'menu_hints_seen': [],
         'completed_steps': [
-            'finish_first_duel',
             'open_first_main_booster',
             'finish_first_conquer_battle',
         ],
@@ -631,10 +633,11 @@ def test_kingdom_coach_shifts_to_post_battle_map_and_config_steps():
     assert step['id'] == 'kingdom_production_intro'
     assert step['rect'] == screen._collect_all_rect
 
-    screen.state.user_dict['onboarding']['menu_hints_seen'] = [
-        'kingdom_after_conquer_map',
-        'kingdom_production_intro',
-    ]
+    # Production advances once the gold is actually collected (the step is
+    # tracked server-side; the coach gates on the completed step, not on the
+    # hint being seen).
+    screen.state.user_dict['onboarding']['completed_steps'].append(
+        'collect_first_kingdom_production')
     step = screen._current_kingdom_coach_step()
     assert step['id'] == 'kingdom_defence_intro'
 
@@ -647,7 +650,6 @@ def test_kingdom_coach_shifts_to_post_battle_map_and_config_steps():
         'save_first_defence_config')
     screen.state.user_dict['onboarding']['menu_hints_seen'] = [
         'kingdom_after_conquer_map',
-        'kingdom_production_intro',
         'kingdom_defence_intro',
     ]
     step = screen._current_kingdom_coach_step()

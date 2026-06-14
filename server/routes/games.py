@@ -7558,8 +7558,20 @@ def _resolve_conquer_battle(game, winner, requesting_player):
     )
     db.session.add(log)
     db.session.flush()
+    attacker_first_conquest = False
     try:
-        from onboarding_service import mark_step
+        from onboarding_service import mark_step, _state as _onb_state
+        if attacker_user and attacker_won:
+            completed_before = set(
+                (_onb_state(attacker_user).get('completed_steps')) or [])
+            prior_conquests = LandAttackLog.query.filter(
+                LandAttackLog.attacker_user_id == attacker_user.id,
+                LandAttackLog.id != log.id,
+            ).count()
+            attacker_first_conquest = (
+                'finish_first_conquer_battle' not in completed_before
+                and prior_conquests == 0
+            )
         if attacker_user:
             mark_step(attacker_user, 'finish_first_conquer_battle')
         if defender_user and not is_ai_land:
@@ -7569,6 +7581,14 @@ def _resolve_conquer_battle(game, winner, requesting_player):
 
     if attacker_won:
         gained_kingdom_id = land.kingdom_id if land else None
+        if attacker_first_conquest and gained_kingdom_id:
+            try:
+                from kingdom_service import seed_first_conquest_production
+                seeded_kingdom = db.session.get(Kingdom, gained_kingdom_id)
+                if seeded_kingdom and seeded_kingdom.owner_user_id == attacker_user.id:
+                    seed_first_conquest_production(seeded_kingdom, now=_utcnow())
+            except Exception:
+                logger.exception("Failed to seed first-conquest production")
         lost_user_for_event = None if is_ai_land else (defender_user.id if defender_user else None)
         _create_kingdom_loot_events(
             attack_log_id=log.id,

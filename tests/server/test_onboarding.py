@@ -80,10 +80,24 @@ def test_journey_metadata_progresses_with_first_session_steps(db, two_users):
 
     mark_step(u1, 'open_first_main_booster')
     onboarding = serialize_onboarding_state(u1)
-    assert onboarding['journey_phase'] == 'first_duel'
-    assert onboarding['next_action']['screen'] == 'duel'
+    # The duel is excluded from the mandatory tutorial; the kingdom core loop
+    # continues with production collection, then the kingdom-config tour.
+    assert onboarding['journey_phase'] == 'collect_production'
+    assert onboarding['next_action'] == {
+        'screen': 'kingdom',
+        'label': 'Collect Production',
+        'target_id': 'kingdom_production_intro',
+    }
 
-    mark_step(u1, 'finish_first_duel')
+    mark_step(u1, 'collect_first_kingdom_production')
+    onboarding = serialize_onboarding_state(u1)
+    assert onboarding['journey_phase'] == 'finish_kingdom_tour'
+    assert onboarding['next_action']['screen'] == 'kingdom'
+
+    # Finishing the kingdom-config tour (final menu hint) completes the tutorial
+    # without requiring a duel.
+    from onboarding_service import mark_menu_hint, FINAL_TUTORIAL_MENU_HINT_ID
+    mark_menu_hint(u1, FINAL_TUTORIAL_MENU_HINT_ID)
     onboarding = serialize_onboarding_state(u1)
     assert onboarding['journey_phase'] == 'complete'
     assert onboarding['next_action'] is None
@@ -367,7 +381,9 @@ def test_finish_tutorial_reward_unlocks_on_last_menu_hint(client, db, two_users,
 
     from onboarding_service import mark_step
     mark_step(u1, 'finish_first_conquer_battle')
-    _add_game_result(db, u1, u2)
+    # Tutorial completion is the kingdom core loop (conquer + collect
+    # production + config tour), not a duel.
+    mark_step(u1, 'collect_first_kingdom_production')
     db.session.commit()
 
     finished = client.get('/onboarding/state', headers=auth_headers_user1).get_json()['onboarding']

@@ -785,9 +785,7 @@ class KingdomScreen(MenuScreenMixin, Screen):
                 'action': 'next',
                 'max_lines': 5,
             }
-        next_action = self._first_session_next_action()
-        if ((next_action or {}).get('screen') == 'collection'
-                and 'open_first_main_booster' not in completed):
+        if 'open_first_main_booster' not in completed:
             return {
                 'id': 'open_main_booster_reward',
                 'rect': getattr(self, '_header_rect', None) or self._map_viewport_rect,
@@ -798,28 +796,19 @@ class KingdomScreen(MenuScreenMixin, Screen):
                 'navigate_screen': 'collection',
                 'max_lines': 4,
             }
-        if ((next_action or {}).get('screen') == 'duel'
-                and 'finish_first_duel' not in completed):
-            return {
-                'id': 'ready_first_duel',
-                'rect': getattr(self, '_header_rect', None) or self._map_viewport_rect,
-                'title': 'Try A Quick Duel',
-                'body': 'Your first conquest is complete. Start a quick duel against AI Strategos when you are ready.',
-                'action': 'next',
-                'button_label': 'Start Duel',
-                'navigate_screen': 'duel_menu',
-                'max_lines': 4,
-            }
-        if 'finish_first_duel' not in completed:
-            return None
-        production_rect = self._collect_all_rect or self._header_rect
-        if production_rect and 'kingdom_production_intro' not in seen:
+        # The core loop pays off here: the freshly conquered land has already
+        # filled a gold vault. Point the player at Collect so conquer -> produce
+        # -> grow lands in a single visit.
+        production_rect = (getattr(self, '_collect_all_rect', None)
+                           or getattr(self, '_header_rect', None))
+        if production_rect and 'collect_first_kingdom_production' not in completed:
             return {
                 'id': 'kingdom_production_intro',
                 'rect': production_rect,
-                'title': 'Collect Production',
-                'body': 'Collect production here. Kingdoms build gold over time; skills add packs and maps.',
-                'action': 'next',
+                'title': 'Collect Your Gold',
+                'body': 'Your new land already filled its gold vault. Tap Collect to bank it — every land you hold keeps producing while you are away.',
+                'action': 'click',
+                'mark_on_click': False,
                 'max_lines': 4,
             }
         defence_already_handled = (
@@ -1953,6 +1942,17 @@ class KingdomScreen(MenuScreenMixin, Screen):
         )))
         main_collected = int(data.get('collected_main_boosters_total', 0) or 0)
         side_collected = int(data.get('collected_side_boosters_total', 0) or 0)
+        maps_collected = int(data.get('collected_maps_total', 0) or 0)
+        if (total_collected > 0 or main_collected > 0 or side_collected > 0
+                or maps_collected > 0):
+            # Optimistically mark the production step so the tutorial coach
+            # advances immediately instead of waiting for the next state poll.
+            onboarding = (getattr(self.state, 'user_dict', None) or {}).get('onboarding')
+            if isinstance(onboarding, dict):
+                steps = list(onboarding.get('completed_steps') or [])
+                if 'collect_first_kingdom_production' not in steps:
+                    steps.append('collect_first_kingdom_production')
+                    onboarding['completed_steps'] = steps
         if total_collected > 0 and hasattr(self, '_suppress_next_gold_floater'):
             # Keep collect feedback anchored to the clicked Collect-All button
             # instead of duplicating it at the top-left HUD gold widget.
