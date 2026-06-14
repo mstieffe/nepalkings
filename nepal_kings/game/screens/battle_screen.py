@@ -1188,6 +1188,43 @@ class BattleScreen(SubScreen):
         o_power += self._get_figure_total_power(self.opponent_figure_2, self.opponent_figure_icon_2)
         return p_power - o_power
 
+    def _conquer_attack_power_summary(self):
+        """Restate the on-screen power tallies for the first-conquest result.
+
+        Returns ``(figure_name, your_total, their_total)`` using the same power
+        helpers that feed the live battle power bars, so the numbers match what
+        the player just watched. Returns ``None`` if figures aren't available.
+        """
+        try:
+            if not getattr(self, 'player_figure', None):
+                return None
+            your_total = self._get_figure_total_power(
+                self.player_figure, self.player_figure_icon)
+            your_total += self._get_figure_total_power(
+                getattr(self, 'player_figure_2', None),
+                getattr(self, 'player_figure_icon_2', None))
+            their_total = self._get_figure_total_power(
+                getattr(self, 'opponent_figure', None),
+                getattr(self, 'opponent_figure_icon', None))
+            their_total += self._get_figure_total_power(
+                getattr(self, 'opponent_figure_2', None),
+                getattr(self, 'opponent_figure_icon_2', None))
+            player_played = getattr(self, 'player_played', []) or []
+            opponent_played = getattr(self, 'opponent_played', []) or []
+            for i in range(3):
+                pm = player_played[i] if i < len(player_played) else None
+                om = opponent_played[i] if i < len(opponent_played) else None
+                if pm:
+                    your_total += self._get_move_effective_power(
+                        pm, is_player=True, round_idx=i)
+                if om:
+                    their_total += self._get_move_effective_power(
+                        om, is_player=False, round_idx=i)
+            name = getattr(self.player_figure, 'name', None) or 'Your attacker'
+            return name, int(round(your_total)), int(round(their_total))
+        except Exception:
+            return None
+
     def _get_total_diff(self, verbose=False):
         """Get total difference: figure diff + all completed round diffs.
 
@@ -2373,11 +2410,19 @@ class BattleScreen(SubScreen):
                 not in set(onboarding.get('completed_steps') or [])
             )
             if first_conquest:
+                power = self._conquer_attack_power_summary()
+                why_line = ""
+                if power and power[1] > 0 and power[2] >= 0 and power[1] >= power[2]:
+                    fig_name, your_total, their_total = power
+                    why_line = (
+                        "Your {} ({}) beat their defender ({}).\n\n"
+                        .format(fig_name, your_total, their_total))
                 message = (
                     "Your first land is yours! You conquered {}.\n\n"
-                    "It now produces resources over time. Next, return to your kingdom, "
-                    "then try a Quick duel when you are ready."
-                ).format(land_label)
+                    "{}"
+                    "It now fills a gold vault — head back to your kingdom and tap "
+                    "Collect to bank it. A Quick duel is open whenever you want one."
+                ).format(land_label, why_line)
             else:
                 message = "You have conquered {}!".format(land_label)
             if gold_rate:

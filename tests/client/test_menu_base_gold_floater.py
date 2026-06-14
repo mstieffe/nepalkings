@@ -714,6 +714,96 @@ def test_conquer_coach_highlights_edit_controls_in_order():
         seen.append(step_id)
 
 
+def test_conquer_second_build_coach_guides_manual_build():
+    import pygame
+    from game.screens.conquer_screen import ConquerScreen
+
+    screen = object.__new__(ConquerScreen)
+    # First conquest done, exactly one battle finished: the guided second
+    # conquest where the player builds the attack by hand.
+    screen.state = SimpleNamespace(user_dict={'onboarding': {
+        'menu_hints_seen': [],
+        'completed_steps': ['finish_first_conquer_battle'],
+        'facts': {'conquer_battles': 1},
+    }})
+    screen._onboarding_guide_open = False
+    screen._welcome_present_dialogue = None
+    screen.dialogue_box = None
+    screen._loading = False
+    screen._error = None
+    screen._config = {'land_id': 2, 'figures': [], 'battle_moves': []}
+    screen._layout_built = True
+    screen._active_subscreen = None
+    screen._figure_detail_box = None
+    screen._move_detail_box = None
+    screen._active_info_key = None
+    screen._field_rects = {'castle': pygame.Rect(20, 80, 120, 80)}
+    screen._res_rect = pygame.Rect(20, 170, 120, 40)
+    screen._btn_build = pygame.Rect(150, 80, 34, 34)
+    screen._battle_plan_rect = pygame.Rect(260, 80, 180, 120)
+    screen._btn_buy_move = pygame.Rect(450, 80, 34, 34)
+    screen._btn_battle = pygame.Rect(520, 380, 140, 42)
+
+    # Empty config: coach the Build button first (clickable).
+    step = screen._current_conquer_coach_step()
+    assert step['id'] == 'conquer_build_yourself'
+    assert step['action'] == 'click'
+    assert step['rect'] == screen._btn_build
+
+    # Until a figure exists, do not advance past the build step.
+    screen.state.user_dict['onboarding']['menu_hints_seen'] = ['conquer_build_yourself']
+    assert screen._current_conquer_coach_step() is None
+
+    # Once a figure is built, guide tactics then Start Battle.
+    screen._config['figures'] = [{'family_name': 'Djungle King'}]
+    step = screen._current_conquer_coach_step()
+    assert step['id'] == 'conquer_build_yourself_tactics'
+
+    screen.state.user_dict['onboarding']['menu_hints_seen'] = [
+        'conquer_build_yourself', 'conquer_build_yourself_tactics']
+    step = screen._current_conquer_coach_step()
+    assert step['id'] == 'conquer_build_yourself_battle'
+    assert step['rect'] == screen._btn_battle
+
+    # Tutorial-skipped players get no second-build coaching.
+    screen.state.user_dict['onboarding']['onboarding_skipped'] = True
+    screen.state.user_dict['onboarding']['menu_hints_seen'] = []
+    screen._config['figures'] = []
+    assert screen._current_conquer_coach_step() is None
+
+
+def test_conquer_second_build_coach_inactive_after_two_battles():
+    import pygame
+    from game.screens.conquer_screen import ConquerScreen
+
+    screen = object.__new__(ConquerScreen)
+    screen.state = SimpleNamespace(user_dict={'onboarding': {
+        'menu_hints_seen': [],
+        'completed_steps': ['finish_first_conquer_battle'],
+        'facts': {'conquer_battles': 2},
+    }})
+    screen._onboarding_guide_open = False
+    screen._welcome_present_dialogue = None
+    screen.dialogue_box = None
+    screen._loading = False
+    screen._error = None
+    screen._config = {'land_id': 3, 'figures': [], 'battle_moves': []}
+    screen._layout_built = True
+    screen._active_subscreen = None
+    screen._figure_detail_box = None
+    screen._move_detail_box = None
+    screen._active_info_key = None
+    screen._field_rects = {'castle': pygame.Rect(20, 80, 120, 80)}
+    screen._res_rect = pygame.Rect(20, 170, 120, 40)
+    screen._btn_build = pygame.Rect(150, 80, 34, 34)
+    screen._battle_plan_rect = pygame.Rect(260, 80, 180, 120)
+    screen._btn_buy_move = pygame.Rect(450, 80, 34, 34)
+    screen._btn_battle = pygame.Rect(520, 380, 140, 42)
+
+    # Past the second conquest (and first conquest done) -> no coach at all.
+    assert screen._current_conquer_coach_step() is None
+
+
 def test_explicit_missing_coach_step_does_not_use_stale_cached_step():
     import pygame
 

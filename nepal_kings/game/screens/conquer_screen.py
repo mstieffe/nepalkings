@@ -1331,14 +1331,77 @@ class ConquerScreen(MenuScreenMixin, Screen):
             bounds.union_ip(rect)
         return bounds
 
+    def _second_build_coach_ready(self):
+        """True during the player's guided second conquest (build-it-yourself).
+
+        The first conquer attack is pre-assembled; this coaches the *next* one,
+        which the player builds by hand. Gated to exactly one finished conquer
+        battle so it fires only for the second conquest and never again.
+        """
+        onboarding = (getattr(self.state, 'user_dict', None) or {}).get('onboarding') or {}
+        if not onboarding or onboarding.get('onboarding_skipped'):
+            return False
+        completed = set(onboarding.get('completed_steps') or [])
+        if 'finish_first_conquer_battle' not in completed:
+            return False
+        facts = onboarding.get('facts') or {}
+        return int(facts.get('conquer_battles') or 0) == 1
+
+    def _second_build_coach_step(self, seen):
+        if not self._second_build_coach_ready():
+            return None
+        figures = (self._config or {}).get('figures', []) if self._config else []
+        if self._btn_build and 'conquer_build_yourself' not in seen:
+            return {
+                'id': 'conquer_build_yourself',
+                'rect': self._btn_build,
+                'title': 'Now Build It Yourself',
+                'body': 'This land has no army yet. Tap Build, pick a glowing recipe — start with your King — then confirm. Add a Farm and Warriors the same way.',
+                'action': 'click',
+                'mark_on_click': True,
+                'max_lines': 5,
+            }
+        if not figures:
+            # Wait until the player has actually built a figure before moving on.
+            return None
+        battle_plan_rect = self._conquer_combined_rect(
+            self._battle_plan_rect, self._btn_buy_move)
+        if battle_plan_rect and 'conquer_build_yourself_tactics' not in seen:
+            return {
+                'id': 'conquer_build_yourself_tactics',
+                'rect': battle_plan_rect,
+                'title': 'Add Your Tactics',
+                'body': 'Now set your battle plan: add three Daggers as tactics, just like your first attack.',
+                'action': 'next',
+                'button_label': 'Got it',
+                'max_lines': 4,
+            }
+        if self._btn_battle and 'conquer_build_yourself_battle' not in seen:
+            return {
+                'id': 'conquer_build_yourself_battle',
+                'rect': self._btn_battle,
+                'title': 'Start When Ready',
+                'body': 'Once you have at least one figure and three tactics, Start Battle lights up. This land has a real defender — your build decides it.',
+                'action': 'next',
+                'button_label': 'Got it',
+                'max_lines': 5,
+            }
+        return None
+
     def _current_conquer_coach_step(self):
-        if not self._menu_coach_allowed_common() or not self._conquer_coach_ready():
+        if not self._menu_coach_allowed_common():
             return None
         if (self._loading or self._error or not self._config or not self._layout_built
                 or self._active_subscreen or self._figure_detail_box or self._move_detail_box
                 or self._active_info_key):
             return None
         seen = self._menu_coach_seen()
+        # Guided second conquest: pay off the "build it yourself" promise.
+        second = self._second_build_coach_step(seen)
+        if second is not None:
+            return second
+        if not self._conquer_coach_ready():
+            return None
         field_rect = self._conquer_field_coach_rect()
         if field_rect and 'conquer_config_field' not in seen:
             return {

@@ -431,6 +431,19 @@ class ConquerGameScreen(GameScreen):
             return False
         return getattr(game, 'conquer_move_model', 'battle_move') == 'tactics_hand'
 
+    def _first_conquest_tutorial_active(self):
+        """True while the player is still in their first conquer battle.
+
+        Drives one-time educational callouts (e.g. what a Dagger does). The
+        ``finish_first_conquer_battle`` step is only marked once the first
+        conquer battle resolves, so it is reliably absent during it.
+        """
+        onboarding = (getattr(self.state, 'user_dict', None) or {}).get('onboarding') or {}
+        if not onboarding or onboarding.get('onboarding_skipped'):
+            return False
+        completed = set(onboarding.get('completed_steps') or [])
+        return 'finish_first_conquer_battle' not in completed
+
     def _is_battle_phase_active(self):
         """True if any battle round (1..3) is in flight or just resolved."""
         game = self.state.game
@@ -3015,7 +3028,17 @@ class ConquerGameScreen(GameScreen):
         if callable(set_banner):
             label = f"{family} {rank}".strip()
             if action == ACTION_PLAY:
-                set_banner(f"Played {label}", color=(180, 220, 160), ttl_ms=4500)
+                # First-conquest tutorial: explain *why* a Dagger matters the
+                # first time one is played, not just that it was played.
+                if ('Dagger' in str(family)
+                        and self._first_conquest_tutorial_active()
+                        and not getattr(self, '_tutorial_dagger_explained', False)):
+                    self._tutorial_dagger_explained = True
+                    set_banner(
+                        f"Played {label} — Daggers add their value to your attack total.",
+                        color=(180, 220, 160), ttl_ms=6000)
+                else:
+                    set_banner(f"Played {label}", color=(180, 220, 160), ttl_ms=4500)
             elif action == ACTION_GAMBLE:
                 set_banner(f"Gambling {label}…", color=(238, 218, 170), ttl_ms=5500)
             elif action == ACTION_COMBINE:
@@ -3048,6 +3071,7 @@ class ConquerGameScreen(GameScreen):
         self._conquer_tactic_power_cache_key = None
         self._conquer_tactic_power_cache = {}
         self._withdraw_dialogue_open = False
+        self._tutorial_dagger_explained = False
         if self.state.game and getattr(self.state.game, 'state', None) != 'finished':
             self.state.game.game_over = False
             self.state.game.pending_game_over = None

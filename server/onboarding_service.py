@@ -203,6 +203,8 @@ MENU_HINT_IDS = (
     'kingdom_conquer_button', 'conquer_config_field',
     'conquer_config_build_edit', 'conquer_config_battle_plan',
     'conquer_config_prelude_spell', 'conquer_config_to_battle',
+    'conquer_build_yourself', 'conquer_build_yourself_tactics',
+    'conquer_build_yourself_battle',
     'conquer_battle_timeline_intro', 'conquer_battle_tactics',
     'conquer_battle_tactic_recap', 'conquer_battle_finish',
     'kingdom_after_conquer_map', 'open_main_booster_reward',

@@ -1013,6 +1013,50 @@ class BuildFigureScreen(SubScreen):
             self.scroll_text_list.sort(key=lambda x: x["_sort_power"], reverse=True)
         self.scroll_text_list_shifter.set_displayed_texts(self.scroll_text_list)
 
+    def _second_build_tutorial_active(self):
+        """True during the player's guided second conquest build.
+
+        The first conquer attack is pre-assembled; this teaches the player to
+        build the next one by hand. Gated to exactly one finished conquer battle
+        so the hint shows only for the second conquest.
+        """
+        onboarding = (getattr(self.state, 'user_dict', None) or {}).get('onboarding') or {}
+        if not onboarding or onboarding.get('onboarding_skipped'):
+            return False
+        completed = set(onboarding.get('completed_steps') or [])
+        if 'finish_first_conquer_battle' not in completed:
+            return False
+        facts = onboarding.get('facts') or {}
+        return int(facts.get('conquer_battles') or 0) == 1
+
+    def _draw_second_build_hint(self):
+        """Draw a one-line instruction banner across the top of the builder."""
+        try:
+            has_selection = bool(
+                self.scroll_text_list_shifter
+                and self.scroll_text_list_shifter.get_current_selected())
+        except Exception:
+            has_selection = False
+        if has_selection:
+            text = 'Press "create!" to build this figure — then build a Farm and Warriors.'
+        else:
+            text = 'Pick a glowing recipe (start with your King), then press "create!".'
+        font = settings.get_font(settings.FS_SMALL) if hasattr(settings, 'FS_SMALL') \
+            else self._kingdom_res_font
+        screen_w = self.window.get_width()
+        label = font.render(text, True, (255, 240, 200))
+        pad_x, pad_y = 16, 8
+        banner_w = label.get_width() + pad_x * 2
+        banner_h = label.get_height() + pad_y * 2
+        x = max(8, (screen_w - banner_w) // 2)
+        y = int(self._sy(settings.BUILD_HIERARCHY_Y)) if hasattr(settings, 'BUILD_HIERARCHY_Y') else 8
+        y = max(6, y - banner_h - 6)
+        surf = pygame.Surface((banner_w, banner_h), pygame.SRCALPHA)
+        pygame.draw.rect(surf, (40, 28, 14, 235), surf.get_rect(), border_radius=8)
+        pygame.draw.rect(surf, (210, 180, 120), surf.get_rect(), 2, border_radius=8)
+        self.window.blit(surf, (x, y))
+        self.window.blit(label, (x + pad_x, y + pad_y))
+
     def draw(self):
         """Draw the screen, including buttons and background."""
         super().draw()
@@ -1049,6 +1093,9 @@ class BuildFigureScreen(SubScreen):
             self._draw_suit_filter()
             self._draw_castle_cap_badge()
             self._draw_resource_strip()
+
+        if self.mode == 'conquer' and self._second_build_tutorial_active():
+            self._draw_second_build_hint()
 
         super().draw_on_top()
 
