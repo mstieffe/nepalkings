@@ -74,7 +74,7 @@ CORE_STEPS = [
     {
         'id': 'finish_tutorial',
         'title': 'Finish first-session tutorial',
-        'description': 'Complete the kingdom tour and finish your first duel.',
+        'description': 'Conquer a land, collect its production, and finish the kingdom tour.',
         'reward': {'booster_packs': 6},
     },
 ]
@@ -205,10 +205,11 @@ MENU_HINT_IDS = (
     'conquer_config_prelude_spell', 'conquer_config_to_battle',
     'conquer_build_yourself', 'conquer_build_yourself_tactics',
     'conquer_build_yourself_battle',
-    'conquer_battle_timeline_intro', 'conquer_battle_tactics',
+    'conquer_battle_timeline_intro', 'conquer_battle_figure_power',
+    'conquer_battle_tactics', 'conquer_battle_block_call',
     'conquer_battle_tactic_recap', 'conquer_battle_finish',
     'kingdom_after_conquer_map', 'open_main_booster_reward',
-    'open_boosters_first',
+    'return_to_kingdom_loop', 'open_boosters_first',
     'collection_starter_cards', 'collection_open_main_booster',
     'ready_first_duel',
     'new_game', 'beginner_duel', 'send_first_duel_challenge',

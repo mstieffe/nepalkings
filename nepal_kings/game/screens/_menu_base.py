@@ -1448,18 +1448,19 @@ class MenuScreenMixin:
         if onboarding.get('onboarding_skipped'):
             return None
         completed = set(onboarding.get('completed_steps') or [])
-        if 'finish_first_duel' in completed:
+        if 'finish_tutorial' in completed:
             return None
         seen = self._menu_coach_seen()
         if 'guide_first_duel_reward' not in seen:
-            row = self._onboarding_guide_item_rects.get('finish_first_duel')
+            row = (self._onboarding_guide_item_rects.get('finish_tutorial')
+                   or self._onboarding_guide_item_rects.get('collect_first_kingdom_production'))
             if row is None:
                 row = self._onboarding_guide_rect().inflate(-40, -140)
             return {
                 'id': 'guide_first_duel_reward',
                 'title': 'Rewards Track Your Progress',
                 'rect': row,
-                'body': 'The checklist and goals grant rewards as you learn. Finish a duel vs AI Strategos to claim this one.',
+                'body': 'The checklist and goals grant rewards as you learn. Finish the kingdom tutorial to claim this one.',
                 'max_lines': 4,
             }
         return None

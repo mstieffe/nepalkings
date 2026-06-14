@@ -6565,6 +6565,20 @@ def finish_battle():
     # server_diff > 0 means invader wins; convert to caller's perspective
     total_diff = server_diff if is_invader else -server_diff
 
+    # Figure-vs-tactic split for the result dialog (invader/attacker
+    # perspective: fig_diff = attacker figure power − defender figure power,
+    # round_diff = attacker tactic total − defender tactic total).  The client
+    # orients these to the viewer.  Surfaced so players learn that figures,
+    # not tactics, usually decide a conquer battle.
+    battle_math = {}
+    if isinstance(breakdown, dict):
+        battle_math = {
+            'fig_diff': breakdown.get('fig_diff'),
+            'round_diff': breakdown.get('round_diff'),
+            'adv_power': breakdown.get('adv_power'),
+            'def_power': breakdown.get('def_power'),
+        }
+
     # ── Discrepancy check ──
     # Compare client value with server value (both in caller perspective)
     diff_delta = abs(total_diff - client_total_diff)
@@ -6636,6 +6650,7 @@ def finish_battle():
                 'conquer_loot_gained_cards': [],
                 'conquer_loot_lost_cards': [],
                 'cards_spent': 0,
+                **battle_math,
             }
             flag_modified(game, 'last_battle_result')
 
@@ -6664,6 +6679,7 @@ def finish_battle():
                 'loot_gained_cards': [],
                 'loot_lost_cards': [],
                 'cards_spent': 0,
+                **battle_math,
                 'game': serialize_game_for_viewer(game, g.user_id),
             })
 
@@ -6798,6 +6814,7 @@ def finish_battle():
             'destroyed_figure_name': destroyed_name,
             'destroyed_figure_family': destroyed_family,
             'checkmate_figure_name': checkmate_game_over.get('checkmate_figure_name') if checkmate_game_over else None,
+            **battle_math,
             **preserved_game_over,
         }
         _set_post_battle_pending_choice(
@@ -6847,6 +6864,7 @@ def finish_battle():
             'destroyed_figure_family': destroyed_family,
             'total_diff': total_diff,
             'returnable_cards': returnable_cards,
+            **battle_math,
             'game': serialize_game_for_viewer(game, g.user_id),
         }
         if game_over_info:

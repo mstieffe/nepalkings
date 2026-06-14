@@ -3450,6 +3450,10 @@ class GameScreen(Screen):
             'is_ai_defender': bool(last.get('is_ai_defender')),
             'conquer_attacker_player_id': last.get('conquer_attacker_player_id'),
             'conquer_defender_player_id': last.get('conquer_defender_player_id'),
+            'fig_diff': last.get('fig_diff'),
+            'round_diff': last.get('round_diff'),
+            'adv_power': last.get('adv_power'),
+            'def_power': last.get('def_power'),
         }
         return result
 
@@ -3601,6 +3605,10 @@ class GameScreen(Screen):
                         f'• {line}' for line in loot_lines)
                     message += '\n\nCollect looted cards from the Loot Inbox in your kingdom configuration.'
 
+        breakdown_line = self._conquer_result_breakdown_line(result, is_attacker)
+        if breakdown_line:
+            message = f'{message}\n\n{breakdown_line}'
+
         if reason_text:
             message = f'{reason_text}\n\n{message}'
 
@@ -3653,6 +3661,35 @@ class GameScreen(Screen):
                     return str(old_invader_id) == str(getattr(game, 'player_id', None))
 
         return bool(getattr(game, 'invader', False))
+
+    def _conquer_result_breakdown_line(self, result, is_attacker):
+        """One-line figure-vs-tactic split for the conquer result dialog.
+
+        The server stores ``fig_diff`` / ``round_diff`` in attacker
+        perspective; flip them for a viewer who defended.  Surfacing this
+        teaches players that figure power, not tactics, usually decides a
+        conquer battle.  Returns '' when the breakdown is absent (e.g.
+        auto-loss / withdrawal outcomes) so the line collapses cleanly.
+        """
+        if not isinstance(result, dict):
+            return ''
+        if result.get('fig_diff') is None or result.get('round_diff') is None:
+            return ''
+        try:
+            fig = int(result.get('fig_diff') or 0)
+            rounds = int(result.get('round_diff') or 0)
+        except (TypeError, ValueError):
+            return ''
+        if not is_attacker:
+            fig = -fig
+            rounds = -rounds
+        total = fig + rounds
+
+        def _signed(value):
+            return f'+{value}' if value >= 0 else str(value)
+
+        return (f'Battle math — Figures {_signed(fig)} · '
+                f'Tactics {_signed(rounds)} · Total {_signed(total)}')
 
     def _try_handle_finished_conquer_game(self):
         """Safety net for finished conquer games resolved outside BattleScreen."""

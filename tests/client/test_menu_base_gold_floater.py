@@ -473,7 +473,7 @@ def _journey_ready_menu_screen(completed_steps):
     return screen
 
 
-def test_main_menu_journey_coach_routes_conquer_then_reward_pack_then_duel():
+def test_main_menu_journey_coach_routes_conquer_reward_kingdom_then_optional_duel():
     # Fresh account: first conquest comes before Collection.
     screen = _journey_ready_menu_screen(completed_steps=[])
     step = screen._current_area_coach_step()
@@ -488,27 +488,55 @@ def test_main_menu_journey_coach_routes_conquer_then_reward_pack_then_duel():
     assert step['id'] == 'open_main_booster_reward'
     assert step['rect'] == screen.button_collection.rect
 
-    # Reward pack opened: now invite the player to their first duel.
+    # Reward pack opened but tutorial not finished: steer BACK TO THE KINGDOM
+    # (collect production + finish the config tour), NOT to a duel.
     screen.state.user_dict['onboarding']['completed_steps'].append(
         'open_first_main_booster')
     step = screen._current_area_coach_step()
+    assert step['id'] == 'return_to_kingdom_loop'
+    assert step['rect'] == screen.button_kingdom.rect
+
+    # Tutorial finished: only now is a duel offered, and clearly as optional.
+    screen.state.user_dict['onboarding']['completed_steps'].append(
+        'finish_tutorial')
+    step = screen._current_area_coach_step()
     assert step['id'] == 'ready_first_duel'
     assert step['rect'] == screen.button_duel.rect
+    assert step['title'].lower().startswith('optional')
 
-    # First duel done: the journey coach is finished.
+    # Optional duel played: the journey coach is finished.
     screen.state.user_dict['onboarding']['completed_steps'].append(
         'finish_first_duel')
     assert screen._current_area_coach_step() is None
 
 
-def test_guide_prompt_does_not_loop_after_first_duel():
+def test_duel_never_blocks_tutorial_completion_in_journey():
+    # Tutorial complete WITHOUT a duel: journey only ever offers the duel as an
+    # optional, skippable nudge — never a mandatory step.
     screen = _journey_ready_menu_screen(completed_steps=[
-        'open_first_main_booster',
         'finish_first_conquer_battle',
+        'open_first_main_booster',
+        'collect_first_kingdom_production',
+        'finish_tutorial',
+    ])
+    step = screen._current_journey_coach_step()
+    assert step['id'] == 'ready_first_duel'
+
+    # Skipping the optional nudge ends the journey; the duel is not required.
+    screen.state.user_dict['onboarding']['menu_hints_seen'] = ['ready_first_duel']
+    assert screen._current_journey_coach_step() is None
+
+
+def test_guide_prompt_does_not_loop_after_tutorial_complete():
+    screen = _journey_ready_menu_screen(completed_steps=[
+        'finish_first_conquer_battle',
+        'open_first_main_booster',
+        'collect_first_kingdom_production',
+        'finish_tutorial',
         'finish_first_duel',
     ])
     screen.state.user_dict['onboarding']['menu_hints_seen'] = [
-        'duel', 'kingdom', 'collection', 'rankings',
+        'duel', 'kingdom', 'collection', 'rankings', 'ready_first_duel',
     ]
 
     step = screen._current_area_coach_step()
@@ -518,14 +546,16 @@ def test_guide_prompt_does_not_loop_after_first_duel():
     assert screen._current_area_coach_step() is None
 
 
-def test_guide_prompt_can_return_to_unfinished_reward_walkthrough_before_duel():
+def test_guide_prompt_can_return_to_unfinished_reward_walkthrough():
     screen = _journey_ready_menu_screen(completed_steps=[
         'open_first_main_booster',
         'finish_first_conquer_battle',
     ])
+    # return_to_kingdom_loop already seen so the journey coach yields to the
+    # guide walkthrough, which should re-show while the tutorial is unfinished.
     screen.state.user_dict['onboarding']['menu_hints_seen'] = [
         'duel', 'kingdom', 'collection', 'rankings',
-        'guide', 'ready_first_duel',
+        'return_to_kingdom_loop', 'guide',
     ]
 
     step = screen._current_area_coach_step()

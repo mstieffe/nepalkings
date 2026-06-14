@@ -2023,7 +2023,9 @@ class ConquerGameScreen(GameScreen):
     def _conquer_battle_intro_step_ids():
         return (
             'conquer_battle_timeline_intro',
+            'conquer_battle_figure_power',
             'conquer_battle_tactics',
+            'conquer_battle_block_call',
             'conquer_battle_tactic_recap',
             'conquer_battle_finish',
         )
@@ -2056,6 +2058,19 @@ class ConquerGameScreen(GameScreen):
                     'button_label': 'Got it',
                     'max_lines': 5,
                 }
+            if step_id == 'conquer_battle_figure_power':
+                rects = (self._conquer_battle_field_overview_rects()
+                         or self._conquer_battle_intro_fallback_rects())
+                return {
+                    'id': step_id,
+                    'rect': rects[0],
+                    'rects': rects,
+                    'title': 'Your Figures Decide Most',
+                    'body': "The centre of the lane shows your figures' power versus the defender's, and it counts for most of the result. The three tactic rounds only swing things on top — so bring strong figures.",
+                    'action': 'next',
+                    'button_label': 'Got it',
+                    'max_lines': 5,
+                }
             if step_id == 'conquer_battle_tactics':
                 rects = (self._conquer_battle_tactic_action_rects()
                          or []) + (self._conquer_battle_tactics_target_rects() or [])
@@ -2069,6 +2084,19 @@ class ConquerGameScreen(GameScreen):
                     'action': 'next',
                     'button_label': 'Got it',
                     'max_lines': 6,
+                }
+            if step_id == 'conquer_battle_block_call':
+                rects = (self._conquer_battle_tactics_target_rects()
+                         or self._conquer_battle_intro_fallback_rects())
+                return {
+                    'id': step_id,
+                    'rect': rects[0],
+                    'rects': rects,
+                    'title': 'Block & Call',
+                    'body': "Block cancels a whole round — use it to erase the defender's biggest tactic. Call pulls one of your field figures into the round, adding its power (matching suit also adds the card value).",
+                    'action': 'next',
+                    'button_label': 'Got it',
+                    'max_lines': 5,
                 }
             if step_id == 'conquer_battle_tactic_recap':
                 rects = self._conquer_battle_tactics_target_rects()

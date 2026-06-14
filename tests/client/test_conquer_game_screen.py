@@ -254,7 +254,8 @@ def test_conquer_battle_coach_hidden_when_tutorial_paused():
 
 def test_conquer_battle_coach_shows_tactics_after_timeline():
     ConquerGameScreen, screen = _battle_coach_screen(
-        menu_seen={'conquer_battle_timeline_intro'})
+        menu_seen={'conquer_battle_timeline_intro',
+                   'conquer_battle_figure_power'})
     screen.active_conquer_timeline_step = lambda: SimpleNamespace(kind='attacker')
     screen._tactics_rail._action_button_rects = {
         'play': pygame.Rect(24, 370, 72, 28),
@@ -315,8 +316,23 @@ def test_conquer_battle_coach_click_step_marks_seen_and_passes_click_through():
     assert seen == ['conquer_battle_tactics']
 
 
+def test_conquer_battle_figure_power_follows_timeline():
+    ConquerGameScreen, screen = _battle_coach_screen(
+        menu_seen=['conquer_battle_timeline_intro'])
+    screen.active_conquer_timeline_step = lambda: SimpleNamespace(kind='overview')
+
+    step = ConquerGameScreen._current_conquer_battle_coach_step(screen)
+
+    assert step['id'] == 'conquer_battle_figure_power'
+    assert step['action'] == 'next'
+    assert 'figures' in step['body'].lower()
+
+
 def test_conquer_battle_tactics_step_follows_timeline():
-    ConquerGameScreen, screen = _battle_coach_screen(menu_seen=['conquer_battle_timeline_intro'])
+    ConquerGameScreen, screen = _battle_coach_screen(menu_seen=[
+        'conquer_battle_timeline_intro',
+        'conquer_battle_figure_power',
+    ])
     screen.active_conquer_timeline_step = lambda: SimpleNamespace(kind='overview')
 
     step = ConquerGameScreen._current_conquer_battle_coach_step(screen)
@@ -325,10 +341,26 @@ def test_conquer_battle_tactics_step_follows_timeline():
     assert step['action'] == 'next'
 
 
+def test_conquer_battle_block_call_follows_tactics():
+    ConquerGameScreen, screen = _battle_coach_screen(menu_seen=[
+        'conquer_battle_timeline_intro',
+        'conquer_battle_figure_power',
+        'conquer_battle_tactics',
+    ])
+
+    step = ConquerGameScreen._current_conquer_battle_coach_step(screen)
+
+    assert step['id'] == 'conquer_battle_block_call'
+    assert 'Block' in step['body']
+    assert 'Call' in step['body']
+
+
 def test_conquer_battle_tactic_recap_follows_tactics_step():
     ConquerGameScreen, screen = _battle_coach_screen(menu_seen=[
         'conquer_battle_timeline_intro',
+        'conquer_battle_figure_power',
         'conquer_battle_tactics',
+        'conquer_battle_block_call',
     ])
 
     step = ConquerGameScreen._current_conquer_battle_coach_step(screen)
@@ -341,6 +373,7 @@ def test_conquer_battle_tactic_recap_follows_tactics_step():
 def test_conquer_battle_tactics_step_independent_of_timeline_kind():
     ConquerGameScreen, screen = _battle_coach_screen(menu_seen=[
         'conquer_battle_timeline_intro',
+        'conquer_battle_figure_power',
     ])
     screen.active_conquer_timeline_step = lambda: SimpleNamespace(kind='overview')
 
@@ -354,6 +387,32 @@ def test_conquer_battle_tactics_step_independent_of_timeline_kind():
 
     step = ConquerGameScreen._current_conquer_battle_coach_step(screen)
     assert step['id'] == 'conquer_battle_tactics'
+
+
+def test_conquer_result_breakdown_line_attacker_perspective():
+    ConquerGameScreen = _conquer_screen_class()
+    line = ConquerGameScreen._conquer_result_breakdown_line(
+        None, {'fig_diff': 5, 'round_diff': 3}, True)
+    assert 'Figures +5' in line
+    assert 'Tactics +3' in line
+    assert 'Total +8' in line
+
+
+def test_conquer_result_breakdown_line_flips_for_defender():
+    ConquerGameScreen = _conquer_screen_class()
+    line = ConquerGameScreen._conquer_result_breakdown_line(
+        None, {'fig_diff': 5, 'round_diff': 3}, False)
+    assert 'Figures -5' in line
+    assert 'Tactics -3' in line
+    assert 'Total -8' in line
+
+
+def test_conquer_result_breakdown_line_absent_without_breakdown():
+    ConquerGameScreen = _conquer_screen_class()
+    # Auto-loss / withdrawal payloads have no figure/tactic split → no line.
+    assert ConquerGameScreen._conquer_result_breakdown_line(None, {}, True) == ''
+    assert ConquerGameScreen._conquer_result_breakdown_line(
+        None, {'fig_diff': 2}, True) == ''
 
 
 def test_conquer_battle_intro_pauses_until_overview_seen():

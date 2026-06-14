@@ -503,12 +503,19 @@ class GameMenuScreen(MenuScreenMixin, Screen):
         return ('finish_first_conquer_battle'
                 not in self._onboarding_completed_steps())
 
+    def _first_session_tutorial_complete(self):
+        return 'finish_tutorial' in self._onboarding_completed_steps()
+
     def _current_journey_coach_step(self):
-        """Guided first-session path: first conquest → reward pack → first duel.
+        """Guided first-session path: conquer → reward pack → kingdom loop.
 
         Conquest comes first by design: a conquer battle is a single short
         fight against the AI, so new players reach their first real battle
-        within minutes. The collection opens as a reward beat after the win.
+        within minutes. The collection opens as a reward beat after the win,
+        and the kingdom loop (collect production + finish the config tour)
+        completes the tutorial. The duel is NOT part of this mandatory path; it
+        is offered once, clearly optional, after the tutorial is done, and gets
+        its own skippable coaching the first time it is played.
         """
         seen = self._menu_coach_seen()
         if self._first_conquer_incomplete():
@@ -533,18 +540,31 @@ class GameMenuScreen(MenuScreenMixin, Screen):
                 'mark_on_click': True,
                 'max_lines': 5,
             }
-        if self._first_duel_incomplete():
-            if 'ready_first_duel' not in seen:
+        if not self._first_session_tutorial_complete():
+            # Collecting production and the kingdom-config tour are guided by the
+            # kingdom screen's own coach; steer the player back there.
+            if 'return_to_kingdom_loop' not in seen:
                 return {
-                    'id': 'ready_first_duel',
-                    'rect': self.button_duel.rect,
-                    'title': 'Ready For Your First Duel',
-                    'body': 'Try a full duel. Play a short practice match against AI Strategos.',
+                    'id': 'return_to_kingdom_loop',
+                    'rect': self.button_kingdom.rect,
+                    'title': 'Back To Your Kingdom',
+                    'body': 'Return to your Kingdom to collect the gold your land produced and finish setting it up.',
                     'action': 'click',
                     'mark_on_click': True,
                     'max_lines': 4,
                 }
             return None
+        # Tutorial finished — a duel is optional. Offer it once, clearly framed.
+        if self._first_duel_incomplete() and 'ready_first_duel' not in seen:
+            return {
+                'id': 'ready_first_duel',
+                'rect': self.button_duel.rect,
+                'title': 'Optional: Try A Duel',
+                'body': 'Your tutorial is complete! For a different challenge, play a quick duel against AI Strategos whenever you like.',
+                'action': 'click',
+                'mark_on_click': True,
+                'max_lines': 4,
+            }
         return None
 
     def _current_area_coach_step(self):
@@ -564,7 +584,7 @@ class GameMenuScreen(MenuScreenMixin, Screen):
 
         # Once the journey is underway, point at the guide for reward tracking.
         guide_walkthrough_pending = (
-            self._first_duel_incomplete()
+            not self._first_session_tutorial_complete()
             and 'guide_first_duel_reward' not in seen
         )
         if 'guide' not in seen or guide_walkthrough_pending:
@@ -572,7 +592,7 @@ class GameMenuScreen(MenuScreenMixin, Screen):
                 'id': 'guide',
                 'rect': self._icon_guide.rect,
                 'title': 'Guide',
-                'body': 'Open the guide to track rewards. Finish your first duel to claim its reward.',
+                'body': 'Open the guide any time to track your checklist and reward goals.',
                 'max_lines': 4,
             }
         return None
