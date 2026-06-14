@@ -871,7 +871,7 @@ class TestGameRouteCoverage:
         two_users,
         auth_headers_user1,
     ):
-        from models import Game, Player
+        from models import Figure, Game, Player
 
         u1, u2 = two_users
         game = db.session.get(Game, created_game['id'])
@@ -883,7 +883,15 @@ class TestGameRouteCoverage:
 
         game.turn_player_id = p1.id
         game.advancing_player_id = p1.id
+        game.advancing_figure_id = Figure.query.filter_by(
+            game_id=game.id,
+            player_id=p1.id,
+        ).first().id
         game.stake = 99
+        for fig in Figure.query.filter_by(game_id=game.id, player_id=p2.id).all():
+            fig.family_name = 'Wall'
+            fig.name = 'Wall'
+            fig.field = 'military'
         points_before = p1.points
         db.session.commit()
 
@@ -898,3 +906,37 @@ class TestGameRouteCoverage:
         assert data.get('success') is True, data
         db.session.refresh(p1)
         assert p1.points == points_before + 10
+
+    def test_defender_no_figures_loss_rejects_selectable_defender(
+        self,
+        client,
+        db,
+        created_game,
+        two_users,
+        auth_headers_user1,
+    ):
+        from models import Figure, Game, Player
+
+        u1, _u2 = two_users
+        game = db.session.get(Game, created_game['id'])
+        p1 = Player.query.filter_by(game_id=game.id, user_id=u1.id).first()
+        assert game is not None
+        assert p1 is not None
+
+        game.turn_player_id = p1.id
+        game.advancing_player_id = p1.id
+        game.advancing_figure_id = Figure.query.filter_by(
+            game_id=game.id,
+            player_id=p1.id,
+        ).first().id
+        db.session.commit()
+
+        resp = client.post(
+            '/games/defender_no_figures_loss',
+            json={'game_id': game.id, 'player_id': p1.id},
+            headers=auth_headers_user1,
+        )
+        data = resp.get_json()
+
+        assert resp.status_code == 400
+        assert data.get('reason') == 'selectable_defender_exists'

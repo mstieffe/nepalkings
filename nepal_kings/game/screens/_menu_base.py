@@ -17,6 +17,9 @@ from game.core.input_state import get_pressed as _get_pressed
 from utils import onboarding_service
 
 
+_MENU_COACH_STEP_UNSET = object()
+
+
 # ═══════════════════════════════════════════════════════════════════
 #  _MenuIconButton
 # ═══════════════════════════════════════════════════════════════════
@@ -854,7 +857,7 @@ class MenuScreenMixin:
             right_limit = self._onboarding_guide_close_rect.left - 12
             self.window.blit(ready, (right_limit - ready.get_width(), rect.y + 24))
 
-        intro = 'Learn the main areas, take a beginner duel, then claim rewards as real milestones unlock.'
+        intro = 'Conquer your first land, practice a beginner duel, then claim rewards as real milestones unlock.'
         intro_surf = self._onboarding_guide_small_font.render(
             self._fit_text(intro, self._onboarding_guide_small_font, rect.w - 44),
             True,
@@ -949,8 +952,8 @@ class MenuScreenMixin:
             'Where To Go', True, settings.SUB_SCREEN_HEADER_CLR)
         self.window.blit(header, (rect.x, rect.y))
         items = [
-            ('Duel', 'Play full duels against other players.'),
             ('Kingdom', 'Conquer lands and collect production.'),
+            ('Duel', 'Play full duels against other players.'),
             ('Collection', 'Open boosters, trade, and sell cards.'),
             ('Rankings', 'Compare progress with other players.'),
         ]
@@ -1343,8 +1346,9 @@ class MenuScreenMixin:
             event_types.add(text_input)
         return event_types
 
-    def _handle_menu_coach_events(self, events, step=None):
-        step = step or getattr(self, '_menu_coach_step', None)
+    def _handle_menu_coach_events(self, events, step=_MENU_COACH_STEP_UNSET):
+        if step is _MENU_COACH_STEP_UNSET:
+            step = getattr(self, '_menu_coach_step', None)
         if not step:
             return False
         action = step.get('action', 'next')

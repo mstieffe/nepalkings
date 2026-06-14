@@ -264,12 +264,21 @@ def test_menu_hint_marks_are_persisted(client, auth_headers_user1):
     data = response.get_json()
     assert data['onboarding']['menu_hints_seen'] == ['user_items', 'duel', 'guide_first_duel_reward']
 
+    collection_intro = client.post('/onboarding/mark_tip', headers=auth_headers_user1,
+                                   json={'tip_key': 'menu:collection_starter_cards'})
+    assert collection_intro.status_code == 200
+    data = collection_intro.get_json()
+    assert data['onboarding']['menu_hints_seen'] == [
+        'user_items', 'duel', 'guide_first_duel_reward', 'collection_starter_cards'
+    ]
+
     post_duel = client.post('/onboarding/mark_tip', headers=auth_headers_user1,
                             json={'tip_key': 'menu:collection_open_main_booster'})
     assert post_duel.status_code == 200
     data = post_duel.get_json()
     assert data['onboarding']['menu_hints_seen'] == [
-        'user_items', 'duel', 'guide_first_duel_reward', 'collection_open_main_booster'
+        'user_items', 'duel', 'guide_first_duel_reward',
+        'collection_starter_cards', 'collection_open_main_booster'
     ]
 
     newest = client.post('/onboarding/mark_tip', headers=auth_headers_user1,
@@ -288,6 +297,7 @@ def test_menu_hint_marks_are_persisted(client, auth_headers_user1):
         'user_items',
         'duel',
         'guide_first_duel_reward',
+        'collection_starter_cards',
         'collection_open_main_booster',
         'conquer_battle_timeline_intro',
         'kingdom_after_conquer_map',
@@ -306,13 +316,13 @@ def test_menu_hint_marks_are_persisted(client, auth_headers_user1):
 
 
 def test_finish_tutorial_reward_unlocks_on_last_menu_hint(client, db, two_users, auth_headers_user1):
-    u1, _ = two_users
+    u1, u2 = two_users
     u1.booster_packs = 0
     db.session.commit()
 
     initial = client.get('/onboarding/state', headers=auth_headers_user1).get_json()['onboarding']
     initial_steps = {step['id']: step for step in initial['core_steps']}
-    assert initial_steps['finish_tutorial']['title'] == 'Finish tutorial'
+    assert initial_steps['finish_tutorial']['title'] == 'Finish first-session tutorial'
     assert initial_steps['finish_tutorial']['reward'] == {'booster_packs': 6}
     assert initial_steps['finish_tutorial']['completed'] is False
     assert initial_steps['finish_tutorial']['claimable'] is False
@@ -321,8 +331,19 @@ def test_finish_tutorial_reward_unlocks_on_last_menu_hint(client, db, two_users,
                          json={'tip_key': 'menu:kingdom_config_shields_style'})
     data = marked.get_json()
     assert marked.status_code == 200
-    assert 'finish_tutorial' in data['onboarding']['completed_steps']
     steps = {step['id']: step for step in data['onboarding']['core_steps']}
+    assert 'finish_tutorial' not in data['onboarding']['completed_steps']
+    assert steps['finish_tutorial']['completed'] is False
+    assert steps['finish_tutorial']['claimable'] is False
+
+    from onboarding_service import mark_step
+    mark_step(u1, 'finish_first_conquer_battle')
+    _add_game_result(db, u1, u2)
+    db.session.commit()
+
+    finished = client.get('/onboarding/state', headers=auth_headers_user1).get_json()['onboarding']
+    steps = {step['id']: step for step in finished['core_steps']}
+    assert 'finish_tutorial' in finished['completed_steps']
     assert steps['finish_tutorial']['completed'] is True
     assert steps['finish_tutorial']['claimable'] is True
 

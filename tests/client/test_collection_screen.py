@@ -394,6 +394,7 @@ class TestCollectionCoach:
         screen._sell_dialogue = None
         screen._trade_dialogue = None
         screen._profile_dialogue = None
+        screen._panel_rect = pygame.Rect(20, 120, 280, 160)
         screen._btn_open_main_rect = pygame.Rect(10, 20, 80, 32)
         screen._btn_open_side_rect = pygame.Rect(10, 70, 80, 32)
         screen._icon_home = SimpleNamespace(rect=pygame.Rect(200, 20, 40, 40))
@@ -401,6 +402,12 @@ class TestCollectionCoach:
 
     def test_coach_requires_main_then_side_then_home(self):
         screen = self._screen(completed=['finish_first_duel'])
+        step = screen._current_collection_coach_step()
+        assert step['id'] == 'collection_starter_cards'
+        assert step['action'] == 'next'
+        assert step['button_label'] == 'Got it'
+
+        screen.state.user_dict['onboarding']['menu_hints_seen'].append('collection_starter_cards')
         assert screen._current_collection_coach_step()['id'] == 'collection_open_main_booster'
 
         screen.state.user_dict['onboarding']['completed_steps'].append('open_first_main_booster')

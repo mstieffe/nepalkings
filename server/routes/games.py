@@ -4007,14 +4007,15 @@ def defender_no_figures_loss():
         opponent_user = db.session.get(User, opponent.user_id) if opponent else None
         opponent_name = opponent_user.username if opponent_user else "Opponent"
 
+        if _has_selectable_defender(game, opponent.id if opponent else None):
+            return jsonify({
+                'success': False,
+                'message': 'Defender still has a selectable battle figure',
+                'reason': 'selectable_defender_exists',
+            }), 400
+
         # ── Conquer mode: single-battle game, no new round / side cards. ──
         if game.mode == 'conquer':
-            if _has_selectable_defender(game, opponent.id if opponent else None):
-                return jsonify({
-                    'success': False,
-                    'message': 'Defender still has a selectable battle figure',
-                    'reason': 'selectable_defender_exists',
-                }), 400
             return jsonify(_resolve_conquer_auto_loss(
                 game,
                 winner_player=player,

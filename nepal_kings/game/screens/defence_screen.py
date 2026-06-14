@@ -929,6 +929,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
             )
             data = resp.json()
             if data.get('success'):
+                self._apply_onboarding_payload(data)
                 self._apply_config(data.get('config'))
                 self._land = data.get('land', self._land)
                 self._rebuild_figure_objects()

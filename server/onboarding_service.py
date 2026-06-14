@@ -73,8 +73,8 @@ CORE_STEPS = [
     },
     {
         'id': 'finish_tutorial',
-        'title': 'Finish tutorial',
-        'description': 'Reach the final tutorial message in the guide flow.',
+        'title': 'Finish first-session tutorial',
+        'description': 'Complete the kingdom tour and finish your first duel.',
         'reward': {'booster_packs': 6},
     },
 ]
@@ -197,7 +197,7 @@ MENU_HINT_IDS = (
     'guide_achievements', 'guide_first_duel_reward',
     'open_boosters_first', 'ready_first_duel',
     'new_game', 'beginner_duel', 'send_first_duel_challenge',
-    'collection_open_main_booster',
+    'collection_starter_cards', 'collection_open_main_booster',
     'collection_open_side_booster', 'collection_return_home',
     'post_boosters_kingdom', 'kingdom_map_intro', 'kingdom_select_land',
     'kingdom_conquer_button', 'conquer_config_field',
@@ -436,7 +436,9 @@ def _facts(user, state=None):
         completed.add('collect_first_kingdom_production')
     if _saved_defence_count(user_id) >= 1:
         completed.add('save_first_defence_config')
-    if FINAL_TUTORIAL_MENU_HINT_ID in set(state.get('menu_hints_seen') or []):
+    if (FINAL_TUTORIAL_MENU_HINT_ID in set(state.get('menu_hints_seen') or [])
+            and 'finish_first_conquer_battle' in completed
+            and duel_finishes >= 1):
         completed.add('finish_tutorial')
 
     early_completed = set()

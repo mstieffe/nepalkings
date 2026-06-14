@@ -1359,8 +1359,9 @@ class ConquerScreen(MenuScreenMixin, Screen):
                 'id': 'conquer_config_build_edit',
                 'rect': self._btn_build,
                 'title': 'Build Figures From Cards',
-                'body': 'Click here to build figures from your collection cards. We gave you a starter deck for exactly this — enough to build a King, a Rice Farm, and Gorkha Warriors. Build all three: the King feeds the farm and warriors, the farm feeds the warriors, and the warriors attack.',
+                'body': 'This edit button opens the figure builder. Your starter deck is enough for a King, a Rice Farm, and Gorkha Warriors. Press Got it, then open it when you are ready. Build all three and return here.',
                 'action': 'next',
+                'button_label': 'Got it',
                 'max_lines': 6,
             }
         battle_plan_rect = self._conquer_combined_rect(self._battle_plan_rect, self._btn_buy_move)
@@ -1369,8 +1370,9 @@ class ConquerScreen(MenuScreenMixin, Screen):
                 'id': 'conquer_config_battle_plan',
                 'rect': battle_plan_rect,
                 'title': 'Battle Plan',
-                'body': 'This edit button opens battle move shopping. Those moves become your tactics during the battle.',
+                'body': 'After your figures are ready, use this edit button to choose the three tactics your attack carries into battle. Fill all three rounds, return here, and then start the conquest.',
                 'action': 'next',
+                'button_label': 'Got it',
                 'max_lines': 5,
             }
         prelude_rect = self._conquer_combined_rect(

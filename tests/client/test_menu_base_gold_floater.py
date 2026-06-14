@@ -455,7 +455,7 @@ def _journey_ready_menu_screen(completed_steps):
 
     seen = [
         'user_items', 'kingdom', 'collection', 'duel', 'rankings', 'home',
-        'guide_achievements', 'guide_first_duel_reward',
+        'guide', 'guide_achievements', 'guide_first_duel_reward',
     ]
     screen = object.__new__(GameMenuScreen)
     screen.state = SimpleNamespace(user_dict={'onboarding': {
@@ -502,6 +502,38 @@ def test_main_menu_journey_coach_routes_boosters_then_conquer_then_duel():
     screen.state.user_dict['onboarding']['completed_steps'].append(
         'finish_first_duel')
     assert screen._current_area_coach_step() is None
+
+
+def test_guide_prompt_does_not_loop_after_first_duel():
+    screen = _journey_ready_menu_screen(completed_steps=[
+        'open_first_main_booster',
+        'open_first_side_booster',
+        'finish_first_conquer_battle',
+        'finish_first_duel',
+    ])
+    screen.state.user_dict['onboarding']['menu_hints_seen'] = [
+        'user_items', 'rankings', 'home',
+    ]
+
+    step = screen._current_area_coach_step()
+    assert step['id'] == 'guide'
+
+    screen.state.user_dict['onboarding']['menu_hints_seen'].append('guide')
+    assert screen._current_area_coach_step() is None
+
+
+def test_guide_prompt_can_return_to_unfinished_reward_walkthrough_before_duel():
+    screen = _journey_ready_menu_screen(completed_steps=[
+        'open_first_main_booster',
+        'open_first_side_booster',
+        'finish_first_conquer_battle',
+    ])
+    screen.state.user_dict['onboarding']['menu_hints_seen'] = [
+        'user_items', 'rankings', 'home', 'guide', 'ready_first_duel',
+    ]
+
+    step = screen._current_area_coach_step()
+    assert step['id'] == 'guide'
 
 
 def test_kingdom_coach_progresses_from_map_to_conquer_button():
@@ -589,6 +621,13 @@ def test_kingdom_coach_shifts_to_post_battle_map_and_config_steps():
     step = screen._current_kingdom_coach_step()
     assert step['id'] == 'kingdom_defence_intro'
 
+    screen.state.user_dict['onboarding']['completed_steps'].append(
+        'save_first_defence_config')
+    step = screen._current_kingdom_coach_step()
+    assert step['id'] == 'kingdom_config_intro'
+
+    screen.state.user_dict['onboarding']['completed_steps'].remove(
+        'save_first_defence_config')
     screen.state.user_dict['onboarding']['menu_hints_seen'] = [
         'kingdom_after_conquer_map',
         'kingdom_connected_lands',
@@ -647,9 +686,28 @@ def test_conquer_coach_highlights_edit_controls_in_order():
         screen.state.user_dict['onboarding']['menu_hints_seen'] = list(seen)
         step = screen._current_conquer_coach_step()
         assert step['id'] == step_id
+        if step_id in {'conquer_config_build_edit', 'conquer_config_battle_plan'}:
+            assert step['action'] == 'next'
+            assert step['button_label'] == 'Got it'
         if step_id == 'conquer_config_to_battle':
             assert step['button_label'] == 'Got it'
         seen.append(step_id)
+
+
+def test_explicit_missing_coach_step_does_not_use_stale_cached_step():
+    import pygame
+
+    screen, _ = _screen_with_gold(100)
+    screen._menu_coach_step = {
+        'id': 'stale_step',
+        'rect': pygame.Rect(10, 10, 80, 40),
+        'title': 'Old Step',
+        'body': 'This step should not block events after a subscreen opens.',
+    }
+
+    event = pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=(20, 20))
+
+    assert screen._handle_menu_coach_events([event], None) is False
 
 
 def test_menu_coach_next_step_blocks_everything_except_next():

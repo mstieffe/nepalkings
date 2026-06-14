@@ -1421,6 +1421,16 @@ class CollectionScreen(MenuScreenMixin, Screen):
                 or self._trade_dialogue or self._profile_dialogue):
             return None
         completed = self._onboarding_completed_steps()
+        if 'collection_starter_cards' not in self._menu_coach_seen():
+            return {
+                'id': 'collection_starter_cards',
+                'rect': self._panel_rect,
+                'title': 'Your Starting Cards',
+                'body': 'You already own a small set of starting cards in this collection. They are enough to build your first King, Rice Farm, and Gorkha Warriors, so booster luck cannot block your first conquest.',
+                'action': 'next',
+                'button_label': 'Got it',
+                'max_lines': 5,
+            }
         if 'open_first_main_booster' not in completed:
             return {
                 'id': 'collection_open_main_booster',

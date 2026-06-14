@@ -517,7 +517,7 @@ class GameMenuScreen(MenuScreenMixin, Screen):
                 'id': 'open_boosters_first',
                 'rect': self.button_collection.rect,
                 'title': 'Open Your Booster Packs',
-                'body': 'Your welcome present holds booster packs. Open one main and one side booster in the Collection — their cards build the figures for your first conquest.',
+                'body': 'Your welcome present holds booster packs. Go to the Collection, then open one main and one side booster so the first conquest has fresh options.',
                 'action': 'click',
                 'mark_on_click': True,
                 'max_lines': 5,
@@ -528,7 +528,7 @@ class GameMenuScreen(MenuScreenMixin, Screen):
                     'id': 'post_boosters_kingdom',
                     'rect': self.button_kingdom.rect,
                     'title': 'Conquer Your First Land',
-                    'body': 'Your collection already holds a starter deck — enough to build a King, a farm, and warriors for your first attack. Head to your Kingdom, pick a nearby land, and win your first battle. It takes only a few minutes.',
+                    'body': 'Good. You have opened both welcome packs and seen where your cards live. Head to your Kingdom, pick a nearby land, and win your first battle. It takes only a few minutes.',
                     'action': 'click',
                     'mark_on_click': True,
                     'max_lines': 5,
@@ -583,12 +583,17 @@ class GameMenuScreen(MenuScreenMixin, Screen):
         for step_id, rect, title, body in steps:
             if step_id not in seen:
                 return {'id': step_id, 'rect': rect, 'title': title, 'body': body}
-        if 'guide_achievements' not in seen or 'guide_first_duel_reward' not in seen:
+        guide_walkthrough_pending = (
+            self._first_duel_incomplete()
+            and ('guide_achievements' not in seen
+                 or 'guide_first_duel_reward' not in seen)
+        )
+        if 'guide' not in seen or guide_walkthrough_pending:
             return {
                 'id': 'guide',
                 'rect': self._icon_guide.rect,
                 'title': 'Guide',
-                'body': 'Open the guide next. It tracks learning achievements and the rewards waiting behind them.',
+                'body': 'Open the guide next. It tracks the conquest path, duel practice, and rewards waiting behind real milestones.',
             }
         return None
 
@@ -667,10 +672,10 @@ class GameMenuScreen(MenuScreenMixin, Screen):
             [
                 f'Hello {username}!',
                 'Welcome to Nepal Kings — build your kingdom, conquer lands from the AI, and duel other rulers in a tactical card game.',
-                "Let's start with a short tutorial. We'll open your booster packs and conquer your first land together — the guide walks you through each step.",
+                "Let's start with a short tutorial. We'll visit your Collection, open your booster packs, and conquer your first land together.",
             ],
             items,
-            footer_when_done='Your starter kit is ready to use.',
+            footer_when_done='Your welcome present is ready to use.',
             hint_text='Click each box to reveal an item and its role.',
         )
 

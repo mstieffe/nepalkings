@@ -2723,19 +2723,24 @@ def defence_draft_save():
                         'message': 'Defence draft is incomplete'}), 400
 
     active = _promote_defence_draft(draft)
+    onboarding_payload = None
     try:
         user = db.session.get(User, g.user_id)
-        from onboarding_service import mark_step
+        from onboarding_service import mark_step, serialize_onboarding_state
         mark_step(user, 'save_first_defence_config')
+        onboarding_payload = serialize_onboarding_state(user)
     except Exception:
         logger.exception("Failed to update defence onboarding progress")
     db.session.commit()
-    return jsonify({
+    payload = {
         'success': True,
         'valid': True,
         'config': _serialize_defence_edit_config(active),
         'land': _serialize_land_context(land),
-    })
+    }
+    if onboarding_payload is not None:
+        payload['onboarding'] = onboarding_payload
+    return jsonify(payload)
 
 
 @kingdom.route('/defence/draft/discard', methods=['POST'])
