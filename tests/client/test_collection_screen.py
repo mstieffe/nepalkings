@@ -400,7 +400,7 @@ class TestCollectionCoach:
         screen._icon_home = SimpleNamespace(rect=pygame.Rect(200, 20, 40, 40))
         return screen
 
-    def test_coach_routes_to_kingdom_before_conquest_then_reward_then_duel(self):
+    def test_coach_routes_to_kingdom_before_conquest_then_reward_then_kingdom(self):
         screen = self._screen()
         step = screen._current_collection_coach_step()
         assert step['id'] == 'collection_starter_cards'
@@ -421,17 +421,32 @@ class TestCollectionCoach:
         step = screen._current_collection_coach_step()
         assert step['id'] == 'collection_open_main_booster'
 
+        # After the reward pack the player is sent BACK TO THE KINGDOM (collect
+        # production + finish the tour), never forced into a duel.
         screen.state.user_dict['onboarding']['completed_steps'].append('open_first_main_booster')
         step = screen._current_collection_coach_step()
-        assert step['id'] == 'ready_first_duel'
-        assert step['button_label'] == 'Start Duel'
-        assert step['navigate_screen'] == 'duel_menu'
+        assert step['id'] == 'return_to_kingdom_loop'
+        assert step['button_label'] == 'Go to Kingdom'
+        assert step['navigate_screen'] == 'kingdom'
 
-        screen.state.user_dict['onboarding']['completed_steps'].append('finish_first_duel')
+        # The side-booster step unlocks on tutorial completion, not on a duel.
+        screen.state.user_dict['onboarding']['completed_steps'].extend([
+            'collect_first_kingdom_production', 'finish_tutorial'])
         assert screen._current_collection_coach_step()['id'] == 'collection_open_side_booster'
 
         screen.state.user_dict['onboarding']['completed_steps'].append('open_first_side_booster')
         assert screen._current_collection_coach_step() is None
+
+    def test_coach_never_routes_to_duel_during_tutorial(self):
+        # Reward pack opened, tutorial unfinished: the collection coach must
+        # never navigate to the duel.
+        screen = self._screen(
+            completed=['finish_first_conquer_battle', 'open_first_main_booster'],
+            seen=['collection_starter_cards'])
+        step = screen._current_collection_coach_step()
+        assert step is not None
+        assert step.get('navigate_screen') != 'duel_menu'
+        assert step['id'] == 'return_to_kingdom_loop'
 
     def test_coach_opens_main_reward_pack_after_conquest_if_intro_seen(self):
         screen = self._screen(completed=[

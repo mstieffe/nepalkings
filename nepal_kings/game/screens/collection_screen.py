@@ -1457,21 +1457,22 @@ class CollectionScreen(MenuScreenMixin, Screen):
                 'mark_on_click': True,
                 'max_lines': 4,
             }
-        if ((next_action or {}).get('screen') == 'duel'
-                and 'finish_first_duel' not in completed):
+        if ((next_action or {}).get('screen') == 'kingdom'
+                and 'open_first_main_booster' in completed
+                and 'finish_tutorial' not in completed):
             home_icon = getattr(self, '_icon_home', None)
             target_rect = getattr(home_icon, 'rect', None) or self._panel_rect
             return {
-                'id': 'ready_first_duel',
+                'id': 'return_to_kingdom_loop',
                 'rect': target_rect,
-                'title': 'Try A Quick Duel',
-                'body': 'Your reward pack is open. Start a quick duel against AI Strategos to learn the full card game.',
+                'title': 'Back To Your Kingdom',
+                'body': 'Reward pack opened. Head back to your Kingdom to collect the gold your land produced and finish setting it up.',
                 'action': 'next',
-                'button_label': 'Start Duel',
-                'navigate_screen': 'duel_menu',
+                'button_label': 'Go to Kingdom',
+                'navigate_screen': 'kingdom',
                 'max_lines': 4,
             }
-        if ('finish_first_duel' in completed
+        if ('finish_tutorial' in completed
                 and 'open_first_side_booster' not in completed):
             return {
                 'id': 'collection_open_side_booster',

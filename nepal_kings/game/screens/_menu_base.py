@@ -1198,14 +1198,22 @@ class MenuScreenMixin:
         return set((self._onboarding() or {}).get('completed_steps') or [])
 
     def _first_session_journey_phase(self):
+        """Client mirror of onboarding_service._journey_metadata.
+
+        The mandatory tutorial is the kingdom core loop: conquer -> open reward
+        -> collect production -> finish the kingdom-config tour. The duel is NOT
+        part of this path (it is optional), so no phase routes to it.
+        """
         completed = self._onboarding_completed_steps()
-        if 'finish_first_duel' in completed:
-            return 'complete'
         if 'finish_first_conquer_battle' not in completed:
             return 'first_conquest'
         if 'open_first_main_booster' not in completed:
             return 'open_main_booster_reward'
-        return 'first_duel'
+        if 'collect_first_kingdom_production' not in completed:
+            return 'collect_production'
+        if 'finish_tutorial' not in completed:
+            return 'finish_kingdom_tour'
+        return 'complete'
 
     def _first_session_next_action(self):
         phase = self._first_session_journey_phase()
@@ -1221,11 +1229,17 @@ class MenuScreenMixin:
                 'label': 'Open Reward Pack',
                 'target_id': 'collection_open_main_booster',
             }
-        if phase == 'first_duel':
+        if phase == 'collect_production':
             return {
-                'screen': 'duel',
-                'label': 'Start Quick Duel',
-                'target_id': 'beginner_duel',
+                'screen': 'kingdom',
+                'label': 'Collect Production',
+                'target_id': 'kingdom_production_intro',
+            }
+        if phase == 'finish_kingdom_tour':
+            return {
+                'screen': 'kingdom',
+                'label': 'Finish Kingdom Tour',
+                'target_id': 'kingdom_config_intro',
             }
         return None
 
