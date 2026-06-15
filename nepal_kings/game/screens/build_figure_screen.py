@@ -1029,31 +1029,44 @@ class BuildFigureScreen(SubScreen):
         facts = onboarding.get('facts') or {}
         return int(facts.get('conquer_battles') or 0) == 1
 
+    def _second_build_hint_text(self):
+        """Progressive instruction reflecting what has been built so far.
+
+        Mirrors the pre-assembled starter attack: a King (castle) feeds people,
+        a Farm (village) makes food, and Warriors (military) spend food to
+        fight. The hint advances as each field is filled.
+        """
+        fields = {
+            str(fig.get('field') or '').lower()
+            for fig in self._kingdom_figures()
+        }
+        if 'castle' not in fields:
+            return 'Build your King first — pick the glowing King recipe, then press "create!".'
+        if 'village' not in fields:
+            return 'King built! Now build a Farm (village) — it turns a villager into food.'
+        if 'military' not in fields:
+            return 'Now build your Warriors (military) — they spend the Farm’s food to fight.'
+        return 'Army ready! Close the builder, then set three Daggers as your tactics.'
+
     def _draw_second_build_hint(self):
-        """Draw a one-line instruction banner across the top of the builder."""
-        try:
-            has_selection = bool(
-                self.scroll_text_list_shifter
-                and self.scroll_text_list_shifter.get_current_selected())
-        except Exception:
-            has_selection = False
-        if has_selection:
-            text = 'Press "create!" to build this figure — then build a Farm and Warriors.'
-        else:
-            text = 'Pick a glowing recipe (start with your King), then press "create!".'
-        font = settings.get_font(settings.FS_SMALL) if hasattr(settings, 'FS_SMALL') \
-            else self._kingdom_res_font
+        """Draw a progressive instruction banner along the bottom of the builder.
+
+        Anchored low so it never overlaps the figure icons or hierarchy diagram
+        in the middle of the screen.
+        """
+        text = self._second_build_hint_text()
+        font = settings.get_font(getattr(settings, 'FS_SMALL', settings.FS_TINY))
         screen_w = self.window.get_width()
+        screen_h = self.window.get_height()
         label = font.render(text, True, (255, 240, 200))
-        pad_x, pad_y = 16, 8
-        banner_w = label.get_width() + pad_x * 2
+        pad_x, pad_y = 18, 10
+        banner_w = min(screen_w - 16, label.get_width() + pad_x * 2)
         banner_h = label.get_height() + pad_y * 2
         x = max(8, (screen_w - banner_w) // 2)
-        y = int(self._sy(settings.BUILD_HIERARCHY_Y)) if hasattr(settings, 'BUILD_HIERARCHY_Y') else 8
-        y = max(6, y - banner_h - 6)
+        y = int(0.88 * screen_h)
         surf = pygame.Surface((banner_w, banner_h), pygame.SRCALPHA)
-        pygame.draw.rect(surf, (40, 28, 14, 235), surf.get_rect(), border_radius=8)
-        pygame.draw.rect(surf, (210, 180, 120), surf.get_rect(), 2, border_radius=8)
+        pygame.draw.rect(surf, (40, 28, 14, 238), surf.get_rect(), border_radius=8)
+        pygame.draw.rect(surf, (224, 182, 82), surf.get_rect(), 2, border_radius=8)
         self.window.blit(surf, (x, y))
         self.window.blit(label, (x + pad_x, y + pad_y))
 

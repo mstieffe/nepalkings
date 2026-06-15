@@ -447,3 +447,32 @@ class TestSecondBuildTutorialGating:
         from game.screens.build_figure_screen import BuildFigureScreen
         screen = self._screen(['finish_first_conquer_battle'], 1, skipped=True)
         assert BuildFigureScreen._second_build_tutorial_active(screen) is False
+
+
+class TestSecondBuildHintText:
+    def _screen(self, figures):
+        from game.screens.build_figure_screen import BuildFigureScreen
+        screen = BuildFigureScreen.__new__(BuildFigureScreen)
+        screen.mode = 'conquer'
+        screen.game = SimpleNamespace(_config={'figures': figures})
+        return screen
+
+    def _text(self, figures):
+        from game.screens.build_figure_screen import BuildFigureScreen
+        return BuildFigureScreen._second_build_hint_text(self._screen(figures))
+
+    def test_starts_with_king(self):
+        assert 'King' in self._text([])
+
+    def test_advances_to_farm_after_king(self):
+        text = self._text([{'field': 'castle'}])
+        assert 'Farm' in text
+
+    def test_advances_to_warriors_after_farm(self):
+        text = self._text([{'field': 'castle'}, {'field': 'village'}])
+        assert 'Warriors' in text
+
+    def test_done_when_all_fields_built(self):
+        text = self._text([
+            {'field': 'castle'}, {'field': 'village'}, {'field': 'military'}])
+        assert 'Daggers' in text or 'ready' in text.lower()
