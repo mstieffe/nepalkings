@@ -857,7 +857,7 @@ class MenuScreenMixin:
             right_limit = self._onboarding_guide_close_rect.left - 12
             self.window.blit(ready, (right_limit - ready.get_width(), rect.y + 24))
 
-        intro = 'Conquer your first land, practice a beginner duel, then claim rewards as real milestones unlock.'
+        intro = 'Finish the conquer tutorial, then try the optional duel tutorial. Claim rewards as milestones unlock.'
         intro_surf = self._onboarding_guide_small_font.render(
             self._fit_text(intro, self._onboarding_guide_small_font, rect.w - 44),
             True,
@@ -1185,6 +1185,8 @@ class MenuScreenMixin:
         if getattr(self, '_logout_dialogue', None):
             return False
         if getattr(self, '_welcome_present_dialogue', None):
+            return False
+        if getattr(self, '_tutorial_complete_dialogue', None):
             return False
         if getattr(self, 'dialogue_box', None):
             return False

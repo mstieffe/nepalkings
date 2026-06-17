@@ -365,8 +365,8 @@ def test_finish_tutorial_reward_unlocks_on_last_menu_hint(client, db, two_users,
 
     initial = client.get('/onboarding/state', headers=auth_headers_user1).get_json()['onboarding']
     initial_steps = {step['id']: step for step in initial['core_steps']}
-    assert initial_steps['finish_tutorial']['title'] == 'Finish first-session tutorial'
-    assert initial_steps['finish_tutorial']['reward'] == {'booster_packs': 6}
+    assert initial_steps['finish_tutorial']['title'] == 'Finish the conquer tutorial'
+    assert initial_steps['finish_tutorial']['reward'] == {'booster_packs': 6, 'booster_packs_side': 2}
     assert initial_steps['finish_tutorial']['completed'] is False
     assert initial_steps['finish_tutorial']['claimable'] is False
 
@@ -396,6 +396,7 @@ def test_finish_tutorial_reward_unlocks_on_last_menu_hint(client, db, two_users,
                           json={'reward_id': 'finish_tutorial'})
     claim_data = claimed.get_json()
     assert claimed.status_code == 200
-    assert claim_data['reward'] == {'booster_packs': 6}
+    assert claim_data['reward'] == {'booster_packs': 6, 'booster_packs_side': 2}
     assert claim_data['balances']['booster_packs'] == 6
+    assert claim_data['balances']['booster_packs_side'] == 2
     assert 'finish_tutorial' in claim_data['onboarding']['claimed_rewards']

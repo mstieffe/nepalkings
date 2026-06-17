@@ -21,19 +21,19 @@ CORE_STEPS = [
         'id': 'finish_first_conquer_battle',
         'title': 'Finish a conquer battle',
         'description': 'Resolve one land battle in kingdom mode.',
-        'reward': {'maps': 1},
+        'reward': {'maps': 4},
     },
     {
         'id': 'open_first_main_booster',
         'title': 'Open a main booster',
-        'description': 'Open a reward pack after your first conquest.',
+        'description': 'Open the reward pack you won from your first conquest.',
         'reward': {'booster_packs_side': 1},
     },
     {
         'id': 'finish_first_duel',
-        'title': 'Finish your first duel',
-        'description': 'Play a short duel from start to finish.',
-        'reward': {'booster_packs': 1},
+        'title': 'Finish the duel tutorial',
+        'description': 'Play a guided duel from start to finish.',
+        'reward': {'booster_packs': 3},
     },
     {
         'id': 'collect_first_kingdom_production',
@@ -73,9 +73,9 @@ CORE_STEPS = [
     },
     {
         'id': 'finish_tutorial',
-        'title': 'Finish first-session tutorial',
+        'title': 'Finish the conquer tutorial',
         'description': 'Conquer a land, collect its production, and finish the kingdom tour.',
-        'reward': {'booster_packs': 6},
+        'reward': {'booster_packs': 6, 'booster_packs_side': 2},
     },
 ]
 

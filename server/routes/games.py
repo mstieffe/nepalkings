@@ -7607,6 +7607,14 @@ def _resolve_conquer_battle(game, winner, requesting_player):
                     seed_first_conquest_production(seeded_kingdom, now=_utcnow())
             except Exception:
                 logger.exception("Failed to seed first-conquest production")
+        if attacker_first_conquest and attacker_user is not None:
+            # Award the first main booster as the conquest "reward pack" so the
+            # open-a-booster tutorial beat is genuinely earned (boosters are no
+            # longer dumped at registration).
+            try:
+                attacker_user.booster_packs = int(attacker_user.booster_packs or 0) + 1
+            except Exception:
+                logger.exception("Failed to grant first-conquest reward pack")
         lost_user_for_event = None if is_ai_land else (defender_user.id if defender_user else None)
         _create_kingdom_loot_events(
             attack_log_id=log.id,

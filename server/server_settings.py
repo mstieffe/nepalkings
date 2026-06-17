@@ -127,8 +127,11 @@ AI_WATCHDOG_RETRY_DELAY = float(os.getenv('AI_WATCHDOG_RETRY_DELAY', '4.0'))
 AI_WATCHDOG_MAX_RETRIES = int(os.getenv('AI_WATCHDOG_MAX_RETRIES', '3'))
 
 # ── v2.0: Collection & Boosters ──
-STARTER_BOOSTER_PACKS = 8                   # Free main-card packs on registration
-STARTER_BOOSTER_PACKS_SIDE = 2              # Free side-card packs on registration
+# Boosters and maps are no longer dumped at registration; they are earned as
+# tutorial milestone rewards (the first main booster is granted by the first
+# conquest win), so new players learn what each item is when it first matters.
+STARTER_BOOSTER_PACKS = 0                   # Earned via tutorial rewards
+STARTER_BOOSTER_PACKS_SIDE = 0             # Earned via tutorial rewards
 
 # Curated starter deck granted at registration so a new player can ALWAYS
 # field a complete, battle-ready first conquer attack, independent of booster
@@ -165,7 +168,7 @@ DUEL_BOOSTER_REWARD_PROBABILITIES = {       # [DEPRECATED] superseded by DUEL_RE
 }
 
 # ── Maps ──
-STARTER_MAPS = 4                            # Free maps on registration
+STARTER_MAPS = 0                            # Earned via the first-conquest reward
 
 # ── Duel rewards (pool-based) ──
 # Each duel awards N independent draws from a shared reward pool.

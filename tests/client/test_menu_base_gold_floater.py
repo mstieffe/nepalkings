@@ -944,3 +944,71 @@ def test_defence_coach_walks_setup_steps_after_first_conquer():
         seen.append(want)
     screen.state.user_dict['onboarding']['menu_hints_seen'] = list(seen)
     assert screen._current_defence_coach_step() is None
+
+
+def _menu_screen_for_completion(core_steps, *, welcome_pending=False, skipped=False):
+    from game.screens.game_menu_screen import GameMenuScreen
+    screen = object.__new__(GameMenuScreen)
+    screen.state = SimpleNamespace(user_dict={'onboarding': {
+        'core_steps': core_steps,
+        'welcome_pending': welcome_pending,
+        'onboarding_skipped': skipped,
+    }})
+    screen._tutorial_celebrated = set()
+    return screen
+
+
+def _core_step(step_id, *, completed, claimed, reward=None):
+    return {'id': step_id, 'completed': completed, 'claimed': claimed,
+            'reward': reward or {}}
+
+
+def test_tutorial_completion_celebrates_conquer_then_duel():
+    from game.screens.game_menu_screen import GameMenuScreen
+    screen = _menu_screen_for_completion([
+        _core_step('finish_tutorial', completed=True, claimed=False,
+                   reward={'booster_packs': 6, 'booster_packs_side': 2}),
+        _core_step('finish_first_duel', completed=True, claimed=False,
+                   reward={'booster_packs': 3}),
+    ])
+    pending = screen._pending_tutorial_completion()
+    assert pending is not None
+    assert pending[0] == 'finish_tutorial'
+    assert 'Conquer Tutorial Complete' in pending[1]
+
+    # Once celebrated, it advances to the duel tutorial.
+    screen._tutorial_celebrated.add('finish_tutorial')
+    pending = screen._pending_tutorial_completion()
+    assert pending[0] == 'finish_first_duel'
+    assert 'Duel Tutorial Complete' in pending[1]
+
+
+def test_tutorial_completion_skips_claimed_and_incomplete():
+    screen = _menu_screen_for_completion([
+        _core_step('finish_tutorial', completed=True, claimed=True),
+        _core_step('finish_first_duel', completed=False, claimed=False),
+    ])
+    assert screen._pending_tutorial_completion() is None
+
+
+def test_tutorial_completion_suppressed_while_welcome_pending():
+    screen = _menu_screen_for_completion([
+        _core_step('finish_tutorial', completed=True, claimed=False),
+    ], welcome_pending=True)
+    assert screen._pending_tutorial_completion() is None
+
+
+def test_tutorial_completion_suppressed_when_skipped():
+    screen = _menu_screen_for_completion([
+        _core_step('finish_tutorial', completed=True, claimed=False),
+    ], skipped=True)
+    assert screen._pending_tutorial_completion() is None
+
+
+def test_reward_reveal_items_covers_all_kinds():
+    from game.screens.game_menu_screen import GameMenuScreen
+    items = GameMenuScreen._reward_reveal_items(
+        {'gold': 50, 'booster_packs': 6, 'booster_packs_side': 2, 'maps': 4})
+    kinds = [it['kind'] for it in items]
+    assert kinds == ['gold', 'main_booster', 'side_booster', 'map']
+    assert all(it['label'] and it['description'] for it in items)

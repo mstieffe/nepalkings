@@ -2811,6 +2811,14 @@ class TestAITemplateCardRewards:
             cap = kingdom_vault_cap(kingdom)
             assert float(kingdom.pending_gold or 0.0) >= cap - 1e-6
 
+    def test_first_conquest_grants_reward_pack(self, app, db):
+        """The first conquest win awards one main booster as the reward pack."""
+        with app.app_context():
+            result, user, land, game, cfg = self._start_battle_and_resolve(
+                app, db, attacker_wins=True)
+            db.session.refresh(user)
+            assert int(user.booster_packs or 0) == 1
+
     def test_attacker_wins_sets_land_conquer_protection(self, app, db):
         """Successful conquest sets a temporary land-level conquer protection timestamp."""
         with app.app_context():

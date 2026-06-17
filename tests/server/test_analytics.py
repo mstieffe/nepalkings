@@ -91,6 +91,11 @@ class TestRouteHooks:
 
     def test_booster_open_tracks(self, client, app):
         _register(client, 'pack_user')
+        # Boosters are no longer granted at registration; give the test user one.
+        with app.app_context():
+            user = User.query.filter_by(username='pack_user').first()
+            user.booster_packs = 1
+            db.session.commit()
         login = client.post('/auth/login', data={
             'username': 'pack_user', 'password': 'pass1234'}).get_json()
         headers = {'Authorization': f"Bearer {login['token']}"}
