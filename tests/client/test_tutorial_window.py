@@ -185,3 +185,17 @@ def test_reveal_draw_runs_through_phases():
     r.draw()                       # def_spin
     r._phase = 'def_done'
     r.draw()                       # def_done
+
+
+def test_figure_button_and_dagger_diagrams_build_and_cache():
+    _display()
+    from game.components import tutorial_diagrams
+    tutorial_diagrams.clear_cache()
+    off = tutorial_diagrams.figure_buttons('offensive', 120)
+    deff = tutorial_diagrams.figure_buttons('defensive', 120)
+    dag = tutorial_diagrams.daggers_diagram(140)
+    assert isinstance(off, pygame.Surface)
+    assert isinstance(deff, pygame.Surface)
+    assert isinstance(dag, pygame.Surface)
+    assert tutorial_diagrams.figure_buttons('offensive', 120) is off
+    assert tutorial_diagrams.daggers_diagram(140) is dag

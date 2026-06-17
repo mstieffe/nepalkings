@@ -90,10 +90,11 @@ def card_combo_to_figure(target_h=None):
     card_w = int(card_h * (settings.CARD_WIDTH / settings.CARD_HEIGHT))
     j_card = _card_surface('Hearts', 'J', card_h)
     seven_card = _card_surface('Hearts', '7', card_h)
-    farm = _scaled(_load(_asset('img', 'slot_icons', 'village.png')),
-                   int(target_h * 0.9))
+    # The real Rice-Farm field-figure icon (a field figure button) as the payoff.
+    farm = _scaled(_load(_asset('img', 'figures', 'icons', 'rice_farm1.png')),
+                   int(target_h * 0.95))
     if farm is None:
-        farm = _scaled(_load(_asset('img', 'figures', 'village', 'farm1.png')),
+        farm = _scaled(_load(_asset('img', 'slot_icons', 'village.png')),
                        int(target_h * 0.9))
 
     gap = int(0.012 * settings.SCREEN_WIDTH)
@@ -186,6 +187,88 @@ def kingdom_overview_diagram(target_h=None):
     for p in parts:
         surf.blit(p, (x, target_h // 2 - p.get_height() // 2))
         x += p.get_width() + gap
+    _CACHE[key] = surf
+    return surf
+
+
+# Field-figure button sets: (icon file in img/figures/icons/, label).
+_ARMY_FIGURES = {
+    'offensive': [
+        ('castle_red.png', 'King'),
+        ('rice_farm1.png', 'Farm'),
+        ('army1.png', 'Warriors'),
+    ],
+    'defensive': [
+        ('castle_black.png', 'King'),
+        ('yack_farm1.png', 'Farm'),
+        ('fortress1.png', 'Fortress'),
+    ],
+}
+
+
+def _figure_button(icon_file, label, box):
+    """A framed field-figure icon with a label under it (one 'button')."""
+    label_font = settings.get_font(getattr(settings, 'FS_TINY', 14))
+    lbl = label_font.render(label, True, (235, 222, 190))
+    surf = pygame.Surface((box, box + lbl.get_height() + 6), pygame.SRCALPHA)
+    frame = pygame.Rect(0, 0, box, box)
+    pygame.draw.rect(surf, (28, 22, 14, 235), frame, border_radius=10)
+    pygame.draw.rect(surf, (224, 182, 82), frame, 2, border_radius=10)
+    icon = _scaled(_load(_asset('img', 'figures', 'icons', icon_file)), int(box * 0.78))
+    if icon:
+        surf.blit(icon, icon.get_rect(center=frame.center))
+    surf.blit(lbl, lbl.get_rect(midtop=(box // 2, box + 4)))
+    return surf
+
+
+def figure_buttons(color='offensive', target_h=None):
+    """A row of field-figure buttons (King / Farm / Warriors|Fortress)."""
+    _SH = settings.SCREEN_HEIGHT
+    target_h = int(target_h or 0.16 * _SH)
+    key = ('figbtns', color, target_h)
+    if key in _CACHE:
+        return _CACHE[key]
+    figs = _ARMY_FIGURES.get(color, _ARMY_FIGURES['offensive'])
+    box = target_h
+    gap = int(0.02 * settings.SCREEN_WIDTH)
+    buttons = [_figure_button(f, lbl, box) for f, lbl in figs]
+    total_w = sum(b.get_width() for b in buttons) + gap * (len(buttons) - 1)
+    h = max(b.get_height() for b in buttons)
+    surf = pygame.Surface((total_w, h), pygame.SRCALPHA)
+    x = 0
+    for b in buttons:
+        surf.blit(b, (x, 0))
+        x += b.get_width() + gap
+    _CACHE[key] = surf
+    return surf
+
+
+def daggers_diagram(target_h=None):
+    """Two Dagger cards joining into one bigger tactic (combine)."""
+    _SH = settings.SCREEN_HEIGHT
+    target_h = int(target_h or 0.18 * _SH)
+    key = ('daggers', target_h)
+    if key in _CACHE:
+        return _CACHE[key]
+    card_h = target_h
+    a = _card_surface('Hearts', '8', card_h)
+    b = _card_surface('Hearts', '9', card_h)
+    big = _card_surface('Hearts', '10', int(card_h * 1.12))
+    plus_font = settings.get_font(getattr(settings, 'FS_HEADING', 28), bold=True)
+    plus = plus_font.render('+', True, (235, 222, 190))
+    gap = int(0.012 * settings.SCREEN_WIDTH)
+    arrow_w = int(0.05 * settings.SCREEN_WIDTH)
+    total_w = (a.get_width() + gap + plus.get_width() + gap + b.get_width()
+               + arrow_w + big.get_width())
+    h = max(big.get_height(), card_h)
+    surf = pygame.Surface((total_w, h), pygame.SRCALPHA)
+    cy = h // 2
+    x = 0
+    surf.blit(a, (x, cy - a.get_height() // 2)); x += a.get_width() + gap
+    surf.blit(plus, plus.get_rect(center=(x + plus.get_width() // 2, cy))); x += plus.get_width() + gap
+    surf.blit(b, (x, cy - b.get_height() // 2)); x += b.get_width()
+    _draw_arrow(surf, (x + gap, cy), (x + arrow_w - gap, cy)); x += arrow_w
+    surf.blit(big, (x, cy - big.get_height() // 2))
     _CACHE[key] = surf
     return surf
 

@@ -246,6 +246,7 @@ class ConquerGameScreen(GameScreen):
         self._conquer_battle_move_cache = []
         self._conquer_battle_move_icon_caches = {}
         self._conquer_battle_move_manager = None
+        self._battle_intro_dialogue = None  # first-battle teaching window
         self._conquer_lane_context_cache_key = None
         self._conquer_lane_context_cache = None
         self._conquer_duel_lane_render_cache_key = None
@@ -1863,6 +1864,9 @@ class ConquerGameScreen(GameScreen):
             return False
         if onboarding.get('onboarding_skipped'):
             return False
+        # The teaching window is modal; suppress anchored coach cards under it.
+        if getattr(self, '_battle_intro_dialogue', None) is not None:
+            return False
         if 'finish_first_conquer_battle' in self._conquer_completed_onboarding_steps():
             return False
         game = getattr(self.state, 'game', None)
@@ -1907,6 +1911,57 @@ class ConquerGameScreen(GameScreen):
             seen.append(step_id)
         onboarding['menu_hints_seen'] = seen
         ud['onboarding'] = onboarding
+
+    # ── First-battle teaching window (replaces the dense battle coach cards) ──
+    def _maybe_show_battle_intro_window(self):
+        if getattr(self, '_battle_intro_dialogue', None) is not None:
+            return
+        if 'battle_intro_window' in self._conquer_menu_coach_seen():
+            return
+        if not self._conquer_battle_coach_allowed():
+            return
+        if not self._is_battle_phase_active():
+            return
+        from game.components.tutorial_window import TutorialWindowDialogue
+        from game.components import tutorial_diagrams
+        self._battle_intro_dialogue = TutorialWindowDialogue(
+            self.window,
+            [
+                {
+                    'title': 'Figures Decide Most',
+                    'layout': 'image_top',
+                    'image': lambda: tutorial_diagrams.figure_buttons('offensive'),
+                    'image_caption': 'Your figures vs the defender.',
+                    'lines': [
+                        "Most of a battle is your figures' total power",
+                        "against the defender's. Strong figures win.",
+                    ],
+                },
+                {
+                    'title': 'Tactics Tip the Rounds',
+                    'layout': 'image_top',
+                    'image': lambda: tutorial_diagrams.daggers_diagram(),
+                    'image_caption': 'Combine same-colour Daggers for a bigger hit.',
+                    'lines': [
+                        'Three quick rounds follow. Play a Dagger (a 7-10 card)',
+                        'to add its value. Combine same-colour Daggers into one,',
+                        'Block to cancel a round, or Call a figure into it.',
+                    ],
+                },
+            ],
+            title='How Battles Work',
+        )
+
+    def _handle_battle_intro_window_events(self, events):
+        win = getattr(self, '_battle_intro_dialogue', None)
+        if win is None:
+            return False
+        if any(getattr(e, 'type', None) == QUIT for e in events):
+            return False
+        if win.update(events) == 'done':
+            self._battle_intro_dialogue = None
+            self._mark_conquer_battle_coach_seen('battle_intro_window')
+        return True
 
     @staticmethod
     def _conquer_battle_coach_bounds(rects):
@@ -2021,12 +2076,11 @@ class ConquerGameScreen(GameScreen):
 
     @staticmethod
     def _conquer_battle_intro_step_ids():
+        # The concepts (timeline, figure power, block/call, combine) are taught
+        # up front by the 'How Battles Work' window; only two action pointers
+        # remain to guide the player's first Play and Finish.
         return (
-            'conquer_battle_timeline_intro',
-            'conquer_battle_figure_power',
             'conquer_battle_tactics',
-            'conquer_battle_block_call',
-            'conquer_battle_tactic_recap',
             'conquer_battle_finish',
         )
 
@@ -2126,6 +2180,9 @@ class ConquerGameScreen(GameScreen):
         return None
 
     def _conquer_battle_intro_paused(self):
+        # The teaching window pauses auto-advance/auto-finish while it is up.
+        if getattr(self, '_battle_intro_dialogue', None) is not None:
+            return True
         if not self._conquer_battle_coach_allowed():
             return False
         return self._current_conquer_battle_intro_step(self._conquer_menu_coach_seen()) is not None
@@ -3100,6 +3157,7 @@ class ConquerGameScreen(GameScreen):
         self._conquer_tactic_power_cache = {}
         self._withdraw_dialogue_open = False
         self._tutorial_dagger_explained = False
+        self._battle_intro_dialogue = None
         if self.state.game and getattr(self.state.game, 'state', None) != 'finished':
             self.state.game.game_over = False
             self.state.game.pending_game_over = None
@@ -7576,6 +7634,8 @@ class ConquerGameScreen(GameScreen):
 
         with perf_section('conquer.coach'):
             self._draw_conquer_battle_coach()
+            if getattr(self, '_battle_intro_dialogue', None) is not None:
+                self._battle_intro_dialogue.draw()
 
     # ----------------------------------------------------------------- update
 
@@ -7647,6 +7707,7 @@ class ConquerGameScreen(GameScreen):
             self._sync_conquer_action_modes()
             self._sync_pending_confirmation_state()
             self._enforce_battle_shop_during_moves()
+            self._maybe_show_battle_intro_window()
             if not self._conquer_battle_intro_paused():
                 self._maybe_auto_trigger_finish_battle()
                 self._maybe_auto_advance_single_option_step()
@@ -7713,6 +7774,9 @@ class ConquerGameScreen(GameScreen):
                 self.dialogue_box = None
                 self.show_next_queued_notification()
                 return
+
+        if self._handle_battle_intro_window_events(events):
+            return
 
         if self._handle_conquer_battle_coach_events(events):
             return

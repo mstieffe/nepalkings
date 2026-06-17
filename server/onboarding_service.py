@@ -205,6 +205,7 @@ MENU_HINT_IDS = (
     'conquer_config_prelude_spell', 'conquer_config_to_battle',
     'conquer_build_yourself', 'conquer_build_yourself_tactics',
     'conquer_build_yourself_battle',
+    'battle_intro_window',
     'conquer_battle_timeline_intro', 'conquer_battle_figure_power',
     'conquer_battle_tactics', 'conquer_battle_block_call',
     'conquer_battle_tactic_recap', 'conquer_battle_finish',

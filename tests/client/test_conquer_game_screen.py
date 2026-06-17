@@ -226,13 +226,54 @@ def test_passive_timeline_still_allows_field_inspection_clicks():
     assert handled == [event]
 
 
-def test_conquer_battle_coach_starts_with_timeline_intro():
+def test_conquer_battle_coach_starts_with_tactics_pointer():
+    # Concepts moved to the 'How Battles Work' window; the anchored coach now
+    # begins with the Play-a-tactic pointer.
     ConquerGameScreen, screen = _battle_coach_screen()
 
     step = ConquerGameScreen._current_conquer_battle_coach_step(screen)
 
-    assert step['id'] == 'conquer_battle_timeline_intro'
-    assert step['title'] == 'Battle Timeline'
+    assert step['id'] == 'conquer_battle_tactics'
+
+
+def _ensure_display_for_window():
+    if not pygame.display.get_init():
+        pygame.display.init()
+    if pygame.display.get_surface() is None:
+        pygame.display.set_mode((1, 1))
+    if not pygame.font.get_init():
+        pygame.font.init()
+    return pygame.display.get_surface()
+
+
+def test_battle_intro_window_shows_once_then_suppressed():
+    ConquerGameScreen, screen = _battle_coach_screen()
+    screen.window = _ensure_display_for_window()
+    screen.state.game.battle_round = 1  # battle phase active
+
+    ConquerGameScreen._maybe_show_battle_intro_window(screen)
+    assert screen._battle_intro_dialogue is not None
+    # While the window is up, the anchored coach is suppressed and the intro
+    # is considered paused.
+    assert ConquerGameScreen._conquer_battle_coach_allowed(screen) is False
+    assert ConquerGameScreen._conquer_battle_intro_paused(screen) is True
+
+    # Mark it seen → no re-show.
+    screen.state.user_dict['onboarding']['menu_hints_seen'].append('battle_intro_window')
+    screen._battle_intro_dialogue = None
+    ConquerGameScreen._maybe_show_battle_intro_window(screen)
+    assert screen._battle_intro_dialogue is None
+
+
+def test_battle_intro_window_suppressed_when_skipped_or_done():
+    for kwargs in ({'skipped': True},
+                   {'completed_steps': ['finish_first_conquer_battle']}):
+        ConquerGameScreen, screen = _battle_coach_screen(**kwargs)
+        screen.window = _ensure_display_for_window()
+        screen._battle_intro_dialogue = None
+        screen.state.game.battle_round = 1
+        ConquerGameScreen._maybe_show_battle_intro_window(screen)
+        assert screen._battle_intro_dialogue is None
 
 
 def test_conquer_battle_coach_hidden_after_first_conquer_completion():
@@ -316,18 +357,6 @@ def test_conquer_battle_coach_click_step_marks_seen_and_passes_click_through():
     assert seen == ['conquer_battle_tactics']
 
 
-def test_conquer_battle_figure_power_follows_timeline():
-    ConquerGameScreen, screen = _battle_coach_screen(
-        menu_seen=['conquer_battle_timeline_intro'])
-    screen.active_conquer_timeline_step = lambda: SimpleNamespace(kind='overview')
-
-    step = ConquerGameScreen._current_conquer_battle_coach_step(screen)
-
-    assert step['id'] == 'conquer_battle_figure_power'
-    assert step['action'] == 'next'
-    assert 'figures' in step['body'].lower()
-
-
 def test_conquer_battle_tactics_step_follows_timeline():
     ConquerGameScreen, screen = _battle_coach_screen(menu_seen=[
         'conquer_battle_timeline_intro',
@@ -341,33 +370,14 @@ def test_conquer_battle_tactics_step_follows_timeline():
     assert step['action'] == 'next'
 
 
-def test_conquer_battle_block_call_follows_tactics():
+def test_conquer_battle_finish_follows_tactics():
     ConquerGameScreen, screen = _battle_coach_screen(menu_seen=[
-        'conquer_battle_timeline_intro',
-        'conquer_battle_figure_power',
         'conquer_battle_tactics',
     ])
 
     step = ConquerGameScreen._current_conquer_battle_coach_step(screen)
 
-    assert step['id'] == 'conquer_battle_block_call'
-    assert 'Block' in step['body']
-    assert 'Call' in step['body']
-
-
-def test_conquer_battle_tactic_recap_follows_tactics_step():
-    ConquerGameScreen, screen = _battle_coach_screen(menu_seen=[
-        'conquer_battle_timeline_intro',
-        'conquer_battle_figure_power',
-        'conquer_battle_tactics',
-        'conquer_battle_block_call',
-    ])
-
-    step = ConquerGameScreen._current_conquer_battle_coach_step(screen)
-
-    assert step['id'] == 'conquer_battle_tactic_recap'
-    assert 'Gamble a weak tactic' in step['body']
-    assert 'Combine two red/red or black/black Daggers' in step['body']
+    assert step['id'] == 'conquer_battle_finish'
 
 
 def test_conquer_battle_tactics_step_independent_of_timeline_kind():
