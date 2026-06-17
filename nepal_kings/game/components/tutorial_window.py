@@ -31,12 +31,16 @@ class TutorialWindowDialogue:
 
         _SW = settings.SCREEN_WIDTH
         _SH = settings.SCREEN_HEIGHT
-        self.title_font = settings.get_font(
+        # The window title is a small "kicker"; the per-page title is the big,
+        # catchy headline.
+        self.kicker_font = settings.get_font(
+            getattr(settings, 'FS_SMALL', settings.FONT_SIZE_DIALOGUE_BOX))
+        self.headline_font = settings.get_font(
             settings.FONT_SIZE_TITLE_DIALOGUE_BOX, bold=True)
-        self.page_title_font = settings.get_font(
-            getattr(settings, 'FS_HEADING', settings.FONT_SIZE_DIALOGUE_BOX), bold=True)
         self.font = settings.get_font(settings.FONT_SIZE_DIALOGUE_BOX)
         self.caption_font = settings.get_font(getattr(settings, 'FS_TINY', 14))
+        # Warm accent for headlines/captions; falls back to the title colour.
+        self._accent = getattr(settings, 'TITLE_TEXT_COLOR', (240, 210, 140))
 
         box_w = settings.DIALOGUE_BOX_WIDTH
         box_h = int(0.66 * _SH)
@@ -117,56 +121,123 @@ class TutorialWindowDialogue:
                     return None
         return None
 
+    def _scaled_image(self, page):
+        """Page image scaled to a generous, layout-aware box (or None)."""
+        img = self._page_image(page)
+        if img is None:
+            return None
+        _SW = settings.SCREEN_WIDTH
+        _SH = settings.SCREEN_HEIGHT
+        max_w = self.rect.w - int(0.14 * _SW)
+        # 'image_top' treats the image as a hero, so allow it to be larger.
+        hero = page.get('layout', 'image_top') in ('image_top', 'image_only')
+        max_h = int((0.32 if hero else 0.24) * _SH)
+        if img.get_width() > max_w or img.get_height() > max_h:
+            ratio = min(max_w / img.get_width(), max_h / img.get_height())
+            img = pygame.transform.smoothscale(
+                img, (max(1, int(img.get_width() * ratio)),
+                      max(1, int(img.get_height() * ratio))))
+        return img
+
+    def _page_rows(self, page):
+        """Ordered (surface, kind, gap_after) blocks for the current page.
+
+        The image/text order is per-page via ``layout``:
+        'image_top' (default), 'image_bottom', 'text_only', 'image_only'.
+        """
+        _SH = settings.SCREEN_HEIGHT
+        _SW = settings.SCREEN_WIDTH
+        block_gap = int(0.024 * _SH)
+        line_gap = int(0.006 * _SH)
+
+        headline = None
+        if page.get('title'):
+            headline = self.headline_font.render(page['title'], True, self._accent)
+        img = self._scaled_image(page)
+        cap = None
+        if img is not None and page.get('image_caption'):
+            cap = self.caption_font.render(
+                page['image_caption'], True, settings.DIALOGUE_BOX_MSG_TEXT_CLR)
+        text_surfs = []
+        max_w = self.rect.w - int(0.10 * _SW)
+        for raw in page.get('lines', []) or []:
+            for line in self._wrap(raw, self.font, max_w):
+                text_surfs.append(
+                    self.font.render(line, True, settings.DIALOGUE_BOX_MSG_TEXT_CLR))
+
+        def image_block():
+            blocks = []
+            if img is not None:
+                blocks.append((img, 'image', line_gap if cap else block_gap))
+                if cap:
+                    blocks.append((cap, 'caption', block_gap))
+            return blocks
+
+        def text_block():
+            return [(s, 'text', line_gap) for s in text_surfs]
+
+        layout = page.get('layout', 'image_top')
+        rows = []
+        if headline:
+            rows.append((headline, 'headline', block_gap))
+        if layout == 'text_only':
+            rows += text_block()
+        elif layout == 'image_only':
+            rows += image_block()
+        elif layout == 'image_bottom':
+            rows += text_block()
+            if text_surfs and (img is not None):
+                # promote the gap before the image to a block gap
+                s, k, _ = rows[-1]
+                rows[-1] = (s, k, block_gap)
+            rows += image_block()
+        else:  # image_top
+            rows += image_block()
+            rows += text_block()
+        return rows
+
     def draw(self):
         _SW = settings.SCREEN_WIDTH
         _SH = settings.SCREEN_HEIGHT
         self.window.blit(self._overlay, (0, 0))
         self.window.blit(self._panel, self.rect.topleft)
 
-        y = self.rect.y + settings.DIALOGUE_BOX_TEXT_MARGIN_Y
+        # ── Header: small kicker + accent rule ──
+        top = self.rect.y + settings.DIALOGUE_BOX_TEXT_MARGIN_Y
         if self.title:
-            ts = self.title_font.render(self.title, True, settings.TITLE_TEXT_COLOR)
-            self.window.blit(ts, ts.get_rect(center=(self.rect.centerx, y + ts.get_height() // 2)))
-            y += ts.get_height() + int(0.012 * _SH)
-            sx1 = self.rect.x + int(0.04 * _SW)
-            sx2 = self.rect.right - int(0.04 * _SW)
-            pygame.draw.line(self.window, settings.DIALOGUE_BOX_SEP_CLR,
-                             (sx1, y), (sx2, y), 1)
-            y += int(0.014 * _SH)
+            ks = self.kicker_font.render(self.title.upper(), True, self._accent)
+            self.window.blit(ks, ks.get_rect(center=(self.rect.centerx, top + ks.get_height() // 2)))
+            top += ks.get_height() + int(0.010 * _SH)
+        rule_w = int(self.rect.w * 0.18)
+        pygame.draw.line(self.window, settings.DIALOGUE_BOX_SEP_CLR,
+                         (self.rect.centerx - rule_w // 2, top),
+                         (self.rect.centerx + rule_w // 2, top), 2)
+        header_bottom = top + int(0.018 * _SH)
 
+        # ── Content: vertically centered between header and the controls ──
         page = self.pages[self.page_index] if self.pages else {}
-        if page.get('title'):
-            pts = self.page_title_font.render(page['title'], True, settings.TITLE_TEXT_COLOR)
-            self.window.blit(pts, pts.get_rect(center=(self.rect.centerx, y + pts.get_height() // 2)))
-            y += pts.get_height() + int(0.012 * _SH)
+        rows = self._page_rows(page)
+        content_h = sum(s.get_height() for s, _, _ in rows)
+        content_h += sum(g for _, _, g in rows[:-1]) if rows else 0
+        dots_top = self._btn_y - int(0.03 * _SH)
+        avail_top = header_bottom
+        avail_h = dots_top - avail_top
+        y = avail_top + max(0, (avail_h - content_h) // 2)
 
-        img = self._page_image(page)
-        if img is not None:
-            max_w = self.rect.w - int(0.10 * _SW)
-            max_h = int(0.26 * _SH)
-            if img.get_width() > max_w or img.get_height() > max_h:
-                ratio = min(max_w / img.get_width(), max_h / img.get_height())
-                img = pygame.transform.smoothscale(
-                    img, (max(1, int(img.get_width() * ratio)),
-                          max(1, int(img.get_height() * ratio))))
-            self.window.blit(img, img.get_rect(midtop=(self.rect.centerx, y)))
-            y += img.get_height() + int(0.010 * _SH)
-            cap = page.get('image_caption')
-            if cap:
-                cs = self.caption_font.render(cap, True, settings.DIALOGUE_BOX_MSG_TEXT_CLR)
-                self.window.blit(cs, cs.get_rect(center=(self.rect.centerx, y + cs.get_height() // 2)))
-                y += cs.get_height() + int(0.008 * _SH)
+        for surf, kind, gap in rows:
+            r = surf.get_rect(midtop=(self.rect.centerx, y))
+            if kind == 'image':
+                pad = int(0.012 * _SW)
+                bg = pygame.Rect(r.x - pad, r.y - pad // 2,
+                                 r.w + pad * 2, r.h + pad)
+                panel = pygame.Surface((bg.w, bg.h), pygame.SRCALPHA)
+                pygame.draw.rect(panel, (0, 0, 0, 60), panel.get_rect(), border_radius=10)
+                pygame.draw.rect(panel, (*self._accent, 90), panel.get_rect(), 1, border_radius=10)
+                self.window.blit(panel, bg.topleft)
+            self.window.blit(surf, r.topleft)
+            y += surf.get_height() + gap
 
-        line_h = self.font.get_height() + int(0.004 * _SH)
-        max_w = self.rect.w - int(0.08 * _SW)
-        for raw in page.get('lines', []) or []:
-            for line in self._wrap(raw, self.font, max_w):
-                ls = self.font.render(line, True, settings.DIALOGUE_BOX_MSG_TEXT_CLR)
-                self.window.blit(ls, ls.get_rect(center=(self.rect.centerx, y + line_h // 2)))
-                y += line_h
-            y += int(0.006 * _SH)
-
-        # Page dots.
+        # ── Page dots ──
         if len(self.pages) > 1:
             dot_r = max(3, int(0.005 * _SH))
             gap = dot_r * 3
@@ -174,10 +245,10 @@ class TutorialWindowDialogue:
             dx = self.rect.centerx - total // 2
             dy = self._btn_y - int(0.02 * _SH)
             for i in range(len(self.pages)):
-                col = settings.TITLE_TEXT_COLOR if i == self.page_index else settings.DIALOGUE_BOX_SEP_CLR
+                col = self._accent if i == self.page_index else settings.DIALOGUE_BOX_SEP_CLR
                 pygame.draw.circle(self.window, col, (dx + i * gap, dy), dot_r)
 
-        # Buttons: relabel Next on the last page.
+        # ── Buttons (Next becomes Got it on the last page) ──
         self._btn_next.text = 'Got it' if self._is_last else 'Next'
         if self.page_index > 0:
             self._btn_back.draw()

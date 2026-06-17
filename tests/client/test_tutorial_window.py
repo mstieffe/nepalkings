@@ -118,3 +118,70 @@ def test_reveal_button_disabled_while_spinning():
     assert r._btn.disabled is True
     # A click while spinning is ignored.
     assert r.update([_click(r._btn.rect)]) is None
+
+
+def _kinds(win, page):
+    return [kind for _surf, kind, _gap in win._page_rows(page)]
+
+
+def test_page_rows_order_respects_layout():
+    from game.components.tutorial_window import TutorialWindowDialogue
+    _display()
+    img = pygame.Surface((40, 20))
+    win = TutorialWindowDialogue(None, [{'lines': ['x']}], title='T')
+
+    top = {'title': 'H', 'layout': 'image_top', 'image': img,
+           'image_caption': 'c', 'lines': ['a', 'b']}
+    assert _kinds(win, top) == ['headline', 'image', 'caption', 'text', 'text']
+
+    bottom = {'title': 'H', 'layout': 'image_bottom', 'image': img,
+              'lines': ['a']}
+    assert _kinds(win, bottom) == ['headline', 'text', 'image']
+
+    text_only = {'title': 'H', 'layout': 'text_only', 'image': img,
+                 'lines': ['a', 'b']}
+    assert _kinds(win, text_only) == ['headline', 'text', 'text']
+
+    image_only = {'title': 'H', 'layout': 'image_only', 'image': img,
+                  'lines': ['a']}
+    assert _kinds(win, image_only) == ['headline', 'image']
+
+
+def _real_window():
+    _display()
+    import pygame as pg
+    return pg.Surface((pg.display.get_surface().get_width() or 1280,
+                       pg.display.get_surface().get_height() or 800))
+
+
+def test_window_draw_runs_for_each_layout():
+    from game.components import tutorial_diagrams
+    from game.components.tutorial_window import TutorialWindowDialogue
+    win_surf = _real_window()
+    pages = [
+        {'title': 'A Chess of Cards', 'layout': 'image_bottom',
+         'lines': ['hook line one', 'hook line two'],
+         'image': lambda: tutorial_diagrams.card_combo_to_figure(),
+         'image_caption': 'Jack + 7 build a Farm.'},
+        {'title': 'Suits Win Battles', 'layout': 'image_top',
+         'image': lambda: tutorial_diagrams.suit_advantage_wheel(),
+         'lines': ['attack and defend']},
+        {'title': 'Text Only', 'layout': 'text_only', 'lines': ['just text']},
+    ]
+    win = TutorialWindowDialogue(win_surf, pages, title='Welcome to Nepal Kings')
+    for _ in range(len(pages)):
+        win.draw()  # must not raise
+        win.page_index = min(win.page_index + 1, len(pages) - 1)
+
+
+def test_reveal_draw_runs_through_phases():
+    from game.components.tutorial_window import StarterSuitRevealDialogue
+    win_surf = _real_window()
+    r = StarterSuitRevealDialogue(win_surf, 'Hearts', 'Spades')
+    r.draw()                       # off_spin
+    r._phase = 'off_done'
+    r.draw()                       # off_done
+    r._phase = 'def_spin'
+    r.draw()                       # def_spin
+    r._phase = 'def_done'
+    r.draw()                       # def_done

@@ -639,26 +639,28 @@ class GameMenuScreen(MenuScreenMixin, Screen):
             self.window,
             [
                 {
+                    # Hook first, then the visual that proves it.
                     'title': 'A Chess of Cards',
+                    'layout': 'image_bottom',
                     'lines': [
-                        f'Welcome, {username}! Nepal Kings is a tactical card game.',
+                        f'Welcome, {username}!',
                         'Build figures, cast spells, and send them to fight.',
-                        'Figures and spells are card COMBINATIONS, not unique cards —',
-                        'so the whole game runs on a standard 52-card deck.',
-                        'A fixed set of figures keeps it deep but chess-like.',
+                        'Figures are card COMBINATIONS — so the whole game',
+                        'runs on one standard deck, deep but chess-like.',
                     ],
                     'image': lambda: tutorial_diagrams.card_combo_to_figure(),
                     'image_caption': 'Jack + 7 build a Farm.',
                 },
                 {
-                    'title': 'Suits Decide Battles',
-                    'lines': [
-                        'Hearts and Diamonds are offensive; Clubs and Spades defensive.',
-                        'Each suit beats one and is beaten by another:',
-                        'Hearts > Clubs > Diamonds > Spades > Hearts.',
-                    ],
+                    # The wheel is the star — lead with it.
+                    'title': 'Suits Win Battles',
+                    'layout': 'image_top',
                     'image': lambda: tutorial_diagrams.suit_advantage_wheel(),
-                    'image_caption': 'The suit-advantage cycle.',
+                    'image_caption': 'Hearts › Clubs › Diamonds › Spades › Hearts',
+                    'lines': [
+                        'Hearts & Diamonds attack; Clubs & Spades defend.',
+                        'Each suit beats the next around the ring.',
+                    ],
                 },
             ],
             title='Welcome to Nepal Kings',

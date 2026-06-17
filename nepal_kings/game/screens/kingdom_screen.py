@@ -747,20 +747,22 @@ class KingdomScreen(MenuScreenMixin, Screen):
             self.window,
             [
                 {
-                    'title': 'Lands & Gold',
-                    'lines': [
-                        'Every hex is a land. Lands you own produce gold over time.',
-                        'Unowned lands are defended by a pre-built set of figures',
-                        'and a tactical sequence — you conquer them just like your first.',
-                    ],
+                    # Lead with the land diagram, then explain it.
+                    'title': 'Lands Make Gold',
+                    'layout': 'image_top',
                     'image': lambda: tutorial_diagrams.kingdom_overview_diagram(),
-                    'image_caption': 'A land makes gold and holds figures.',
+                    'image_caption': 'Each land produces gold and holds figures.',
+                    'lines': [
+                        'Every hex is a land. Yours produce gold over time.',
+                        'Unowned lands are defended — conquer them like your first.',
+                    ],
                 },
                 {
-                    'title': 'Build Your Kingdom',
+                    'title': 'Grow Your Kingdom',
+                    'layout': 'text_only',
                     'lines': [
-                        'Conquer ADJACENT lands to expand your kingdom.',
-                        'Collect kingdom production for gold, packs and maps,',
+                        'Conquer ADJACENT lands to expand.',
+                        'Collect production for gold, packs and maps,',
                         'and spend kingdom skills to grow faster.',
                     ],
                 },
