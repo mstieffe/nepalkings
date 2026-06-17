@@ -104,6 +104,7 @@ class KingdomScreen(MenuScreenMixin, Screen):
 
         # ── State ───────────────────────────────────────────────────
         self._hex_map = None          # built on first enter
+        self._kingdom_overview_dialogue = None  # first-open teaching window
         self._detail_box = None       # LandDetailBox (modal)
         self._map_data = None         # raw server response
         self._cooldown = 0            # conquer cooldown seconds
@@ -722,9 +723,67 @@ class KingdomScreen(MenuScreenMixin, Screen):
 
         self._draw_menu_overlay()
         self._draw_menu_coach(self._current_kingdom_coach_step())
+        if getattr(self, '_kingdom_overview_dialogue', None):
+            self._kingdom_overview_dialogue.draw()
+
+    def _maybe_show_kingdom_overview(self):
+        """First Kingdom open: a teaching window about lands and kingdoms."""
+        if self._kingdom_overview_dialogue:
+            return
+        onboarding = self._onboarding()
+        if not onboarding or onboarding.get('onboarding_skipped'):
+            return
+        if 'kingdom_overview_window' in self._menu_coach_seen():
+            return
+        if not self._hex_map or self._loading or self._error:
+            return
+        if self._detail_box or self._thread or self._new_msg_picker:
+            return
+        if getattr(self, 'dialogue_box', None) or getattr(self, '_onboarding_guide_open', False):
+            return
+        from game.components.tutorial_window import TutorialWindowDialogue
+        from game.components import tutorial_diagrams
+        self._kingdom_overview_dialogue = TutorialWindowDialogue(
+            self.window,
+            [
+                {
+                    'title': 'Lands & Gold',
+                    'lines': [
+                        'Every hex is a land. Lands you own produce gold over time.',
+                        'Unowned lands are defended by a pre-built set of figures',
+                        'and a tactical sequence — you conquer them just like your first.',
+                    ],
+                    'image': lambda: tutorial_diagrams.kingdom_overview_diagram(),
+                    'image_caption': 'A land makes gold and holds figures.',
+                },
+                {
+                    'title': 'Build Your Kingdom',
+                    'lines': [
+                        'Conquer ADJACENT lands to expand your kingdom.',
+                        'Collect kingdom production for gold, packs and maps,',
+                        'and spend kingdom skills to grow faster.',
+                    ],
+                },
+            ],
+            title='Your Kingdom',
+        )
+
+    def _handle_kingdom_overview_events(self, events):
+        if not getattr(self, '_kingdom_overview_dialogue', None):
+            return False
+        from pygame import QUIT
+        if any(getattr(e, 'type', None) == QUIT for e in events):
+            return False
+        if self._kingdom_overview_dialogue.update(events) == 'done':
+            self._kingdom_overview_dialogue = None
+            self._mark_menu_coach_seen('kingdom_overview_window')
+        return True
 
     def _kingdom_coach_ready(self):
-        return True
+        # The first-open overview window teaches concepts before coach pointers.
+        if getattr(self, '_kingdom_overview_dialogue', None):
+            return False
+        return 'kingdom_overview_window' in self._menu_coach_seen()
 
     def _detail_conquer_button_rect(self):
         detail_box = getattr(self, '_detail_box', None)
@@ -1777,7 +1836,13 @@ class KingdomScreen(MenuScreenMixin, Screen):
         if self._detail_box:
             self._detail_box.update()
 
+        self._maybe_show_kingdom_overview()
+
     def handle_events(self, events):
+        # The first-open teaching window is modal — it captures all input.
+        if self._handle_kingdom_overview_events(events):
+            return
+
         super().handle_events(events)
 
         coach_step = self._current_kingdom_coach_step()

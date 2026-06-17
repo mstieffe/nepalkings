@@ -1186,6 +1186,8 @@ class MenuScreenMixin:
             return False
         if getattr(self, '_welcome_present_dialogue', None):
             return False
+        if getattr(self, '_starter_reveal_dialogue', None):
+            return False
         if getattr(self, '_tutorial_complete_dialogue', None):
             return False
         if getattr(self, 'dialogue_box', None):

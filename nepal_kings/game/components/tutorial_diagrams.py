@@ -161,5 +161,34 @@ def suit_advantage_wheel(target_h=None):
     return surf
 
 
+def kingdom_overview_diagram(target_h=None):
+    """A land that produces gold and holds figures: [gold] [castle][village][military]."""
+    _SH = settings.SCREEN_HEIGHT
+    target_h = int(target_h or 0.14 * _SH)
+    key = ('kingdom', target_h)
+    if key in _CACHE:
+        return _CACHE[key]
+
+    gold = _scaled(_load(_asset('img', 'dialogue_box', 'icons', 'gold.png')), target_h)
+    slots = [
+        _scaled(_load(_asset('img', 'slot_icons', f'{name}.png')), int(target_h * 0.95))
+        for name in ('castle', 'village', 'military')
+    ]
+    parts = [p for p in ([gold] + slots) if p]
+    if not parts:
+        surf = pygame.Surface((1, 1), pygame.SRCALPHA)
+        _CACHE[key] = surf
+        return surf
+    gap = int(0.02 * settings.SCREEN_WIDTH)
+    total_w = sum(p.get_width() for p in parts) + gap * (len(parts) - 1)
+    surf = pygame.Surface((total_w, target_h), pygame.SRCALPHA)
+    x = 0
+    for p in parts:
+        surf.blit(p, (x, target_h // 2 - p.get_height() // 2))
+        x += p.get_width() + gap
+    _CACHE[key] = surf
+    return surf
+
+
 def clear_cache():
     _CACHE.clear()

@@ -109,6 +109,7 @@ class GameMenuScreen(MenuScreenMixin, Screen):
         self._welcome_dialogue_opened = False
         self._welcome_dialogue_username = self._current_menu_username()
         self._welcome_present_dialogue = None
+        self._starter_reveal_dialogue = None
         # Explicit "tutorial complete" celebrations (conquer + duel tutorials).
         self._tutorial_complete_dialogue = None
         self._tutorial_complete_step_id = None
@@ -418,6 +419,7 @@ class GameMenuScreen(MenuScreenMixin, Screen):
         if hasattr(self, '_badge_poller') and self._badge_poller and self._badge_poller.has_result():
             self._apply_badge_data(self._badge_poller.result)
         self._maybe_show_welcome_present()
+        self._maybe_show_starter_reveal()
         self._maybe_show_tutorial_completion()
 
     def handle_events(self, events):
@@ -627,39 +629,63 @@ class GameMenuScreen(MenuScreenMixin, Screen):
         if self.dialogue_box or getattr(self, '_onboarding_guide_open', False):
             return
 
-        # A short goal-setter, not an item dump. Boosters, maps and gold are
-        # earned as tutorial rewards (revealed when they first matter), so the
-        # welcome instead explains the starter cards the first attack is built
-        # from and sets the immediate goal.
+        # A short teaching window, not an item dump: what the game is, that
+        # figures/spells are card combinations, and the suit cycle. Boosters and
+        # maps are earned later; the assigned suits are revealed next (C).
+        from game.components.tutorial_window import TutorialWindowDialogue
+        from game.components import tutorial_diagrams
         self._welcome_dialogue_opened = True
-        self._welcome_present_dialogue = RewardsRevealDialogueBox(
+        self._welcome_present_dialogue = TutorialWindowDialogue(
             self.window,
-            'Welcome to Nepal Kings',
-            'welcome',
             [
-                f'Hello {username}!',
-                'Collect cards, build figures, cast spells, and conquer lands to grow your kingdom.',
-                'Cards are ingredients: some build figures (K = King, J+7 = Farm), others make spells or battle tactics.',
-                "We've already built your first attack from your starter cards. Open your Kingdom and conquer your first land — you'll earn boosters and maps as you go.",
+                {
+                    'title': 'A Chess of Cards',
+                    'lines': [
+                        f'Welcome, {username}! Nepal Kings is a tactical card game.',
+                        'Build figures, cast spells, and send them to fight.',
+                        'Figures and spells are card COMBINATIONS, not unique cards —',
+                        'so the whole game runs on a standard 52-card deck.',
+                        'A fixed set of figures keeps it deep but chess-like.',
+                    ],
+                    'image': lambda: tutorial_diagrams.card_combo_to_figure(),
+                    'image_caption': 'Jack + 7 build a Farm.',
+                },
+                {
+                    'title': 'Suits Decide Battles',
+                    'lines': [
+                        'Hearts and Diamonds are offensive; Clubs and Spades defensive.',
+                        'Each suit beats one and is beaten by another:',
+                        'Hearts > Clubs > Diamonds > Spades > Hearts.',
+                    ],
+                    'image': lambda: tutorial_diagrams.suit_advantage_wheel(),
+                    'image_caption': 'The suit-advantage cycle.',
+                },
             ],
-            [],
-            hint_text=None,
+            title='Welcome to Nepal Kings',
         )
 
     def _draw_welcome_present_dialogue(self):
         if self._welcome_present_dialogue:
             self._welcome_present_dialogue.draw()
+        if getattr(self, '_starter_reveal_dialogue', None):
+            self._starter_reveal_dialogue.draw()
 
     def _handle_welcome_present_events(self, events):
-        if not self._welcome_present_dialogue:
-            return False
-        if any(event.type == QUIT for event in events):
-            return False
-        response = self._welcome_present_dialogue.update(events)
-        if response:
-            self._welcome_present_dialogue = None
-            self._mark_welcome_seen()
-        return True
+        if self._welcome_present_dialogue:
+            if any(event.type == QUIT for event in events):
+                return False
+            if self._welcome_present_dialogue.update(events) == 'done':
+                self._welcome_present_dialogue = None
+                self._mark_welcome_seen()
+            return True
+        if getattr(self, '_starter_reveal_dialogue', None):
+            if any(event.type == QUIT for event in events):
+                return False
+            if self._starter_reveal_dialogue.update(events) == 'done':
+                self._starter_reveal_dialogue = None
+                self._mark_menu_coach_seen('starter_suit_reveal')
+            return True
+        return False
 
     def _mark_welcome_seen(self):
         try:
@@ -667,6 +693,32 @@ class GameMenuScreen(MenuScreenMixin, Screen):
             self._apply_onboarding_payload(data)
         except Exception as exc:
             logger.error("Failed to mark welcome present seen: %s", exc)
+
+    def _maybe_show_starter_reveal(self):
+        """After the welcome, reveal the assigned offensive/defensive suits."""
+        if getattr(self, '_starter_reveal_dialogue', None):
+            return
+        if self._welcome_present_dialogue or self._tutorial_complete_dialogue:
+            return
+        onboarding = self._onboarding()
+        if not onboarding or onboarding.get('welcome_pending'):
+            return
+        if onboarding.get('onboarding_skipped'):
+            return
+        if 'starter_suit_reveal' in self._menu_coach_seen():
+            return
+        if self.dialogue_box or getattr(self, '_onboarding_guide_open', False):
+            return
+        suits = onboarding.get('starter_suits') or {}
+        offensive = suits.get('offensive')
+        defensive = suits.get('defensive')
+        if not offensive or not defensive:
+            # No assigned suits (e.g. legacy account) — skip the reveal.
+            self._mark_menu_coach_seen('starter_suit_reveal')
+            return
+        from game.components.tutorial_window import StarterSuitRevealDialogue
+        self._starter_reveal_dialogue = StarterSuitRevealDialogue(
+            self.window, offensive, defensive)
 
     # ── Tutorial completion celebrations ───────────────────────────
 

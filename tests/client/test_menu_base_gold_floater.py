@@ -568,11 +568,12 @@ def test_kingdom_coach_progresses_from_map_to_conquer_button():
 
     screen = object.__new__(KingdomScreen)
     screen.state = SimpleNamespace(user_dict={'onboarding': {
-        'menu_hints_seen': [],
+        'menu_hints_seen': ['kingdom_overview_window'],
         'completed_steps': [],
     }})
     screen._onboarding_guide_open = False
     screen._welcome_present_dialogue = None
+    screen._kingdom_overview_dialogue = None
     screen.dialogue_box = None
     screen._thread = None
     screen._new_msg_picker = None
@@ -599,11 +600,12 @@ def test_kingdom_coach_routes_from_first_land_to_reward_pack_then_production():
 
     screen = object.__new__(KingdomScreen)
     screen.state = SimpleNamespace(user_dict={'onboarding': {
-        'menu_hints_seen': ['kingdom_after_conquer_map'],
+        'menu_hints_seen': ['kingdom_overview_window', 'kingdom_after_conquer_map'],
         'completed_steps': ['finish_first_conquer_battle'],
     }})
     screen._onboarding_guide_open = False
     screen._welcome_present_dialogue = None
+    screen._kingdom_overview_dialogue = None
     screen.dialogue_box = None
     screen._thread = None
     screen._new_msg_picker = None
@@ -636,7 +638,7 @@ def test_kingdom_coach_shifts_to_post_battle_map_and_config_steps():
 
     screen = object.__new__(KingdomScreen)
     screen.state = SimpleNamespace(user_dict={'onboarding': {
-        'menu_hints_seen': [],
+        'menu_hints_seen': ['kingdom_overview_window'],
         'completed_steps': [
             'open_first_main_booster',
             'finish_first_conquer_battle',
@@ -644,6 +646,7 @@ def test_kingdom_coach_shifts_to_post_battle_map_and_config_steps():
     }})
     screen._onboarding_guide_open = False
     screen._welcome_present_dialogue = None
+    screen._kingdom_overview_dialogue = None
     screen.dialogue_box = None
     screen._thread = None
     screen._new_msg_picker = None
@@ -658,7 +661,8 @@ def test_kingdom_coach_shifts_to_post_battle_map_and_config_steps():
 
     assert screen._current_kingdom_coach_step()['id'] == 'kingdom_after_conquer_map'
 
-    screen.state.user_dict['onboarding']['menu_hints_seen'] = ['kingdom_after_conquer_map']
+    screen.state.user_dict['onboarding']['menu_hints_seen'] = [
+        'kingdom_overview_window', 'kingdom_after_conquer_map']
     step = screen._current_kingdom_coach_step()
     assert step['id'] == 'kingdom_production_intro'
     assert step['rect'] == screen._collect_all_rect
@@ -679,6 +683,7 @@ def test_kingdom_coach_shifts_to_post_battle_map_and_config_steps():
     screen.state.user_dict['onboarding']['completed_steps'].remove(
         'save_first_defence_config')
     screen.state.user_dict['onboarding']['menu_hints_seen'] = [
+        'kingdom_overview_window',
         'kingdom_after_conquer_map',
         'kingdom_defence_intro',
     ]
@@ -1012,3 +1017,58 @@ def test_reward_reveal_items_covers_all_kinds():
     kinds = [it['kind'] for it in items]
     assert kinds == ['gold', 'main_booster', 'side_booster', 'map']
     assert all(it['label'] and it['description'] for it in items)
+
+
+def _kingdom_overview_screen(seen=None, skipped=False, loaded=True):
+    import pygame
+    from game.screens.kingdom_screen import KingdomScreen
+    if not pygame.display.get_init():
+        pygame.display.init()
+    if pygame.display.get_surface() is None:
+        pygame.display.set_mode((1, 1))
+    if not pygame.font.get_init():
+        pygame.font.init()
+    screen = object.__new__(KingdomScreen)
+    screen.window = pygame.display.get_surface()
+    screen.state = SimpleNamespace(user_dict={'onboarding': {
+        'menu_hints_seen': list(seen or []),
+        'completed_steps': [],
+        'onboarding_skipped': skipped,
+    }})
+    screen._onboarding_guide_open = False
+    screen.dialogue_box = None
+    screen._thread = None
+    screen._new_msg_picker = None
+    screen._detail_box = None
+    screen._kingdom_overview_dialogue = None
+    screen._hex_map = object() if loaded else None
+    screen._loading = not loaded
+    screen._error = None
+    return screen
+
+
+def test_kingdom_overview_window_shows_once_on_first_open():
+    screen = _kingdom_overview_screen(seen=[])
+    screen._maybe_show_kingdom_overview()
+    assert screen._kingdom_overview_dialogue is not None
+    # The kingdom coach is suppressed while the window is up.
+    assert screen._kingdom_coach_ready() is False
+
+
+def test_kingdom_overview_window_suppressed_after_seen():
+    screen = _kingdom_overview_screen(seen=['kingdom_overview_window'])
+    screen._maybe_show_kingdom_overview()
+    assert screen._kingdom_overview_dialogue is None
+    assert screen._kingdom_coach_ready() is True
+
+
+def test_kingdom_overview_window_suppressed_when_skipped():
+    screen = _kingdom_overview_screen(seen=[], skipped=True)
+    screen._maybe_show_kingdom_overview()
+    assert screen._kingdom_overview_dialogue is None
+
+
+def test_kingdom_overview_window_waits_for_map_load():
+    screen = _kingdom_overview_screen(seen=[], loaded=False)
+    screen._maybe_show_kingdom_overview()
+    assert screen._kingdom_overview_dialogue is None
