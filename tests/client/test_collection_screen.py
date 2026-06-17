@@ -406,9 +406,9 @@ class TestCollectionCoach:
         assert step['id'] == 'collection_starter_cards'
         assert step['action'] == 'next'
         assert step['button_label'] == 'Got it'
-        assert 'Cards become useful through recipes' in step['body']
-        assert 'K can make a King' in step['body']
-        assert 'J+7 can make a Farm' in step['body']
+        # The full card->figure lesson now lives in the welcome window; this
+        # card is a brief in-collection reinforcement.
+        assert 'combine into figures' in step['body']
 
         screen.state.user_dict['onboarding']['menu_hints_seen'].append('collection_starter_cards')
         step = screen._current_collection_coach_step()

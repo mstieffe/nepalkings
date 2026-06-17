@@ -1408,9 +1408,9 @@ class ConquerScreen(MenuScreenMixin, Screen):
                 'id': 'conquer_config_field',
                 'rect': field_rect,
                 'title': 'Your Attack Is Ready',
-                'body': 'These are figures: card recipes placed onto fields. The King produces people; the Farm turns one villager into food. Together they power your Warriors.',
+                'body': 'Built from your starter cards: a King, a Farm and Warriors. The King feeds the Farm; the Farm feeds the Warriors.',
                 'action': 'next',
-                'max_lines': 6,
+                'max_lines': 4,
             }
         if self._btn_build and 'conquer_config_build_edit' not in seen:
             return {

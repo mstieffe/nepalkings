@@ -1426,11 +1426,11 @@ class CollectionScreen(MenuScreenMixin, Screen):
             return {
                 'id': 'collection_starter_cards',
                 'rect': self._panel_rect,
-                'title': 'Cards Are Ingredients',
-                'body': 'Cards become useful through recipes. Some recipes create figures that stay on the field; others create spells or battle tactics. For example, K can make a King, and J+7 can make a Farm.',
+                'title': 'Your Collection',
+                'body': 'These are the cards you combine into figures, spells and tactics. Open boosters to add more recipes.',
                 'action': 'next',
                 'button_label': 'Got it',
-                'max_lines': 6,
+                'max_lines': 4,
             }
         if ((next_action or {}).get('screen') == 'kingdom'
                 and 'finish_first_conquer_battle' not in completed):
