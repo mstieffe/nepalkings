@@ -191,6 +191,11 @@ class TutorialWindowDialogue:
 _REEL_SPIN_MS = 1400
 _REEL_TICK_MS = 90
 
+# Stable card-game facts (red = offensive, black = defensive); kept local so the
+# client UI does not depend on server-only settings.
+_OFFENSIVE_SUITS = ('Hearts', 'Diamonds')
+_DEFENSIVE_SUITS = ('Clubs', 'Spades')
+
 
 class StarterSuitRevealDialogue:
     """One-armed-bandit reveal of the assigned offensive then defensive suit.
@@ -241,8 +246,8 @@ class StarterSuitRevealDialogue:
 
     @property
     def _candidates(self):
-        return (list(settings.OFFENSIVE_SUITS) if self._phase.startswith('off')
-                else list(settings.DEFENSIVE_SUITS))
+        return (list(_OFFENSIVE_SUITS) if self._phase.startswith('off')
+                else list(_DEFENSIVE_SUITS))
 
     @property
     def _assigned(self):
