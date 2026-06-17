@@ -7615,6 +7615,15 @@ def _resolve_conquer_battle(game, winner, requesting_player):
                 attacker_user.booster_packs = int(attacker_user.booster_packs or 0) + 1
             except Exception:
                 logger.exception("Failed to grant first-conquest reward pack")
+            # Stage a ready defence draft (assigned black suit + Health Boost)
+            # for the just-conquered land; the guided defence beat lets the
+            # player review and Save it.
+            try:
+                from routes.kingdom import _preassemble_tutorial_defence_draft
+                if land is not None and land.owner_user_id == attacker_user.id:
+                    _preassemble_tutorial_defence_draft(attacker_user, land)
+            except Exception:
+                logger.exception("Failed to pre-assemble tutorial defence draft")
         lost_user_for_event = None if is_ai_land else (defender_user.id if defender_user else None)
         _create_kingdom_loot_events(
             attack_log_id=log.id,

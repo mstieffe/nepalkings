@@ -339,12 +339,28 @@ def register():
             logger.exception("Failed to initialize onboarding for new user")
         db.session.add(user)
         db.session.flush()
-        # Curated starter deck so the first conquer attack is always buildable.
+        # Assign a random offensive (red) + defensive (black) starter suit and
+        # grant a matching set in each, so the first conquer attack and first
+        # defence are always buildable. Revealed one-armed-bandit style in the
+        # starter window. See _preassemble_tutorial_* in routes/kingdom.py.
         try:
             from models import CollectionCard
-            for rank, suit, value in settings.STARTER_FIGURE_CARDS:
+            from onboarding_service import assign_starter_suits
+            suits = assign_starter_suits(user)
+            offensive_suit = suits['offensive']
+            defensive_suit = suits['defensive']
+
+            def _grant(rank, suit, value):
                 db.session.add(CollectionCard(
                     user_id=user.id, rank=rank, suit=suit, value=value, locked=False))
+
+            for rank, value in settings.STARTER_OFFENSIVE_SET:
+                _grant(rank, offensive_suit, value)
+            for rank, value in settings.STARTER_DEFENSIVE_SET:
+                _grant(rank, defensive_suit, value)
+            # Health-Boost prelude needs red 3s; grant them in the red suit.
+            for _ in range(settings.STARTER_DEFENSIVE_PRELUDE_RED_THREES):
+                _grant('3', offensive_suit, 3)
         except Exception:
             logger.exception("Failed to grant starter figure cards")
         track('signup', user_id=user.id, has_email=bool(email))

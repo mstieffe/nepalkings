@@ -55,7 +55,9 @@ def _open_config(client, token, land_id):
 def test_first_conquer_config_is_preassembled_and_battle_ready(client, app, db):
     token = _register(client, 'preasm_ready')
     from models import User
+    from onboarding_service import get_starter_suits
     user = User.query.filter_by(username='preasm_ready').first()
+    suit = get_starter_suits(user)['offensive']
     land = _tier1_unowned_land(db)
     assert land is not None, 'expected a seeded tier-1 unowned land'
 
@@ -70,7 +72,7 @@ def test_first_conquer_config_is_preassembled_and_battle_ready(client, app, db):
     assert cfg.get('battle_figure_id') == warriors['id']
     assert cfg.get('counter_spell_name') in (None, '')
     assert cfg.get('prelude_spell_name') == 'Draw 2 MainCards'
-    assert cfg.get('prelude_spell_card_details') == [{'suit': 'Hearts', 'rank': '8'}]
+    assert cfg.get('prelude_spell_card_details') == [{'suit': suit, 'rank': '8'}]
 
     moves = cfg.get('battle_moves', cfg.get('moves', []))
     assert len(moves) == 3
@@ -81,10 +83,11 @@ def test_first_conquer_config_is_preassembled_and_battle_ready(client, app, db):
     # deficit), so with a battle figure + 3 moves the config can start.
     assert all(not f.get('has_deficit') for f in figures)
 
-    # All starter cards are now reserved (locked) to this config.
-    free_hearts = CollectionCard.query.filter_by(
-        user_id=user.id, suit='Hearts', locked=False).count()
-    assert free_hearts == 0
+    # The offensive figure/prelude/tactic cards are now reserved (locked);
+    # only the two red Health-Boost 3s remain free in the offensive suit.
+    free_off = CollectionCard.query.filter_by(
+        user_id=user.id, suit=suit, locked=False).all()
+    assert sorted(c.rank for c in free_off) == ['3', '3']
 
 
 def test_preassembly_is_idempotent(client, app, db):
@@ -134,10 +137,12 @@ def test_preassembly_skipped_after_prior_defence_log(client, app, db):
 def test_preassembly_skipped_when_starter_cards_missing(client, app, db):
     token = _register(client, 'preasm_nocards')
     from models import User
+    from onboarding_service import get_starter_suits
     user = User.query.filter_by(username='preasm_nocards').first()
-    # Remove the King — the deterministic plan can no longer be satisfied.
+    suit = get_starter_suits(user)['offensive']
+    # Remove the offensive King — the deterministic plan can no longer be met.
     king = CollectionCard.query.filter_by(
-        user_id=user.id, suit='Hearts', rank='K').first()
+        user_id=user.id, suit=suit, rank='K').first()
     db.session.delete(king)
     db.session.commit()
     land = _tier1_unowned_land(db)
@@ -185,3 +190,58 @@ def test_first_tier1_ai_conquest_uses_safe_defence_template(client, app, db):
     assert template['prelude_spell_name'] is None
     assert template['counter_spell_name'] is None
     assert len(template['battle_moves']) == 3
+
+
+def test_defence_draft_preassembled_in_defensive_suit(client, app, db):
+    """A ready defence DRAFT is staged on a conquered land in the assigned
+    defensive (black) suit, with the King as defender and a Health-Boost
+    prelude (two red 3s)."""
+    _register(client, 'preasm_def')
+    from models import User, Land, LandConfig, LandConfigFigure
+    from onboarding_service import get_starter_suits
+    from routes.kingdom import _preassemble_tutorial_defence_draft, _CONFIG_STATUS_DRAFT
+
+    user = User.query.filter_by(username='preasm_def').first()
+    suits = get_starter_suits(user)
+    land = _tier1_unowned_land(db)
+    land.owner_user_id = user.id  # the player just conquered it
+    db.session.commit()
+
+    assert _preassemble_tutorial_defence_draft(user, land) is True
+
+    draft = (LandConfig.query
+             .filter_by(user_id=user.id, land_id=land.id,
+                        config_type='defence', status=_CONFIG_STATUS_DRAFT)
+             .first())
+    assert draft is not None
+    figs = LandConfigFigure.query.filter_by(config_id=draft.id).all()
+    names = sorted(f.family_name for f in figs)
+    assert names == ['Himalaya King', 'Small Yack Farm', 'Wooden Fortress']
+    assert all(f.suit == suits['defensive'] for f in figs)
+    king = next(f for f in figs if f.family_name == 'Himalaya King')
+    assert draft.battle_figure_id == king.id
+    assert draft.prelude_spell_name == 'Health Boost'
+    assert (draft.prelude_spell_data or {}).get('target_figure_id') == king.id
+    assert len(draft.prelude_spell_card_ids or []) == 2
+
+    # Idempotent: a second call does not create another draft.
+    assert _preassemble_tutorial_defence_draft(user, land) is False
+
+
+def test_defence_draft_skipped_without_defensive_cards(client, app, db):
+    _register(client, 'preasm_def_nocards')
+    from models import User, CollectionCard
+    from onboarding_service import get_starter_suits
+    from routes.kingdom import _preassemble_tutorial_defence_draft
+
+    user = User.query.filter_by(username='preasm_def_nocards').first()
+    suits = get_starter_suits(user)
+    # Remove the defensive King — the deterministic plan can no longer be met.
+    king = CollectionCard.query.filter_by(
+        user_id=user.id, suit=suits['defensive'], rank='K').first()
+    db.session.delete(king)
+    land = _tier1_unowned_land(db)
+    land.owner_user_id = user.id
+    db.session.commit()
+
+    assert _preassemble_tutorial_defence_draft(user, land) is False

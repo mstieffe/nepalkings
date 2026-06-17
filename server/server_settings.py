@@ -133,30 +133,45 @@ AI_WATCHDOG_MAX_RETRIES = int(os.getenv('AI_WATCHDOG_MAX_RETRIES', '3'))
 STARTER_BOOSTER_PACKS = 0                   # Earned via tutorial rewards
 STARTER_BOOSTER_PACKS_SIDE = 0             # Earned via tutorial rewards
 
-# Curated starter deck granted at registration so a new player can ALWAYS
-# field a complete, battle-ready first conquer attack, independent of booster
-# luck. The server pre-assembles these into the first conquer config (see
-# _preassemble_tutorial_conquer_attack in routes/kingdom.py). All Hearts main
-# cards; the deck deterministically covers three figures, one prelude spell,
-# and three tactics:
-#   Djungle King (K)            -> villager_red x2, warrior_red x1
-#   Small Rice Farm (J + 7)     -> food_red x7      (needs villager_red x1)
-#   Gorkha Warriors (A + 7)     -> attacker         (needs warrior_red x1, food_red x7)
-#   Draw 2 MainCards            -> one number card  (8)
-#   3x Dagger                   -> one number card each (8, 9, 10)
-# Resource math balances (villager_red +1, warrior_red 0, food_red 0).
-# Format: (rank, suit, value).
-STARTER_FIGURE_CARDS = [
-    ('K', 'Hearts', 4),
-    ('A', 'Hearts', 3),
-    ('J', 'Hearts', 1),
-    ('7', 'Hearts', 7),
-    ('7', 'Hearts', 7),
-    ('8', 'Hearts', 8),
-    ('8', 'Hearts', 8),
-    ('9', 'Hearts', 9),
-    ('10', 'Hearts', 10),
+# Each new player is assigned a random OFFENSIVE (red) suit and DEFENSIVE
+# (black) suit at registration, and granted a starter set in each so the first
+# conquer attack and first defence are always buildable, independent of booster
+# luck. The server pre-assembles these (see _preassemble_tutorial_conquer_attack
+# and _preassemble_tutorial_defence_draft in routes/kingdom.py).
+OFFENSIVE_SUITS = ('Hearts', 'Diamonds')
+DEFENSIVE_SUITS = ('Clubs', 'Spades')
+
+# Rank-based set templates; the suit is filled in per the assigned suit.
+# Format: (rank, value).
+# Offensive set (red suit): three figures + one prelude card + three tactics:
+#   Djungle King (K)         -> villager_red x2, warrior_red x1
+#   Small Rice Farm (J + 7)  -> food_red x7  (needs villager_red x1)
+#   Gorkha Warriors (A + 7)  -> attacker     (needs warrior_red x1, food_red x7)
+#   Draw 2 MainCards         -> one number card (8)
+#   3x Dagger                -> one number card each (8, 9, 10)
+STARTER_OFFENSIVE_SET = [
+    ('K', 4), ('A', 3), ('J', 1),
+    ('7', 7), ('7', 7),
+    ('8', 8), ('8', 8), ('9', 9), ('10', 10),
 ]
+# Defensive set (black suit): mirrors the offensive with defensive families
+#   Himalaya King (K)        -> villager_black x2, warrior_black x1
+#   Small Yack Farm (J + 7)  -> food_black x7  (needs villager_black x1)
+#   Wooden Fortress (A + 7)  -> defender       (needs warrior_black x1, food_black x7)
+#   3x Dagger                -> one number card each (8, 9, 10)
+# The Health-Boost prelude uses two RED 3s (see below), independent of suit.
+STARTER_DEFENSIVE_SET = [
+    ('K', 4), ('A', 3), ('J', 1),
+    ('7', 7), ('7', 7),
+    ('8', 8), ('9', 9), ('10', 10),
+]
+# Two red 3s for the defensive Health-Boost prelude, granted in the (red)
+# offensive suit so the spell is castable regardless of the black defence suit.
+STARTER_DEFENSIVE_PRELUDE_RED_THREES = 2
+
+# Legacy fixed Hearts deck, retained as a fallback when no suit is assigned.
+# Format: (rank, suit, value).
+STARTER_FIGURE_CARDS = [(_r, 'Hearts', _v) for (_r, _v) in STARTER_OFFENSIVE_SET]
 BOOSTER_PACK_PRICE = 100                    # Gold cost per main pack
 BOOSTER_PACK_SIDE_PRICE = 100               # Gold cost per side pack
 BOOSTER_PACK_CARDS = 3                      # Cards drawn per pack (both types)

@@ -208,6 +208,7 @@ MENU_HINT_IDS = (
     'conquer_battle_timeline_intro', 'conquer_battle_figure_power',
     'conquer_battle_tactics', 'conquer_battle_block_call',
     'conquer_battle_tactic_recap', 'conquer_battle_finish',
+    'starter_suit_reveal', 'kingdom_overview_window',
     'kingdom_after_conquer_map', 'open_main_booster_reward',
     'return_to_kingdom_loop', 'open_boosters_first',
     'collection_starter_cards', 'collection_open_main_booster',
@@ -247,6 +248,9 @@ def default_onboarding_state(*, new_user=False):
         'duel_hints_seen': [],
         'menu_hints_seen': [],
         'onboarding_skipped': False,
+        # {'offensive': <red suit>, 'defensive': <black suit>} assigned at
+        # registration; revealed one-armed-bandit style in the starter window.
+        'starter_suits': None,
         'counters': {
             'gold_earned': 0,
             'kingdom_production_collections': 0,
@@ -284,6 +288,35 @@ def _save_state(user, state, *, commit=False):
 
 def set_initial_onboarding(user):
     user.onboarding_state = default_onboarding_state(new_user=True)
+
+
+def assign_starter_suits(user, *, commit=False):
+    """Assign (once) a random offensive (red) and defensive (black) starter suit.
+
+    Returns ``{'offensive': <suit>, 'defensive': <suit>}``. Idempotent: an
+    already-assigned pair is returned unchanged.
+    """
+    import random
+    state = _state(user)
+    suits = state.get('starter_suits') or {}
+    if not suits.get('offensive') or not suits.get('defensive'):
+        suits = {
+            'offensive': random.choice(list(settings.OFFENSIVE_SUITS)),
+            'defensive': random.choice(list(settings.DEFENSIVE_SUITS)),
+        }
+        state['starter_suits'] = suits
+        _save_state(user, state, commit=commit)
+    return dict(suits)
+
+
+def get_starter_suits(user):
+    """Return the player's assigned starter suits, with safe defaults."""
+    state = _state(user)
+    suits = state.get('starter_suits') or {}
+    return {
+        'offensive': suits.get('offensive') or settings.OFFENSIVE_SUITS[0],
+        'defensive': suits.get('defensive') or settings.DEFENSIVE_SUITS[0],
+    }
 
 
 def mark_step(user, step_id, *, commit=False):
@@ -627,6 +660,7 @@ def serialize_onboarding_state(user):
         'early_goals_claimed': sorted(claimed_early),
         'duel_hints_seen': list(state.get('duel_hints_seen') or []),
         'menu_hints_seen': list(state.get('menu_hints_seen') or []),
+        'starter_suits': dict(state.get('starter_suits') or {}),
         'onboarding_skipped': bool(state.get('onboarding_skipped')),
         'counters': dict(state.get('counters') or {}),
         'facts': facts_payload,

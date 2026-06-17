@@ -28,25 +28,43 @@ class TestRegister:
         assert data['user']['username'] == 'newuser'
 
     def test_register_grants_buildable_starter_deck(self, client):
-        """New accounts get a curated starter deck that can build a minimal
-        conquer attack and first prelude, independent of booster luck."""
+        """New accounts get an offensive (red) and defensive (black) starter set
+        plus red 3s for the Health-Boost prelude, independent of booster luck."""
         import server_settings as settings
         from ai.figure_recipes import find_buildable_figures
         from models import CollectionCard, User
+        from onboarding_service import get_starter_suits
 
         resp = client.post('/auth/register', data=_register_data(username='deckuser'))
         assert resp.status_code == 200
         user = User.query.filter_by(username='deckuser').first()
 
-        cards = CollectionCard.query.filter_by(user_id=user.id).all()
-        assert len(cards) == len(settings.STARTER_FIGURE_CARDS)
+        suits = get_starter_suits(user)
+        assert suits['offensive'] in settings.OFFENSIVE_SUITS
+        assert suits['defensive'] in settings.DEFENSIVE_SUITS
 
-        main_hand = [{'id': c.id, 'rank': c.rank, 'suit': c.suit,
-                      'value': c.value, 'card_type': 'main'} for c in cards]
-        names = {b['name'] for b in find_buildable_figures(main_hand, [], [])}
-        assert {'Djungle King', 'Small Rice Farm', 'Gorkha Warriors'} <= names
-        hearts_8s = [c for c in cards if c.suit == 'Hearts' and c.rank == '8']
-        assert len(hearts_8s) == 2
+        cards = CollectionCard.query.filter_by(user_id=user.id).all()
+        expected = (len(settings.STARTER_OFFENSIVE_SET)
+                    + len(settings.STARTER_DEFENSIVE_SET)
+                    + settings.STARTER_DEFENSIVE_PRELUDE_RED_THREES)
+        assert len(cards) == expected
+
+        off = [c for c in cards if c.suit == suits['offensive']]
+        deff = [c for c in cards if c.suit == suits['defensive']]
+        # Offensive set builds the red attack figures.
+        off_hand = [{'id': c.id, 'rank': c.rank, 'suit': c.suit,
+                     'value': c.value, 'card_type': 'main'} for c in off]
+        off_names = {b['name'] for b in find_buildable_figures(off_hand, [], [])}
+        assert {'Djungle King', 'Small Rice Farm', 'Gorkha Warriors'} <= off_names
+        # Defensive set builds the black defence figures.
+        def_hand = [{'id': c.id, 'rank': c.rank, 'suit': c.suit,
+                     'value': c.value, 'card_type': 'main'} for c in deff]
+        def_names = {b['name'] for b in find_buildable_figures(def_hand, [], [])}
+        assert {'Himalaya King', 'Small Yack Farm', 'Wooden Fortress'} <= def_names
+        # Two red 3s for the Health-Boost prelude.
+        red_threes = [c for c in cards
+                      if c.rank == '3' and c.suit == suits['offensive']]
+        assert len(red_threes) == settings.STARTER_DEFENSIVE_PRELUDE_RED_THREES
 
     def test_register_duplicate_username_fails(self, client):
         client.post('/auth/register', data=_register_data('dup', 'pass1234'))
