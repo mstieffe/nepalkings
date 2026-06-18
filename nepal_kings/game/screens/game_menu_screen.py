@@ -649,7 +649,7 @@ class GameMenuScreen(MenuScreenMixin, Screen):
                         'runs on one standard deck, deep but chess-like.',
                     ],
                     'image': lambda: tutorial_diagrams.card_combo_to_figure(),
-                    'image_caption': 'Jack + 7 build a Farm.',
+                    'image_caption': 'Jack + 7 build a Farm that produces 7 units of rice.',
                 },
                 {
                     # The wheel is the star — lead with it.

@@ -962,11 +962,52 @@ def _should_use_tutorial_safe_ai_defence(user, land):
     )
 
 
-def _tutorial_safe_ai_defence_template():
-    from ai.defence.config import AI_DEFENCE_SAFE_FALLBACKS
-    template = deepcopy(AI_DEFENCE_SAFE_FALLBACKS[1])
-    template['ai_name'] = 'Tutorial Border Watch'
-    return template
+def _tutorial_safe_ai_defence_template(attack_suit=None):
+    """A fixed, scripted, deliberately-weak first-battle defender.
+
+    Fully inline (never drifts with AI tuning) and tuned so the player's
+    pre-built attack always wins: the defender sits in the BLACK suit the
+    player's red attack beats (suit advantage), fields a weak Yack Farm as its
+    counter-advancing defending figure, and plays three low 7-Daggers against
+    the player's 8/9/10. It still demonstrates the two mechanics a new player
+    should see a defender use: a prelude spell and a counter-advancing figure.
+    """
+    # Both red attack suits beat a black suit; the beaten suit is what we field.
+    beaten = _SUIT_ADVANTAGE.get(attack_suit or _TUTORIAL_ATTACK_SUIT) or 'Clubs'
+    if beaten not in _BLACK_SUITS:
+        beaten = 'Clubs'
+    return {
+        'ai_name': 'Tutorial Border Watch',
+        'figures': [
+            {'family_name': 'Himalaya King', 'name': 'Himalaya King',
+             'suit': beaten, 'color': 'defensive', 'field': 'castle',
+             'produces': {'villager_black': 2, 'warrior_black': 1}, 'requires': {},
+             'card_ids': [], 'card_roles': ['key'],
+             'cards': [{'rank': 'K', 'suit': beaten, 'role': 'key'}]},
+            {'family_name': 'Small Yack Farm', 'name': 'Small Yack Farm',
+             'suit': beaten, 'color': 'defensive', 'field': 'village',
+             'produces': {'food_black': 7}, 'requires': {'villager_black': 1},
+             'card_ids': [], 'card_roles': ['key', 'number'],
+             'cards': [{'rank': 'J', 'suit': beaten, 'role': 'key'},
+                       {'rank': '7', 'suit': beaten, 'role': 'number'}]},
+        ],
+        'battle_moves': [
+            {'family_name': 'Dagger', 'rank': '7', 'suit': beaten,
+             'value': 7, 'round_index': i, 'card_type': 'main'}
+            for i in range(3)
+        ],
+        'battle_figure_index': 1,   # the Yack Farm counter-advances
+        'battle_modifier': None,
+        'spell': None,
+        # A visible, reveal-only prelude that adds no tactics/power, so the
+        # scripted outcome stays a guaranteed win.
+        'prelude_spell_name': 'All Seeing Eye',
+        'prelude_spell_data': None,
+        'counter_spell_name': None,
+        'counter_spell_data': None,
+        'auto_gamble': False,
+        'auto_gamble_threshold': 10,
+    }
 
 
 def _bulk_defence_incomplete_by_land(land_ids, user_id):
@@ -5401,7 +5442,7 @@ def conquer_start_battle():
     if is_ai_land:
         defender_user = _get_or_create_ai_user()
         if _should_use_tutorial_safe_ai_defence(user, land):
-            template = _tutorial_safe_ai_defence_template()
+            template = _tutorial_safe_ai_defence_template(_user_offensive_suit(user))
         else:
             template = get_ai_defence_template_for_land(land)
         if not template:

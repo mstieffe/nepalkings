@@ -90,9 +90,9 @@ def card_combo_to_figure(target_h=None):
     card_w = int(card_h * (settings.CARD_WIDTH / settings.CARD_HEIGHT))
     j_card = _card_surface('Hearts', 'J', card_h)
     seven_card = _card_surface('Hearts', '7', card_h)
-    # The real Rice-Farm field-figure icon (a field figure button) as the payoff.
-    farm = _scaled(_load(_asset('img', 'figures', 'icons', 'rice_farm1.png')),
-                   int(target_h * 0.95))
+    # The full Rice-Farm field-figure icon (frame + power badge) as the payoff.
+    farm = field_figure_icon('Small Rice Farm', 'rice_farm1.png',
+                             label='', target_h=int(target_h * 1.05))
     if farm is None:
         farm = _scaled(_load(_asset('img', 'slot_icons', 'village.png')),
                        int(target_h * 0.9))
@@ -163,75 +163,164 @@ def suit_advantage_wheel(target_h=None):
 
 
 def kingdom_overview_diagram(target_h=None):
-    """A land that produces gold and holds figures: [gold] [castle][village][military]."""
+    """A land that makes gold and holds figures: [gold] + full field figures."""
     _SH = settings.SCREEN_HEIGHT
-    target_h = int(target_h or 0.14 * _SH)
+    target_h = int(target_h or 0.16 * _SH)
     key = ('kingdom', target_h)
     if key in _CACHE:
         return _CACHE[key]
 
-    gold = _scaled(_load(_asset('img', 'dialogue_box', 'icons', 'gold.png')), target_h)
-    slots = [
-        _scaled(_load(_asset('img', 'slot_icons', f'{name}.png')), int(target_h * 0.95))
-        for name in ('castle', 'village', 'military')
-    ]
-    parts = [p for p in ([gold] + slots) if p]
+    gold = _scaled(_load(_asset('img', 'dialogue_box', 'icons', 'gold.png')),
+                   int(target_h * 0.7))
+    figs = [field_figure_icon(name, fb, lbl, target_h)
+            for name, fb, lbl in _ARMY_FIGURES['offensive']]
+    parts = [p for p in ([gold] + figs) if p]
     if not parts:
         surf = pygame.Surface((1, 1), pygame.SRCALPHA)
         _CACHE[key] = surf
         return surf
     gap = int(0.02 * settings.SCREEN_WIDTH)
     total_w = sum(p.get_width() for p in parts) + gap * (len(parts) - 1)
-    surf = pygame.Surface((total_w, target_h), pygame.SRCALPHA)
+    h = max(p.get_height() for p in parts)
+    surf = pygame.Surface((total_w, h), pygame.SRCALPHA)
     x = 0
     for p in parts:
-        surf.blit(p, (x, target_h // 2 - p.get_height() // 2))
+        surf.blit(p, (x, (h - p.get_height()) // 2))
         x += p.get_width() + gap
     _CACHE[key] = surf
     return surf
 
 
-# Field-figure button sets: (icon file in img/figures/icons/, label).
+# Field-figure button sets: (family_name, fallback icon file, label).
 _ARMY_FIGURES = {
     'offensive': [
-        ('castle_red.png', 'King'),
-        ('rice_farm1.png', 'Farm'),
-        ('army1.png', 'Warriors'),
+        ('Djungle King', 'castle_red.png', 'King'),
+        ('Small Rice Farm', 'rice_farm1.png', 'Farm'),
+        ('Gorkha Warriors', 'army1.png', 'Warriors'),
     ],
     'defensive': [
-        ('castle_black.png', 'King'),
-        ('yack_farm1.png', 'Farm'),
-        ('fortress1.png', 'Fortress'),
+        ('Himalaya King', 'castle_black.png', 'King'),
+        ('Small Yack Farm', 'yack_farm1.png', 'Farm'),
+        ('Wooden Fortress', 'fortress1.png', 'Fortress'),
     ],
 }
 
+_FIG_MGR = None
 
-def _figure_button(icon_file, label, box):
-    """A framed field-figure icon with a label under it (one 'button')."""
+
+def _figure_manager():
+    """Lazily build and cache a FigureManager (loads all figure art once)."""
+    global _FIG_MGR
+    if _FIG_MGR is None:
+        try:
+            from game.components.figures.figure_manager import FigureManager
+            _FIG_MGR = FigureManager()
+        except Exception:
+            _FIG_MGR = False
+    return _FIG_MGR or None
+
+
+def _skill_icons(skill_keys, size):
+    try:
+        from game.components.figures.family_configs.skill_config import SKILL_DEFINITIONS
+    except Exception:
+        return []
+    icons = []
+    for key in (skill_keys or [])[:2]:
+        rel = (SKILL_DEFINITIONS.get(key) or {}).get('icon')
+        if not rel:
+            continue
+        ic = _scaled(_load(_asset(*rel.split('/'))), size)
+        if ic:
+            icons.append(ic)
+    return icons
+
+
+def field_figure_icon(family_name, fallback_icon=None, label=None, target_h=None):
+    """A faithful field-figure icon: real frame + icon + power/skill badge.
+
+    Composed from the family's frame/icon art with a small power badge and any
+    active skill icons, mirroring how the figure appears on the field. Falls
+    back to a framed raw icon if the figure manager/art is unavailable.
+    """
+    _SH = settings.SCREEN_HEIGHT
+    box = int(target_h or 0.16 * _SH)
+    label = family_name if label is None else label  # '' => no label row
+    key = ('fieldfig', family_name, box, label)
+    if key in _CACHE:
+        return _CACHE[key]
+
     label_font = settings.get_font(getattr(settings, 'FS_TINY', 14))
-    lbl = label_font.render(label, True, (235, 222, 190))
-    surf = pygame.Surface((box, box + lbl.get_height() + 6), pygame.SRCALPHA)
-    frame = pygame.Rect(0, 0, box, box)
-    pygame.draw.rect(surf, (28, 22, 14, 235), frame, border_radius=10)
-    pygame.draw.rect(surf, (224, 182, 82), frame, 2, border_radius=10)
-    icon = _scaled(_load(_asset('img', 'figures', 'icons', icon_file)), int(box * 0.78))
-    if icon:
-        surf.blit(icon, icon.get_rect(center=frame.center))
-    surf.blit(lbl, lbl.get_rect(midtop=(box // 2, box + 4)))
+    lbl = label_font.render(label, True, (235, 222, 190)) if label else None
+    extra = (lbl.get_height() + 8) if lbl else 0
+    surf = pygame.Surface((box, box + extra), pygame.SRCALPHA)
+    frame_rect = pygame.Rect(0, 0, box, box)
+
+    mgr = _figure_manager()
+    family = mgr.families.get(family_name) if mgr else None
+    drew = False
+    if family is not None:
+        try:
+            from game.components.figures.figure_img import FigureImg
+            FigureImg(surf, family, box, box).draw_icon(0, 0)
+            drew = True
+        except Exception:
+            drew = False
+    if not drew:
+        pygame.draw.rect(surf, (28, 22, 14, 235), frame_rect, border_radius=10)
+        pygame.draw.rect(surf, (224, 182, 82), frame_rect, 2, border_radius=10)
+        icon = _scaled(_load(_asset('img', 'figures', 'icons', fallback_icon)),
+                       int(box * 0.78)) if fallback_icon else None
+        if icon:
+            surf.blit(icon, icon.get_rect(center=frame_rect.center))
+
+    # Power + skill badge, mirroring the field info display (best-effort).
+    rep = None
+    if mgr:
+        reps = mgr.figures_by_name.get(family_name) or []
+        rep = reps[0] if reps else None
+    if rep is not None:
+        try:
+            value = int(rep.get_value())
+            badge_font = settings.get_font(getattr(settings, 'FS_SMALL', 16), bold=True)
+            txt = badge_font.render(str(value), True, (255, 244, 210))
+            bw = max(int(box * 0.30), txt.get_width() + 10)
+            bh = txt.get_height() + 4
+            badge = pygame.Rect(4, box - bh - 4, bw, bh)
+            bg = pygame.Surface((badge.w, badge.h), pygame.SRCALPHA)
+            pygame.draw.rect(bg, (24, 20, 14, 235), bg.get_rect(), border_radius=6)
+            pygame.draw.rect(bg, (224, 182, 82), bg.get_rect(), 1, border_radius=6)
+            surf.blit(bg, badge.topleft)
+            surf.blit(txt, txt.get_rect(center=badge.center))
+        except Exception:
+            pass
+        try:
+            sk_size = int(box * 0.24)
+            icons = _skill_icons(rep.get_active_skill_keys(), sk_size)
+            sx = box - sk_size - 4
+            sy = 4
+            for ic in icons:
+                surf.blit(ic, (sx, sy))
+                sy += sk_size + 3
+        except Exception:
+            pass
+
+    if lbl:
+        surf.blit(lbl, lbl.get_rect(midtop=(box // 2, box + 5)))
+    _CACHE[key] = surf
     return surf
 
 
 def figure_buttons(color='offensive', target_h=None):
-    """A row of field-figure buttons (King / Farm / Warriors|Fortress)."""
+    """A row of full field-figure icons (King / Farm / Warriors|Fortress)."""
     _SH = settings.SCREEN_HEIGHT
     target_h = int(target_h or 0.16 * _SH)
     key = ('figbtns', color, target_h)
     if key in _CACHE:
         return _CACHE[key]
     figs = _ARMY_FIGURES.get(color, _ARMY_FIGURES['offensive'])
-    box = target_h
     gap = int(0.02 * settings.SCREEN_WIDTH)
-    buttons = [_figure_button(f, lbl, box) for f, lbl in figs]
+    buttons = [field_figure_icon(name, fb, lbl, target_h) for name, fb, lbl in figs]
     total_w = sum(b.get_width() for b in buttons) + gap * (len(buttons) - 1)
     h = max(b.get_height() for b in buttons)
     surf = pygame.Surface((total_w, h), pygame.SRCALPHA)
@@ -269,6 +358,31 @@ def daggers_diagram(target_h=None):
     surf.blit(b, (x, cy - b.get_height() // 2)); x += b.get_width()
     _draw_arrow(surf, (x + gap, cy), (x + arrow_w - gap, cy)); x += arrow_w
     surf.blit(big, (x, cy - big.get_height() // 2))
+    _CACHE[key] = surf
+    return surf
+
+
+def card_row(suit, ranks, max_w, target_h=None):
+    """A row of the actual card images for ``ranks`` of ``suit``, scaled to fit."""
+    _SH = settings.SCREEN_HEIGHT
+    target_h = int(target_h or 0.13 * _SH)
+    ranks = list(ranks or [])
+    key = ('cardrow', suit, tuple(ranks), int(max_w), target_h)
+    if key in _CACHE:
+        return _CACHE[key]
+    gap = max(3, int(0.004 * settings.SCREEN_WIDTH))
+    cards = [_card_surface(suit, r, target_h) for r in ranks]
+    total = sum(c.get_width() for c in cards) + gap * max(0, len(cards) - 1)
+    if total > max_w and total > 0:
+        scaled_h = max(12, int(target_h * (max_w / total)))
+        cards = [_card_surface(suit, r, scaled_h) for r in ranks]
+        total = sum(c.get_width() for c in cards) + gap * max(0, len(cards) - 1)
+    h = max((c.get_height() for c in cards), default=1)
+    surf = pygame.Surface((max(1, total), max(1, h)), pygame.SRCALPHA)
+    x = 0
+    for c in cards:
+        surf.blit(c, (x, (h - c.get_height()) // 2))
+        x += c.get_width() + gap
     _CACHE[key] = surf
     return surf
 

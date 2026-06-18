@@ -1928,6 +1928,15 @@ class ConquerGameScreen(GameScreen):
             self.window,
             [
                 {
+                    'title': 'How a Battle Flows',
+                    'layout': 'text_only',
+                    'lines': [
+                        '1. A prelude spell fires first (yours drew extra cards).',
+                        '2. You pick your attacking figure to advance.',
+                        '3. Three quick tactic rounds then decide the winner.',
+                    ],
+                },
+                {
                     'title': 'Figures Decide Most',
                     'layout': 'image_top',
                     'image': lambda: tutorial_diagrams.figure_buttons('offensive'),
@@ -1943,9 +1952,9 @@ class ConquerGameScreen(GameScreen):
                     'image': lambda: tutorial_diagrams.daggers_diagram(),
                     'image_caption': 'Combine same-colour Daggers for a bigger hit.',
                     'lines': [
-                        'Three quick rounds follow. Play a Dagger (a 7-10 card)',
-                        'to add its value. Combine same-colour Daggers into one,',
-                        'Block to cancel a round, or Call a figure into it.',
+                        'Each round, Play a Dagger (a 7-10 card) to add its value.',
+                        'Combine same-colour Daggers into one, Block to cancel a',
+                        'round, or Call a field figure into it.',
                     ],
                 },
             ],

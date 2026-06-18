@@ -165,10 +165,14 @@ class TutorialWindowDialogue:
                 text_surfs.append(
                     self.font.render(line, True, settings.DIALOGUE_BOX_MSG_TEXT_CLR))
 
+        # The image draws a backing panel that extends ~0.012*SW below it, so a
+        # caption needs a gap larger than that to sit clear of the panel border.
+        caption_gap = int(0.022 * _SW)
+
         def image_block():
             blocks = []
             if img is not None:
-                blocks.append((img, 'image', line_gap if cap else block_gap))
+                blocks.append((img, 'image', caption_gap if cap else block_gap))
                 if cap:
                     blocks.append((cap, 'caption', block_gap))
             return blocks
@@ -266,6 +270,10 @@ _REEL_TICK_MS = 90
 # client UI does not depend on server-only settings.
 _OFFENSIVE_SUITS = ('Hearts', 'Diamonds')
 _DEFENSIVE_SUITS = ('Clubs', 'Spades')
+# The granted starter sets (mirror server_settings STARTER_*_SET), shown as the
+# actual cards in the reveal.
+_OFFENSIVE_SET_RANKS = ['K', 'A', 'J', '7', '7', '8', '8', '9', '10']
+_DEFENSIVE_SET_RANKS = ['K', 'A', 'J', '7', '7', '8', '9', '10']
 
 
 class StarterSuitRevealDialogue:
@@ -292,7 +300,7 @@ class StarterSuitRevealDialogue:
         self.caption_font = settings.get_font(getattr(settings, 'FS_TINY', 14))
 
         box_w = settings.DIALOGUE_BOX_WIDTH
-        box_h = int(0.5 * _SH)
+        box_h = int(0.58 * _SH)
         self.x = (_SW - box_w) // 2
         self.y = max(int(0.02 * _SH), (_SH - box_h) // 2)
         self.rect = pygame.Rect(self.x, self.y, box_w, box_h)
@@ -368,35 +376,43 @@ class StarterSuitRevealDialogue:
 
         y = self.rect.y + settings.DIALOGUE_BOX_TEXT_MARGIN_Y
         is_off = self._phase.startswith('off')
+        settled = self._phase in ('off_done', 'def_done')
         title = 'Your Attack Suit' if is_off else 'Your Defence Suit'
         ts = self.title_font.render(title, True, settings.TITLE_TEXT_COLOR)
         self.window.blit(ts, ts.get_rect(center=(self.rect.centerx, y + ts.get_height() // 2)))
-        y += ts.get_height() + int(0.02 * _SH)
+        y += ts.get_height() + int(0.018 * _SH)
 
-        icon_sz = int(0.16 * _SH)
+        # Spinning: a big reel icon. Settled: a smaller icon to leave room for
+        # the actual cards the player gained.
+        icon_sz = int((0.10 if settled else 0.16) * _SH)
         suit = self._current_reel_suit()
         ic = tutorial_diagrams.suit_icon(suit, icon_sz)
         if ic:
             self.window.blit(ic, ic.get_rect(center=(self.rect.centerx, y + icon_sz // 2)))
-        y += icon_sz + int(0.02 * _SH)
+        y += icon_sz + int(0.014 * _SH)
 
-        settled = self._phase in ('off_done', 'def_done')
-        lines = []
-        if settled and is_off:
-            lines = [f'{self.offensive_suit} — an offensive (red) suit!',
-                     'You received a starter attack set: a King, a Farm,',
-                     'Warriors, three Daggers and a Draw-2 prelude.']
-        elif settled and not is_off:
-            lines = [f'{self.defensive_suit} — a defensive (black) suit!',
-                     'You received a defence set: King, Yack Farm, Fortress,',
-                     'three Daggers and a Health-Boost prelude.']
+        if settled:
+            assigned = self.offensive_suit if is_off else self.defensive_suit
+            ranks = _OFFENSIVE_SET_RANKS if is_off else _DEFENSIVE_SET_RANKS
+            headline = (f'{assigned} — an offensive (red) suit!' if is_off
+                        else f'{assigned} — a defensive (black) suit!')
+            hs = self.font.render(headline, True, settings.TITLE_TEXT_COLOR)
+            self.window.blit(hs, hs.get_rect(center=(self.rect.centerx, y + hs.get_height() // 2)))
+            y += hs.get_height() + int(0.012 * _SH)
+            # The actual cards gained.
+            cards = tutorial_diagrams.card_row(
+                assigned, ranks, self.rect.w - int(0.08 * _SW))
+            if cards is not None:
+                self.window.blit(cards, cards.get_rect(midtop=(self.rect.centerx, y)))
+                y += cards.get_height() + int(0.012 * _SH)
+            tail = ('Builds your King, Farm, Warriors, 3 Daggers + a Draw-2 prelude.'
+                    if is_off else
+                    'Builds your defence + 3 Daggers and a Health-Boost prelude.')
+            tsurf = self.caption_font.render(tail, True, settings.DIALOGUE_BOX_MSG_TEXT_CLR)
+            self.window.blit(tsurf, tsurf.get_rect(center=(self.rect.centerx, y + tsurf.get_height() // 2)))
         else:
-            lines = ['Spinning…']
-        line_h = self.font.get_height() + int(0.004 * _SH)
-        for line in lines:
-            ls = self.font.render(line, True, settings.DIALOGUE_BOX_MSG_TEXT_CLR)
-            self.window.blit(ls, ls.get_rect(center=(self.rect.centerx, y + line_h // 2)))
-            y += line_h
+            spin = self.font.render('Spinning…', True, settings.DIALOGUE_BOX_MSG_TEXT_CLR)
+            self.window.blit(spin, spin.get_rect(center=(self.rect.centerx, y + spin.get_height() // 2)))
 
         self._btn.text = ('…' if self._btn.disabled
                           else ('Next' if self._phase == 'off_done' else 'Got it'))

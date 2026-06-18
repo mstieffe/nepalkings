@@ -185,11 +185,23 @@ def test_first_tier1_ai_conquest_uses_safe_defence_template(client, app, db):
     land = _tier1_unowned_land(db)
 
     assert _should_use_tutorial_safe_ai_defence(user, land) is True
-    template = _tutorial_safe_ai_defence_template()
+    # The scripted defender demonstrates a prelude + a counter-advancing figure,
+    # in the BLACK suit the player's red attack beats, with weak 7-Daggers.
+    from onboarding_service import get_starter_suits
+    from routes.kingdom import _SUIT_ADVANTAGE
+    attack_suit = get_starter_suits(user)['offensive']
+    template = _tutorial_safe_ai_defence_template(attack_suit)
     assert template['ai_name'] == 'Tutorial Border Watch'
-    assert template['prelude_spell_name'] is None
+    assert template['prelude_spell_name'] == 'All Seeing Eye'
     assert template['counter_spell_name'] is None
     assert len(template['battle_moves']) == 3
+    beaten = _SUIT_ADVANTAGE[attack_suit]
+    assert all(m['suit'] == beaten and int(m['value']) == 7
+               for m in template['battle_moves'])
+    assert all(f['suit'] == beaten and f['color'] == 'defensive'
+               for f in template['figures'])
+    # Counter-advancing defending figure (no counter spell / must_be_attacked).
+    assert template['battle_figure_index'] == 1
 
 
 def test_defence_draft_preassembled_in_defensive_suit(client, app, db):
