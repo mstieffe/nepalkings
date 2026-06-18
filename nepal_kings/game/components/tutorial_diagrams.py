@@ -236,77 +236,105 @@ def _skill_icons(skill_keys, size):
     return icons
 
 
-def field_figure_icon(family_name, fallback_icon=None, label=None, target_h=None):
-    """A faithful field-figure icon: real frame + icon + power/skill badge.
+def _figure_info_pill(rep, label, suit, max_w):
+    """A parchment info pill (name + power + suit + skills), like the field's
+    figure info line. Returns a Surface or None."""
+    name_font = settings.get_font(getattr(settings, 'FS_TINY', 18))
+    name = label or (getattr(rep, 'name', '') if rep else '')
+    parts = []  # (surface, baseline_h)
+    if name:
+        parts.append(name_font.render(name, True, settings.SUIT_ICON_CAPTION_COLOR))
+    line_h = name_font.get_height()
+    icon_sz = int(line_h * 0.95)
+    if rep is not None:
+        try:
+            parts.append(name_font.render(str(int(rep.get_value())), True,
+                                          settings.SUIT_ICON_CAPTION_COLOR))
+        except Exception:
+            pass
+    si = _suit_icon(suit, icon_sz) if suit else None
+    if si:
+        parts.append(si)
+    if rep is not None:
+        try:
+            parts.extend(_skill_icons(rep.get_active_skill_keys(), icon_sz))
+        except Exception:
+            pass
+    if not parts:
+        return None
+    gap = max(3, int(0.003 * settings.SCREEN_WIDTH))
+    pad_x = int(line_h * 0.45)
+    pad_y = max(2, int(line_h * 0.12))
+    content_w = sum(p.get_width() for p in parts) + gap * (len(parts) - 1)
+    h = max(p.get_height() for p in parts) + pad_y * 2
+    w = content_w + pad_x * 2
+    pill = pygame.Surface((w, h), pygame.SRCALPHA)
+    corner = getattr(settings, 'FIGURE_NAME_CORNER_R', 5)
+    pygame.draw.rect(pill, settings.FIGURE_NAME_BG_COLOR, pill.get_rect(), border_radius=corner)
+    pygame.draw.rect(pill, settings.FIGURE_NAME_FRAME_COLOR, pill.get_rect(), 2, border_radius=corner)
+    x = pad_x
+    for p in parts:
+        pill.blit(p, (x, (h - p.get_height()) // 2))
+        x += p.get_width() + gap
+    if w > max_w and w > 0:
+        pill = pygame.transform.smoothscale(pill, (max_w, max(1, int(h * max_w / w))))
+    return pill
 
-    Composed from the family's frame/icon art with a small power badge and any
-    active skill icons, mirroring how the figure appears on the field. Falls
-    back to a framed raw icon if the figure manager/art is unavailable.
+
+def field_figure_icon(family_name, fallback_icon=None, label=None, target_h=None):
+    """A faithful field-figure icon, rendered exactly like the field/conquer
+    screens: the icon sits INSIDE a frame scaled to FRAME_FIGURE_SCALE x the
+    icon (so it never overflows), with a parchment info pill (name, power,
+    suit, skill icons) below it.
     """
     _SH = settings.SCREEN_HEIGHT
     box = int(target_h or 0.16 * _SH)
-    label = family_name if label is None else label  # '' => no label row
+    label = family_name if label is None else label  # '' => no info pill
     key = ('fieldfig', family_name, box, label)
     if key in _CACHE:
         return _CACHE[key]
 
-    label_font = settings.get_font(getattr(settings, 'FS_TINY', 14))
-    lbl = label_font.render(label, True, (235, 222, 190)) if label else None
-    extra = (lbl.get_height() + 8) if lbl else 0
-    surf = pygame.Surface((box, box + extra), pygame.SRCALPHA)
-    frame_rect = pygame.Rect(0, 0, box, box)
-
     mgr = _figure_manager()
     family = mgr.families.get(family_name) if mgr else None
-    drew = False
-    if family is not None:
-        try:
-            from game.components.figures.figure_img import FigureImg
-            FigureImg(surf, family, box, box).draw_icon(0, 0)
-            drew = True
-        except Exception:
-            drew = False
-    if not drew:
-        pygame.draw.rect(surf, (28, 22, 14, 235), frame_rect, border_radius=10)
-        pygame.draw.rect(surf, (224, 182, 82), frame_rect, 2, border_radius=10)
-        icon = _scaled(_load(_asset('img', 'figures', 'icons', fallback_icon)),
-                       int(box * 0.78)) if fallback_icon else None
-        if icon:
-            surf.blit(icon, icon.get_rect(center=frame_rect.center))
-
-    # Power + skill badge, mirroring the field info display (best-effort).
     rep = None
     if mgr:
         reps = mgr.figures_by_name.get(family_name) or []
         rep = reps[0] if reps else None
-    if rep is not None:
-        try:
-            value = int(rep.get_value())
-            badge_font = settings.get_font(getattr(settings, 'FS_SMALL', 16), bold=True)
-            txt = badge_font.render(str(value), True, (255, 244, 210))
-            bw = max(int(box * 0.30), txt.get_width() + 10)
-            bh = txt.get_height() + 4
-            badge = pygame.Rect(4, box - bh - 4, bw, bh)
-            bg = pygame.Surface((badge.w, badge.h), pygame.SRCALPHA)
-            pygame.draw.rect(bg, (24, 20, 14, 235), bg.get_rect(), border_radius=6)
-            pygame.draw.rect(bg, (224, 182, 82), bg.get_rect(), 1, border_radius=6)
-            surf.blit(bg, badge.topleft)
-            surf.blit(txt, txt.get_rect(center=badge.center))
-        except Exception:
-            pass
-        try:
-            sk_size = int(box * 0.24)
-            icons = _skill_icons(rep.get_active_skill_keys(), sk_size)
-            sx = box - sk_size - 4
-            sy = 4
-            for ic in icons:
-                surf.blit(ic, (sx, sy))
-                sy += sk_size + 3
-        except Exception:
-            pass
+    suit = getattr(rep, 'suit', None)
 
-    if lbl:
-        surf.blit(lbl, lbl.get_rect(midtop=(box // 2, box + 5)))
+    # Match FigureIcon.draw_icon: frame is FRAME_FIGURE_SCALE x the icon, both
+    # centred, so the icon sits inside the frame instead of filling it.
+    frame_scale = getattr(settings, 'FRAME_FIGURE_SCALE', 1.4)
+    icon_box = int(box / frame_scale)
+    frame_src = getattr(family, 'frame_img', None) if family else None
+    icon_src = getattr(family, 'icon_img', None) if family else None
+    if icon_src is None and fallback_icon:
+        icon_src = _load(_asset('img', 'figures', 'icons', fallback_icon))
+    frame_img = _scaled(frame_src, box) if frame_src is not None else None
+    icon_img = _scaled(icon_src, icon_box) if icon_src is not None else None
+
+    frame_w = frame_img.get_width() if frame_img is not None else box
+    frame_h = frame_img.get_height() if frame_img is not None else box
+    pill = _figure_info_pill(rep, label, suit, box) if label else None
+    pill_h = (pill.get_height() + max(2, int(box * 0.04))) if pill else 0
+    w = max(box, frame_w, pill.get_width() if pill else 0)
+    top_h = max(box, frame_h)
+    surf = pygame.Surface((w, top_h + pill_h), pygame.SRCALPHA)
+    cx = w // 2
+
+    cy = top_h // 2
+    if frame_img is not None:
+        surf.blit(frame_img, frame_img.get_rect(center=(cx, cy)))
+    else:
+        fr = pygame.Rect(0, 0, box, box)
+        fr.center = (cx, cy)
+        pygame.draw.rect(surf, (28, 22, 14, 235), fr, border_radius=10)
+        pygame.draw.rect(surf, (224, 182, 82), fr, 2, border_radius=10)
+    if icon_img is not None:
+        surf.blit(icon_img, icon_img.get_rect(center=(cx, cy)))
+    if pill is not None:
+        surf.blit(pill, pill.get_rect(midtop=(cx, top_h + max(2, int(box * 0.02)))))
+
     _CACHE[key] = surf
     return surf
 
