@@ -1072,3 +1072,24 @@ def test_kingdom_overview_window_waits_for_map_load():
     screen = _kingdom_overview_screen(seen=[], loaded=False)
     screen._maybe_show_kingdom_overview()
     assert screen._kingdom_overview_dialogue is None
+
+
+def test_tutorial_completion_available_on_any_menu_mixin_screen():
+    # The celebration logic lives on MenuScreenMixin, so non-menu tutorial
+    # screens (e.g. the kingdom-config screen) can fire it after the last card.
+    from game.screens._menu_base import MenuScreenMixin
+    screen = object.__new__(MenuScreenMixin)
+    screen.state = SimpleNamespace(user_dict={'onboarding': {
+        'core_steps': [
+            {'id': 'finish_tutorial', 'completed': True, 'claimed': False,
+             'reward': {'booster_packs': 6, 'booster_packs_side': 2}},
+        ],
+        'welcome_pending': False,
+        'onboarding_skipped': False,
+    }})
+    screen._tutorial_celebrated = set()
+    pending = screen._pending_tutorial_completion()
+    assert pending is not None and pending[0] == 'finish_tutorial'
+    # Items render with explanations.
+    items = MenuScreenMixin._reward_reveal_items(pending[3])
+    assert [it['kind'] for it in items] == ['main_booster', 'side_booster']

@@ -673,6 +673,126 @@ class MenuScreenMixin:
             if key in balances:
                 self.state.user_dict[key] = balances[key]
 
+    # ── Tutorial completion celebrations (shared across menu-like screens) ──
+    # Shown on whatever tutorial-coach screen completes a tutorial (e.g. the
+    # kingdom-config screen for the conquer tutorial), not only on the menu.
+
+    @staticmethod
+    def _reward_reveal_items(reward):
+        """Turn a reward dict into reveal-dialogue items with explanations."""
+        reward = dict(reward or {})
+        items = []
+        gold = int(reward.get('gold') or 0)
+        if gold > 0:
+            items.append({'kind': 'gold', 'label': f'{gold} gold',
+                          'description': 'Spend it on booster packs, cosmetics, and shields.'})
+        main = int(reward.get('booster_packs') or 0)
+        if main > 0:
+            items.append({'kind': 'main_booster',
+                          'label': f"{main} main booster" + ('' if main == 1 else 's'),
+                          'description': 'Main cards build your core figures, spells, and tactics.'})
+        side = int(reward.get('booster_packs_side') or 0)
+        if side > 0:
+            items.append({'kind': 'side_booster',
+                          'label': f"{side} side booster" + ('' if side == 1 else 's'),
+                          'description': 'Side cards unlock advanced figures and effects.'})
+        maps = int(reward.get('maps') or 0)
+        if maps > 0:
+            items.append({'kind': 'map',
+                          'label': f"{maps} map" + ('' if maps == 1 else 's'),
+                          'description': 'Maps skip the cooldown after conquering a land.'})
+        return items
+
+    # Ordered: conquer tutorial completes first, the duel tutorial later.
+    _TUTORIAL_COMPLETIONS = (
+        ('finish_tutorial', 'Conquer Tutorial Complete!', [
+            "You've learned the kingdom loop: conquer a land, build figures, win the battle, and collect production.",
+            "The Duel is a separate, optional tutorial — start it whenever you like, or keep expanding your kingdom.",
+        ]),
+        ('finish_first_duel', 'Duel Tutorial Complete!', [
+            "You've played a full duel: building figures, casting spells, and winning rounds.",
+            "Jump into Quick duels and kingdom conquests whenever you like.",
+        ]),
+    )
+
+    def _pending_tutorial_completion(self):
+        """Return ``(step_id, title, lines, reward)`` for a completed-but-
+        uncelebrated tutorial milestone, or ``None``."""
+        onboarding = self._onboarding()
+        if not onboarding or onboarding.get('welcome_pending'):
+            return None
+        if onboarding.get('onboarding_skipped'):
+            return None
+        celebrated = getattr(self, '_tutorial_celebrated', None)
+        if celebrated is None:
+            celebrated = self._tutorial_celebrated = set()
+        steps = {s.get('id'): s for s in (onboarding.get('core_steps') or [])}
+        for step_id, title, lines in self._TUTORIAL_COMPLETIONS:
+            payload = steps.get(step_id)
+            if not payload or not payload.get('completed') or payload.get('claimed'):
+                continue
+            if step_id in celebrated:
+                continue
+            return step_id, title, lines, payload.get('reward')
+        return None
+
+    def _maybe_show_tutorial_completion(self):
+        if getattr(self, '_tutorial_complete_dialogue', None):
+            return
+        if getattr(self, '_welcome_present_dialogue', None):
+            return
+        if getattr(self, '_starter_reveal_dialogue', None):
+            return
+        if getattr(self, 'dialogue_box', None) or getattr(self, '_onboarding_guide_open', False):
+            return
+        pending = self._pending_tutorial_completion()
+        if not pending:
+            return
+        from game.components.rewards_reveal_dialogue import RewardsRevealDialogueBox
+        step_id, title, lines, reward = pending
+        if getattr(self, '_tutorial_celebrated', None) is None:
+            self._tutorial_celebrated = set()
+        self._tutorial_celebrated.add(step_id)
+        self._tutorial_complete_step_id = step_id
+        self._tutorial_complete_dialogue = RewardsRevealDialogueBox(
+            self.window,
+            title,
+            'victory',
+            lines,
+            self._reward_reveal_items(reward),
+            footer_when_done='Reward claimed. Well played!',
+            hint_text='Click each box to reveal your reward.',
+        )
+
+    def _draw_tutorial_complete_dialogue(self):
+        if getattr(self, '_tutorial_complete_dialogue', None):
+            self._tutorial_complete_dialogue.draw()
+
+    def _handle_tutorial_completion_events(self, events):
+        if not getattr(self, '_tutorial_complete_dialogue', None):
+            return False
+        if any(event.type == pygame.QUIT for event in events):
+            return False
+        response = self._tutorial_complete_dialogue.update(events)
+        if response:
+            step_id = getattr(self, '_tutorial_complete_step_id', None)
+            self._tutorial_complete_dialogue = None
+            self._tutorial_complete_step_id = None
+            if step_id:
+                try:
+                    data = onboarding_service.claim_reward(step_id)
+                    reward = (data or {}).get('reward') or {}
+                    if int(reward.get('gold') or 0) and hasattr(self, '_suppress_next_gold_floater'):
+                        self._suppress_next_gold_floater()
+                    self._apply_onboarding_payload(data)
+                    if getattr(self.state, 'set_msg', None) and data.get('reward_label'):
+                        self.state.set_msg(data['reward_label'])
+                except Exception:
+                    import logging
+                    logging.getLogger(__name__).exception(
+                        "Failed to claim tutorial completion reward")
+        return True
+
     def _merge_onboarding_state(self, incoming):
         if not isinstance(incoming, dict):
             return incoming

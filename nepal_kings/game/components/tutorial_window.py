@@ -398,16 +398,21 @@ class StarterSuitRevealDialogue:
                         else f'{assigned} — a defensive (black) suit!')
             hs = self.font.render(headline, True, settings.TITLE_TEXT_COLOR)
             self.window.blit(hs, hs.get_rect(center=(self.rect.centerx, y + hs.get_height() // 2)))
-            y += hs.get_height() + int(0.012 * _SH)
-            # The actual cards gained.
+            y += hs.get_height() + int(0.010 * _SH)
+            # Make clear these are GAINED starter cards, not just shown.
+            grant = self.caption_font.render(
+                'These starter cards are added to your collection:',
+                True, settings.DIALOGUE_BOX_MSG_TEXT_CLR)
+            self.window.blit(grant, grant.get_rect(center=(self.rect.centerx, y + grant.get_height() // 2)))
+            y += grant.get_height() + int(0.008 * _SH)
             cards = tutorial_diagrams.card_row(
                 assigned, ranks, self.rect.w - int(0.08 * _SW))
             if cards is not None:
                 self.window.blit(cards, cards.get_rect(midtop=(self.rect.centerx, y)))
                 y += cards.get_height() + int(0.012 * _SH)
-            tail = ('Builds your King, Farm, Warriors, 3 Daggers + a Draw-2 prelude.'
+            tail = ('They build your King, Farm, Warriors, 3 Daggers + a Draw-2 prelude.'
                     if is_off else
-                    'Builds your defence + 3 Daggers and a Health-Boost prelude.')
+                    'They build your defence + 3 Daggers and a Health-Boost prelude.')
             tsurf = self.caption_font.render(tail, True, settings.DIALOGUE_BOX_MSG_TEXT_CLR)
             self.window.blit(tsurf, tsurf.get_rect(center=(self.rect.centerx, y + tsurf.get_height() // 2)))
         else:

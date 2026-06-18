@@ -323,15 +323,16 @@ def field_figure_icon(family_name, fallback_icon=None, label=None, target_h=None
     cx = w // 2
 
     cy = top_h // 2
+    # Match the field draw order: icon first, then the frame ON TOP, so the
+    # frame border overlaps the icon edges (icon never floats over the frame).
+    if icon_img is not None:
+        surf.blit(icon_img, icon_img.get_rect(center=(cx, cy)))
     if frame_img is not None:
         surf.blit(frame_img, frame_img.get_rect(center=(cx, cy)))
     else:
         fr = pygame.Rect(0, 0, box, box)
         fr.center = (cx, cy)
-        pygame.draw.rect(surf, (28, 22, 14, 235), fr, border_radius=10)
         pygame.draw.rect(surf, (224, 182, 82), fr, 2, border_radius=10)
-    if icon_img is not None:
-        surf.blit(icon_img, icon_img.get_rect(center=(cx, cy)))
     if pill is not None:
         surf.blit(pill, pill.get_rect(midtop=(cx, top_h + max(2, int(box * 0.02)))))
 

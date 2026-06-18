@@ -945,6 +945,10 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         self._select_kingdom_at(self._selected_kingdom_index() + delta)
 
     def handle_events(self, events):
+        # The conquer-tutorial completion celebration fires here (the final
+        # coach card lives on this screen) and is modal.
+        if self._handle_tutorial_completion_events(events):
+            return
         if self._handle_pending_purchase_dialogue(events):
             return
         super().handle_events(events)
@@ -1237,6 +1241,7 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
     def update(self, events=None):
         super().update()
         self._update_icon_buttons()
+        self._maybe_show_tutorial_completion()
 
     def _current_kingdom_config_coach_id(self):
         if not self._menu_coach_allowed_common():
@@ -2563,3 +2568,4 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         self._floating_text.draw(self.window)
         self._draw_menu_overlay()
         self._draw_menu_coach(self._current_kingdom_config_coach_step())
+        self._draw_tutorial_complete_dialogue()
