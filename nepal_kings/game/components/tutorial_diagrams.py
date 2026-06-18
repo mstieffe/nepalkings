@@ -492,71 +492,111 @@ def _result_surface(kind, ref, box):
     return _chip(None, box)
 
 
-def _recipe_row(cards, result_surf, label, row_h, label_w):
-    """[card][card] → [result] label — one recipe line."""
-    label_font = settings.get_font(getattr(settings, 'FS_SMALL', 18))
-    lbl = label_font.render(label, True, (235, 222, 190)) if label else None
-    card_h = int(row_h * 0.92)
-    card_surfs = [_card_surface(s, r, card_h) for (r, s) in cards]
-    gap = max(3, int(0.004 * settings.SCREEN_WIDTH))
-    arrow_w = int(0.045 * settings.SCREEN_WIDTH)
-    cards_w = sum(c.get_width() for c in card_surfs) + gap * max(0, len(card_surfs) - 1)
-    res_w = result_surf.get_width() if result_surf else 0
-    lbl_gap = int(0.012 * settings.SCREEN_WIDTH)
-    right_pad = int(0.008 * settings.SCREEN_WIDTH)
-    total_w = cards_w + arrow_w + res_w + (lbl_gap + label_w if lbl else 0) + right_pad
-    h = max(row_h, result_surf.get_height() if result_surf else 0)
-    surf = pygame.Surface((total_w, h), pygame.SRCALPHA)
-    cy = h // 2
-    x = 0
-    for c in card_surfs:
-        surf.blit(c, (x, cy - c.get_height() // 2))
-        x += c.get_width() + gap
-    _draw_arrow(surf, (x + gap, cy), (x + arrow_w - gap, cy))
-    x += arrow_w
-    if result_surf:
-        surf.blit(result_surf, (x, cy - result_surf.get_height() // 2))
-        x += res_w + lbl_gap
-    if lbl:
-        surf.blit(lbl, (x, cy - lbl.get_height() // 2))
-    return surf
-
-
 def _recipe_diagram(cache_key, entries, target_h=None):
-    """A vertical stack of recipe rows ([cards] → [result] label)."""
+    """A grid of recipe rows ([cards] → [result] label) with COLUMN ALIGNMENT.
+
+    Cards are right-aligned to a shared column so every arrow lands on the same
+    vertical axis; results and labels share their own aligned columns too.
+    """
     _SH = settings.SCREEN_HEIGHT
     row_h = int(target_h or 0.072 * _SH)
     if cache_key in _CACHE:
         return _CACHE[cache_key]
+
     label_font = settings.get_font(getattr(settings, 'FS_SMALL', 18))
-    label_w = max((label_font.size(e.get('label', ''))[0] for e in entries), default=0)
-    rows = []
+    card_h = int(row_h * 0.92)
+    gap = max(3, int(0.004 * settings.SCREEN_WIDTH))
+    col_gap = int(0.012 * settings.SCREEN_WIDTH)
+    arrow_w = int(0.045 * settings.SCREEN_WIDTH)
+    right_pad = int(0.008 * settings.SCREEN_WIDTH)
+
+    built = []
     for e in entries:
+        cards = [_card_surface(s, r, card_h) for (r, s) in e['cards']]
         result = _result_surface(e['kind'], e['ref'], row_h)
-        rows.append(_recipe_row(e['cards'], result, e.get('label', ''), row_h, label_w))
+        label = e.get('label', '')
+        lbl = label_font.render(label, True, (235, 222, 190)) if label else None
+        cards_w = sum(c.get_width() for c in cards) + gap * max(0, len(cards) - 1)
+        built.append((cards, cards_w, result, lbl))
+
+    cards_col = max((b[1] for b in built), default=0)
+    result_col = max((b[2].get_width() if b[2] else 0 for b in built), default=0)
+    label_col = max((b[3].get_width() if b[3] else 0 for b in built), default=0)
+    row_w = cards_col + col_gap + arrow_w + col_gap + result_col + col_gap + label_col + right_pad
     row_gap = int(0.016 * _SH)
-    w = max((r.get_width() for r in rows), default=1)
-    h = sum(r.get_height() for r in rows) + row_gap * max(0, len(rows) - 1)
-    surf = pygame.Surface((max(1, w), max(1, h)), pygame.SRCALPHA)
+    n = len(built)
+    surf = pygame.Surface((max(1, row_w), max(1, n * row_h + row_gap * max(0, n - 1))),
+                          pygame.SRCALPHA)
+
+    # Shared column x-positions (so all arrows align on one axis).
+    arrow_x0 = cards_col + col_gap
+    arrow_x1 = arrow_x0 + arrow_w
+    result_x = arrow_x1 + col_gap
+    label_x = result_x + result_col + col_gap
+
     y = 0
-    for r in rows:
-        surf.blit(r, (0, y))
-        y += r.get_height() + row_gap
+    for cards, cards_w, result, lbl in built:
+        cy = y + row_h // 2
+        # Cards: right-aligned to the cards column so the arrow start is fixed.
+        cx = cards_col - cards_w
+        for c in cards:
+            surf.blit(c, (cx, cy - c.get_height() // 2))
+            cx += c.get_width() + gap
+        _draw_arrow(surf, (arrow_x0, cy), (arrow_x1, cy))
+        if result:
+            surf.blit(result, (result_x + (result_col - result.get_width()) // 2,
+                               cy - result.get_height() // 2))
+        if lbl:
+            surf.blit(lbl, (label_x, cy - lbl.get_height() // 2))
+        y += row_h + row_gap
+
     _CACHE[cache_key] = surf
     return surf
 
 
+def field_compartments_diagram(target_h=None):
+    """Window 2: the three fields (Castle / Village / Military), each holding a
+    representative figure — illustrating where figures stand."""
+    _SH = settings.SCREEN_HEIGHT
+    target_h = int(target_h or 0.16 * _SH)
+    key = ('compartments', target_h)
+    if key in _CACHE:
+        return _CACHE[key]
+    fields = [
+        ('Castle', 'Djungle King', 'castle_red.png'),
+        ('Village', 'Small Rice Farm', 'rice_farm1.png'),
+        ('Military', 'Gorkha Warriors', 'army1.png'),
+    ]
+    header_font = settings.get_font(getattr(settings, 'FS_SMALL', 18), bold=True)
+    icon_h = int(target_h * 0.86)
+    header_gap = max(4, int(0.01 * _SH))
+    cols = []
+    for field_name, fam, fb in fields:
+        icon = field_figure_icon(fam, fb, label='', target_h=icon_h)
+        header = header_font.render(field_name, True, (240, 210, 140))
+        col_w = max(icon.get_width(), header.get_width())
+        col_h = header.get_height() + header_gap + icon.get_height()
+        col = pygame.Surface((col_w, col_h), pygame.SRCALPHA)
+        col.blit(header, header.get_rect(midtop=(col_w // 2, 0)))
+        col.blit(icon, icon.get_rect(midtop=(col_w // 2, header.get_height() + header_gap)))
+        cols.append(col)
+    gap = int(0.03 * settings.SCREEN_WIDTH)
+    total_w = sum(c.get_width() for c in cols) + gap * (len(cols) - 1)
+    h = max(c.get_height() for c in cols)
+    surf = pygame.Surface((total_w, h), pygame.SRCALPHA)
+    x = 0
+    for c in cols:
+        surf.blit(c, (x, 0))
+        x += c.get_width() + gap
+    _CACHE[key] = surf
+    return surf
+
+
 def card_recipe_examples(target_h=None):
-    """Window 1: cards combine into figures AND spells."""
+    """Window 1: one figure and one spell example."""
     entries = [
-        {'cards': [('K', 'Hearts')], 'kind': 'figure', 'ref': 'Djungle King',
-         'label': 'King (figure)'},
         {'cards': [('J', 'Hearts'), ('7', 'Hearts')], 'kind': 'figure',
          'ref': 'Small Rice Farm', 'label': 'Rice Farm (figure)'},
-        {'cards': [('A', 'Hearts'), ('7', 'Hearts')], 'kind': 'figure',
-         'ref': 'Gorkha Warriors', 'label': 'Warriors (figure)'},
-        {'cards': [('3', 'Spades'), ('3', 'Spades')], 'kind': 'spell',
-         'ref': 'Poison', 'label': 'Poison (spell)'},
         {'cards': [('Q', 'Hearts'), ('Q', 'Hearts')], 'kind': 'spell',
          'ref': 'Blitzkrieg', 'label': 'Blitzkrieg (spell)'},
     ]

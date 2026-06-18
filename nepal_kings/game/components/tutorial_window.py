@@ -142,8 +142,9 @@ class TutorialWindowDialogue:
     def _page_rows(self, page):
         """Ordered (surface, kind, gap_after) blocks for the current page.
 
-        The image/text order is per-page via ``layout``:
-        'image_top' (default), 'image_bottom', 'text_only', 'image_only'.
+        The image/text order is per-page via ``layout``: 'image_top' (default),
+        'image_bottom', 'text_only', 'image_only', or 'text_image_text' (text
+        above AND below the image; the below text comes from ``lines_below``).
         """
         _SH = settings.SCREEN_HEIGHT
         _SW = settings.SCREEN_WIDTH
@@ -158,12 +159,18 @@ class TutorialWindowDialogue:
         if img is not None and page.get('image_caption'):
             cap = self.caption_font.render(
                 page['image_caption'], True, settings.DIALOGUE_BOX_MSG_TEXT_CLR)
-        text_surfs = []
         max_w = self.rect.w - int(0.10 * _SW)
-        for raw in page.get('lines', []) or []:
-            for line in self._wrap(raw, self.font, max_w):
-                text_surfs.append(
-                    self.font.render(line, True, settings.DIALOGUE_BOX_MSG_TEXT_CLR))
+
+        def render_lines(key):
+            out = []
+            for raw in page.get(key, []) or []:
+                for line in self._wrap(raw, self.font, max_w):
+                    out.append(self.font.render(
+                        line, True, settings.DIALOGUE_BOX_MSG_TEXT_CLR))
+            return out
+
+        text_surfs = render_lines('lines')
+        below_surfs = render_lines('lines_below')
 
         # The image draws a backing panel that extends ~0.012*SW below it, so a
         # caption needs a gap larger than that to sit clear of the panel border.
@@ -177,19 +184,26 @@ class TutorialWindowDialogue:
                     blocks.append((cap, 'caption', block_gap))
             return blocks
 
-        def text_block():
-            return [(s, 'text', line_gap) for s in text_surfs]
+        def text_block(surfs):
+            return [(s, 'text', line_gap) for s in surfs]
 
         layout = page.get('layout', 'image_top')
         rows = []
         if headline:
             rows.append((headline, 'headline', block_gap))
         if layout == 'text_only':
-            rows += text_block()
+            rows += text_block(text_surfs)
         elif layout == 'image_only':
             rows += image_block()
+        elif layout == 'text_image_text':
+            rows += text_block(text_surfs)
+            if text_surfs and img is not None:
+                s, k, _ = rows[-1]
+                rows[-1] = (s, k, block_gap)
+            rows += image_block()
+            rows += text_block(below_surfs)
         elif layout == 'image_bottom':
-            rows += text_block()
+            rows += text_block(text_surfs)
             if text_surfs and (img is not None):
                 # promote the gap before the image to a block gap
                 s, k, _ = rows[-1]
@@ -197,7 +211,7 @@ class TutorialWindowDialogue:
             rows += image_block()
         else:  # image_top
             rows += image_block()
-            rows += text_block()
+            rows += text_block(text_surfs)
         return rows
 
     def draw(self):

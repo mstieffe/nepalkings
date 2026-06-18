@@ -64,20 +64,18 @@ def render(width: int, height: int, ui_scale: str, mobile: bool) -> None:
     welcome = TutorialWindowDialogue(
         surf,
         [
-            {'title': 'A Chess of Cards', 'layout': 'image_top',
+            {'title': 'A Chess of Cards', 'layout': 'text_image_text',
+             'lines': ['Welcome, Mira! A 1-vs-1 tactical card game.'],
              'image': lambda: td.card_recipe_examples(),
-             'image_caption': 'Cards combine into figures and spells.',
-             'lines': [
-                 'Welcome, Mira! A 1-vs-1 tactical card game where',
-                 'figures and spells are card combinations — one standard deck.']},
+             'lines_below': ['Figures and spells are card combinations,',
+                             'so it all runs on one standard deck.']},
             {'title': 'Suits, Resources & Fields', 'layout': 'image_top',
-             'image': lambda: td.figure_anatomy_diagram(),
-             'image_caption': 'Same-suit cards build a figure that trades resources.',
+             'image': lambda: td.field_compartments_diagram(),
+             'image_caption': 'Figures stand in Castle, Village or Military fields.',
              'lines': [
                  'A figure or spell is built from cards of ONE suit.',
-                 'Hearts & Diamonds are offensive; Clubs & Spades defensive.',
-                 'Figures stand in a Castle, Village or Military field and',
-                 'produce and require resources to support each other.']},
+                 'Hearts & Diamonds attack; Clubs & Spades defend.',
+                 'Figures produce and require resources to support each other.']},
         ],
         title='Welcome to Nepal Kings')
     shot('welcome-1', welcome, page=0)

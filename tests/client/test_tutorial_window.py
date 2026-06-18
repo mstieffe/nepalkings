@@ -210,3 +210,13 @@ def test_new_recipe_and_land_diagrams_build():
     assert isinstance(td.land_hex_diagram(), pygame.Surface)
     assert isinstance(td.starter_set_breakdown('offensive', 'Hearts'), pygame.Surface)
     assert isinstance(td.starter_set_breakdown('defensive', 'Spades'), pygame.Surface)
+
+
+def test_field_compartments_and_recipe_alignment():
+    _display()
+    from game.components import tutorial_diagrams as td
+    td.clear_cache()
+    assert isinstance(td.field_compartments_diagram(), pygame.Surface)
+    # Recipe examples now show one figure + one spell (King removed).
+    examples = td.card_recipe_examples()
+    assert isinstance(examples, pygame.Surface)
