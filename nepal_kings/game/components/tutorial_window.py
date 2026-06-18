@@ -131,7 +131,7 @@ class TutorialWindowDialogue:
         max_w = self.rect.w - int(0.14 * _SW)
         # 'image_top' treats the image as a hero, so allow it to be larger.
         hero = page.get('layout', 'image_top') in ('image_top', 'image_only')
-        max_h = int((0.32 if hero else 0.24) * _SH)
+        max_h = int((0.30 if hero else 0.22) * _SH)
         if img.get_width() > max_w or img.get_height() > max_h:
             ratio = min(max_w / img.get_width(), max_h / img.get_height())
             img = pygame.transform.smoothscale(
@@ -221,11 +221,31 @@ class TutorialWindowDialogue:
         # ── Content: vertically centered between header and the controls ──
         page = self.pages[self.page_index] if self.pages else {}
         rows = self._page_rows(page)
-        content_h = sum(s.get_height() for s, _, _ in rows)
-        content_h += sum(g for _, _, g in rows[:-1]) if rows else 0
         dots_top = self._btn_y - int(0.03 * _SH)
         avail_top = header_bottom
         avail_h = dots_top - avail_top
+
+        def _content_h(rs):
+            return (sum(s.get_height() for s, _, _ in rs)
+                    + (sum(g for _, _, g in rs[:-1]) if rs else 0))
+
+        # Fit pass: if the page is taller than the space above the buttons,
+        # shrink the image row so text never overflows onto the controls.
+        content_h = _content_h(rows)
+        if content_h > avail_h:
+            overflow = content_h - avail_h
+            min_img_h = int(0.10 * _SH)
+            for i, (surf, kind, gap) in enumerate(rows):
+                if kind != 'image':
+                    continue
+                new_h = max(min_img_h, surf.get_height() - overflow)
+                if new_h < surf.get_height():
+                    ratio = new_h / surf.get_height()
+                    rows[i] = (pygame.transform.smoothscale(
+                        surf, (max(1, int(surf.get_width() * ratio)), new_h)), kind, gap)
+                break
+            content_h = _content_h(rows)
+        # Top-align when still too tall (text-heavy) so it stays off the buttons.
         y = avail_top + max(0, (avail_h - content_h) // 2)
 
         for surf, kind, gap in rows:

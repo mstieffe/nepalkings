@@ -503,7 +503,8 @@ def _recipe_row(cards, result_surf, label, row_h, label_w):
     cards_w = sum(c.get_width() for c in card_surfs) + gap * max(0, len(card_surfs) - 1)
     res_w = result_surf.get_width() if result_surf else 0
     lbl_gap = int(0.012 * settings.SCREEN_WIDTH)
-    total_w = cards_w + arrow_w + res_w + (lbl_gap + label_w if lbl else 0)
+    right_pad = int(0.008 * settings.SCREEN_WIDTH)
+    total_w = cards_w + arrow_w + res_w + (lbl_gap + label_w if lbl else 0) + right_pad
     h = max(row_h, result_surf.get_height() if result_surf else 0)
     surf = pygame.Surface((total_w, h), pygame.SRCALPHA)
     cy = h // 2

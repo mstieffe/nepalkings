@@ -632,9 +632,8 @@ class GameMenuScreen(MenuScreenMixin, Screen):
                         'image': lambda: td.card_recipe_examples(),
                         'image_caption': 'Cards combine into figures and spells.',
                         'lines': [
-                            f'Welcome, {username}! Nepal Kings is a 1-vs-1 tactical card game.',
-                            'Figures and spells are card COMBINATIONS, so it all',
-                            'runs on one standard deck — easy to learn, deep to master.',
+                            f'Welcome, {username}! A 1-vs-1 tactical card game where',
+                            'figures and spells are card combinations — one standard deck.',
                         ],
                     },
                     {
@@ -685,11 +684,9 @@ class GameMenuScreen(MenuScreenMixin, Screen):
                         'image': lambda: td.land_hex_diagram(),
                         'image_caption': 'Each land produces gold; higher tiers are richer but tougher.',
                         'lines': [
-                            'Your kingdom is made of lands. Lands produce gold over time',
-                            'and come in tiers — harder lands pay more.',
-                            'Conquer and defend lands to grow.',
-                            'To get you started, here is a first set of cards',
-                            'for attack and defence…',
+                            'Your kingdom is made of lands that produce gold.',
+                            'Conquer and defend lands to grow it.',
+                            'First, here is a starter set of cards for attack and defence…',
                         ],
                     },
                 ],
