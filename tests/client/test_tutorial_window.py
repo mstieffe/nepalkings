@@ -199,3 +199,14 @@ def test_figure_button_and_dagger_diagrams_build_and_cache():
     assert isinstance(dag, pygame.Surface)
     assert tutorial_diagrams.figure_buttons('offensive', 120) is off
     assert tutorial_diagrams.daggers_diagram(140) is dag
+
+
+def test_new_recipe_and_land_diagrams_build():
+    _display()
+    from game.components import tutorial_diagrams as td
+    td.clear_cache()
+    assert isinstance(td.card_recipe_examples(), pygame.Surface)
+    assert isinstance(td.figure_anatomy_diagram(), pygame.Surface)
+    assert isinstance(td.land_hex_diagram(), pygame.Surface)
+    assert isinstance(td.starter_set_breakdown('offensive', 'Hearts'), pygame.Surface)
+    assert isinstance(td.starter_set_breakdown('defensive', 'Spades'), pygame.Surface)

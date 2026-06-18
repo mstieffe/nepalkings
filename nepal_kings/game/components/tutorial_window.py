@@ -300,7 +300,7 @@ class StarterSuitRevealDialogue:
         self.caption_font = settings.get_font(getattr(settings, 'FS_TINY', 14))
 
         box_w = settings.DIALOGUE_BOX_WIDTH
-        box_h = int(0.58 * _SH)
+        box_h = int(0.68 * _SH)
         self.x = (_SW - box_w) // 2
         self.y = max(int(0.02 * _SH), (_SH - box_h) // 2)
         self.rect = pygame.Rect(self.x, self.y, box_w, box_h)
@@ -393,28 +393,29 @@ class StarterSuitRevealDialogue:
 
         if settled:
             assigned = self.offensive_suit if is_off else self.defensive_suit
-            ranks = _OFFENSIVE_SET_RANKS if is_off else _DEFENSIVE_SET_RANKS
             headline = (f'{assigned} — an offensive (red) suit!' if is_off
                         else f'{assigned} — a defensive (black) suit!')
             hs = self.font.render(headline, True, settings.TITLE_TEXT_COLOR)
             self.window.blit(hs, hs.get_rect(center=(self.rect.centerx, y + hs.get_height() // 2)))
-            y += hs.get_height() + int(0.010 * _SH)
+            y += hs.get_height() + int(0.008 * _SH)
             # Make clear these are GAINED starter cards, not just shown.
             grant = self.caption_font.render(
                 'These starter cards are added to your collection:',
                 True, settings.DIALOGUE_BOX_MSG_TEXT_CLR)
             self.window.blit(grant, grant.get_rect(center=(self.rect.centerx, y + grant.get_height() // 2)))
             y += grant.get_height() + int(0.008 * _SH)
-            cards = tutorial_diagrams.card_row(
-                assigned, ranks, self.rect.w - int(0.08 * _SW))
-            if cards is not None:
-                self.window.blit(cards, cards.get_rect(midtop=(self.rect.centerx, y)))
-                y += cards.get_height() + int(0.012 * _SH)
-            tail = ('They build your King, Farm, Warriors, 3 Daggers + a Draw-2 prelude.'
-                    if is_off else
-                    'They build your defence + 3 Daggers and a Health-Boost prelude.')
-            tsurf = self.caption_font.render(tail, True, settings.DIALOGUE_BOX_MSG_TEXT_CLR)
-            self.window.blit(tsurf, tsurf.get_rect(center=(self.rect.centerx, y + tsurf.get_height() // 2)))
+            # Cards mapped to the figures / spell / tactics they build.
+            kind = 'offensive' if is_off else 'defensive'
+            breakdown = tutorial_diagrams.starter_set_breakdown(kind, assigned)
+            if breakdown is not None:
+                max_w = self.rect.w - int(0.08 * _SW)
+                max_h = self._btn.rect.top - y - int(0.02 * _SH)
+                bw, bh = breakdown.get_size()
+                if bw > max_w or bh > max_h:
+                    ratio = min(max_w / bw, max_h / bh)
+                    breakdown = pygame.transform.smoothscale(
+                        breakdown, (max(1, int(bw * ratio)), max(1, int(bh * ratio))))
+                self.window.blit(breakdown, breakdown.get_rect(midtop=(self.rect.centerx, y)))
         else:
             spin = self.font.render('Spinning…', True, settings.DIALOGUE_BOX_MSG_TEXT_CLR)
             self.window.blit(spin, spin.get_rect(center=(self.rect.centerx, y + spin.get_height() // 2)))

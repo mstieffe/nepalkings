@@ -162,6 +162,66 @@ def suit_advantage_wheel(target_h=None):
     return surf
 
 
+def _resource_icon(name, size):
+    return _scaled(_load(_asset('img', 'resource_icons', f'{name}.png')), size)
+
+
+def figure_anatomy_diagram(target_h=None):
+    """Window 2: a figure is built from same-suit cards and trades resources.
+
+    [J♥][7♥] → (Rice Farm)   requires [villager] · produces [rice].
+    """
+    _SH = settings.SCREEN_HEIGHT
+    target_h = int(target_h or 0.15 * _SH)
+    key = ('anatomy', target_h)
+    if key in _CACHE:
+        return _CACHE[key]
+
+    card_h = target_h
+    j = _card_surface('Hearts', 'J', card_h)
+    seven = _card_surface('Hearts', '7', card_h)
+    farm = field_figure_icon('Small Rice Farm', 'rice_farm1.png', label='',
+                             target_h=int(target_h * 1.05))
+    gap = int(0.012 * settings.SCREEN_WIDTH)
+    arrow_w = int(0.05 * settings.SCREEN_WIDTH)
+
+    # Resource line below.
+    res_sz = int(target_h * 0.34)
+    font = settings.get_font(getattr(settings, 'FS_TINY', 16))
+    villager = _resource_icon('villager_red', res_sz)
+    rice = _resource_icon('rice', res_sz)
+    req_lbl = font.render('requires', True, (235, 222, 190))
+    prod_lbl = font.render('produces', True, (235, 222, 190))
+    res_parts = [p for p in [req_lbl, villager, prod_lbl, rice] if p]
+    rgap = int(0.008 * settings.SCREEN_WIDTH)
+    res_w = sum(p.get_width() for p in res_parts) + rgap * max(0, len(res_parts) - 1)
+    res_h = max((p.get_height() for p in res_parts), default=0)
+
+    top_w = (j.get_width() + gap + seven.get_width() + arrow_w
+             + (farm.get_width() if farm else 0))
+    w = max(top_w, res_w)
+    line_gap = int(0.018 * _SH)
+    top_h = max(card_h, farm.get_height() if farm else 0)
+    surf = pygame.Surface((w, top_h + line_gap + res_h), pygame.SRCALPHA)
+
+    x = (w - top_w) // 2
+    cy = top_h // 2
+    surf.blit(j, (x, cy - j.get_height() // 2)); x += j.get_width() + gap
+    surf.blit(seven, (x, cy - seven.get_height() // 2)); x += seven.get_width()
+    _draw_arrow(surf, (x + gap, cy), (x + arrow_w - gap, cy)); x += arrow_w
+    if farm:
+        surf.blit(farm, (x, cy - farm.get_height() // 2))
+
+    x = (w - res_w) // 2
+    ry = top_h + line_gap
+    for p in res_parts:
+        surf.blit(p, (x, ry + (res_h - p.get_height()) // 2))
+        x += p.get_width() + rgap
+
+    _CACHE[key] = surf
+    return surf
+
+
 def kingdom_overview_diagram(target_h=None):
     """A land that makes gold and holds figures: [gold] + full field figures."""
     _SH = settings.SCREEN_HEIGHT
@@ -389,6 +449,176 @@ def daggers_diagram(target_h=None):
     surf.blit(big, (x, cy - big.get_height() // 2))
     _CACHE[key] = surf
     return surf
+
+
+_SPELL_ICON_FILES = {
+    'Poison': 'poisson_portion.png',
+    'Blitzkrieg': 'blitzkrieg.png',
+    'Draw 2 MainCards': 'draw_two_main.png',
+    'Health Boost': 'health_portion.png',
+    'All Seeing Eye': 'eye.png',
+}
+
+
+def _chip(icon, box, accent=(224, 182, 82)):
+    """Frame an icon in a small rounded 'button' chip."""
+    surf = pygame.Surface((box, box), pygame.SRCALPHA)
+    r = surf.get_rect()
+    pygame.draw.rect(surf, (28, 22, 14, 235), r, border_radius=8)
+    pygame.draw.rect(surf, accent, r, 2, border_radius=8)
+    ic = _scaled(icon, int(box * 0.74)) if icon else None
+    if ic:
+        surf.blit(ic, ic.get_rect(center=r.center))
+    return surf
+
+
+def _spell_chip(name, box):
+    icon = _load(_asset('img', 'spells', 'icons', _SPELL_ICON_FILES.get(name, '')))
+    return _chip(icon, box, accent=(170, 120, 210))
+
+
+def _dagger_chip(box):
+    icon = _load(_asset('img', 'battle', 'icons', 'dagger.png'))
+    return _chip(icon, box, accent=(210, 170, 120))
+
+
+def _result_surface(kind, ref, box):
+    if kind == 'figure':
+        return field_figure_icon(ref, None, label='', target_h=box)
+    if kind == 'spell':
+        return _spell_chip(ref, box)
+    if kind == 'dagger':
+        return _dagger_chip(box)
+    return _chip(None, box)
+
+
+def _recipe_row(cards, result_surf, label, row_h, label_w):
+    """[card][card] → [result] label — one recipe line."""
+    label_font = settings.get_font(getattr(settings, 'FS_SMALL', 18))
+    lbl = label_font.render(label, True, (235, 222, 190)) if label else None
+    card_h = int(row_h * 0.92)
+    card_surfs = [_card_surface(s, r, card_h) for (r, s) in cards]
+    gap = max(3, int(0.004 * settings.SCREEN_WIDTH))
+    arrow_w = int(0.045 * settings.SCREEN_WIDTH)
+    cards_w = sum(c.get_width() for c in card_surfs) + gap * max(0, len(card_surfs) - 1)
+    res_w = result_surf.get_width() if result_surf else 0
+    lbl_gap = int(0.012 * settings.SCREEN_WIDTH)
+    total_w = cards_w + arrow_w + res_w + (lbl_gap + label_w if lbl else 0)
+    h = max(row_h, result_surf.get_height() if result_surf else 0)
+    surf = pygame.Surface((total_w, h), pygame.SRCALPHA)
+    cy = h // 2
+    x = 0
+    for c in card_surfs:
+        surf.blit(c, (x, cy - c.get_height() // 2))
+        x += c.get_width() + gap
+    _draw_arrow(surf, (x + gap, cy), (x + arrow_w - gap, cy))
+    x += arrow_w
+    if result_surf:
+        surf.blit(result_surf, (x, cy - result_surf.get_height() // 2))
+        x += res_w + lbl_gap
+    if lbl:
+        surf.blit(lbl, (x, cy - lbl.get_height() // 2))
+    return surf
+
+
+def _recipe_diagram(cache_key, entries, target_h=None):
+    """A vertical stack of recipe rows ([cards] → [result] label)."""
+    _SH = settings.SCREEN_HEIGHT
+    row_h = int(target_h or 0.072 * _SH)
+    if cache_key in _CACHE:
+        return _CACHE[cache_key]
+    label_font = settings.get_font(getattr(settings, 'FS_SMALL', 18))
+    label_w = max((label_font.size(e.get('label', ''))[0] for e in entries), default=0)
+    rows = []
+    for e in entries:
+        result = _result_surface(e['kind'], e['ref'], row_h)
+        rows.append(_recipe_row(e['cards'], result, e.get('label', ''), row_h, label_w))
+    row_gap = int(0.016 * _SH)
+    w = max((r.get_width() for r in rows), default=1)
+    h = sum(r.get_height() for r in rows) + row_gap * max(0, len(rows) - 1)
+    surf = pygame.Surface((max(1, w), max(1, h)), pygame.SRCALPHA)
+    y = 0
+    for r in rows:
+        surf.blit(r, (0, y))
+        y += r.get_height() + row_gap
+    _CACHE[cache_key] = surf
+    return surf
+
+
+def card_recipe_examples(target_h=None):
+    """Window 1: cards combine into figures AND spells."""
+    entries = [
+        {'cards': [('K', 'Hearts')], 'kind': 'figure', 'ref': 'Djungle King',
+         'label': 'King (figure)'},
+        {'cards': [('J', 'Hearts'), ('7', 'Hearts')], 'kind': 'figure',
+         'ref': 'Small Rice Farm', 'label': 'Rice Farm (figure)'},
+        {'cards': [('A', 'Hearts'), ('7', 'Hearts')], 'kind': 'figure',
+         'ref': 'Gorkha Warriors', 'label': 'Warriors (figure)'},
+        {'cards': [('3', 'Spades'), ('3', 'Spades')], 'kind': 'spell',
+         'ref': 'Poison', 'label': 'Poison (spell)'},
+        {'cards': [('Q', 'Hearts'), ('Q', 'Hearts')], 'kind': 'spell',
+         'ref': 'Blitzkrieg', 'label': 'Blitzkrieg (spell)'},
+    ]
+    return _recipe_diagram(('recipe_examples', int(target_h or 0)), entries, target_h)
+
+
+def land_hex_diagram(target_h=None):
+    """Window 4: a land hex showing gold production and its tier."""
+    _SH = settings.SCREEN_HEIGHT
+    size = int(target_h or 0.22 * _SH)
+    key = ('landhex', size)
+    if key in _CACHE:
+        return _CACHE[key]
+    surf = pygame.Surface((size, size), pygame.SRCALPHA)
+    cx, cy = size // 2, int(size * 0.42)
+    R = int(size * 0.36)
+    pts = [(cx + R * math.cos(math.radians(60 * i)),
+            cy + R * math.sin(math.radians(60 * i))) for i in range(6)]
+    pygame.draw.polygon(surf, (70, 104, 64), pts)          # land green
+    pygame.draw.polygon(surf, (224, 182, 82), pts, 3)      # gold rim
+
+    gold = _scaled(_load(_asset('img', 'dialogue_box', 'icons', 'gold.png')),
+                   int(size * 0.26))
+    if gold:
+        surf.blit(gold, gold.get_rect(center=(cx, cy - int(size * 0.04))))
+    font = settings.get_font(getattr(settings, 'FS_TINY', 16), bold=True)
+    rate = font.render('gold / hour', True, (255, 244, 210))
+    surf.blit(rate, rate.get_rect(center=(cx, cy + int(size * 0.16))))
+    tier = font.render('Tiers 1–6 · harder = richer', True, (235, 222, 190))
+    surf.blit(tier, tier.get_rect(center=(cx, int(size * 0.92))))
+    _CACHE[key] = surf
+    return surf
+
+
+def starter_set_breakdown(kind, suit, target_h=None):
+    """Window 5: the granted cards mapped to the figures / spell / tactics
+    they build (offensive or defensive set)."""
+    if kind == 'offensive':
+        entries = [
+            {'cards': [('K', suit)], 'kind': 'figure', 'ref': 'Djungle King',
+             'label': 'King'},
+            {'cards': [('J', suit), ('7', suit)], 'kind': 'figure',
+             'ref': 'Small Rice Farm', 'label': 'Farm'},
+            {'cards': [('A', suit), ('7', suit)], 'kind': 'figure',
+             'ref': 'Gorkha Warriors', 'label': 'Warriors'},
+            {'cards': [('8', suit)], 'kind': 'spell', 'ref': 'Draw 2 MainCards',
+             'label': 'Prelude'},
+            {'cards': [('8', suit), ('9', suit), ('10', suit)], 'kind': 'dagger',
+             'ref': None, 'label': '3 Daggers'},
+        ]
+    else:
+        entries = [
+            {'cards': [('K', suit)], 'kind': 'figure', 'ref': 'Himalaya King',
+             'label': 'King'},
+            {'cards': [('J', suit), ('7', suit)], 'kind': 'figure',
+             'ref': 'Small Yack Farm', 'label': 'Farm'},
+            {'cards': [('A', suit), ('7', suit)], 'kind': 'figure',
+             'ref': 'Wooden Fortress', 'label': 'Fortress'},
+            {'cards': [('8', suit), ('9', suit), ('10', suit)], 'kind': 'dagger',
+             'ref': None, 'label': '3 Daggers'},
+        ]
+    return _recipe_diagram(('starter_breakdown', kind, suit, int(target_h or 0)),
+                           entries, target_h)
 
 
 def card_row(suit, ranks, max_w, target_h=None):

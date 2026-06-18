@@ -1093,3 +1093,25 @@ def test_tutorial_completion_available_on_any_menu_mixin_screen():
     # Items render with explanations.
     items = MenuScreenMixin._reward_reveal_items(pending[3])
     assert [it['kind'] for it in items] == ['main_booster', 'side_booster']
+
+
+def test_welcome_sequence_advances_through_stages_then_marks_seen():
+    from game.screens.game_menu_screen import GameMenuScreen
+    screen = object.__new__(GameMenuScreen)
+    screen.state = SimpleNamespace(user_dict={'onboarding': {'welcome_pending': True}})
+    screen._welcome_present_dialogue = None
+    screen._starter_reveal_dialogue = None
+    screen._welcome_stage = 0
+    marked = []
+    screen._mark_welcome_seen = lambda: marked.append(True)
+
+    class _FakeDlg:
+        def update(self, events):
+            return 'done'
+
+    # Three welcome stages: each dismiss advances; the last marks welcome seen.
+    for expected_stage in range(GameMenuScreen._WELCOME_STAGES):
+        screen._welcome_present_dialogue = _FakeDlg()
+        assert screen._handle_welcome_present_events([]) is True
+        assert screen._welcome_stage == expected_stage + 1
+    assert marked == [True]

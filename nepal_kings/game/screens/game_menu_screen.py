@@ -105,8 +105,9 @@ class GameMenuScreen(MenuScreenMixin, Screen):
         self._badge_timer = 0
         self._badge_interval = 5000          # ms between server polls
         self._badge_font = settings.get_font(int(0.018 * _SH * _UI_SCALE), bold=True)
-        self._welcome_dialogue_opened = False
         self._welcome_dialogue_username = self._current_menu_username()
+        # Welcome sequence: 0 intro windows, 1 welcome-gift boxes, 2 lands window.
+        self._welcome_stage = 0
         self._welcome_present_dialogue = None
         self._starter_reveal_dialogue = None
         # Explicit "tutorial complete" celebrations (conquer + duel tutorials).
@@ -614,6 +615,88 @@ class GameMenuScreen(MenuScreenMixin, Screen):
 
     # ── Welcome present reveal ─────────────────────────────────────
 
+    # Number of welcome-window stages before the starter-suit reveal.
+    _WELCOME_STAGES = 3
+
+    def _build_welcome_stage(self, stage, username):
+        """Build the dialogue for one welcome stage (or None)."""
+        from game.components.tutorial_window import TutorialWindowDialogue
+        from game.components import tutorial_diagrams as td
+        if stage == 0:
+            return TutorialWindowDialogue(
+                self.window,
+                [
+                    {
+                        'title': 'A Chess of Cards',
+                        'layout': 'image_top',
+                        'image': lambda: td.card_recipe_examples(),
+                        'image_caption': 'Cards combine into figures and spells.',
+                        'lines': [
+                            f'Welcome, {username}! Nepal Kings is a 1-vs-1 tactical card game.',
+                            'Figures and spells are card COMBINATIONS, so it all',
+                            'runs on one standard deck — easy to learn, deep to master.',
+                        ],
+                    },
+                    {
+                        'title': 'Suits, Resources & Fields',
+                        'layout': 'image_top',
+                        'image': lambda: td.figure_anatomy_diagram(),
+                        'image_caption': 'Same-suit cards build a figure that trades resources.',
+                        'lines': [
+                            'A figure or spell is built from cards of ONE suit.',
+                            'Hearts & Diamonds are offensive; Clubs & Spades defensive.',
+                            'Figures stand in a Castle, Village or Military field and',
+                            'produce and require resources to support each other.',
+                        ],
+                    },
+                ],
+                title='Welcome to Nepal Kings',
+            )
+        if stage == 1:
+            from game.components.rewards_reveal_dialogue import RewardsRevealDialogueBox
+            present = (self._onboarding() or {}).get('starter_present') or {}
+            items = self._reward_reveal_items({
+                'gold': present.get('gold'),
+                'booster_packs': present.get('booster_packs'),
+                'booster_packs_side': present.get('booster_packs_side'),
+                'maps': present.get('maps'),
+            })
+            return RewardsRevealDialogueBox(
+                self.window,
+                'Your Welcome Gift',
+                'welcome',
+                [
+                    'You keep a permanent collection of cards.',
+                    'Grow it by opening booster packs, bought with gold —',
+                    'you need cards to conquer and defend your kingdom.',
+                    "Here's a gift to get you started:",
+                ],
+                items,
+                footer_when_done='Added to your collection!',
+                hint_text='Click each box to reveal your gift.',
+            )
+        if stage == 2:
+            return TutorialWindowDialogue(
+                self.window,
+                [
+                    {
+                        'title': 'Lands & Your Kingdom',
+                        'layout': 'image_top',
+                        'image': lambda: td.land_hex_diagram(),
+                        'image_caption': 'Each land produces gold; higher tiers are richer but tougher.',
+                        'lines': [
+                            'Your kingdom is made of lands. Lands produce gold over time',
+                            'and come in tiers — harder lands pay more.',
+                            'Conquer and defend lands to grow.',
+                            'To get you started, here is a first set of cards',
+                            'for attack and defence…',
+                        ],
+                    },
+                ],
+                title='Your Kingdom Awaits',
+            )
+        return None
+
     def _maybe_show_welcome_present(self):
         onboarding = self._onboarding()
         if not onboarding:
@@ -621,49 +704,16 @@ class GameMenuScreen(MenuScreenMixin, Screen):
         username = self._current_menu_username() or 'there'
         if getattr(self, '_welcome_dialogue_username', None) != username:
             self._welcome_dialogue_username = username
-            self._welcome_dialogue_opened = False
+            self._welcome_stage = 0
             self._welcome_present_dialogue = None
-        if not onboarding.get('welcome_pending') or self._welcome_dialogue_opened:
+        if not onboarding.get('welcome_pending'):
+            return
+        if self._welcome_present_dialogue is not None or self._welcome_stage >= self._WELCOME_STAGES:
             return
         if self.dialogue_box or getattr(self, '_onboarding_guide_open', False):
             return
-
-        # A short teaching window, not an item dump: what the game is, that
-        # figures/spells are card combinations, and the suit cycle. Boosters and
-        # maps are earned later; the assigned suits are revealed next (C).
-        from game.components.tutorial_window import TutorialWindowDialogue
-        from game.components import tutorial_diagrams
-        self._welcome_dialogue_opened = True
-        self._welcome_present_dialogue = TutorialWindowDialogue(
-            self.window,
-            [
-                {
-                    # Hook first, then the visual that proves it.
-                    'title': 'A Chess of Cards',
-                    'layout': 'image_bottom',
-                    'lines': [
-                        f'Welcome, {username}!',
-                        'Build figures, cast spells, and send them to fight.',
-                        'Figures are card COMBINATIONS — so the whole game',
-                        'runs on one standard deck, deep but chess-like.',
-                    ],
-                    'image': lambda: tutorial_diagrams.card_combo_to_figure(),
-                    'image_caption': 'Jack + 7 build a Farm that produces 7 units of rice.',
-                },
-                {
-                    # The wheel is the star — lead with it.
-                    'title': 'Suits Win Battles',
-                    'layout': 'image_top',
-                    'image': lambda: tutorial_diagrams.suit_advantage_wheel(),
-                    'image_caption': 'Hearts › Clubs › Diamonds › Spades › Hearts',
-                    'lines': [
-                        'Hearts & Diamonds attack; Clubs & Spades defend.',
-                        'Each suit beats the next around the ring.',
-                    ],
-                },
-            ],
-            title='Welcome to Nepal Kings',
-        )
+        self._welcome_present_dialogue = self._build_welcome_stage(
+            self._welcome_stage, username)
 
     def _draw_welcome_present_dialogue(self):
         if self._welcome_present_dialogue:
@@ -675,9 +725,12 @@ class GameMenuScreen(MenuScreenMixin, Screen):
         if self._welcome_present_dialogue:
             if any(event.type == QUIT for event in events):
                 return False
-            if self._welcome_present_dialogue.update(events) == 'done':
+            # All three welcome dialogue types return a truthy value when done.
+            if self._welcome_present_dialogue.update(events):
                 self._welcome_present_dialogue = None
-                self._mark_welcome_seen()
+                self._welcome_stage += 1
+                if self._welcome_stage >= self._WELCOME_STAGES:
+                    self._mark_welcome_seen()
             return True
         if getattr(self, '_starter_reveal_dialogue', None):
             if any(event.type == QUIT for event in events):

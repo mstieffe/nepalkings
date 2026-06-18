@@ -127,11 +127,12 @@ AI_WATCHDOG_RETRY_DELAY = float(os.getenv('AI_WATCHDOG_RETRY_DELAY', '4.0'))
 AI_WATCHDOG_MAX_RETRIES = int(os.getenv('AI_WATCHDOG_MAX_RETRIES', '3'))
 
 # ── v2.0: Collection & Boosters ──
-# Boosters and maps are no longer dumped at registration; they are earned as
-# tutorial milestone rewards (the first main booster is granted by the first
-# conquest win), so new players learn what each item is when it first matters.
-STARTER_BOOSTER_PACKS = 0                   # Earned via tutorial rewards
-STARTER_BOOSTER_PACKS_SIDE = 0             # Earned via tutorial rewards
+# A small WELCOME GIFT granted at registration and revealed (as gift boxes) in
+# the third welcome window: gold (INITIAL_GOLD) + a few booster packs to seed
+# the player's permanent collection. Larger amounts are still earned as tutorial
+# milestone rewards (and the first conquest win grants its reward pack).
+STARTER_BOOSTER_PACKS = 2                   # Welcome-gift main packs
+STARTER_BOOSTER_PACKS_SIDE = 1             # Welcome-gift side pack
 
 # Each new player is assigned a random OFFENSIVE (red) suit and DEFENSIVE
 # (black) suit at registration, and granted a starter set in each so the first
