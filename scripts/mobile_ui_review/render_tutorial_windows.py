@@ -69,13 +69,12 @@ def render(width: int, height: int, ui_scale: str, mobile: bool) -> None:
              'image': lambda: td.card_recipe_examples(),
              'lines_below': ['Figures and spells are card combinations,',
                              'so it all runs on one standard deck.']},
-            {'title': 'Suits, Resources & Fields', 'layout': 'image_top',
-             'image': lambda: td.field_compartments_diagram(),
-             'image_caption': 'Figures stand in Castle, Village or Military fields.',
+            {'title': 'Offensive & Defensive', 'layout': 'image_top',
+             'image': lambda: td.offensive_vs_defensive_diagram(),
+             'image_caption': 'Warriors strike; a Tower holds the line.',
              'lines': [
-                 'A figure or spell is built from cards of ONE suit.',
-                 'Hearts & Diamonds attack; Clubs & Spades defend.',
-                 'Figures produce and require resources to support each other.']},
+                 'Each figure is built from cards of ONE suit.',
+                 'Hearts & Diamonds attack; Clubs & Spades defend.']},
         ],
         title='Welcome to Nepal Kings')
     shot('welcome-1', welcome, page=0)
@@ -135,18 +134,29 @@ def render(width: int, height: int, ui_scale: str, mobile: bool) -> None:
 
     kingdom = TutorialWindowDialogue(
         surf,
-        [{'title': 'Lands Make Gold', 'layout': 'image_top',
-          'image': lambda: td.kingdom_overview_diagram(),
-          'image_caption': 'Each land produces gold and holds figures.',
-          'lines': ['Every hex is a land. Yours produce gold over time.',
-                    'Unowned lands are defended — conquer them like your first.']},
-         {'title': 'Grow Your Kingdom', 'layout': 'text_only',
-          'lines': ['Conquer ADJACENT lands to expand.',
-                    'Collect production for gold, packs and maps,',
-                    'and spend kingdom skills to grow faster.']}],
+        [{'title': 'Read Your Map', 'layout': 'image_top',
+          'image': lambda: td.map_legend_diagram(),
+          'image_caption': 'Tap the glowing target — tuned for your first conquest.',
+          'lines': ['Each hex is a land. Yours are marked with a crown,',
+                    'rivals hold the rest. A hex shows its tier and gold rate.']},
+         {'title': 'The Growth Loop', 'layout': 'image_top',
+          'image': lambda: td.growth_loop_diagram(),
+          'image_caption': 'Conquer, produce gold, grow — then repeat.',
+          'lines': ['A conquered land produces gold — spend it on packs',
+                    'and skills, then take the next adjacent land.']},
+         {'title': 'Attack & Defend', 'layout': 'image_top',
+          'image': lambda: td.attack_defend_diagram(),
+          'image_caption': 'Warriors attack; a Tower defends.',
+          'lines': ['You conquer rival lands — and rivals can attack yours.',
+                    'Station a defence so your lands hold while you are away.']},
+         {'title': 'Three Fields', 'layout': 'image_top',
+          'image': lambda: td.field_compartments_diagram(),
+          'image_caption': 'Castle, Village and Military.',
+          'lines': ['Figures stand in one of three fields, and produce',
+                    'and require resources to support each other.']}],
         title='Your Kingdom')
-    shot('kingdom-1', kingdom, page=0)
-    shot('kingdom-2', kingdom, page=1)
+    for i in range(4):
+        shot(f'kingdom-{i + 1}', kingdom, page=i)
 
     pygame.quit()
 

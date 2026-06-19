@@ -639,14 +639,13 @@ class GameMenuScreen(MenuScreenMixin, Screen):
                         ],
                     },
                     {
-                        'title': 'Suits, Resources & Fields',
+                        'title': 'Offensive & Defensive',
                         'layout': 'image_top',
-                        'image': lambda: td.field_compartments_diagram(),
-                        'image_caption': 'Figures stand in Castle, Village or Military fields.',
+                        'image': lambda: td.offensive_vs_defensive_diagram(),
+                        'image_caption': 'Warriors strike; a Tower holds the line.',
                         'lines': [
-                            'A figure or spell is built from cards of ONE suit.',
+                            'Each figure is built from cards of ONE suit.',
                             'Hearts & Diamonds attack; Clubs & Spades defend.',
-                            'Figures produce and require resources to support each other.',
                         ],
                     },
                 ],

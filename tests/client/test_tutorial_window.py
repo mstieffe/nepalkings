@@ -220,3 +220,14 @@ def test_field_compartments_and_recipe_alignment():
     # Recipe examples now show one figure + one spell (King removed).
     examples = td.card_recipe_examples()
     assert isinstance(examples, pygame.Surface)
+
+
+def test_kingdom_and_offdef_diagrams_build():
+    _display()
+    from game.components import tutorial_diagrams as td
+    td.clear_cache()
+    for fn in (td.offensive_vs_defensive_diagram, td.map_legend_diagram,
+               td.growth_loop_diagram, td.attack_defend_diagram):
+        surf = fn()
+        assert isinstance(surf, pygame.Surface)
+        assert fn() is surf  # cached

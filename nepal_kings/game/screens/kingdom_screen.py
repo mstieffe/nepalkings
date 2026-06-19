@@ -747,23 +747,43 @@ class KingdomScreen(MenuScreenMixin, Screen):
             self.window,
             [
                 {
-                    # Lead with the land diagram, then explain it.
-                    'title': 'Lands Make Gold',
+                    'title': 'Read Your Map',
                     'layout': 'image_top',
-                    'image': lambda: tutorial_diagrams.kingdom_overview_diagram(),
-                    'image_caption': 'Each land produces gold and holds figures.',
+                    'image': lambda: tutorial_diagrams.map_legend_diagram(),
+                    'image_caption': 'Tap the glowing target — tuned for your first conquest.',
                     'lines': [
-                        'Every hex is a land. Yours produce gold over time.',
-                        'Unowned lands are defended — conquer them like your first.',
+                        'Each hex is a land. Yours are marked with a crown,',
+                        'rivals hold the rest. A hex shows its tier and gold rate.',
                     ],
                 },
                 {
-                    'title': 'Grow Your Kingdom',
-                    'layout': 'text_only',
+                    'title': 'The Growth Loop',
+                    'layout': 'image_top',
+                    'image': lambda: tutorial_diagrams.growth_loop_diagram(),
+                    'image_caption': 'Conquer, produce gold, grow — then repeat.',
                     'lines': [
-                        'Conquer ADJACENT lands to expand.',
-                        'Collect production for gold, packs and maps,',
-                        'and spend kingdom skills to grow faster.',
+                        'A conquered land produces gold — spend it on packs',
+                        'and skills, then take the next adjacent land.',
+                    ],
+                },
+                {
+                    'title': 'Attack & Defend',
+                    'layout': 'image_top',
+                    'image': lambda: tutorial_diagrams.attack_defend_diagram(),
+                    'image_caption': 'Warriors attack; a Tower defends.',
+                    'lines': [
+                        'You conquer rival lands — and rivals can attack yours.',
+                        'Station a defence so your lands hold while you are away.',
+                    ],
+                },
+                {
+                    'title': 'Three Fields',
+                    'layout': 'image_top',
+                    'image': lambda: tutorial_diagrams.field_compartments_diagram(),
+                    'image_caption': 'Castle, Village and Military.',
+                    'lines': [
+                        'Figures stand in one of three fields, and produce',
+                        'and require resources to support each other.',
                     ],
                 },
             ],

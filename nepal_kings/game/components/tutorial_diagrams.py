@@ -592,6 +592,44 @@ def field_compartments_diagram(target_h=None):
     return surf
 
 
+def offensive_vs_defensive_diagram(target_h=None):
+    """Welcome window 2: an offensive figure (Warriors) vs a defensive one
+    (Wooden Fortress / 'Tower'), shown as full field-figure icons."""
+    _SH = settings.SCREEN_HEIGHT
+    target_h = int(target_h or 0.18 * _SH)
+    key = ('off_vs_def', target_h)
+    if key in _CACHE:
+        return _CACHE[key]
+    header_font = settings.get_font(getattr(settings, 'FS_SMALL', 18), bold=True)
+    icon_h = int(target_h * 0.86)
+    header_gap = max(4, int(0.01 * _SH))
+
+    def column(field_name, header_color, fam, fb, lbl):
+        icon = field_figure_icon(fam, fb, label=lbl, target_h=icon_h)
+        header = header_font.render(field_name, True, header_color)
+        col_w = max(icon.get_width(), header.get_width())
+        col_h = header.get_height() + header_gap + icon.get_height()
+        col = pygame.Surface((col_w, col_h), pygame.SRCALPHA)
+        col.blit(header, header.get_rect(midtop=(col_w // 2, 0)))
+        col.blit(icon, icon.get_rect(midtop=(col_w // 2, header.get_height() + header_gap)))
+        return col
+
+    left = column('OFFENSIVE', (232, 138, 120), 'Gorkha Warriors', 'army1.png', 'Warriors')
+    right = column('DEFENSIVE', (130, 178, 224), 'Wooden Fortress', 'fortress1.png', 'Tower')
+    vs_font = settings.get_font(getattr(settings, 'FS_HEADING', 28), bold=True)
+    vs = vs_font.render('vs', True, (235, 222, 190))
+    gap = int(0.03 * settings.SCREEN_WIDTH)
+    total_w = left.get_width() + gap + vs.get_width() + gap + right.get_width()
+    h = max(left.get_height(), right.get_height())
+    surf = pygame.Surface((total_w, h), pygame.SRCALPHA)
+    x = 0
+    surf.blit(left, (x, 0)); x += left.get_width() + gap
+    surf.blit(vs, vs.get_rect(center=(x + vs.get_width() // 2, h // 2))); x += vs.get_width() + gap
+    surf.blit(right, (x, 0))
+    _CACHE[key] = surf
+    return surf
+
+
 def card_recipe_examples(target_h=None):
     """Window 1: one figure and one spell example."""
     entries = [
@@ -627,6 +665,138 @@ def land_hex_diagram(target_h=None):
     surf.blit(rate, rate.get_rect(center=(cx, cy + int(size * 0.16))))
     tier = font.render('Tiers 1–6 · harder = richer', True, (235, 222, 190))
     surf.blit(tier, tier.get_rect(center=(cx, int(size * 0.92))))
+    _CACHE[key] = surf
+    return surf
+
+
+def _hex_points(cx, cy, R):
+    return [(cx + R * math.cos(math.radians(60 * i)),
+             cy + R * math.sin(math.radians(60 * i))) for i in range(6)]
+
+
+def _label_below(surf, text, color=(235, 222, 190), bold=False):
+    """Stack a caption under a surface, centered."""
+    font = settings.get_font(getattr(settings, 'FS_TINY', 16), bold=bold)
+    lbl = font.render(text, True, color)
+    gap = max(3, int(0.006 * settings.SCREEN_HEIGHT))
+    w = max(surf.get_width(), lbl.get_width())
+    out = pygame.Surface((w, surf.get_height() + gap + lbl.get_height()), pygame.SRCALPHA)
+    out.blit(surf, surf.get_rect(midtop=(w // 2, 0)))
+    out.blit(lbl, lbl.get_rect(midtop=(w // 2, surf.get_height() + gap)))
+    return out
+
+
+def _hex_tile(size, fill, rim, *, glow=False, icon_file=None, glyph=None):
+    surf = pygame.Surface((size, size), pygame.SRCALPHA)
+    cx = cy = size // 2
+    R = int(size * 0.44)
+    if glow:
+        pygame.draw.polygon(surf, (255, 214, 110, 70), _hex_points(cx, cy, int(R * 1.16)))
+    pygame.draw.polygon(surf, fill, _hex_points(cx, cy, R))
+    pygame.draw.polygon(surf, rim, _hex_points(cx, cy, R), 3)
+    if icon_file:
+        ic = _scaled(_load(_asset('img', 'resource_icons', icon_file)), int(R * 0.85))
+        if ic is None:
+            ic = _scaled(_load(_asset('img', 'dialogue_box', 'icons', icon_file)), int(R * 0.85))
+        if ic:
+            surf.blit(ic, ic.get_rect(center=(cx, cy)))
+    if glyph:
+        gf = settings.get_font(int(size * 0.4), bold=True)
+        gs = gf.render(glyph, True, (255, 244, 210))
+        surf.blit(gs, gs.get_rect(center=(cx, cy)))
+    return surf
+
+
+def map_legend_diagram(target_h=None):
+    """Kingdom window: read the map — your land, the target, a rival."""
+    _SH = settings.SCREEN_HEIGHT
+    size = int(target_h or 0.16 * _SH)
+    key = ('maplegend', size)
+    if key in _CACHE:
+        return _CACHE[key]
+    tiles = [
+        _label_below(_hex_tile(size, (74, 116, 196), (235, 220, 150),
+                               icon_file='castle.png'), 'Your land', bold=True),
+        _label_below(_hex_tile(size, (70, 120, 70), (255, 224, 120), glow=True,
+                               icon_file='gold.png'), 'Target', bold=True),
+        _label_below(_hex_tile(size, (150, 74, 70), (150, 140, 130), glyph='?'),
+                     'Rival', bold=True),
+    ]
+    gap = int(0.02 * settings.SCREEN_WIDTH)
+    total_w = sum(t.get_width() for t in tiles) + gap * (len(tiles) - 1)
+    h = max(t.get_height() for t in tiles)
+    surf = pygame.Surface((total_w, h), pygame.SRCALPHA)
+    x = 0
+    for t in tiles:
+        surf.blit(t, (x, 0))
+        x += t.get_width() + gap
+    _CACHE[key] = surf
+    return surf
+
+
+def growth_loop_diagram(target_h=None):
+    """Kingdom window: conquer -> produce gold -> grow -> repeat."""
+    _SH = settings.SCREEN_HEIGHT
+    chip = int(target_h or 0.11 * _SH)
+    key = ('growthloop', chip)
+    if key in _CACHE:
+        return _CACHE[key]
+    steps = [
+        (_load(_asset('img', 'resource_icons', 'sword.png')), 'Conquer'),
+        (_load(_asset('img', 'dialogue_box', 'icons', 'gold.png')), 'Produce'),
+        (_load(_asset('img', 'dialogue_box', 'icons', 'booster_pack.png')), 'Grow'),
+    ]
+    cells = [_label_below(_chip(icon, chip), lbl, bold=True) for icon, lbl in steps]
+    arrow_w = int(0.04 * settings.SCREEN_WIDTH)
+    cell_h = max(c.get_height() for c in cells)
+    total_w = sum(c.get_width() for c in cells) + arrow_w * (len(cells) - 1)
+    extra = int(0.05 * _SH)  # room for the return loop arrow
+    surf = pygame.Surface((total_w, cell_h + extra), pygame.SRCALPHA)
+    cy = chip // 2
+    xs = []
+    x = 0
+    for i, c in enumerate(cells):
+        surf.blit(c, (x, 0))
+        xs.append((x, x + c.get_width()))
+        x += c.get_width()
+        if i < len(cells) - 1:
+            _draw_arrow(surf, (x + 4, cy), (x + arrow_w - 4, cy))
+            x += arrow_w
+    # Return loop arrow from last chip back to the first, under the row.
+    ry = cell_h + int(0.02 * _SH)
+    start = (xs[-1][0] + chip // 2, cy + chip // 2)
+    pygame.draw.line(surf, (230, 200, 120), start, (start[0], ry), 3)
+    pygame.draw.line(surf, (230, 200, 120), (start[0], ry),
+                     (xs[0][0] + chip // 2, ry), 3)
+    _draw_arrow(surf, (xs[0][0] + chip // 2, ry),
+                (xs[0][0] + chip // 2, cy + chip // 2))
+    _CACHE[key] = surf
+    return surf
+
+
+def attack_defend_diagram(target_h=None):
+    """Kingdom window: you attack rival lands; rivals attack yours, so you
+    defend. Warriors -> land <- Tower."""
+    _SH = settings.SCREEN_HEIGHT
+    target_h = int(target_h or 0.16 * _SH)
+    key = ('attackdefend', target_h)
+    if key in _CACHE:
+        return _CACHE[key]
+    warriors = field_figure_icon('Gorkha Warriors', 'army1.png', label='', target_h=target_h)
+    tower = field_figure_icon('Wooden Fortress', 'fortress1.png', label='', target_h=target_h)
+    land = _hex_tile(int(target_h * 0.92), (70, 104, 64), (224, 182, 82), icon_file='gold.png')
+    sword = _scaled(_load(_asset('img', 'resource_icons', 'sword.png')), int(target_h * 0.3))
+    shield = _scaled(_load(_asset('img', 'resource_icons', 'shield.png')), int(target_h * 0.3))
+    gap = int(0.012 * settings.SCREEN_WIDTH)
+    parts = [warriors, sword, land, shield, tower]
+    parts = [p for p in parts if p]
+    total_w = sum(p.get_width() for p in parts) + gap * (len(parts) - 1)
+    h = max(p.get_height() for p in parts)
+    surf = pygame.Surface((total_w, h), pygame.SRCALPHA)
+    x = 0
+    for p in parts:
+        surf.blit(p, (x, (h - p.get_height()) // 2))
+        x += p.get_width() + gap
     _CACHE[key] = surf
     return surf
 
