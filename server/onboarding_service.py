@@ -26,7 +26,7 @@ CORE_STEPS = [
     {
         'id': 'open_first_main_booster',
         'title': 'Open a main booster',
-        'description': 'Open the reward pack you won from your first conquest.',
+        'description': 'Open one of your starter booster packs to grow your collection.',
         'reward': {'booster_packs_side': 1},
     },
     {
@@ -200,29 +200,26 @@ MENU_HINT_IDS = (
     'duel', 'kingdom', 'collection', 'rankings', 'guide',
     'guide_first_duel_reward',
     'post_boosters_kingdom', 'kingdom_pick_land',
-    'kingdom_conquer_button', 'conquer_config_field',
-    'conquer_config_build_edit', 'conquer_config_battle_plan',
-    'conquer_config_prelude_spell', 'conquer_config_to_battle',
+    'kingdom_conquer_button',
+    'conquer_config_build_edit', 'conquer_config_to_battle',
     'conquer_build_yourself', 'conquer_build_yourself_tactics',
     'conquer_build_yourself_battle',
     'battle_intro_window',
     'conquer_battle_timeline_intro', 'conquer_battle_figure_power',
     'conquer_battle_tactics', 'conquer_battle_block_call',
     'conquer_battle_tactic_recap', 'conquer_battle_finish',
-    'starter_suit_reveal', 'kingdom_overview_window',
-    'kingdom_after_conquer_map', 'open_main_booster_reward',
+    'starter_cards_present_window', 'starter_suit_reveal', 'kingdom_overview_window',
+    'kingdom_after_conquer_map',
     'return_to_kingdom_loop', 'open_boosters_first',
     'collection_starter_cards', 'collection_open_main_booster',
-    'ready_first_duel',
     'new_game', 'beginner_duel', 'send_first_duel_challenge',
     'collection_open_side_booster',
     'kingdom_production_intro',
-    'kingdom_defence_intro', 'defence_intro', 'defence_battle_plan',
+    'defence_intro', 'defence_battle_plan',
     'defence_final_response', 'defence_save',
-    'kingdom_config_intro', 'kingdom_config_essentials',
+    'kingdom_config_essentials',
     'kingdom_config_shields_style',
 )
-FINAL_TUTORIAL_MENU_HINT_ID = 'kingdom_config_shields_style'
 COACH_VERSION = 'first_session_v3'
 
 
@@ -243,6 +240,12 @@ def default_onboarding_state(*, new_user=False):
     return {
         'welcome_pending': bool(new_user),
         'welcome_seen': False,
+        # Set once the welcome gift (gold + packs + maps) has been credited, so
+        # opening the gift (or skipping onboarding) never double-grants.
+        'welcome_gift_granted': False,
+        # Set once the offensive starter set has been granted (on the first
+        # booster open, or on skip), so it is never granted twice.
+        'starter_set_granted': False,
         'completed_steps': [],
         'claimed_rewards': [],
         'early_goals_claimed': [],
@@ -308,6 +311,37 @@ def assign_starter_suits(user, *, commit=False):
         state['starter_suits'] = suits
         _save_state(user, state, commit=commit)
     return dict(suits)
+
+
+def grant_starter_set(user, *, commit=False):
+    """Assign the random offensive starter suit and grant its curated set — once.
+
+    Deferred from signup: the player receives the starter set when they open
+    their first booster pack, just before the first conquest, and it is revealed
+    one-armed-bandit style on the collection screen. Idempotent via the
+    'starter_set_granted' state flag. Returns the assigned offensive suit.
+    """
+    if not user:
+        return None
+    state = _state(user)
+    suits = state.get('starter_suits') or {}
+    offensive = suits.get('offensive')
+    if state.get('starter_set_granted'):
+        return offensive
+    import random
+    from models import CollectionCard
+    if not offensive:
+        offensive = random.choice(list(settings.OFFENSIVE_SUITS))
+        state['starter_suits'] = {
+            'offensive': offensive,
+            'defensive': random.choice(list(settings.DEFENSIVE_SUITS)),
+        }
+    for rank, value in settings.STARTER_OFFENSIVE_SET:
+        db.session.add(CollectionCard(
+            user_id=user.id, rank=rank, suit=offensive, value=value, locked=False))
+    state['starter_set_granted'] = True
+    _save_state(user, state, commit=commit)
+    return offensive
 
 
 def get_starter_suits(user):
@@ -390,12 +424,44 @@ def mark_menu_hint(user, hint_id, *, commit=False):
     return True
 
 
+def _credit_welcome_gift(user, state):
+    """Credit the welcome gift (gold + booster packs + maps) into ``user`` and
+    flag it on ``state`` — no save. Idempotent; returns True if it credited.
+
+    These are intentionally NOT granted at signup; the player receives them by
+    opening the gift boxes in the welcome sequence.
+    """
+    if not user or state.get('welcome_gift_granted'):
+        return False
+    user.gold = int(user.gold or 0) + int(getattr(settings, 'INITIAL_GOLD', 0) or 0)
+    user.booster_packs = int(user.booster_packs or 0) + int(
+        getattr(settings, 'STARTER_BOOSTER_PACKS', 0) or 0)
+    user.booster_packs_side = int(user.booster_packs_side or 0) + int(
+        getattr(settings, 'STARTER_BOOSTER_PACKS_SIDE', 0) or 0)
+    user.maps = int(user.maps or 0) + int(getattr(settings, 'STARTER_MAPS', 0) or 0)
+    state['welcome_gift_granted'] = True
+    return True
+
+
+def grant_welcome_gift(user, *, commit=False):
+    """Public, idempotent welcome-gift grant (loads + saves state)."""
+    if not user:
+        return False
+    state = _state(user)
+    if _credit_welcome_gift(user, state):
+        _save_state(user, state, commit=commit)
+        return True
+    return False
+
+
 def mark_welcome_seen(user, *, commit=False):
     if not user:
         return False
     state = _state(user)
     state['welcome_pending'] = False
     state['welcome_seen'] = True
+    # Opening the gift boxes is what completes the welcome — credit it now.
+    _credit_welcome_gift(user, state)
     _save_state(user, state, commit=commit)
     return True
 
@@ -404,7 +470,11 @@ def skip_onboarding(user, *, commit=False):
     state = _state(user)
     state['onboarding_skipped'] = True
     state['welcome_pending'] = False
-    _save_state(user, state, commit=commit)
+    # Skipping the tutorial still grants the welcome gift (no soft-lock).
+    _credit_welcome_gift(user, state)
+    _save_state(user, state, commit=False)
+    # ...and the starter set, so a skipper still has a buildable attack.
+    grant_starter_set(user, commit=commit)
     return state
 
 
@@ -471,18 +541,21 @@ def _facts(user, state=None):
     completed = set(state.get('completed_steps') or [])
     if duel_finishes >= 1:
         completed.add('finish_first_duel')
-    if conquer_battles >= 1:
+    # Win-based: the first-conquest tutorial beat is only "done" once a land is
+    # actually conquered. A lost first battle is a no-penalty retry, so the
+    # player stays in the conquest phase until they win.
+    if conquered_lands >= 1:
         completed.add('finish_first_conquer_battle')
     if production_collections >= 1:
         completed.add('collect_first_kingdom_production')
     if _saved_defence_count(user_id) >= 1:
         completed.add('save_first_defence_config')
     # The first-session tutorial completes on the kingdom core loop: conquer a
-    # land, collect its production, and finish the kingdom-config tour. The duel
-    # is intentionally NOT required here -- it is offered as an optional next
-    # step with its own skippable coaching the first time it is played.
-    if (FINAL_TUTORIAL_MENU_HINT_ID in set(state.get('menu_hints_seen') or [])
-            and 'finish_first_conquer_battle' in completed
+    # land and collect its production. It deliberately ends on that payoff --
+    # the kingdom-config tour and defence setup are deferred (each teaches
+    # itself the first time the player opens that screen), and the duel is
+    # offered as an optional next step, never required here.
+    if ('finish_first_conquer_battle' in completed
             and 'collect_first_kingdom_production' in completed):
         completed.add('finish_tutorial')
 
@@ -564,13 +637,23 @@ def _step_payload(step, completed, claimed):
 def _journey_metadata(completed_steps):
     """First-session guided path.
 
-    The mandatory tutorial is the kingdom core loop: conquer a land -> open the
-    reward pack -> collect the land's production -> finish the kingdom-config
-    tour. The duel is deliberately excluded from this path; it is offered as an
-    optional next step (with its own skippable coaching the first time it is
-    played), not as a tutorial gate.
+    The mandatory tutorial is the kingdom core loop: open a starter booster
+    (grow the collection) -> conquer a land -> collect the land's production.
+    It ends on that payoff; the kingdom-config tour and defence setup are
+    deferred to on-demand coaching, and the duel is offered as an optional next
+    step (with its own skippable coaching), not as a tutorial gate.
     """
     completed = set(completed_steps or [])
+    if 'open_first_main_booster' not in completed:
+        return {
+            'coach_version': COACH_VERSION,
+            'journey_phase': 'open_starter_pack',
+            'next_action': {
+                'screen': 'collection',
+                'label': 'Open a Booster Pack',
+                'target_id': 'collection_open_main_booster',
+            },
+        }
     if 'finish_first_conquer_battle' not in completed:
         return {
             'coach_version': COACH_VERSION,
@@ -581,16 +664,6 @@ def _journey_metadata(completed_steps):
                 'target_id': 'recommended_tutorial_land',
             },
         }
-    if 'open_first_main_booster' not in completed:
-        return {
-            'coach_version': COACH_VERSION,
-            'journey_phase': 'open_main_booster_reward',
-            'next_action': {
-                'screen': 'collection',
-                'label': 'Open Reward Pack',
-                'target_id': 'collection_open_main_booster',
-            },
-        }
     if 'collect_first_kingdom_production' not in completed:
         return {
             'coach_version': COACH_VERSION,
@@ -599,16 +672,6 @@ def _journey_metadata(completed_steps):
                 'screen': 'kingdom',
                 'label': 'Collect Production',
                 'target_id': 'kingdom_production_intro',
-            },
-        }
-    if 'finish_tutorial' not in completed:
-        return {
-            'coach_version': COACH_VERSION,
-            'journey_phase': 'finish_kingdom_tour',
-            'next_action': {
-                'screen': 'kingdom',
-                'label': 'Finish Kingdom Tour',
-                'target_id': 'kingdom_config_intro',
             },
         }
     return {

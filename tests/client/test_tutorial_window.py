@@ -62,6 +62,38 @@ def test_window_back_disabled_on_first_page():
     assert win.page_index == 0
 
 
+def test_window_scrolls_when_content_overflows():
+    from game.components.tutorial_window import TutorialWindowDialogue
+    win_surf = _real_window()
+    pages = [{'title': 'Tall', 'layout': 'text_only',
+              'lines': [f'line {i}' for i in range(40)]}]
+    win = TutorialWindowDialogue(win_surf, pages, title='T')
+    win._created_at = pygame.time.get_ticks() - 1000
+    win.draw()  # computes _max_scroll from the content height
+    assert win._max_scroll > 0
+
+    before = win._scroll
+    win.update([pygame.event.Event(pygame.MOUSEWHEEL, x=0, y=-1)])  # wheel down
+    assert win._scroll > before
+    win.draw()  # rendering while scrolled must not raise
+
+    # Scroll clamps at the bottom.
+    for _ in range(200):
+        win.update([pygame.event.Event(pygame.MOUSEWHEEL, x=0, y=-1)])
+    assert win._scroll == win._max_scroll
+    # Wheel up returns toward the top.
+    win.update([pygame.event.Event(pygame.MOUSEWHEEL, x=0, y=5)])
+    assert win._scroll < win._max_scroll
+
+
+def test_short_window_does_not_scroll():
+    from game.components.tutorial_window import TutorialWindowDialogue
+    win_surf = _real_window()
+    win = TutorialWindowDialogue(win_surf, [{'title': 'S', 'lines': ['a']}], title='T')
+    win.draw()
+    assert win._max_scroll == 0
+
+
 def test_window_ignores_clicks_within_200ms():
     from game.components.tutorial_window import TutorialWindowDialogue
     _display()
@@ -83,32 +115,23 @@ def test_diagrams_return_surfaces_and_cache():
     assert tutorial_diagrams.suit_advantage_wheel(200) is wheel
 
 
-def _reveal(off='Hearts', deff='Spades'):
+def _reveal(suit='Hearts'):
     from game.components.tutorial_window import StarterSuitRevealDialogue
     _display()
-    r = StarterSuitRevealDialogue(None, off, deff)
+    r = StarterSuitRevealDialogue(None, suit)
     r._created_at = pygame.time.get_ticks() - 1000
     return r
 
 
-def test_reveal_runs_offensive_then_defensive_then_done():
+def test_reveal_runs_spin_then_done():
     from game.components import tutorial_window as tw
-    r = _reveal('Diamonds', 'Clubs')
-    # Force the offensive spin to finish.
+    r = _reveal('Diamonds')
+    # Force the spin to finish.
     r._phase_started = pygame.time.get_ticks() - (tw._REEL_SPIN_MS + 50)
     assert r.update([]) is None
-    assert r._phase == 'off_done'
+    assert r._phase == 'done'
     assert r._current_reel_suit() == 'Diamonds'
-
-    # Clicking advances to the defensive spin.
-    assert r.update([_click(r._btn.rect)]) is None
-    assert r._phase == 'def_spin'
-
-    # Finish the defensive spin, then acknowledge -> done.
-    r._phase_started = pygame.time.get_ticks() - (tw._REEL_SPIN_MS + 50)
-    assert r.update([]) is None
-    assert r._phase == 'def_done'
-    assert r._current_reel_suit() == 'Clubs'
+    # Acknowledge -> done.
     assert r.update([_click(r._btn.rect)]) == 'done'
 
 
@@ -159,7 +182,7 @@ def test_window_draw_runs_for_each_layout():
     from game.components.tutorial_window import TutorialWindowDialogue
     win_surf = _real_window()
     pages = [
-        {'title': 'A Chess of Cards', 'layout': 'image_bottom',
+        {'title': 'Cards Become Recipes', 'layout': 'image_bottom',
          'lines': ['hook line one', 'hook line two'],
          'image': lambda: tutorial_diagrams.card_combo_to_figure(),
          'image_caption': 'Jack + 7 build a Farm.'},
@@ -177,14 +200,10 @@ def test_window_draw_runs_for_each_layout():
 def test_reveal_draw_runs_through_phases():
     from game.components.tutorial_window import StarterSuitRevealDialogue
     win_surf = _real_window()
-    r = StarterSuitRevealDialogue(win_surf, 'Hearts', 'Spades')
-    r.draw()                       # off_spin
-    r._phase = 'off_done'
-    r.draw()                       # off_done
-    r._phase = 'def_spin'
-    r.draw()                       # def_spin
-    r._phase = 'def_done'
-    r.draw()                       # def_done
+    r = StarterSuitRevealDialogue(win_surf, 'Hearts')
+    r.draw()                       # spin
+    r._phase = 'done'
+    r.draw()                       # done
 
 
 def test_figure_button_and_dagger_diagrams_build_and_cache():
@@ -217,7 +236,7 @@ def test_field_compartments_and_recipe_alignment():
     from game.components import tutorial_diagrams as td
     td.clear_cache()
     assert isinstance(td.field_compartments_diagram(), pygame.Surface)
-    # Recipe examples now show one figure + one spell (King removed).
+    # Recipe examples show one figure, one spell, and one tactic.
     examples = td.card_recipe_examples()
     assert isinstance(examples, pygame.Surface)
 
@@ -227,7 +246,10 @@ def test_kingdom_and_offdef_diagrams_build():
     from game.components import tutorial_diagrams as td
     td.clear_cache()
     for fn in (td.offensive_vs_defensive_diagram, td.map_legend_diagram,
-               td.growth_loop_diagram, td.attack_defend_diagram):
+               td.growth_loop_diagram, td.attack_defend_diagram,
+               td.kingdom_journey_diagram, td.battle_flow_diagram,
+               td.kingdom_map_diagram, td.suit_roulette_diagram,
+               td.battle_matchup_diagram, td.starter_tactics_diagram):
         surf = fn()
         assert isinstance(surf, pygame.Surface)
         assert fn() is surf  # cached

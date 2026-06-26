@@ -400,34 +400,36 @@ class TestCollectionCoach:
         screen._icon_home = SimpleNamespace(rect=pygame.Rect(200, 20, 40, 40))
         return screen
 
-    def test_coach_routes_to_kingdom_before_conquest_then_reward_then_kingdom(self):
+    def test_coach_routes_open_pack_then_kingdom_then_loop(self):
         screen = self._screen()
         step = screen._current_collection_coach_step()
         assert step['id'] == 'collection_starter_cards'
         assert step['action'] == 'next'
         assert step['button_label'] == 'Got it'
-        # The full card->figure lesson now lives in the welcome window; this
-        # card is a brief in-collection reinforcement.
+        # The full card->figure lesson lives in the collection-basics window;
+        # this card is a brief in-collection reinforcement.
         assert 'combine into figures' in step['body']
 
+        # Collection-first journey: open a starter pack BEFORE the first
+        # conquest.
         screen.state.user_dict['onboarding']['menu_hints_seen'].append('collection_starter_cards')
+        step = screen._current_collection_coach_step()
+        assert step['id'] == 'collection_open_main_booster'
+
+        # Once a pack is opened, the player is sent to the Kingdom to conquer.
+        screen.state.user_dict['onboarding']['completed_steps'].append('open_first_main_booster')
         step = screen._current_collection_coach_step()
         assert step['id'] == 'post_boosters_kingdom'
         assert step['button_label'] == 'Go to Kingdom'
         assert step['navigate_screen'] == 'kingdom'
 
+        # After the first conquest the collection screen no longer nudges back
+        # and forth (the reward-pack round-trip is gone); the kingdom and menu
+        # coaches steer the player to collect production, so collection coaching
+        # goes quiet here.
         screen.state.user_dict['onboarding']['completed_steps'].append(
             'finish_first_conquer_battle')
-        step = screen._current_collection_coach_step()
-        assert step['id'] == 'collection_open_main_booster'
-
-        # After the reward pack the player is sent BACK TO THE KINGDOM (collect
-        # production + finish the tour), never forced into a duel.
-        screen.state.user_dict['onboarding']['completed_steps'].append('open_first_main_booster')
-        step = screen._current_collection_coach_step()
-        assert step['id'] == 'return_to_kingdom_loop'
-        assert step['button_label'] == 'Go to Kingdom'
-        assert step['navigate_screen'] == 'kingdom'
+        assert screen._current_collection_coach_step() is None
 
         # The side-booster step unlocks on tutorial completion, not on a duel.
         screen.state.user_dict['onboarding']['completed_steps'].extend([
@@ -439,14 +441,13 @@ class TestCollectionCoach:
 
     def test_coach_never_routes_to_duel_during_tutorial(self):
         # Reward pack opened, tutorial unfinished: the collection coach must
-        # never navigate to the duel.
+        # never navigate to the duel. With the round-trip removed it simply goes
+        # quiet here (the kingdom/menu coaches steer back to production).
         screen = self._screen(
             completed=['finish_first_conquer_battle', 'open_first_main_booster'],
             seen=['collection_starter_cards'])
         step = screen._current_collection_coach_step()
-        assert step is not None
-        assert step.get('navigate_screen') != 'duel_menu'
-        assert step['id'] == 'return_to_kingdom_loop'
+        assert step is None or step.get('navigate_screen') != 'duel_menu'
 
     def test_coach_opens_main_reward_pack_after_conquest_if_intro_seen(self):
         screen = self._screen(completed=[

@@ -813,6 +813,94 @@ def test_expanded_timeline_right_reserve_preserves_full_bottom_border(monkeypatc
     assert window.get_at((rect.right - 2, rect.bottom - 1))[:3] == (189, 149, 75)
 
 
+def test_compact_info_box_shows_next_only_for_held_beat_and_clears_text():
+    from game.components.conquer_timeline_panel import ConquerTimelinePanel
+    from game.screens.conquer_flow import TimelineStep
+
+    panel = ConquerTimelinePanel(pygame.Surface((900, 200)))
+    rect = pygame.Rect(0, 0, 360, 64)  # short row -> compact mobile layout
+    screen = SimpleNamespace(
+        _conquer_pending_confirmation=None,
+        _conquer_objective_action_rects={},
+        _conquer_timeline_info_text_rect=None,
+    )
+
+    # A held sequence beat skips its countdown, so it keeps the Next button --
+    # and on the compact layout the button must clear the info text column.
+    held = TimelineStep(
+        kind='overview', title='Your Prelude', completed=False, active=True,
+        interactive=False, primary_action='next',
+        info_body='Holding the resolved beat on screen for a moment.')
+    panel._draw_compact_info_box(screen, rect, held, border=(0, 0, 0))
+    next_rect = screen._conquer_objective_action_rects.get('next')
+    text_rect = screen._conquer_timeline_info_text_rect
+    assert next_rect is not None
+    assert text_rect is not None
+    assert next_rect.left >= text_rect.right + 8, (tuple(text_rect), tuple(next_rect))
+    assert not next_rect.colliderect(text_rect)
+
+    # A non-interactive battle-round beat advances on game state, so the Next
+    # button (which would do nothing) is not drawn at all.
+    screen._conquer_objective_action_rects = {}
+    round_step = TimelineStep(
+        kind='battle_round_2_opponent', title='Round 2', completed=False,
+        active=True, interactive=False, primary_action=None,
+        info_body='Waiting for the defender to play.')
+    panel._draw_compact_info_box(screen, rect, round_step, border=(0, 0, 0))
+    assert screen._conquer_objective_action_rects.get('next') is None
+
+
+def test_opponent_defender_chosen_by_you_requires_explicit_player_pick():
+    from game.screens.conquer_flow import derive_conquer_timeline
+
+    # You are the attacker (advancing_player_id == player_id) and the opponent's
+    # defending figure is locked in.
+    defender_fig = _make_figure(30, 'Opponent Defender', player_id=2)
+    field = SimpleNamespace(
+        figures=[defender_fig],
+        icon_cache={},
+        figure_pending_defender_selection=None,
+        figure_pending_own_defender_selection=None,
+    )
+    game = _make_game(
+        turn=True,
+        advancing_player_id=1,
+        advancing_figure_id=10,
+        defending_figure_id=30,
+        current_round=2,
+        log_entries=[],
+    )
+
+    # A locked opponent defender is not automatically your pick; the defender
+    # may have counter-advanced with this figure.
+    defender = {s.kind: s for s in derive_conquer_timeline(
+        game, _make_state(game), field, None)}['defender']
+    assert defender.sidenote != 'Chosen by you'
+
+    # A genuine local pick among options is tagged "Chosen by you".
+    field._player_selected_defender_id = 30
+    defender = {s.kind: s for s in derive_conquer_timeline(
+        game, _make_state(game), field, None)}['defender']
+    assert defender.sidenote == 'Chosen by you'
+
+    # The server log preserves the tag after a poll/refresh.
+    del field._player_selected_defender_id
+    game.log_entries = [{
+        'type': 'select_defender',
+        'player_id': 1,
+        'round_number': 2,
+    }]
+    defender = {s.kind: s for s in derive_conquer_timeline(
+        game, _make_state(game), field, None)}['defender']
+    assert defender.sidenote == 'Chosen by you'
+
+    # A single-option auto-pick (recorded on the field) is NOT.
+    field._auto_selected_defender_id = 30
+    defender = {s.kind: s for s in derive_conquer_timeline(
+        game, _make_state(game), field, None)}['defender']
+    assert defender.sidenote != 'Chosen by you'
+
+
 def test_step_info_tooltip_draws_step_assets(monkeypatch):
     from game.components.conquer_timeline_panel import ConquerTimelinePanel
     from game.screens.conquer_flow import TimelineStep
@@ -1309,6 +1397,12 @@ def test_opponent_defender_selected_by_player_gets_timeline_tag():
         advancing_figure_id=10,
         defending_figure_id=20,
         advancing_player_id=1,
+        current_round=1,
+        log_entries=[{
+            'type': 'select_defender',
+            'player_id': 1,
+            'round_number': 1,
+        }],
     )
 
     steps = derive_conquer_timeline(game, _make_state(game), field, None)

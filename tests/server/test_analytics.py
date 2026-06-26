@@ -76,6 +76,12 @@ class TestRouteHooks:
     def test_challenge_created_tracks(self, client, app):
         _register(client, 'chal_a')
         _register(client, 'chal_b')
+        # Gold is no longer granted at registration (deferred to the welcome
+        # gift), so fund the challenger to cover the stake.
+        with app.app_context():
+            challenger = User.query.filter_by(username='chal_a').first()
+            challenger.gold = 100
+            db.session.commit()
         login = client.post('/auth/login', data={
             'username': 'chal_a', 'password': 'pass1234'}).get_json()
         headers = {'Authorization': f"Bearer {login['token']}"}

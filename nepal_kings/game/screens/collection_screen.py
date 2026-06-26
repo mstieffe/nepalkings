@@ -280,6 +280,14 @@ class CollectionScreen(MenuScreenMixin, Screen):
         self._booster_poller = None
         self._booster_action = None
         self._booster_pack_type = None
+        # First-visit "collection basics" teaching window (onboarding).
+        self._collection_basics_dialogue = None
+        # Second welcome-present explainer, shown after the first booster card
+        # reveal and before the starter-suit roulette.
+        self._starter_present_dialogue = None
+        # Starter-suit reveal, shown after the first booster open (the deferred
+        # starter set), just before the player is sent to the Kingdom.
+        self._starter_reveal_dialogue = None
 
         # ── Custom button glow ──────────────────────────────────────
         glow_w = int(settings.COLLECTION_PACK_PANEL_BTN_W * 1.3)
@@ -461,6 +469,12 @@ class CollectionScreen(MenuScreenMixin, Screen):
         # Icon buttons + messages overlay
         self._draw_menu_overlay()
         self._draw_menu_coach(self._current_collection_coach_step())
+        if getattr(self, '_collection_basics_dialogue', None):
+            self._collection_basics_dialogue.draw()
+        if getattr(self, '_starter_present_dialogue', None):
+            self._starter_present_dialogue.draw()
+        if getattr(self, '_starter_reveal_dialogue', None):
+            self._starter_reveal_dialogue.draw()
 
     def _draw_collection_stats(self):
         """Draw a compact owned/missing/locked summary strip."""
@@ -1405,6 +1419,12 @@ class CollectionScreen(MenuScreenMixin, Screen):
             if self.state.user_dict:
                 self.state.user_dict['booster_packs_side'] = self._boosters_side
             self._mark_onboarding_step_completed_local('open_first_side_booster')
+        # Opening the first main booster grants the deferred starter set on the
+        # server; pick up the updated onboarding (starter_suits + completed
+        # steps) so the starter-suit reveal can fire after this booster reveal.
+        onboarding = result.get('onboarding')
+        if onboarding and self.state.user_dict is not None:
+            self.state.user_dict['onboarding'] = onboarding
         drawn_cards = result.get('cards', [])
         for c in drawn_cards:
             key = (c['suit'], c['rank'])
@@ -1414,8 +1434,156 @@ class CollectionScreen(MenuScreenMixin, Screen):
         sound.play('booster_open')
         self._reveal_overlay = BoosterRevealOverlay(self.window, drawn_cards, pack_type=pack_type)
 
+    def _maybe_show_collection_basics(self):
+        """First collection visit during the opening 'open a starter pack' phase:
+        a windowed 'collection basics' explainer (cards become recipes) before
+        the player opens their first booster."""
+        if getattr(self, '_collection_basics_dialogue', None):
+            return
+        if not self._menu_coach_allowed_common():
+            return
+        # Only before the first main booster is opened (the opening phase).
+        if 'open_first_main_booster' in self._onboarding_completed_steps():
+            return
+        if 'collection_basics_window' in self._menu_coach_seen():
+            return
+        if (self._booster_poller or self._reveal_overlay or self._sell_dialogue
+                or self._trade_dialogue or self._profile_dialogue or self.dialogue_box):
+            return
+        from game.components.tutorial_window import TutorialWindowDialogue
+        from game.components import tutorial_diagrams as td
+        self._collection_basics_dialogue = TutorialWindowDialogue(
+            self.window,
+            [
+                {
+                    'title': 'Key And Number Cards',
+                    'layout': 'text_image_text',
+                    'lines': [
+                        'Key cards have jewels. Number cards have numbers.',
+                        'Together they form the resources for figures, spells,',
+                        'and battle tactics.',
+                    ],
+                    'image': lambda: td.card_recipe_examples(),
+                    'lines_below': [
+                        'Open a booster pack to add more cards.',
+                    ],
+                },
+            ],
+            title='Your Collection',
+        )
+
+    def _handle_collection_basics_events(self, events):
+        win = getattr(self, '_collection_basics_dialogue', None)
+        if win is None:
+            return False
+        from pygame import QUIT
+        if any(getattr(e, 'type', None) == QUIT for e in events):
+            return False
+        if win.update(events) == 'done':
+            self._collection_basics_dialogue = None
+            self._mark_menu_coach_seen('collection_basics_window')
+            # The window already taught collection basics — skip the small
+            # 'Your Collection' pointer that repeats the same lesson.
+            self._mark_menu_coach_seen('collection_starter_cards')
+        return True
+
+    def _maybe_show_starter_present(self):
+        """After the first booster reveal, explain the starter-card present
+        before running the suit roulette."""
+        if getattr(self, '_starter_present_dialogue', None):
+            return
+        if not self._menu_coach_allowed_common():
+            return
+        completed = self._onboarding_completed_steps()
+        if 'open_first_main_booster' not in completed:
+            return
+        seen = self._menu_coach_seen()
+        if 'starter_suit_reveal' in seen or 'starter_cards_present_window' in seen:
+            return
+        suits = (self._onboarding() or {}).get('starter_suits') or {}
+        if not suits.get('offensive'):
+            return
+        if (self._reveal_overlay or self._collection_basics_dialogue
+                or self._booster_poller or self._sell_dialogue
+                or self._trade_dialogue or self._profile_dialogue or self.dialogue_box):
+            return
+        from game.components.tutorial_window import TutorialWindowDialogue
+        from game.components import tutorial_diagrams as td
+        self._starter_present_dialogue = TutorialWindowDialogue(
+            self.window,
+            [
+                {
+                    'title': 'Your Starter Set',
+                    'layout': 'image_top',
+                    'image': lambda: td.suit_roulette_diagram(),
+                    'image_caption': 'One of the four suits — drawn at random.',
+                    'lines': [
+                        'We want to equip you with a starter set of cards',
+                        'to get you ready for your first conquest.',
+                        'Spin the roulette to reveal which suit you received.',
+                    ],
+                },
+            ],
+            title='Starter Cards',
+        )
+
+    def _handle_starter_present_events(self, events):
+        win = getattr(self, '_starter_present_dialogue', None)
+        if win is None:
+            return False
+        from pygame import QUIT
+        if any(getattr(e, 'type', None) == QUIT for e in events):
+            return False
+        if win.update(events) == 'done':
+            self._starter_present_dialogue = None
+            self._mark_menu_coach_seen('starter_cards_present_window')
+        return True
+
+    def _maybe_show_starter_reveal(self):
+        """After the first booster open, reveal the (deferred) starter suit and
+        set — the beat just before the player is sent to the Kingdom."""
+        if getattr(self, '_starter_reveal_dialogue', None):
+            return
+        if getattr(self, '_starter_present_dialogue', None):
+            return
+        if not self._menu_coach_allowed_common():
+            return
+        # Only once the starter set has been granted (first main booster open).
+        suits = (self._onboarding() or {}).get('starter_suits') or {}
+        offensive = suits.get('offensive')
+        if not offensive:
+            return
+        seen = self._menu_coach_seen()
+        if 'starter_suit_reveal' in seen:
+            return
+        if 'starter_cards_present_window' not in seen:
+            return
+        # Wait until the booster card reveal (and any other modal) has cleared.
+        if (self._reveal_overlay or self._collection_basics_dialogue
+                or self._booster_poller or self._sell_dialogue
+                or self._trade_dialogue or self._profile_dialogue or self.dialogue_box):
+            return
+        from game.components.tutorial_window import StarterSuitRevealDialogue
+        self._starter_reveal_dialogue = StarterSuitRevealDialogue(self.window, offensive)
+
+    def _handle_starter_reveal_events(self, events):
+        win = getattr(self, '_starter_reveal_dialogue', None)
+        if win is None:
+            return False
+        from pygame import QUIT
+        if any(getattr(e, 'type', None) == QUIT for e in events):
+            return False
+        if win.update(events) == 'done':
+            self._starter_reveal_dialogue = None
+            self._mark_menu_coach_seen('starter_suit_reveal')
+        return True
+
     def _current_collection_coach_step(self):
         if not self._menu_coach_allowed_common():
+            return None
+        if getattr(self, '_collection_basics_dialogue', None):
+            return None
+        if getattr(self, '_starter_present_dialogue', None):
             return None
         if (self._booster_poller or self._reveal_overlay or self._sell_dialogue
                 or self._trade_dialogue or self._profile_dialogue):
@@ -1457,21 +1625,9 @@ class CollectionScreen(MenuScreenMixin, Screen):
                 'mark_on_click': True,
                 'max_lines': 4,
             }
-        if ((next_action or {}).get('screen') == 'kingdom'
-                and 'open_first_main_booster' in completed
-                and 'finish_tutorial' not in completed):
-            home_icon = getattr(self, '_icon_home', None)
-            target_rect = getattr(home_icon, 'rect', None) or self._panel_rect
-            return {
-                'id': 'return_to_kingdom_loop',
-                'rect': target_rect,
-                'title': 'Back To Your Kingdom',
-                'body': 'Reward pack opened. Head back to your Kingdom to collect the gold your land produced and finish setting it up.',
-                'action': 'next',
-                'button_label': 'Go to Kingdom',
-                'navigate_screen': 'kingdom',
-                'max_lines': 4,
-            }
+        # No reward-pack round-trip: after the first conquest the kingdom screen
+        # (and the menu) guide collecting production, so the collection screen no
+        # longer nudges the player back and forth.
         if ('finish_tutorial' in completed
                 and 'open_first_side_booster' not in completed):
             return {
@@ -1640,6 +1796,9 @@ class CollectionScreen(MenuScreenMixin, Screen):
     def update(self, events):
         super().update()
         self._update_icon_buttons()
+        self._maybe_show_collection_basics()
+        self._maybe_show_starter_present()
+        self._maybe_show_starter_reveal()
 
         # Re-fetch if data never loaded (e.g. screen was created before login)
         if not self._data_loaded and not self._poller:
@@ -1708,6 +1867,18 @@ class CollectionScreen(MenuScreenMixin, Screen):
         if self.dialogue_box:
             return
         if self._booster_poller:
+            return
+
+        # The collection-basics window captures input while it is up.
+        if self._handle_collection_basics_events(events):
+            return
+
+        if self._handle_starter_present_events(events):
+            return
+
+        # The starter-suit reveal owns its own timed reel animation; updating
+        # it here lets the roulette settle and captures the final acknowledgement.
+        if self._handle_starter_reveal_events(events):
             return
 
         coach_step = self._current_collection_coach_step()

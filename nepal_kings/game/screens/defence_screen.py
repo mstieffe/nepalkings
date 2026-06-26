@@ -1670,6 +1670,12 @@ class DefenceScreen(MenuScreenMixin, Screen):
         """Light first-time guidance for the defence config (mixin coach)."""
         if not self._menu_coach_allowed_common():
             return None
+        # Defence is no longer part of the first-session tutorial: a conquered
+        # land already gets a complete auto-built defence, so this coaching is
+        # deferred until the conquer tutorial is finished and only appears
+        # on-demand the first time the player opens a defence config later.
+        if 'finish_tutorial' not in self._onboarding_completed_steps():
+            return None
         if (self._loading or self._error or not self._config or not self._layout_built
                 or self._active_subscreen or self._figure_detail_box
                 or self._move_detail_box or self._active_info_key):

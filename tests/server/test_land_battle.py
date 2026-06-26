@@ -104,12 +104,17 @@ def _mark_first_conquer_done(user):
     """Opt a test user out of the tutorial-safe AI defence path.
 
     Fresh users on an unowned tier-1 land are routed to a fixed, counter-free
-    AI template so the tutorial first conquest is winnable. Mechanics tests that
-    assert real counter/prelude template behaviour must opt out by marking the
-    first conquer complete.
+    AI template so the tutorial first conquest is winnable. The tutorial-safe
+    defender, recommended land, and no-penalty retry are all gated on NOT having
+    conquered a land yet, so mechanics tests that assert real counter/prelude
+    template behaviour opt out by recording a prior conquest WIN.
     """
     from onboarding_service import mark_step
-    mark_step(user, 'finish_first_conquer_battle', commit=True)
+    mark_step(user, 'finish_first_conquer_battle', commit=False)
+    won_land = _make_land(db, tier=1, owner_user_id=user.id)
+    db.session.add(LandAttackLog(
+        land_id=won_land.id, attacker_user_id=user.id, result='attacker_won'))
+    db.session.commit()
 
 
 def _make_defence_config(db_session, user, land):
@@ -579,9 +584,14 @@ class TestConquerStartBattle:
             assert 'no figures' in resp.get_json()['message'].lower()
 
     def test_start_battle_sets_cooldown(self, app, db):
-        """Starting a battle sets the user's cooldown timestamp."""
+        """Starting a battle sets the user's cooldown timestamp.
+
+        The first-conquest tutorial deliberately skips the cooldown (no-penalty
+        retry), so opt the user past it to exercise normal cooldown behaviour.
+        """
         with app.app_context():
             user = _make_user(db)
+            _mark_first_conquer_done(user)
             assert user.last_conquer_at is None
 
             land = _make_land(db, tier=1)
@@ -2672,11 +2682,16 @@ class TestConquerAutoPlay:
 class TestAITemplateCardRewards:
     """Card rewards when beating an AI-owned land."""
 
-    def _start_battle_and_resolve(self, app, db, attacker_wins=True):
+    def _start_battle_and_resolve(self, app, db, attacker_wins=True,
+                                  past_tutorial=False):
         """Helper: start a conquer battle and call _resolve_conquer_battle."""
         from routes.games import _resolve_conquer_battle
 
         user = _make_user(db)
+        if past_tutorial:
+            # Opt out of the no-penalty tutorial first conquest so normal
+            # loot-on-loss applies.
+            _mark_first_conquer_done(user)
         land = _make_land(db, tier=1)
         cfg = _make_conquer_config(db, user, land)
 
@@ -2872,10 +2887,10 @@ class TestAITemplateCardRewards:
             assert resp.status_code == 200
 
     def test_defender_wins_attacker_loses_key_card(self, app, db):
-        """When defender wins, attacker loses a key card."""
+        """When defender wins, attacker loses a key card (past the tutorial)."""
         with app.app_context():
             result, user, land, game, cfg = self._start_battle_and_resolve(
-                app, db, attacker_wins=False)
+                app, db, attacker_wins=False, past_tutorial=True)
 
             assert result['attacker_won'] is False
             log = LandAttackLog.query.filter_by(land_id=land.id).first()
@@ -2886,6 +2901,30 @@ class TestAITemplateCardRewards:
             # Land ownership unchanged (still unowned)
             db.session.refresh(land)
             assert land.owner_user_id is None
+
+    def test_tutorial_first_loss_is_no_penalty_retry(self, app, db):
+        """A brand-new player's first conquer loss costs nothing and keeps them
+        in the tutorial: no loot, all cards returned, land still unowned, and
+        the win-based first-conquest gate stays open for an immediate retry."""
+        with app.app_context():
+            from routes.kingdom import _first_conquer_complete_for_user
+            # Fresh user (no past_tutorial) -> the tutorial first conquest.
+            result, user, land, game, cfg = self._start_battle_and_resolve(
+                app, db, attacker_wins=False)
+
+            assert result['attacker_won'] is False
+            log = LandAttackLog.query.filter_by(land_id=land.id).first()
+            assert log is not None and log.result == 'defender_won'
+            # Nothing looted.
+            assert log.card_lost_suit is None and log.card_lost_rank is None
+            # Land stays unowned and the player is still pre-first-conquest, so
+            # the safe defender / recommended land / pre-assembly all persist.
+            db.session.refresh(land)
+            assert land.owner_user_id is None
+            assert _first_conquer_complete_for_user(user) is False
+            # Every attacked card returned to the collection (none still locked).
+            assert CollectionCard.query.filter_by(
+                user_id=user.id, locked=True).count() == 0
 
     def test_player_defender_win_reports_loot_and_returns_unlooted_cards(self, app, db):
         """Defender win payload includes looted cards and consumes none."""

@@ -707,7 +707,7 @@ class MenuScreenMixin:
     _TUTORIAL_COMPLETIONS = (
         ('finish_tutorial', 'Conquer Tutorial Complete!', [
             "You've learned the kingdom loop: conquer a land, build figures, win the battle, and collect production.",
-            "The Duel is a separate, optional tutorial — start it whenever you like, or keep expanding your kingdom.",
+            "There's also an optional Duel tutorial — start it any time from the Duel menu, or keep expanding your kingdom.",
         ]),
         ('finish_first_duel', 'Duel Tutorial Complete!', [
             "You've played a full duel: building figures, casting spells, and winning rounds.",
@@ -1324,46 +1324,39 @@ class MenuScreenMixin:
     def _first_session_journey_phase(self):
         """Client mirror of onboarding_service._journey_metadata.
 
-        The mandatory tutorial is the kingdom core loop: conquer -> open reward
-        -> collect production -> finish the kingdom-config tour. The duel is NOT
-        part of this path (it is optional), so no phase routes to it.
+        The mandatory tutorial is the kingdom core loop: open a starter booster
+        -> conquer -> collect production. It ends on that payoff; the
+        kingdom-config tour and defence setup are deferred to on-demand coaching,
+        and the duel is optional, so no phase routes to either.
         """
         completed = self._onboarding_completed_steps()
+        if 'open_first_main_booster' not in completed:
+            return 'open_starter_pack'
         if 'finish_first_conquer_battle' not in completed:
             return 'first_conquest'
-        if 'open_first_main_booster' not in completed:
-            return 'open_main_booster_reward'
         if 'collect_first_kingdom_production' not in completed:
             return 'collect_production'
-        if 'finish_tutorial' not in completed:
-            return 'finish_kingdom_tour'
         return 'complete'
 
     def _first_session_next_action(self):
         phase = self._first_session_journey_phase()
+        if phase == 'open_starter_pack':
+            return {
+                'screen': 'collection',
+                'label': 'Open a Booster Pack',
+                'target_id': 'collection_open_main_booster',
+            }
         if phase == 'first_conquest':
             return {
                 'screen': 'kingdom',
                 'label': 'Conquer First Land',
                 'target_id': 'recommended_tutorial_land',
             }
-        if phase == 'open_main_booster_reward':
-            return {
-                'screen': 'collection',
-                'label': 'Open Reward Pack',
-                'target_id': 'collection_open_main_booster',
-            }
         if phase == 'collect_production':
             return {
                 'screen': 'kingdom',
                 'label': 'Collect Production',
                 'target_id': 'kingdom_production_intro',
-            }
-        if phase == 'finish_kingdom_tour':
-            return {
-                'screen': 'kingdom',
-                'label': 'Finish Kingdom Tour',
-                'target_id': 'kingdom_config_intro',
             }
         return None
 
@@ -1465,8 +1458,12 @@ class MenuScreenMixin:
         body_line_h = self._menu_coach_font.get_height() + 3
         button_h = max(30, self._menu_coach_font.get_height() + 10)
         draws_next = step.get('action', 'next') == 'next'
-        draws_skip = not (self._onboarding() or {}).get('onboarding_skipped')
-        button_space = button_h + 16 if (draws_next or draws_skip) else 8
+        draws_finish = bool(step.get('finish_tutorial_button'))
+        draws_skip = (
+            not draws_finish
+            and not (self._onboarding() or {}).get('onboarding_skipped')
+        )
+        button_space = button_h + 16 if (draws_next or draws_finish or draws_skip) else 8
         card_h = max(152, 22 + title_h + 10 + len(body_lines) * body_line_h + button_space)
         gap = 14
         if target.right + gap + card_w < _SW:
@@ -1495,6 +1492,14 @@ class MenuScreenMixin:
             next_rect = pygame.Rect(card.right - button_w - 14, card.bottom - button_h - 12,
                                     button_w, button_h)
             self._draw_menu_coach_button(next_rect, label, ('next', step['id']))
+        if draws_finish:
+            label = step.get('finish_button_label') or 'Finish tutorial'
+            button_w = max(132, self._menu_coach_font.size(label)[0] + 28)
+            finish_rect = pygame.Rect(card.right - button_w - 14,
+                                      card.bottom - button_h - 12,
+                                      button_w, button_h)
+            self._draw_menu_coach_button(
+                finish_rect, label, ('finish_tutorial', step['id']))
         if draws_skip:
             label = 'Skip tutorial'
             button_w = max(96, self._menu_coach_font.size(label)[0] + 20)
@@ -1556,6 +1561,12 @@ class MenuScreenMixin:
                     if kind == 'next':
                         self._mark_menu_coach_seen(step_id)
                         self._after_menu_coach_next(step_id)
+                    elif kind == 'finish_tutorial':
+                        handler = getattr(self, '_finish_menu_coach_tutorial', None)
+                        if callable(handler):
+                            handler(step_id)
+                        else:
+                            self._mark_menu_coach_seen(step_id)
                     elif kind == 'skip_tutorial':
                         self._pause_onboarding_tutorial()
                     return True

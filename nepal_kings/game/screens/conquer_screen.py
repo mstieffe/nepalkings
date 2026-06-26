@@ -1402,55 +1402,15 @@ class ConquerScreen(MenuScreenMixin, Screen):
             return second
         if not self._conquer_coach_ready():
             return None
-        field_rect = self._conquer_field_coach_rect()
-        if field_rect and 'conquer_config_field' not in seen:
-            return {
-                'id': 'conquer_config_field',
-                'rect': field_rect,
-                'title': 'Your Attack Is Ready',
-                'body': 'Built from your starter cards: a King, a Farm and Warriors. The King feeds the Farm; the Farm feeds the Warriors.',
-                'action': 'next',
-                'max_lines': 4,
-            }
-        if self._btn_build and 'conquer_config_build_edit' not in seen:
-            return {
-                'id': 'conquer_config_build_edit',
-                'rect': self._btn_build,
-                'title': 'Build Your Own (Later)',
-                'body': 'Built for you this time. Later, Build lets you choose recipes yourself and place figures into castle, village, and military fields.',
-                'action': 'next',
-                'button_label': 'Got it',
-                'max_lines': 4,
-            }
-        battle_plan_rect = self._conquer_combined_rect(self._battle_plan_rect, self._btn_buy_move)
-        if battle_plan_rect and 'conquer_config_battle_plan' not in seen:
-            return {
-                'id': 'conquer_config_battle_plan',
-                'rect': battle_plan_rect,
-                'title': 'Battle Plan Set',
-                'body': 'Tactics are battle recipes. Daggers add their value to a round, and same-colour Daggers can combine into one stronger Double Dagger.',
-                'action': 'next',
-                'button_label': 'Got it',
-                'max_lines': 4,
-            }
-        prelude_rect = self._conquer_combined_rect(
-            self._prelude_panel_rect, self._prelude_spell_rect, self._btn_prelude_edit)
-        if prelude_rect and 'conquer_config_prelude_spell' not in seen:
-            return {
-                'id': 'conquer_config_prelude_spell',
-                'rect': prelude_rect,
-                'title': 'Prelude Spell Ready',
-                'body': 'Spells are recipes too, but they create effects instead of figures. A prelude spell fires before round one; this one draws two extra main cards.',
-                'action': 'next',
-                'button_label': 'Got it',
-                'max_lines': 5,
-            }
+        # The first attack is pre-assembled, so a single window orients the
+        # player and sends them straight into battle. The mechanics (tactics,
+        # prelude, loot) are taught in context once the battle is under way.
         if self._btn_battle and 'conquer_config_to_battle' not in seen:
             return {
                 'id': 'conquer_config_to_battle',
                 'rect': self._btn_battle,
-                'title': 'Start Conquer Battle',
-                'body': 'Start Battle now. First the prelude draws cards, then each round asks you to Play, Gamble, or Combine tactics. Cards can be looted if you lose; the rest return.',
+                'title': 'Your Attack Is Ready',
+                'body': 'We pre-built this attack from your starter cards: figures, three tactics, and a prelude spell. Tap Start Battle — the prelude draws cards, then you play tactics each round. Lose and only looted cards are gone; the rest return.',
                 'action': 'next',
                 'button_label': 'Got it',
                 'max_lines': 6,

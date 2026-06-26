@@ -27,44 +27,42 @@ class TestRegister:
         assert 'token' in data
         assert data['user']['username'] == 'newuser'
 
-    def test_register_grants_buildable_starter_deck(self, client):
-        """New accounts get an offensive (red) and defensive (black) starter set
-        plus red 3s for the Health-Boost prelude, independent of booster luck."""
+    def test_starter_set_is_deferred_then_grants_buildable_deck(self, client):
+        """The starter set is NOT granted at signup. It is granted (random
+        offensive suit + curated set) on the first booster open / on skip, and
+        is enough to build the first conquer attack independent of booster luck."""
         import server_settings as settings
         from ai.figure_recipes import find_buildable_figures
         from models import CollectionCard, User
-        from onboarding_service import get_starter_suits
+        from onboarding_service import get_starter_suits, grant_starter_set
 
         resp = client.post('/auth/register', data=_register_data(username='deckuser'))
         assert resp.status_code == 200
         user = User.query.filter_by(username='deckuser').first()
 
-        suits = get_starter_suits(user)
-        assert suits['offensive'] in settings.OFFENSIVE_SUITS
-        assert suits['defensive'] in settings.DEFENSIVE_SUITS
+        # Deferred: a fresh account has no starter cards, and the set is unflagged.
+        assert CollectionCard.query.filter_by(user_id=user.id).count() == 0
+        assert not (user.onboarding_state or {}).get('starter_set_granted')
+
+        # Granting (as on the first booster open) assigns the suit + set.
+        offensive = grant_starter_set(user, commit=True)
+        assert offensive in settings.OFFENSIVE_SUITS
+        assert get_starter_suits(user)['offensive'] == offensive
 
         cards = CollectionCard.query.filter_by(user_id=user.id).all()
-        expected = (len(settings.STARTER_OFFENSIVE_SET)
-                    + len(settings.STARTER_DEFENSIVE_SET)
-                    + settings.STARTER_DEFENSIVE_PRELUDE_RED_THREES)
-        assert len(cards) == expected
+        assert len(cards) == len(settings.STARTER_OFFENSIVE_SET)
+        assert all(c.suit == offensive for c in cards)
 
-        off = [c for c in cards if c.suit == suits['offensive']]
-        deff = [c for c in cards if c.suit == suits['defensive']]
         # Offensive set builds the red attack figures.
         off_hand = [{'id': c.id, 'rank': c.rank, 'suit': c.suit,
-                     'value': c.value, 'card_type': 'main'} for c in off]
+                     'value': c.value, 'card_type': 'main'} for c in cards]
         off_names = {b['name'] for b in find_buildable_figures(off_hand, [], [])}
         assert {'Djungle King', 'Small Rice Farm', 'Gorkha Warriors'} <= off_names
-        # Defensive set builds the black defence figures.
-        def_hand = [{'id': c.id, 'rank': c.rank, 'suit': c.suit,
-                     'value': c.value, 'card_type': 'main'} for c in deff]
-        def_names = {b['name'] for b in find_buildable_figures(def_hand, [], [])}
-        assert {'Himalaya King', 'Small Yack Farm', 'Wooden Fortress'} <= def_names
-        # Two red 3s for the Health-Boost prelude.
-        red_threes = [c for c in cards
-                      if c.rank == '3' and c.suit == suits['offensive']]
-        assert len(red_threes) == settings.STARTER_DEFENSIVE_PRELUDE_RED_THREES
+
+        # Idempotent: a second grant does not duplicate the set.
+        grant_starter_set(user, commit=True)
+        assert CollectionCard.query.filter_by(
+            user_id=user.id).count() == len(settings.STARTER_OFFENSIVE_SET)
 
     def test_register_duplicate_username_fails(self, client):
         client.post('/auth/register', data=_register_data('dup', 'pass1234'))

@@ -725,6 +725,9 @@ class KingdomScreen(MenuScreenMixin, Screen):
         self._draw_menu_coach(self._current_kingdom_coach_step())
         if getattr(self, '_kingdom_overview_dialogue', None):
             self._kingdom_overview_dialogue.draw()
+        # Topmost modal: the conquer-tutorial completion celebration, shown
+        # right after the final task completes on this screen.
+        self._draw_tutorial_complete_dialogue()
 
     def _maybe_show_kingdom_overview(self):
         """First Kingdom open: a teaching window about lands and kingdoms."""
@@ -749,41 +752,11 @@ class KingdomScreen(MenuScreenMixin, Screen):
                 {
                     'title': 'Read Your Map',
                     'layout': 'image_top',
-                    'image': lambda: tutorial_diagrams.map_legend_diagram(),
-                    'image_caption': 'Tap the glowing target — tuned for your first conquest.',
+                    'image': lambda: tutorial_diagrams.kingdom_map_diagram(),
+                    'image_caption': 'Conquer a neighbour to grow your kingdom.',
                     'lines': [
-                        'Each hex is a land. Yours are marked with a crown,',
-                        'rivals hold the rest. A hex shows its tier and gold rate.',
-                    ],
-                },
-                {
-                    'title': 'The Growth Loop',
-                    'layout': 'image_top',
-                    'image': lambda: tutorial_diagrams.growth_loop_diagram(),
-                    'image_caption': 'Conquer, produce gold, grow — then repeat.',
-                    'lines': [
-                        'A conquered land produces gold — spend it on packs',
-                        'and skills, then take the next adjacent land.',
-                    ],
-                },
-                {
-                    'title': 'Attack & Defend',
-                    'layout': 'image_top',
-                    'image': lambda: tutorial_diagrams.attack_defend_diagram(),
-                    'image_caption': 'Warriors attack; a Tower defends.',
-                    'lines': [
-                        'You conquer rival lands — and rivals can attack yours.',
-                        'Station a defence so your lands hold while you are away.',
-                    ],
-                },
-                {
-                    'title': 'Three Fields',
-                    'layout': 'image_top',
-                    'image': lambda: tutorial_diagrams.field_compartments_diagram(),
-                    'image_caption': 'Castle, Village and Military.',
-                    'lines': [
-                        'Figures stand in one of three fields, and produce',
-                        'and require resources to support each other.',
+                        'Your lands form a kingdom; rivals hold the rest.',
+                        'Conquer a neighbouring land to expand, one hex at a time.',
                     ],
                 },
             ],
@@ -815,6 +788,15 @@ class KingdomScreen(MenuScreenMixin, Screen):
             if action == 'conquer' and not getattr(btn, 'disabled', False):
                 return getattr(btn, 'rect', None)
         return None
+
+    def _first_conquest_attempted(self):
+        """True once the player has finished at least one conquer battle.
+
+        Combined with an incomplete first conquest, this means they lost their
+        first attempt — the no-penalty retry path.
+        """
+        facts = (self._onboarding() or {}).get('facts') or {}
+        return int(facts.get('conquer_battles') or 0) >= 1
 
     def _current_kingdom_coach_step(self):
         if not self._menu_coach_allowed_common() or not self._kingdom_coach_ready():
@@ -854,6 +836,20 @@ class KingdomScreen(MenuScreenMixin, Screen):
                 'mark_on_click': False,
                 'max_lines': 4,
             }
+        # Lost the first conquest (no land won yet): re-guide the no-penalty
+        # retry. No cards were lost and the recommended land + starter attack are
+        # still available, so the player can attack the marked land again. This
+        # nudge is never marked, so it re-shows every visit until they win.
+        if not first_conquer_complete and self._first_conquest_attempted():
+            return {
+                'id': 'kingdom_conquer_retry',
+                'rect': self._map_viewport_rect,
+                'title': 'Try Again',
+                'body': 'No cards were lost — your starter attack is ready. Tap the gold-marked land to conquer it again.',
+                'action': 'click',
+                'mark_on_click': False,
+                'max_lines': 4,
+            }
         if not first_conquer_complete:
             return None
 
@@ -866,20 +862,11 @@ class KingdomScreen(MenuScreenMixin, Screen):
                 'action': 'next',
                 'max_lines': 5,
             }
-        if 'open_first_main_booster' not in completed:
-            return {
-                'id': 'open_main_booster_reward',
-                'rect': getattr(self, '_header_rect', None) or self._map_viewport_rect,
-                'title': 'Open Your Reward Pack',
-                'body': 'You have your first land. Open one main booster now to see new recipe ingredients.',
-                'action': 'next',
-                'button_label': 'Open Pack',
-                'navigate_screen': 'collection',
-                'max_lines': 4,
-            }
-        # The core loop pays off here: the freshly conquered land has already
-        # filled a gold vault. Point the player at Collect so conquer -> produce
-        # -> grow lands in a single visit.
+        # The core loop pays off here, and the first-session tutorial ends here:
+        # the freshly conquered land has already filled a gold vault, so point
+        # the player at Collect (conquer -> produce -> grow in a single visit).
+        # Defence and Kingdom Config are no longer pushed during the tutorial;
+        # each teaches itself the first time the player opens that screen.
         production_rect = (getattr(self, '_collect_all_rect', None)
                            or getattr(self, '_header_rect', None))
         if production_rect and 'collect_first_kingdom_production' not in completed:
@@ -890,33 +877,16 @@ class KingdomScreen(MenuScreenMixin, Screen):
                 'body': 'Your new land already filled its gold vault. Tap Collect to bank it — every land you hold keeps producing while you are away.',
                 'action': 'click',
                 'mark_on_click': False,
-                'max_lines': 4,
-            }
-        defence_already_handled = (
-            'save_first_defence_config' in completed
-            or 'defence_save' in seen
-        )
-        if not defence_already_handled and 'kingdom_defence_intro' not in seen:
-            return {
-                'id': 'kingdom_defence_intro',
-                'rect': self._map_viewport_rect,
-                'title': 'Defend Your Lands',
-                'body': 'Defend what you own. Select one of your lands and choose Configure Defence to station holders before others attack.',
-                'action': 'next',
-                'max_lines': 5,
-            }
-        gear_rect = getattr(self, '_kingdom_chip_gear_rect', None)
-        if gear_rect and 'kingdom_config_intro' not in seen:
-            return {
-                'id': 'kingdom_config_intro',
-                'rect': gear_rect,
-                'title': 'Open Kingdom Config',
-                'body': 'Open Kingdom Config to spend skill points, collect production, and manage shields.',
-                'action': 'click',
-                'mark_on_click': True,
+                'finish_tutorial_button': True,
                 'max_lines': 4,
             }
         return None
+
+    def _finish_menu_coach_tutorial(self, step_id):
+        if step_id == 'kingdom_production_intro':
+            self._collect_all_gold()
+        else:
+            self._mark_menu_coach_seen(step_id)
 
     def _draw_close_x_button(self):
         r = self._btn_close_rect
@@ -1859,8 +1829,14 @@ class KingdomScreen(MenuScreenMixin, Screen):
             self._detail_box.update()
 
         self._maybe_show_kingdom_overview()
+        self._maybe_show_tutorial_completion()
 
     def handle_events(self, events):
+        # The conquer-tutorial completion celebration is modal and fires here so
+        # it appears immediately after the final task (collecting production),
+        # not only once the player returns to the menu.
+        if self._handle_tutorial_completion_events(events):
+            return
         # The first-open teaching window is modal — it captures all input.
         if self._handle_kingdom_overview_events(events):
             return

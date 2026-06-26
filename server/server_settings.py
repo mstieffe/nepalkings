@@ -134,26 +134,33 @@ AI_WATCHDOG_MAX_RETRIES = int(os.getenv('AI_WATCHDOG_MAX_RETRIES', '3'))
 STARTER_BOOSTER_PACKS = 2                   # Welcome-gift main packs
 STARTER_BOOSTER_PACKS_SIDE = 1             # Welcome-gift side pack
 
-# Each new player is assigned a random OFFENSIVE (red) suit and DEFENSIVE
-# (black) suit at registration, and granted a starter set in each so the first
-# conquer attack and first defence are always buildable, independent of booster
-# luck. The server pre-assembles these (see _preassemble_tutorial_conquer_attack
-# and _preassemble_tutorial_defence_draft in routes/kingdom.py).
+# Each new player is assigned a random OFFENSIVE (red) suit at registration and
+# granted its starter set, so the first conquer attack is always buildable,
+# independent of booster luck (see _preassemble_tutorial_conquer_attack in
+# routes/kingdom.py). No defensive set is granted: a won conquest converts the
+# conquer config into the land's defence config (see routes/games.py), so the
+# first defence is "just the conquer config".
 OFFENSIVE_SUITS = ('Hearts', 'Diamonds')
 DEFENSIVE_SUITS = ('Clubs', 'Spades')
 
 # Rank-based set templates; the suit is filled in per the assigned suit.
 # Format: (rank, value).
-# Offensive set (red suit): three figures + one prelude card + three tactics:
-#   Djungle King (K)         -> villager_red x2, warrior_red x1
-#   Small Rice Farm (J + 7)  -> food_red x7  (needs villager_red x1)
-#   Gorkha Warriors (A + 7)  -> attacker     (needs warrior_red x1, food_red x7)
-#   Draw 2 MainCards         -> one number card (8)
-#   3x Dagger                -> one number card each (8, 9, 10)
+# Offensive set (red suit): three figures + a Health Boost prelude + three
+# tactics. The tactic TYPE follows the card rank (K->Call King, J->Call
+# Villager, Q->Block; numbers->Dagger), so the tactic cards mirror the figures'
+# key cards (a second K and J, plus a Q):
+#   Djungle King (K)          -> villager_red x2, warrior_red x1
+#   Small Rice Farm (J + 10)  -> food_red x10  (needs villager_red x1)
+#   Gorkha Warriors (A + 9)   -> attacker      (needs warrior_red x1, food_red x9)
+#   Health Boost prelude      -> two 3s (boosts the battle figure)
+#   Call King (K) / Call Villager (J) / Block (Q)  -> one card each
 STARTER_OFFENSIVE_SET = [
-    ('K', 4), ('A', 3), ('J', 1),
-    ('7', 7), ('7', 7),
-    ('8', 8), ('8', 8), ('9', 9), ('10', 10),
+    ('K', 4), ('K', 4),       # Djungle King figure + Call King tactic
+    ('J', 1), ('J', 1),       # Small Rice Farm figure + Call Villager tactic
+    ('A', 3),                 # Gorkha Warriors figure (key)
+    ('Q', 2),                 # Block tactic
+    ('9', 9), ('10', 10),     # Warriors / Rice Farm number cards
+    ('3', 3), ('3', 3),       # Health Boost prelude (two 3s)
 ]
 # Defensive set (black suit): mirrors the offensive with defensive families
 #   Himalaya King (K)        -> villager_black x2, warrior_black x1

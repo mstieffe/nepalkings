@@ -63,7 +63,8 @@ another player.
 
 1. Follow the Kingdom prompt and conquer the marked tier-1 land first.
 2. Open a main booster after the win to grow your collection.
-3. Then try a Quick duel to learn the full tactical card game.
+3. Return to your Kingdom, collect the new land's gold, then try a Quick duel
+   whenever you want a head-to-head challenge.
 
 Made by a solo developer. Feedback very welcome — leave a comment!
 

@@ -1016,6 +1016,10 @@ class ConquerGameScreen(GameScreen):
                     field.defender_selection_mode = False
                     if hasattr(field, '_reset_defender_selectable'):
                         field._reset_defender_selectable()
+                    # Single-option auto-pick: the player made no real choice, so
+                    # the timeline must not tag this figure "Chosen by you".
+                    field._auto_selected_defender_id = payload
+                    field._player_selected_defender_id = None
             elif kind == 'own_defender':
                 from utils.game_service import select_conquer_own_defender
                 result = select_conquer_own_defender(
@@ -1920,8 +1924,9 @@ class ConquerGameScreen(GameScreen):
             return
         if not self._conquer_battle_coach_allowed():
             return
-        if not self._is_battle_phase_active():
-            return
+        # Show the intro as the FIRST thing on the first conquer tutorial battle
+        # — on entering the screen, before any setup/tactics coaching — rather
+        # than waiting for a battle round to be active.
         from game.components.tutorial_window import TutorialWindowDialogue
         from game.components import tutorial_diagrams
         self._battle_intro_dialogue = TutorialWindowDialogue(
@@ -1929,32 +1934,14 @@ class ConquerGameScreen(GameScreen):
             [
                 {
                     'title': 'How a Battle Flows',
-                    'layout': 'text_only',
-                    'lines': [
-                        '1. A prelude spell fires first (yours drew extra cards).',
-                        '2. You pick your attacking figure to advance.',
-                        '3. Three quick tactic rounds then decide the winner.',
-                    ],
-                },
-                {
-                    'title': 'Figures Decide Most',
                     'layout': 'image_top',
-                    'image': lambda: tutorial_diagrams.figure_buttons('offensive'),
-                    'image_caption': 'Your figures vs the defender.',
+                    'image': lambda: tutorial_diagrams.starter_tactics_diagram(),
+                    'image_caption': 'Your three tactics: Call King, Call Villager, Block.',
                     'lines': [
-                        "Most of a battle is your figures' total power",
-                        "against the defender's. Strong figures win.",
-                    ],
-                },
-                {
-                    'title': 'Tactics Tip the Rounds',
-                    'layout': 'image_top',
-                    'image': lambda: tutorial_diagrams.daggers_diagram(),
-                    'image_caption': 'Combine same-colour Daggers for a bigger hit.',
-                    'lines': [
-                        'Each round, Play a Dagger (a 7-10 card) to add its value.',
-                        'Combine same-colour Daggers into one, Block to cancel a',
-                        'round, or Call a field figure into it.',
+                        'A battle runs in three beats: your prelude fires, your figures',
+                        'set the score, then three tactic rounds let you swing it.',
+                        'Each round, Play a tactic — or Gamble it for new cards.',
+                        'Call King or Call Villager adds that figure\'s power; Block cancels the round.',
                     ],
                 },
             ],
@@ -2085,7 +2072,7 @@ class ConquerGameScreen(GameScreen):
 
     @staticmethod
     def _conquer_battle_intro_step_ids():
-        # The concepts (timeline, figure power, block/call, combine) are taught
+        # The concepts (timeline, figure power, play/gamble/combine) are taught
         # up front by the 'How Battles Work' window; only two action pointers
         # remain to guide the player's first Play and Finish.
         return (

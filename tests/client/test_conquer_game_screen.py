@@ -3562,7 +3562,11 @@ class TestTacticsHandRouting:
         assert 'next' not in screen._conquer_objective_action_rects
         assert 'withdraw' in screen._conquer_objective_action_rects
 
-    def test_mobile_timeline_next_button_clears_info_text_column(self):
+    def test_mobile_timeline_has_no_next_button_in_inert_states(self):
+        # The timeline Next button only does something for held sequence beats
+        # (it skips their countdown). In battle rounds and the game-start hold,
+        # advancing is driven by game state, so the button is inert and must not
+        # be drawn. The held-beat geometry is covered in test_conquer_timeline.
         _run_mobile_geometry_check(r'''
 import pygame
 pygame.mouse.set_cursor = lambda *args, **kwargs: None
@@ -3572,23 +3576,14 @@ client = Client()
 client._init_perf_conquer_fixture(lambda *_args, **_kwargs: None)
 screen = client.screens['conquer_game']
 
-def assert_next_button_clear(label):
+def assert_no_next_button(label):
     screen.render()
-    next_rect = screen._conquer_objective_action_rects.get('next')
-    info_rect = getattr(screen, '_conquer_timeline_info_rect', None)
-    text_rect = getattr(screen, '_conquer_timeline_info_text_rect', None)
-    assert next_rect is not None, label
-    assert info_rect is not None, label
-    assert text_rect is not None, label
-    assert info_rect.contains(next_rect), (label, tuple(info_rect), tuple(next_rect))
-    assert info_rect.contains(text_rect), (label, tuple(info_rect), tuple(text_rect))
-    assert next_rect.left >= text_rect.right + 8, (
-        label, tuple(text_rect), tuple(next_rect))
-    assert not next_rect.colliderect(text_rect), (
-        label, tuple(text_rect), tuple(next_rect))
+    assert screen._conquer_objective_action_rects.get('next') is None, label
 
-assert_next_button_clear('battle overlay')
+# Battle overlay (a round beat): inert -> no Next button.
+assert_no_next_button('battle overlay')
 
+# Pre-battle game-start hold: also inert -> no Next button.
 game = screen.state.game
 game.battle_turn_player_id = None
 game.battle_round = 0
@@ -3599,7 +3594,7 @@ game._game_start_pending = True
 game.game_start_notification_checked = False
 screen._conquer_timeline_hover_open = False
 screen._conquer_timeline_last_layout_mode = None
-assert_next_button_clear('pre-battle inline')
+assert_no_next_button('pre-battle inline')
 pygame.quit()
 ''')
 

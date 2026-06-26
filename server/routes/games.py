@@ -271,7 +271,7 @@ _USER_ACTION_LOG_TYPES = (
     'card_changed', 'spell_cast', 'spell_end', 'counter_spell',
     'battle_move', 'battle_skip', 'battle_decision', 'battle_start',
     'battle_win', 'battle_draw',
-    'advance', 'counter_advance',
+    'advance', 'counter_advance', 'select_defender',
     'auto_loss', 'fold_win', 'deficit_loss', 'civil_war_skip',
     'game_start',
 )
@@ -3240,6 +3240,9 @@ def select_defender():
         game = db.session.get(Game, game_id)
         if not game:
             return jsonify({'success': False, 'message': 'Game not found'}), 404
+        player = db.session.get(Player, player_id)
+        if not player:
+            return jsonify({'success': False, 'message': 'Player not found'}), 404
 
         # There must be an active advance
         if not game.advancing_figure_id:
@@ -3374,6 +3377,20 @@ def select_defender():
             invader_name = invader_user.username if invader_user else f"Player {player_id}"
             defender_name = defender_user.username if defender_user else f"Player {defender_owner_id}"
             return _resolve_deficit_loss(game, invader_player, defender_player, invader_name, defender_name, figure.name)
+
+        user = db.session.get(User, player.user_id)
+        username = user.username if user else f"Player {player_id}"
+        pick_label = 'second defender' if is_second_pick else 'defender'
+        log_entry = LogEntry(
+            game_id=game_id,
+            player_id=player_id,
+            round_number=game.current_round,
+            turn_number=player.turns_left,
+            message=f"{username} selected {figure.name} as the {pick_label}.",
+            author=username,
+            type='select_defender',
+        )
+        db.session.add(log_entry)
 
         db.session.commit()
 
@@ -7264,15 +7281,18 @@ def _wipe_land_config_return_unlooted(cfg, looted_card_ids=None):
     db.session.delete(cfg)
 
 
-def _return_config_non_figure_cards(cfg):
-    """Unlock and remove non-figure cards from a surviving config."""
-    from models import CollectionCard, LandConfigBattleMove
+def _return_config_attack_only_cards(cfg):
+    """Unlock and clear the attack-only cards from a surviving config.
+
+    Used when a winning attacker's conquer config becomes the new defence: its
+    figures AND its battle-move tactics carry over to the defence (so the
+    conquered land is defended automatically), while the attack-only prelude
+    spell, battle modifier, in-battle spell and counter spell are unlocked and
+    returned to the collection.
+    """
+    from models import CollectionCard
 
     card_ids = []
-    for move in list(cfg.battle_moves):
-        if move.card_id:
-            card_ids.append(move.card_id)
-        db.session.delete(move)
     for arr in (cfg.modifier_card_ids, cfg.spell_card_ids,
                 cfg.prelude_spell_card_ids, cfg.counter_spell_card_ids):
         if arr:
@@ -7330,6 +7350,15 @@ def _resolve_conquer_battle(game, winner, requesting_player):
     land = db.session.get(Land, game.land_id)
     is_ai_land = defender_user and defender_user.is_ai
     old_land_owner_id = land.owner_user_id if land else None
+    # A brand-new player's FIRST conquest attempt (no land won yet). Used to make
+    # the tutorial's first battle a no-penalty retry (no loot on a loss) and to
+    # recognise the eventual win as the first conquest even after lost attempts.
+    attacker_first_conquest_attempt = bool(
+        attacker_user
+        and LandAttackLog.query.filter_by(
+            attacker_user_id=attacker_user.id, result='attacker_won'
+        ).count() == 0
+    )
     lost_kingdom_id = land.kingdom_id if land else None
     lost_kingdom_name = None
     if lost_kingdom_id:
@@ -7427,13 +7456,14 @@ def _resolve_conquer_battle(game, winner, requesting_player):
             else:
                 land.conquer_cooldown_until = None
 
-        # Convert attacker's conquer config to defence config.  Only figure
-        # cards remain committed to the new defence; attack-only battle,
-        # modifier, and spell cards return instead of being consumed.
+        # Convert attacker's conquer config to defence config.  Figures and
+        # battle-move tactics carry over so the conquered land is defended
+        # automatically; attack-only modifier, prelude, and spell cards return
+        # instead of being consumed.
         if game.conquer_config_id:
             atk_cfg = db.session.get(LandConfig, game.conquer_config_id)
             if atk_cfg:
-                _return_config_non_figure_cards(atk_cfg)
+                _return_config_attack_only_cards(atk_cfg)
                 atk_cfg.config_type = 'defence'
                 atk_cfg.land_id = game.land_id
                 _rekey_config_lock_types(atk_cfg, 'defence')
@@ -7530,8 +7560,12 @@ def _resolve_conquer_battle(game, winner, requesting_player):
 
     else:
         # ── Defender wins: loot from attacker config by tier + defender skill ──
+        # The tutorial's first conquest is a no-penalty retry: a brand-new
+        # player who loses their first AI-land battle keeps every card (nothing
+        # is looted) so they can immediately attack the same land again.
+        tutorial_first_loss = bool(attacker_first_conquest_attempt and is_ai_land)
         extra_chance = 0.0
-        if lost_kingdom_id:
+        if lost_kingdom_id and not tutorial_first_loss:
             try:
                 from kingdom_service import kingdom_skill_level
                 level = kingdom_skill_level(lost_kingdom_id, 'loot_chance')
@@ -7541,20 +7575,23 @@ def _resolve_conquer_battle(game, winner, requesting_player):
         if game.conquer_config_id:
             atk_cfg = db.session.get(LandConfig, game.conquer_config_id)
             if atk_cfg:
-                defender_looted_cards = _select_conquer_loot_cards(
-                    attack_loot_pool,
-                    land.tier if land else 1,
-                    extra_chance=extra_chance,
-                    rng=_random,
-                )
-                loot_gained_cards = _loot_cards_public(defender_looted_cards)
-                looted_lost_cards = list(loot_gained_cards)
-                if looted_lost_cards:
-                    card_lost_suit = looted_lost_cards[0].get('suit')
-                    card_lost_rank = looted_lost_cards[0].get('rank')
-                looted_ids = {
-                    c.get('id') for c in defender_looted_cards if c.get('id')
-                }
+                if tutorial_first_loss:
+                    looted_ids = set()  # no penalty -> every card returns
+                else:
+                    defender_looted_cards = _select_conquer_loot_cards(
+                        attack_loot_pool,
+                        land.tier if land else 1,
+                        extra_chance=extra_chance,
+                        rng=_random,
+                    )
+                    loot_gained_cards = _loot_cards_public(defender_looted_cards)
+                    looted_lost_cards = list(loot_gained_cards)
+                    if looted_lost_cards:
+                        card_lost_suit = looted_lost_cards[0].get('suit')
+                        card_lost_rank = looted_lost_cards[0].get('rank')
+                    looted_ids = {
+                        c.get('id') for c in defender_looted_cards if c.get('id')
+                    }
                 _wipe_land_config_return_unlooted(atk_cfg, looted_ids)
 
     consumed_cards = []
@@ -7578,19 +7615,21 @@ def _resolve_conquer_battle(game, winner, requesting_player):
     db.session.flush()
     attacker_first_conquest = False
     try:
-        from onboarding_service import mark_step, _state as _onb_state
+        from onboarding_service import mark_step
         if attacker_user and attacker_won:
-            completed_before = set(
-                (_onb_state(attacker_user).get('completed_steps')) or [])
-            prior_conquests = LandAttackLog.query.filter(
+            # Base "first conquest" on prior WINS only, so a no-penalty tutorial
+            # loss earlier does not disqualify this win from seeding production /
+            # awarding the reward booster.
+            prior_attacker_wins = LandAttackLog.query.filter(
                 LandAttackLog.attacker_user_id == attacker_user.id,
+                LandAttackLog.result == 'attacker_won',
                 LandAttackLog.id != log.id,
             ).count()
-            attacker_first_conquest = (
-                'finish_first_conquer_battle' not in completed_before
-                and prior_conquests == 0
-            )
-        if attacker_user:
+            attacker_first_conquest = (prior_attacker_wins == 0)
+        # A brand-new player's first battle marks the step only on a win, so a
+        # no-penalty tutorial loss keeps the retry path open; all other battles
+        # mark it as before.
+        if attacker_user and (attacker_won or not attacker_first_conquest_attempt):
             mark_step(attacker_user, 'finish_first_conquer_battle')
         if defender_user and not is_ai_land:
             mark_step(defender_user, 'finish_first_conquer_battle')
@@ -7615,15 +7654,10 @@ def _resolve_conquer_battle(game, winner, requesting_player):
                 attacker_user.booster_packs = int(attacker_user.booster_packs or 0) + 1
             except Exception:
                 logger.exception("Failed to grant first-conquest reward pack")
-            # Stage a ready defence draft (assigned black suit + Health Boost)
-            # for the just-conquered land; the guided defence beat lets the
-            # player review and Save it.
-            try:
-                from routes.kingdom import _preassemble_tutorial_defence_draft
-                if land is not None and land.owner_user_id == attacker_user.id:
-                    _preassemble_tutorial_defence_draft(attacker_user, land)
-            except Exception:
-                logger.exception("Failed to pre-assemble tutorial defence draft")
+            # No separate defence draft is staged for the tutorial: the won
+            # land's conquer config is converted into its defence config above,
+            # so the first defence is "just the conquer config". (New players are
+            # granted only an offensive starter set.)
         lost_user_for_event = None if is_ai_land else (defender_user.id if defender_user else None)
         _create_kingdom_loot_events(
             attack_log_id=log.id,
@@ -8067,12 +8101,16 @@ def _rekey_config_lock_types(cfg, new_config_type):
         'conquer_counter':  f'{new_config_type}_counter',
     }
 
-    # Gather every card id that is part of this cfg (figures only at this
-    # point — battle/modifier/spell cards have already been consumed).
+    # Gather every card id still locked by this cfg: figure cards and the
+    # battle-move (tactic) cards that now carry over into the defence. The
+    # attack-only modifier/prelude/spell cards were already returned.
     card_ids = []
     for fig in cfg.figures:
         if fig.card_ids:
             card_ids.extend(fig.card_ids)
+    for move in cfg.battle_moves:
+        if move.card_id:
+            card_ids.append(move.card_id)
     if not card_ids:
         return
 

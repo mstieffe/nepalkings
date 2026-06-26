@@ -48,21 +48,16 @@ def _utcnow():
 
 
 def _first_conquer_complete_for_user(user):
+    """True once the user has actually CONQUERED their first land (won an attack).
+
+    A lost first battle does NOT count: the tutorial keeps offering the
+    scripted-safe defender, the recommended land, and the pre-assembled attack
+    so the player can retry with no penalty until they win.
+    """
     if not user:
         return True
-    try:
-        from onboarding_service import _state as _onboarding_state
-        state = _onboarding_state(user)
-        if 'finish_first_conquer_battle' in set(state.get('completed_steps') or []):
-            return True
-    except Exception:
-        logger.debug('Could not read onboarding state for first-conquer gate',
-                     exc_info=True)
-    return LandAttackLog.query.filter(
-        db.or_(
-            LandAttackLog.attacker_user_id == user.id,
-            LandAttackLog.defender_user_id == user.id,
-        )
+    return LandAttackLog.query.filter_by(
+        attacker_user_id=user.id, result='attacker_won'
     ).first() is not None
 
 
@@ -968,9 +963,11 @@ def _tutorial_safe_ai_defence_template(attack_suit=None):
     Fully inline (never drifts with AI tuning) and tuned so the player's
     pre-built attack always wins: the defender sits in the BLACK suit the
     player's red attack beats (suit advantage), fields a weak Yack Farm as its
-    counter-advancing defending figure, and plays three low 7-Daggers against
-    the player's 8/9/10. It still demonstrates the two mechanics a new player
-    should see a defender use: a prelude spell and a counter-advancing figure.
+    counter-advancing defending figure, and plays only three low 7-Daggers
+    (no Call/Block tactics of its own), so the player's stronger figures and
+    Call King / Call Villager tactics win out. It still demonstrates the two
+    mechanics a new player should see a defender use: a prelude spell and a
+    counter-advancing figure.
     """
     # Both red attack suits beat a black suit; the beaten suit is what we field.
     beaten = _SUIT_ADVANTAGE.get(attack_suit or _TUTORIAL_ATTACK_SUIT) or 'Clubs'
@@ -2117,7 +2114,7 @@ def _get_or_create_conquer_config(user_id, land_id):
 # Families pre-assembled into a new player's very first conquer attack, in
 # build order (King first so its production covers the farm/warriors).
 _TUTORIAL_ATTACK_FAMILIES = ('Djungle King', 'Small Rice Farm', 'Gorkha Warriors')
-_TUTORIAL_PRELUDE_SPELL_NAME = 'Draw 2 MainCards'
+_TUTORIAL_PRELUDE_SPELL_NAME = 'Health Boost'
 
 
 def _preassemble_tutorial_conquer_attack(user, cfg, land):
@@ -2125,11 +2122,11 @@ def _preassemble_tutorial_conquer_attack(user, cfg, land):
     battle-ready starter attack from their curated starter deck, so the first
     conquest never hits the figure-builder cliff.
 
-    Builds Djungle King + Small Rice Farm + Gorkha Warriors from the reserved
-    Hearts cards, selects the Warriors as the battle figure, adds Draw 2
-    MainCards as a prelude spell, and adds three Daggers (the 8/9/10 Hearts) as
-    the battle plan. Best-effort and gated to the tutorial; any unmet
-    precondition skips silently (player builds manually).
+    Builds Djungle King (K) + Small Rice Farm (J+10) + Gorkha Warriors (A+9),
+    selects the Warriors as the battle figure, adds a Health Boost prelude (two
+    3s, targeting the Warriors), and a three-tactic plan that teaches the
+    non-Dagger moves: Call King (K), Call Villager (J), Block (Q). Best-effort
+    and gated to the tutorial; any unmet precondition skips silently.
     """
     from ai.figure_recipes import FIGURE_RECIPES
 
@@ -2172,19 +2169,23 @@ def _preassemble_tutorial_conquer_attack(user, cfg, land):
     if not all(name in recipes for name in _TUTORIAL_ATTACK_FAMILIES):
         return False
 
-    # Reserve the exact cards the figures need (7s for figures, one 8 for the
-    # prelude, then 8/9/10 for Daggers). Validate everything is available
-    # BEFORE mutating anything.
+    # Reserve the exact cards: figure keys + number cards (Rice Farm 10,
+    # Warriors 9), two 3s for the Health Boost prelude, then the tactic cards
+    # (a second K for Call King, a second J for Call Villager, a Q for Block).
+    # Validate everything is available BEFORE mutating anything.
     king_key = _take('K')
     farm_key = _take('J')
-    farm_num = _take('7')
+    farm_num = _take('10')
     war_key = _take('A')
-    war_num = _take('7')
-    prelude_card = _take('8')
-    dagger_cards = [_take('8'), _take('9'), _take('10')]
+    war_num = _take('9')
+    three_a = _take('3')
+    three_b = _take('3')
+    call_king_card = _take('K')
+    call_villager_card = _take('J')
+    block_card = _take('Q')
     needed = [
         king_key, farm_key, farm_num, war_key, war_num,
-        prelude_card, *dagger_cards,
+        three_a, three_b, call_king_card, call_villager_card, block_card,
     ]
     if any(c is None for c in needed):
         return False
@@ -2227,25 +2228,34 @@ def _preassemble_tutorial_conquer_attack(user, cfg, land):
         _lock_collection_cards(card_ids, 'conquer_figure', figure.id)
         return figure
 
-    _build_figure(recipes['Djungle King'], king_key, None)
-    _build_figure(recipes['Small Rice Farm'], farm_key, farm_num)
+    king = _build_figure(recipes['Djungle King'], king_key, None)
+    rice_farm = _build_figure(recipes['Small Rice Farm'], farm_key, farm_num)
     warriors = _build_figure(recipes['Gorkha Warriors'], war_key, war_num)
 
     cfg.battle_figure_id = warriors.id
-    cfg.prelude_spell_name = _TUTORIAL_PRELUDE_SPELL_NAME
-    cfg.prelude_spell_data = None
-    cfg.prelude_spell_card_ids = [prelude_card.id]
-    _lock_collection_cards([prelude_card.id], 'conquer_prelude', cfg.id)
+    cfg.prelude_spell_name = _TUTORIAL_PRELUDE_SPELL_NAME  # Health Boost
+    cfg.prelude_spell_data = {'target_figure_id': warriors.id}
+    cfg.prelude_spell_card_ids = [three_a.id, three_b.id]
+    _lock_collection_cards([three_a.id, three_b.id], 'conquer_prelude', cfg.id)
 
-    for round_index, card in enumerate(dagger_cards):
+    # Three tactics that teach the non-Dagger moves. Call moves reference a
+    # field figure (remapped to the runtime Figure when the battle starts);
+    # Block needs no target.
+    tactics = [
+        ('Call King', call_king_card, king.id),
+        ('Call Villager', call_villager_card, rice_farm.id),
+        ('Block', block_card, None),
+    ]
+    for round_index, (family, card, call_figure_id) in enumerate(tactics):
         move = LandConfigBattleMove(
             config_id=cfg.id,
-            family_name='Dagger',
+            family_name=family,
             card_id=card.id,
             suit=suit,
             rank=card.rank,
             value=int(card.value),
             round_index=round_index,
+            call_figure_id=call_figure_id,
         )
         db.session.add(move)
         db.session.flush()
@@ -2260,7 +2270,12 @@ _TUTORIAL_DEFENCE_FAMILIES = ('Himalaya King', 'Small Yack Farm', 'Wooden Fortre
 
 
 def _preassemble_tutorial_defence_draft(user, land):
-    """Pre-build a ready DEFENCE draft for the just-conquered tutorial land.
+    """DEPRECATED / unused. New players are granted only an offensive starter
+    set, and a won conquest converts the conquer config into the land's defence
+    config (see routes/games.py), so no separate defence draft is staged. Kept
+    for reference; safe to remove.
+
+    Pre-build a ready DEFENCE draft for the just-conquered tutorial land.
 
     Mirrors the conquer pre-assembler in the player's assigned defensive (black)
     suit: Himalaya King (the defender / battle figure) + Small Yack Farm +
@@ -5728,6 +5743,10 @@ def conquer_start_battle():
         user.maps = max(0, int(user.maps or 0) - 1)
         user.last_conquer_at = None
         map_consumed = True
+    elif not _first_conquer_complete_for_user(user):
+        # First-conquest tutorial: no conquer cooldown, so a no-penalty loss
+        # can be retried against the same land immediately.
+        user.last_conquer_at = None
     else:
         user.last_conquer_at = _utcnow()
 

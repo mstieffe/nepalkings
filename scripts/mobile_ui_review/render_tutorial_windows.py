@@ -64,28 +64,37 @@ def render(width: int, height: int, ui_scale: str, mobile: bool) -> None:
     welcome = TutorialWindowDialogue(
         surf,
         [
-            {'title': 'A Chess of Cards', 'layout': 'text_image_text',
-             'lines': ['Welcome, Mira! A 1-vs-1 tactical card game.'],
+            {'title': 'Your Path to the Crown', 'layout': 'image_top',
+             'image': lambda: td.kingdom_journey_diagram(),
+             'image_caption': 'Cards build figures, figures take lands, lands win the crown.',
+             'lines': ['Welcome, Mira! Your goal: become King of Nepal.',
+                       'Turn your cards into figures, conquer lands for gold,',
+                       'and grow your kingdom until the crown is yours.']},
+            {'title': 'Cards Become Recipes', 'layout': 'text_image_text',
+             'lines': ['It all starts with your cards — each one is a recipe.'],
              'image': lambda: td.card_recipe_examples(),
-             'lines_below': ['Figures and spells are card combinations,',
-                             'so it all runs on one standard deck.']},
-            {'title': 'Offensive & Defensive', 'layout': 'image_top',
+             'lines_below': ['Combine same-suit cards into figures; turn single',
+                             'cards into spells and battle tactics.',
+                             'You build them by hand from your own collection.']},
+            {'title': 'Skills Follow the Suit', 'layout': 'image_top',
              'image': lambda: td.offensive_vs_defensive_diagram(),
-             'image_caption': 'Warriors strike; a Tower holds the line.',
+             'image_caption': 'Attack skills push forward; defence skills hold the line.',
              'lines': [
-                 'Each figure is built from cards of ONE suit.',
-                 'Hearts & Diamonds attack; Clubs & Spades defend.']},
+                 'Every figure carries skills, and its suit shapes them.',
+                 'Hearts & Diamonds bring offensive skills to conquer;',
+                 'Clubs & Spades bring defensive skills to hold your lands.']},
         ],
         title='Welcome to Nepal Kings')
     shot('welcome-1', welcome, page=0)
     shot('welcome-2', welcome, page=1)
+    shot('welcome-3', welcome, page=2)
 
     gift = RewardsRevealDialogueBox(
         surf, 'Your Welcome Gift', 'welcome',
         ['You keep a permanent collection of cards.',
-         'Grow it by opening booster packs, bought with gold —',
-         'you need cards to conquer and defend your kingdom.',
-         "Here's a gift to get you started:"],
+         'Your first attack is prepared already.',
+         'Packs, maps and gold grow your options after each conquest.',
+         "Here's a gift to claim before you begin:"],
         [{'kind': 'gold', 'label': '2000 gold', 'description': 'Spend it on booster packs, cosmetics, and shields.'},
          {'kind': 'main_booster', 'label': '2 main boosters', 'description': 'Main cards build your core figures, spells, and tactics.'},
          {'kind': 'side_booster', 'label': '1 side booster', 'description': 'Side cards unlock advanced figures and effects.'}],
@@ -93,70 +102,32 @@ def render(width: int, height: int, ui_scale: str, mobile: bool) -> None:
         hint_text='Click each box to reveal your gift.')
     shot('welcome-gift', gift)
 
-    lands = TutorialWindowDialogue(
-        surf,
-        [{'title': 'Lands & Your Kingdom', 'layout': 'image_top',
-          'image': lambda: td.land_hex_diagram(),
-          'image_caption': 'Each land produces gold; higher tiers are richer but tougher.',
-          'lines': [
-              'Your kingdom is made of lands that produce gold.',
-              'Conquer and defend lands to grow it.',
-              'First, here is a starter set of cards for attack and defence…']}],
-        title='Your Kingdom Awaits')
-    shot('welcome-lands', lands)
-
-    for phase, nm in (('off_done', 'reveal-offensive'), ('def_done', 'reveal-defensive')):
-        reveal = StarterSuitRevealDialogue(surf, 'Hearts', 'Spades')
-        reveal._phase = phase
-        shot(nm, reveal)
+    reveal = StarterSuitRevealDialogue(surf, 'Hearts')
+    reveal._phase = 'done'
+    shot('reveal-starter', reveal)
 
     battle = TutorialWindowDialogue(
         surf,
-        [{'title': 'How a Battle Flows', 'layout': 'text_only',
-          'lines': ['1. A prelude spell fires first (yours drew extra cards).',
-                    '2. You pick your attacking figure to advance.',
-                    '3. Three quick tactic rounds then decide the winner.']},
-         {'title': 'Figures Decide Most', 'layout': 'image_top',
-          'image': lambda: td.figure_buttons('offensive'),
-          'image_caption': 'Your figures vs the defender.',
-          'lines': ["Most of a battle is your figures' total power",
-                    "against the defender's. Strong figures win."]},
-         {'title': 'Tactics Tip the Rounds', 'layout': 'image_top',
-          'image': lambda: td.daggers_diagram(),
-          'image_caption': 'Combine same-colour Daggers for a bigger hit.',
-          'lines': ['Each round, Play a Dagger (a 7-10 card) to add its value.',
-                    'Combine same-colour Daggers into one, Block to cancel a',
-                    'round, or Call a field figure into it.']}],
+        [{'title': 'How a Battle Flows', 'layout': 'image_top',
+          'image': lambda: td.starter_tactics_diagram(),
+          'image_caption': 'Your three tactics: Call King, Call Villager, Block.',
+          'lines': ['A battle runs in three beats: your prelude fires, your figures',
+                    'set the score, then three tactic rounds let you swing it.',
+                    'Each round, Play a tactic — or Gamble it for new cards.',
+                    "Call King or Call Villager adds that figure's power; Block cancels the round."]}],
         title='How Battles Work')
     shot('battle-1', battle, page=0)
-    shot('battle-2', battle, page=1)
-    shot('battle-3', battle, page=2)
 
     kingdom = TutorialWindowDialogue(
         surf,
         [{'title': 'Read Your Map', 'layout': 'image_top',
-          'image': lambda: td.map_legend_diagram(),
-          'image_caption': 'Tap the glowing target — tuned for your first conquest.',
-          'lines': ['Each hex is a land. Yours are marked with a crown,',
-                    'rivals hold the rest. A hex shows its tier and gold rate.']},
-         {'title': 'The Growth Loop', 'layout': 'image_top',
-          'image': lambda: td.growth_loop_diagram(),
-          'image_caption': 'Conquer, produce gold, grow — then repeat.',
-          'lines': ['A conquered land produces gold — spend it on packs',
-                    'and skills, then take the next adjacent land.']},
-         {'title': 'Attack & Defend', 'layout': 'image_top',
-          'image': lambda: td.attack_defend_diagram(),
-          'image_caption': 'Warriors attack; a Tower defends.',
-          'lines': ['You conquer rival lands — and rivals can attack yours.',
-                    'Station a defence so your lands hold while you are away.']},
-         {'title': 'Three Fields', 'layout': 'image_top',
-          'image': lambda: td.field_compartments_diagram(),
-          'image_caption': 'Castle, Village and Military.',
-          'lines': ['Figures stand in one of three fields, and produce',
-                    'and require resources to support each other.']}],
+          'image': lambda: td.kingdom_map_diagram(),
+          'image_caption': 'Conquer a neighbour to grow your kingdom.',
+          'lines': ['Your lands form a kingdom; rivals hold the rest.',
+                    'Conquer a neighbouring land to expand, one hex at a time.']},
+         ],
         title='Your Kingdom')
-    for i in range(4):
-        shot(f'kingdom-{i + 1}', kingdom, page=i)
+    shot('kingdom-1', kingdom, page=0)
 
     pygame.quit()
 

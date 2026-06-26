@@ -234,6 +234,8 @@ class TestOpenBooster:
     def test_open_one(self, client, db, two_users, auth_headers_user1):
         u1, _ = two_users
         u1.booster_packs = 2
+        # Isolate the booster draw from the first-open starter-set grant.
+        u1.onboarding_state = dict(u1.onboarding_state or {}, starter_set_granted=True)
         db.session.commit()
 
         rv = client.post('/collection/open_booster', headers=auth_headers_user1)
@@ -266,6 +268,8 @@ class TestOpenBooster:
     def test_open_multiple_accumulate(self, client, db, two_users, auth_headers_user1):
         u1, _ = two_users
         u1.booster_packs = 3
+        # Isolate the booster draw from the first-open starter-set grant.
+        u1.onboarding_state = dict(u1.onboarding_state or {}, starter_set_granted=True)
         db.session.commit()
 
         # Open twice
@@ -319,7 +323,7 @@ class TestOpenBoosterSide:
 # ═══════════════════════════════════════════════════════════════════
 
 class TestRegistrationStarterPacks:
-    def test_new_user_gets_starter_packs(self, client, db):
+    def test_welcome_gift_is_deferred_until_opened(self, client, db):
         rv = client.post('/auth/register', data={
             'username': 'newplayer',
             'password': 'secret123',
@@ -333,12 +337,24 @@ class TestRegistrationStarterPacks:
 
         user = User.query.filter_by(username='newplayer').first()
         assert user is not None
+        # The welcome gift (gold + packs) is NOT granted at signup; it is
+        # credited when the player opens the gift boxes in the welcome sequence.
+        assert user.gold == 0
+        assert user.booster_packs == 0
+        assert user.booster_packs_side == 0
+        assert data['user']['booster_packs'] == 0
+        assert data['user']['booster_packs_side'] == 0
+
+        # Opening the welcome gift credits the starter defaults, idempotently.
+        from onboarding_service import grant_welcome_gift
+        grant_welcome_gift(user, commit=True)
+        assert user.gold == settings.INITIAL_GOLD
         assert user.booster_packs == settings.STARTER_BOOSTER_PACKS
         assert user.booster_packs_side == settings.STARTER_BOOSTER_PACKS_SIDE
-
-        # Also returned in serialized user
-        assert data['user']['booster_packs'] == settings.STARTER_BOOSTER_PACKS
-        assert data['user']['booster_packs_side'] == settings.STARTER_BOOSTER_PACKS_SIDE
+        # A second grant does not double-credit.
+        grant_welcome_gift(user, commit=True)
+        assert user.booster_packs == settings.STARTER_BOOSTER_PACKS
+        assert user.gold == settings.INITIAL_GOLD
 
 
 # ═══════════════════════════════════════════════════════════════════

@@ -847,6 +847,37 @@ def _same_identity(left: Any, right: Any) -> bool:
     return str(left) == str(right)
 
 
+def _entry_get(entry: Any, name: str, default: Any = None) -> Any:
+    if isinstance(entry, dict):
+        return entry.get(name, default)
+    return getattr(entry, name, default)
+
+
+def _defender_selected_by_player(game: Any, field_screen: Any,
+                                  defender_id: Any, player_id: Any) -> bool:
+    """True when the local player explicitly selected this opponent defender."""
+    if defender_id is None or player_id is None:
+        return False
+
+    local_pick = _get(field_screen, '_player_selected_defender_id')
+    if _same_identity(local_pick, defender_id):
+        return True
+
+    logs = _get(game, 'log_entries', []) or []
+    current_round = _get(game, 'current_round', None)
+    for entry in reversed(list(logs)):
+        if _entry_get(entry, 'type') != 'select_defender':
+            continue
+        if not _same_identity(_entry_get(entry, 'player_id'), player_id):
+            continue
+        entry_round = _entry_get(entry, 'round_number', None)
+        if (current_round is not None and entry_round is not None
+                and not _same_identity(entry_round, current_round)):
+            continue
+        return True
+    return False
+
+
 def _counter_spell_matches_current_context(game: Any, spell: dict) -> bool:
     """Prefer counter records that belong to the current advance.
 
@@ -1376,10 +1407,21 @@ def derive_conquer_timeline(game: Any, state: Any = None,
         (defender_figure_2, defender_side, defender_second_reveal),
         (defender_pending_figure, defender_side, defender_reveal),
     ))
+    # A single-option opponent defender is auto-selected (no real choice), so it
+    # must not be labelled "Chosen by you".
+    defender_auto_selected = bool(
+        defending_id is not None
+        and defending_id == _get(field_screen, '_auto_selected_defender_id', None)
+    )
     defender_chosen_by_player = bool(
         own_is_attacker
         and not invader_swap
-        and (defender_pending_local or defender_done)
+        and not defender_auto_selected
+        and (
+            defender_pending_local
+            or _defender_selected_by_player(
+                game, field_screen, defending_id, player_id)
+        )
     )
     defender_sidenote = (
         'Chosen by you' if defender_chosen_by_player

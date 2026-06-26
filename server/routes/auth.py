@@ -328,9 +328,13 @@ def register():
             terms_accepted_at=_utcnow(),
             privacy_version=settings.LEGAL_PRIVACY_VERSION,
             privacy_accepted_at=_utcnow(),
-            booster_packs=settings.STARTER_BOOSTER_PACKS,
-            booster_packs_side=settings.STARTER_BOOSTER_PACKS_SIDE,
-            maps=settings.STARTER_MAPS,
+            # Welcome gift (gold, packs, maps) is NOT granted at signup; it is
+            # credited when the player opens the gift boxes in the welcome
+            # sequence. See grant_welcome_gift() in onboarding_service.
+            gold=0,
+            booster_packs=0,
+            booster_packs_side=0,
+            maps=0,
         )
         try:
             from onboarding_service import set_initial_onboarding
@@ -339,30 +343,12 @@ def register():
             logger.exception("Failed to initialize onboarding for new user")
         db.session.add(user)
         db.session.flush()
-        # Assign a random offensive (red) + defensive (black) starter suit and
-        # grant a matching set in each, so the first conquer attack and first
-        # defence are always buildable. Revealed one-armed-bandit style in the
-        # starter window. See _preassemble_tutorial_* in routes/kingdom.py.
-        try:
-            from models import CollectionCard
-            from onboarding_service import assign_starter_suits
-            suits = assign_starter_suits(user)
-            offensive_suit = suits['offensive']
-            defensive_suit = suits['defensive']
-
-            def _grant(rank, suit, value):
-                db.session.add(CollectionCard(
-                    user_id=user.id, rank=rank, suit=suit, value=value, locked=False))
-
-            for rank, value in settings.STARTER_OFFENSIVE_SET:
-                _grant(rank, offensive_suit, value)
-            for rank, value in settings.STARTER_DEFENSIVE_SET:
-                _grant(rank, defensive_suit, value)
-            # Health-Boost prelude needs red 3s; grant them in the red suit.
-            for _ in range(settings.STARTER_DEFENSIVE_PRELUDE_RED_THREES):
-                _grant('3', offensive_suit, 3)
-        except Exception:
-            logger.exception("Failed to grant starter figure cards")
+        # The starter suit + offensive set are NOT assigned at signup. They are
+        # granted when the player opens their first booster pack (just before the
+        # first conquest) and revealed one-armed-bandit style on the collection
+        # screen, framed as a draw from all four suits. No defensive set is
+        # granted: after a won conquest the conquer config is converted into the
+        # land's defence config. See grant_starter_set() in onboarding_service.
         track('signup', user_id=user.id, has_email=bool(email))
         db.session.commit()
 

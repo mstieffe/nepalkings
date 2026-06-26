@@ -1429,7 +1429,13 @@ class ConquerTimelinePanel:
             self.window.blit(hint, (x_left, btn_y + 4))
             return []
 
-        # Auto-advance: Next button to skip the countdown.
+        # Next skips the countdown of a held sequence beat. It only does
+        # anything for those beats (which carry primary_action == 'next'); other
+        # non-interactive steps — battle rounds, the game-start/intro overview —
+        # advance on game state, so a Next button there has no effect. Draw it
+        # only where it works.
+        if step.primary_action != 'next':
+            return []
         next_rect = pygame.Rect(x_left, btn_y, btn_w, btn_h)
         self._draw_rect_button(next_rect, 'Next', (86, 106, 134))
         screen._conquer_objective_action_rects['next'] = next_rect

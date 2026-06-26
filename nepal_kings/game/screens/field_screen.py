@@ -63,6 +63,7 @@ class FieldScreen(SubScreen):
         self.figure_pending_upgrade = None  # Figure waiting for upgrade confirmation
         self.figure_pending_defender_selection = None  # Figure waiting for defender selection confirmation
         self.figure_pending_own_defender_selection = None  # Own figure waiting for own-defender confirmation (Invader Swap)
+        self._player_selected_defender_id = None  # Local marker for manual conquer defender picks
         self._pending_advance_figure = None  # Figure waiting for advance confirmation
         
         # Defender selection mode flag (True when player needs to select defender vs opponent advance)
@@ -141,6 +142,7 @@ class FieldScreen(SubScreen):
         self.figure_pending_upgrade = None
         self.figure_pending_defender_selection = None
         self.figure_pending_own_defender_selection = None
+        self._player_selected_defender_id = None
         self._pending_advance_figure = None
         self.defender_selection_mode = False
         self.conquer_own_defender_mode = False
@@ -1062,6 +1064,7 @@ class FieldScreen(SubScreen):
                                             icon='magic',
                                             title='Civil War'
                                         )
+                                    self._player_selected_defender_id = target_figure.id
                                     self.state.set_msg(f"Selected {selected_name} as opponent's defender.")
                                     self.game.pending_defender_selection = False
                                     # Defender was selected manually. Re-arm battle-ready

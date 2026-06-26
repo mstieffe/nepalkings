@@ -106,7 +106,7 @@ class GameMenuScreen(MenuScreenMixin, Screen):
         self._badge_interval = 5000          # ms between server polls
         self._badge_font = settings.get_font(int(0.018 * _SH * _UI_SCALE), bold=True)
         self._welcome_dialogue_username = self._current_menu_username()
-        # Welcome sequence: 0 intro windows, 1 welcome-gift boxes, 2 lands window.
+        # Welcome sequence: intro window, welcome-gift boxes, then starter suits.
         self._welcome_stage = 0
         self._welcome_present_dialogue = None
         self._starter_reveal_dialogue = None
@@ -419,7 +419,6 @@ class GameMenuScreen(MenuScreenMixin, Screen):
         if hasattr(self, '_badge_poller') and self._badge_poller and self._badge_poller.has_result():
             self._apply_badge_data(self._badge_poller.result)
         self._maybe_show_welcome_present()
-        self._maybe_show_starter_reveal()
         self._maybe_show_tutorial_completion()
 
     def handle_events(self, events):
@@ -500,11 +499,6 @@ class GameMenuScreen(MenuScreenMixin, Screen):
             self.state.screen = 'rankings'
             logger.debug("Rankings button clicked")
 
-    def _first_duel_incomplete(self):
-        onboarding = (getattr(self.state, 'user_dict', None) or {}).get('onboarding') or {}
-        completed = self._onboarding_completed_steps()
-        return bool(onboarding and 'finish_first_duel' not in completed)
-
     def _main_reward_booster_unopened(self):
         completed = self._onboarding_completed_steps()
         return 'open_first_main_booster' not in completed
@@ -517,17 +511,28 @@ class GameMenuScreen(MenuScreenMixin, Screen):
         return 'finish_tutorial' in self._onboarding_completed_steps()
 
     def _current_journey_coach_step(self):
-        """Guided first-session path: conquer → reward pack → kingdom loop.
+        """Guided first-session path: open a pack → conquer → kingdom loop.
 
-        Conquest comes first by design: a conquer battle is a single short
-        fight against the AI, so new players reach their first real battle
-        within minutes. The collection opens as a reward beat after the win,
-        and the kingdom loop (collect production + finish the config tour)
-        completes the tutorial. The duel is NOT part of this mandatory path; it
-        is offered once, clearly optional, after the tutorial is done, and gets
-        its own skippable coaching the first time it is played.
+        Collection comes first: after the welcome gift, the player opens a
+        starter booster (learning how the collection grows) before their first
+        conquest. The conquer battle follows, then collecting the conquered
+        land's production completes the tutorial. The duel is NOT part of this
+        path and is not pushed from here; the completion box points the player
+        to the Duel menu, where the guided beginner duel waits on opt-in.
         """
         seen = self._menu_coach_seen()
+        if self._main_reward_booster_unopened():
+            if 'open_starter_pack' not in seen:
+                return {
+                    'id': 'open_starter_pack',
+                    'rect': self.button_collection.rect,
+                    'title': 'Open Your Booster Packs',
+                    'body': 'Open your Collection and crack a booster pack to grow your card collection before your first conquest.',
+                    'action': 'click',
+                    'mark_on_click': True,
+                    'max_lines': 4,
+                }
+            return None  # the collection screen guides opening the pack
         if self._first_conquer_incomplete():
             if 'post_boosters_kingdom' not in seen:
                 return {
@@ -540,41 +545,24 @@ class GameMenuScreen(MenuScreenMixin, Screen):
                     'max_lines': 4,
                 }
             return None  # the kingdom screens guide the rest
-        if self._main_reward_booster_unopened():
-            return {
-                'id': 'open_main_booster_reward',
-                'rect': self.button_collection.rect,
-                'title': 'Open Your Reward Pack',
-                'body': 'You won land. Open one main booster now to see how your collection grows after a conquest.',
-                'action': 'click',
-                'mark_on_click': True,
-                'max_lines': 5,
-            }
         if not self._first_session_tutorial_complete():
-            # Collecting production and the kingdom-config tour are guided by the
-            # kingdom screen's own coach; steer the player back there.
+            # Collecting production is guided by the kingdom screen's own coach;
+            # steer the player back there to finish the tutorial.
             if 'return_to_kingdom_loop' not in seen:
                 return {
                     'id': 'return_to_kingdom_loop',
                     'rect': self.button_kingdom.rect,
                     'title': 'Back To Your Kingdom',
-                    'body': 'Return to your Kingdom to collect the gold your land produced and finish setting it up.',
+                    'body': 'Return to your Kingdom to collect the gold your land produced.',
                     'action': 'click',
                     'mark_on_click': True,
                     'max_lines': 4,
                 }
             return None
-        # Tutorial finished — a duel is optional. Offer it once, clearly framed.
-        if self._first_duel_incomplete() and 'ready_first_duel' not in seen:
-            return {
-                'id': 'ready_first_duel',
-                'rect': self.button_duel.rect,
-                'title': 'Optional: Try A Duel',
-                'body': 'Your tutorial is complete! For a different challenge, play a quick duel against AI Strategos whenever you like.',
-                'action': 'click',
-                'mark_on_click': True,
-                'max_lines': 4,
-            }
+        # Tutorial finished. The duel tutorial is optional and is NOT pushed
+        # from here — the "Conquer Tutorial Complete!" box tells the player they
+        # can start it from the Duel menu whenever they like. Going to Duel ->
+        # New Game still gives the guided beginner-duel setup on opt-in.
         return None
 
     def _current_area_coach_step(self):
@@ -586,7 +574,7 @@ class GameMenuScreen(MenuScreenMixin, Screen):
         seen = self._menu_coach_seen()
 
         # Lead with the actionable journey the welcome promised: conquer a
-        # land -> open a reward pack -> first duel. Action-first, not a
+        # land -> open a reward pack -> collect production. Action-first, not a
         # generic tour.
         journey = self._current_journey_coach_step()
         if journey is not None:
@@ -616,7 +604,7 @@ class GameMenuScreen(MenuScreenMixin, Screen):
     # ── Welcome present reveal ─────────────────────────────────────
 
     # Number of welcome-window stages before the starter-suit reveal.
-    _WELCOME_STAGES = 3
+    _WELCOME_STAGES = 2
 
     def _build_welcome_stage(self, stage, username):
         """Build the dialogue for one welcome stage (or None)."""
@@ -627,25 +615,15 @@ class GameMenuScreen(MenuScreenMixin, Screen):
                 self.window,
                 [
                     {
-                        'title': 'A Chess of Cards',
-                        'layout': 'text_image_text',
+                        'title': 'Your Path to the Crown',
+                        'layout': 'image_bottom',
+                        'image': lambda: td.kingdom_journey_diagram(),
+                        'image_caption': '',
                         'lines': [
-                            f'Welcome, {username}! A 1-vs-1 tactical card game.',
-                        ],
-                        'image': lambda: td.card_recipe_examples(),
-                        'lines_below': [
-                            'Figures and spells are card combinations,',
-                            'so it all runs on one standard deck.',
-                        ],
-                    },
-                    {
-                        'title': 'Offensive & Defensive',
-                        'layout': 'image_top',
-                        'image': lambda: td.offensive_vs_defensive_diagram(),
-                        'image_caption': 'Warriors strike; a Tower holds the line.',
-                        'lines': [
-                            'Each figure is built from cards of ONE suit.',
-                            'Hearts & Diamonds attack; Clubs & Spades defend.',
+                            f'Welcome, {username}!',
+                            'You want to become the greatest king of Nepal?',
+                            'Turn your cards into figures, conquer lands for gold,',
+                            'and grow your kingdom until the crown is yours.',
                         ],
                     },
                 ],
@@ -654,43 +632,27 @@ class GameMenuScreen(MenuScreenMixin, Screen):
         if stage == 1:
             from game.components.rewards_reveal_dialogue import RewardsRevealDialogueBox
             present = (self._onboarding() or {}).get('starter_present') or {}
+            # The gift is credited only when these boxes are opened, so the
+            # account balance is still 0 here — reveal the starter DEFAULTS.
+            defaults = present.get('starter_defaults') or {}
             items = self._reward_reveal_items({
-                'gold': present.get('gold'),
-                'booster_packs': present.get('booster_packs'),
-                'booster_packs_side': present.get('booster_packs_side'),
-                'maps': present.get('maps'),
+                'gold': defaults.get('gold'),
+                'booster_packs': defaults.get('booster_packs'),
+                'booster_packs_side': defaults.get('booster_packs_side'),
+                'maps': defaults.get('maps'),
             })
             return RewardsRevealDialogueBox(
                 self.window,
                 'Your Welcome Gift',
                 'welcome',
                 [
-                    'You keep a permanent collection of cards.',
-                    'Grow it by opening booster packs, bought with gold —',
-                    'you need cards to conquer and defend your kingdom.',
-                    "Here's a gift to get you started:",
+                    'The basis of your kingdom is your card collection.',
+                    'Open booster packs to expand your collection.',
+                    'Claim your welcome gift to begin:',
                 ],
                 items,
                 footer_when_done='Added to your collection!',
                 hint_text='Click each box to reveal your gift.',
-            )
-        if stage == 2:
-            return TutorialWindowDialogue(
-                self.window,
-                [
-                    {
-                        'title': 'Lands & Your Kingdom',
-                        'layout': 'image_top',
-                        'image': lambda: td.land_hex_diagram(),
-                        'image_caption': 'Each land produces gold; higher tiers are richer but tougher.',
-                        'lines': [
-                            'Your kingdom is made of lands that produce gold.',
-                            'Conquer and defend lands to grow it.',
-                            'First, here is a starter set of cards for attack and defence…',
-                        ],
-                    },
-                ],
-                title='Your Kingdom Awaits',
             )
         return None
 
@@ -744,30 +706,4 @@ class GameMenuScreen(MenuScreenMixin, Screen):
             self._apply_onboarding_payload(data)
         except Exception as exc:
             logger.error("Failed to mark welcome present seen: %s", exc)
-
-    def _maybe_show_starter_reveal(self):
-        """After the welcome, reveal the assigned offensive/defensive suits."""
-        if getattr(self, '_starter_reveal_dialogue', None):
-            return
-        if self._welcome_present_dialogue or self._tutorial_complete_dialogue:
-            return
-        onboarding = self._onboarding()
-        if not onboarding or onboarding.get('welcome_pending'):
-            return
-        if onboarding.get('onboarding_skipped'):
-            return
-        if 'starter_suit_reveal' in self._menu_coach_seen():
-            return
-        if self.dialogue_box or getattr(self, '_onboarding_guide_open', False):
-            return
-        suits = onboarding.get('starter_suits') or {}
-        offensive = suits.get('offensive')
-        defensive = suits.get('defensive')
-        if not offensive or not defensive:
-            # No assigned suits (e.g. legacy account) — skip the reveal.
-            self._mark_menu_coach_seen('starter_suit_reveal')
-            return
-        from game.components.tutorial_window import StarterSuitRevealDialogue
-        self._starter_reveal_dialogue = StarterSuitRevealDialogue(
-            self.window, offensive, defensive)
 

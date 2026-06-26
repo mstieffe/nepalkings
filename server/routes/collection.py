@@ -256,8 +256,13 @@ def open_booster():
             value=card['value'],
         )
         db.session.add(cc)
-    from onboarding_service import mark_step
+    from onboarding_service import (mark_step, grant_starter_set,
+                                    serialize_onboarding_state)
     mark_step(user, 'open_first_main_booster')
+    # Deferred starter set: opening the first main booster assigns the random
+    # offensive suit and grants its curated set (revealed on the collection
+    # screen, just before the first conquest). Idempotent on later opens.
+    grant_starter_set(user)
     track('booster_opened', user_id=user.id, kind='main')
     db.session.commit()
 
@@ -265,6 +270,7 @@ def open_booster():
         'success': True,
         'cards': drawn,
         'booster_packs': user.booster_packs,
+        'onboarding': serialize_onboarding_state(user),
     })
 
 

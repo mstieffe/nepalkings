@@ -495,7 +495,7 @@ class TestGameRouteCoverage:
         two_users,
         auth_headers_user1,
     ):
-        from models import Figure, Game, Player
+        from models import Figure, Game, LogEntry, Player
 
         u1, u2 = two_users
         game = db.session.get(Game, created_game['id'])
@@ -525,6 +525,12 @@ class TestGameRouteCoverage:
         assert resp.status_code == 200
         assert data.get('success') is True, data
         assert data.get('game', {}).get('defending_figure_id') == defender_figure.id
+        log = LogEntry.query.filter_by(
+            game_id=game.id,
+            player_id=p1.id,
+            type='select_defender',
+        ).one()
+        assert defender_figure.name in log.message
 
     def test_select_defender_requires_must_be_attacked_without_blitzkrieg(
         self,

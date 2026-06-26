@@ -162,6 +162,42 @@ def suit_advantage_wheel(target_h=None):
     return surf
 
 
+def suit_roulette_diagram(target_h=None):
+    """The four suit icons with a glowing '?' disc overlaid — the random
+    starter suit, about to be drawn."""
+    _SH = settings.SCREEN_HEIGHT
+    size = int(target_h or 0.22 * _SH)
+    key = ('suitroulette', size)
+    if key in _CACHE:
+        return _CACHE[key]
+    surf = pygame.Surface((size, size), pygame.SRCALPHA)
+    icon = int(size * 0.42)
+    cx = cy = size // 2
+    off = int(icon * 0.56)
+    positions = {
+        'Hearts': (cx - off, cy - off),
+        'Diamonds': (cx + off, cy - off),
+        'Clubs': (cx - off, cy + off),
+        'Spades': (cx + off, cy + off),
+    }
+    for suit, (px, py) in positions.items():
+        ic = _suit_icon(suit, icon)
+        if ic:
+            surf.blit(ic, ic.get_rect(center=(px, py)))
+    # Central glowing '?' disc overlaying the suits.
+    r = int(size * 0.21)
+    disc = pygame.Surface((r * 2, r * 2), pygame.SRCALPHA)
+    pygame.draw.circle(disc, (255, 214, 110, 60), (r, r), r)
+    pygame.draw.circle(disc, (26, 22, 14, 235), (r, r), int(r * 0.82))
+    pygame.draw.circle(disc, (224, 182, 82), (r, r), int(r * 0.82), 3)
+    qf = settings.get_font(int(r * 1.3), bold=True)
+    q = qf.render('?', True, (240, 210, 140))
+    disc.blit(q, q.get_rect(center=(r, r)))
+    surf.blit(disc, disc.get_rect(center=(cx, cy)))
+    _CACHE[key] = surf
+    return surf
+
+
 def _resource_icon(name, size):
     return _scaled(_load(_asset('img', 'resource_icons', f'{name}.png')), size)
 
@@ -422,31 +458,36 @@ def figure_buttons(color='offensive', target_h=None):
 
 
 def daggers_diagram(target_h=None):
-    """Two Dagger cards joining into one bigger tactic (combine)."""
+    """Two single Daggers combine into one larger Double Dagger (icons only)."""
     _SH = settings.SCREEN_HEIGHT
     target_h = int(target_h or 0.18 * _SH)
     key = ('daggers', target_h)
     if key in _CACHE:
         return _CACHE[key]
-    card_h = target_h
-    a = _card_surface('Hearts', '8', card_h)
-    b = _card_surface('Hearts', '9', card_h)
-    big = _card_surface('Hearts', '10', int(card_h * 1.12))
+    box = int(target_h * 0.60)
+    big = int(target_h * 0.92)
+    d1 = _dagger_chip(box)
+    d2 = _dagger_chip(box)
+    combined = _dagger_chip(big)
     plus_font = settings.get_font(getattr(settings, 'FS_HEADING', 28), bold=True)
     plus = plus_font.render('+', True, (235, 222, 190))
+    label_font = settings.get_font(getattr(settings, 'FS_TINY', 16), bold=True)
+    label = label_font.render('Double Dagger', True, (235, 222, 190))
     gap = int(0.012 * settings.SCREEN_WIDTH)
-    arrow_w = int(0.05 * settings.SCREEN_WIDTH)
-    total_w = (a.get_width() + gap + plus.get_width() + gap + b.get_width()
-               + arrow_w + big.get_width())
-    h = max(big.get_height(), card_h)
+    arrow_w = int(0.06 * settings.SCREEN_WIDTH)
+    label_gap = max(3, int(0.005 * _SH))
+
+    total_w = box + gap + plus.get_width() + gap + box + arrow_w + big
+    h = big + label_gap + label.get_height()
     surf = pygame.Surface((total_w, h), pygame.SRCALPHA)
-    cy = h // 2
+    cy = big // 2
     x = 0
-    surf.blit(a, (x, cy - a.get_height() // 2)); x += a.get_width() + gap
+    surf.blit(d1, (x, cy - box // 2)); x += box + gap
     surf.blit(plus, plus.get_rect(center=(x + plus.get_width() // 2, cy))); x += plus.get_width() + gap
-    surf.blit(b, (x, cy - b.get_height() // 2)); x += b.get_width()
+    surf.blit(d2, (x, cy - box // 2)); x += box
     _draw_arrow(surf, (x + gap, cy), (x + arrow_w - gap, cy)); x += arrow_w
-    surf.blit(big, (x, cy - big.get_height() // 2))
+    surf.blit(combined, (x, cy - big // 2))
+    surf.blit(label, label.get_rect(midtop=(x + big // 2, big + label_gap)))
     _CACHE[key] = surf
     return surf
 
@@ -477,9 +518,29 @@ def _spell_chip(name, box):
     return _chip(icon, box, accent=(170, 120, 210))
 
 
+def _battle_move_chip(icon_file, box, accent=(224, 182, 82)):
+    """A real battle-move icon (from img/battle/icons) framed in a chip."""
+    icon = _load(_asset('img', 'battle', 'icons', icon_file))
+    return _chip(icon, box, accent=accent)
+
+
 def _dagger_chip(box):
-    icon = _load(_asset('img', 'battle', 'icons', 'dagger.png'))
-    return _chip(icon, box, accent=(210, 170, 120))
+    return _battle_move_chip('dagger.png', box, accent=(210, 170, 120))
+
+
+def _named_skill_chip(skill_key, box, accent=(224, 182, 82)):
+    """A figure-skill icon framed in a chip with its name labelled below."""
+    defn = {}
+    try:
+        from game.components.figures.family_configs.skill_config import SKILL_DEFINITIONS
+        defn = SKILL_DEFINITIONS.get(skill_key) or {}
+    except Exception:
+        defn = {}
+    rel = defn.get('icon')
+    icon = _load(_asset(*rel.split('/'))) if rel else None
+    chip = _chip(icon, box, accent=accent)
+    name = defn.get('name', '')
+    return _label_below(chip, name) if name else chip
 
 
 def _result_surface(kind, ref, box):
@@ -489,6 +550,12 @@ def _result_surface(kind, ref, box):
         return _spell_chip(ref, box)
     if kind == 'dagger':
         return _dagger_chip(box)
+    if kind == 'block':
+        # The actual Block battle-move icon.
+        return _battle_move_chip('block.png', box, accent=(130, 178, 224))
+    if kind == 'call':
+        # ``ref`` is the battle-move icon file (castle/village/military.png).
+        return _battle_move_chip(ref, box, accent=(224, 182, 82))
     return _chip(None, box)
 
 
@@ -593,29 +660,40 @@ def field_compartments_diagram(target_h=None):
 
 
 def offensive_vs_defensive_diagram(target_h=None):
-    """Welcome window 2: an offensive figure (Warriors) vs a defensive one
-    (Wooden Fortress / 'Tower'), shown as full field-figure icons."""
+    """Welcome window 3: an offensive figure (Warriors) vs a defensive one
+    (Wooden Fortress), each shown with a representative skill so the suit→skill
+    split is concrete — Hearts/Diamonds lean offensive, Clubs/Spades defensive."""
     _SH = settings.SCREEN_HEIGHT
     target_h = int(target_h or 0.18 * _SH)
     key = ('off_vs_def', target_h)
     if key in _CACHE:
         return _CACHE[key]
     header_font = settings.get_font(getattr(settings, 'FS_SMALL', 18), bold=True)
-    icon_h = int(target_h * 0.86)
+    icon_h = int(target_h * 0.70)
+    chip_box = int(target_h * 0.30)
     header_gap = max(4, int(0.01 * _SH))
+    row_gap = max(4, int(0.012 * _SH))
 
-    def column(field_name, header_color, fam, fb, lbl):
+    def column(field_name, header_color, fam, fb, lbl, skill_key):
         icon = field_figure_icon(fam, fb, label=lbl, target_h=icon_h)
         header = header_font.render(field_name, True, header_color)
-        col_w = max(icon.get_width(), header.get_width())
-        col_h = header.get_height() + header_gap + icon.get_height()
+        skill = _named_skill_chip(skill_key, chip_box, accent=header_color)
+        col_w = max(icon.get_width(), header.get_width(), skill.get_width())
+        col_h = (header.get_height() + header_gap + icon.get_height()
+                 + row_gap + skill.get_height())
         col = pygame.Surface((col_w, col_h), pygame.SRCALPHA)
-        col.blit(header, header.get_rect(midtop=(col_w // 2, 0)))
-        col.blit(icon, icon.get_rect(midtop=(col_w // 2, header.get_height() + header_gap)))
+        y = 0
+        col.blit(header, header.get_rect(midtop=(col_w // 2, y)))
+        y += header.get_height() + header_gap
+        col.blit(icon, icon.get_rect(midtop=(col_w // 2, y)))
+        y += icon.get_height() + row_gap
+        col.blit(skill, skill.get_rect(midtop=(col_w // 2, y)))
         return col
 
-    left = column('OFFENSIVE', (232, 138, 120), 'Gorkha Warriors', 'army1.png', 'Warriors')
-    right = column('DEFENSIVE', (130, 178, 224), 'Wooden Fortress', 'fortress1.png', 'Tower')
+    left = column('OFFENSIVE', (232, 138, 120), 'Gorkha Warriors', 'army1.png',
+                  'Warriors', 'distance_attack')
+    right = column('DEFENSIVE', (130, 178, 224), 'Wooden Fortress', 'fortress1.png',
+                   'Fortress', 'buffs_allies_defence')
     vs_font = settings.get_font(getattr(settings, 'FS_HEADING', 28), bold=True)
     vs = vs_font.render('vs', True, (235, 222, 190))
     gap = int(0.03 * settings.SCREEN_WIDTH)
@@ -631,12 +709,14 @@ def offensive_vs_defensive_diagram(target_h=None):
 
 
 def card_recipe_examples(target_h=None):
-    """Window 1: one figure and one spell example."""
+    """Collection basics: a figure, a spell, and a tactic recipe example."""
     entries = [
-        {'cards': [('J', 'Hearts'), ('7', 'Hearts')], 'kind': 'figure',
+        {'cards': [('J', 'Hearts'), ('10', 'Hearts')], 'kind': 'figure',
          'ref': 'Small Rice Farm', 'label': 'Rice Farm (figure)'},
-        {'cards': [('Q', 'Hearts'), ('Q', 'Hearts')], 'kind': 'spell',
-         'ref': 'Blitzkrieg', 'label': 'Blitzkrieg (spell)'},
+        {'cards': [('3', 'Hearts'), ('3', 'Hearts')], 'kind': 'spell',
+         'ref': 'Health Boost', 'label': 'Health Boost (spell)'},
+        {'cards': [('Q', 'Hearts')], 'kind': 'block',
+         'ref': None, 'label': 'Block (tactic)'},
     ]
     return _recipe_diagram(('recipe_examples', int(target_h or 0)), entries, target_h)
 
@@ -734,6 +814,70 @@ def map_legend_diagram(target_h=None):
     return surf
 
 
+def kingdom_map_diagram(target_h=None):
+    """'Read your map': a small kingdom of owned lands, the neighbour you take
+    next, and a rival beyond — an arrow shows that conquering neighbours grows
+    the kingdom."""
+    _SH = settings.SCREEN_HEIGHT
+    size = int(target_h or 0.22 * _SH)
+    key = ('kingdommap', size)
+    if key in _CACHE:
+        return _CACHE[key]
+    R = size * 0.30
+    dy = R * math.sqrt(3) / 2.0
+    owned = [(0.0, 0.0), (1.5 * R, -dy), (1.5 * R, dy)]
+    target = (3.0 * R, 0.0)
+    rival = (4.5 * R, dy)
+    all_c = owned + [target, rival]
+    min_x = min(c[0] for c in all_c) - R
+    max_x = max(c[0] for c in all_c) + R
+    min_y = min(c[1] for c in all_c) - dy
+    max_y = max(c[1] for c in all_c) + dy
+    pad = max(6, int(R * 0.3))
+    label_font = settings.get_font(getattr(settings, 'FS_TINY', 16), bold=True)
+    field_w, field_h = int(max_x - min_x), int(max_y - min_y)
+    w = field_w + pad * 2
+    h = field_h + pad * 2 + label_font.get_height() + 4
+    surf = pygame.Surface((max(1, w), max(1, h)), pygame.SRCALPHA)
+
+    def P(c):
+        return (int(c[0] - min_x + pad), int(c[1] - min_y + pad))
+
+    for c in owned:
+        pygame.draw.polygon(surf, (74, 116, 196), _hex_points(*P(c), R))
+    pygame.draw.polygon(surf, (255, 214, 110, 70), _hex_points(*P(target), R * 1.14))
+    pygame.draw.polygon(surf, (70, 120, 70), _hex_points(*P(target), R))
+    pygame.draw.polygon(surf, (150, 74, 70), _hex_points(*P(rival), R))
+    rim_w = max(2, int(R * 0.12))
+    for c in owned:
+        pygame.draw.polygon(surf, (235, 220, 150), _hex_points(*P(c), R), rim_w)
+    pygame.draw.polygon(surf, (255, 224, 120), _hex_points(*P(target), R), rim_w)
+    pygame.draw.polygon(surf, (170, 150, 140), _hex_points(*P(rival), R), rim_w)
+
+    crown = _scaled(_load(_asset('img', 'kingdom', 'ranking', 'kingdom_gold.png')),
+                    int(R * 0.85))
+    if crown:
+        surf.blit(crown, crown.get_rect(center=P(owned[0])))
+    gold = _scaled(_load(_asset('img', 'dialogue_box', 'icons', 'gold.png')), int(R * 0.7))
+    if gold:
+        surf.blit(gold, gold.get_rect(center=P(target)))
+    qf = settings.get_font(max(10, int(R * 0.8)), bold=True)
+    q = qf.render('?', True, (255, 244, 210))
+    surf.blit(q, q.get_rect(center=P(rival)))
+
+    # Expansion arrow: from the kingdom edge into the next land.
+    _draw_arrow(surf, P((1.5 * R + R * 0.45, dy * 0.45)), P((3.0 * R - R * 0.6, 0.0)))
+
+    ly = field_h + pad * 2 + 2
+    for text, col, cx in (('Your kingdom', (235, 220, 150), 0.75 * R),
+                          ('Next', (255, 224, 120), target[0]),
+                          ('Rival', (210, 150, 140), rival[0])):
+        s = label_font.render(text, True, col)
+        surf.blit(s, s.get_rect(midtop=(int(cx - min_x + pad), ly)))
+    _CACHE[key] = surf
+    return surf
+
+
 def growth_loop_diagram(target_h=None):
     """Kingdom window: conquer -> produce gold -> grow -> repeat."""
     _SH = settings.SCREEN_HEIGHT
@@ -749,34 +893,33 @@ def growth_loop_diagram(target_h=None):
     cells = [_label_below(_chip(icon, chip), lbl, bold=True) for icon, lbl in steps]
     arrow_w = int(0.04 * settings.SCREEN_WIDTH)
     cell_h = max(c.get_height() for c in cells)
+    top_extra = int(0.06 * _SH)  # headroom so the return loop clears the labels
     total_w = sum(c.get_width() for c in cells) + arrow_w * (len(cells) - 1)
-    extra = int(0.05 * _SH)  # room for the return loop arrow
-    surf = pygame.Surface((total_w, cell_h + extra), pygame.SRCALPHA)
-    cy = chip // 2
+    surf = pygame.Surface((total_w, top_extra + cell_h), pygame.SRCALPHA)
+    icon_cy = top_extra + chip // 2
     xs = []
     x = 0
     for i, c in enumerate(cells):
-        surf.blit(c, (x, 0))
-        xs.append((x, x + c.get_width()))
+        surf.blit(c, (x, top_extra))
+        xs.append((x + c.get_width() // 2))
         x += c.get_width()
         if i < len(cells) - 1:
-            _draw_arrow(surf, (x + 4, cy), (x + arrow_w - 4, cy))
+            _draw_arrow(surf, (x + 4, icon_cy), (x + arrow_w - 4, icon_cy))
             x += arrow_w
-    # Return loop arrow from last chip back to the first, under the row.
-    ry = cell_h + int(0.02 * _SH)
-    start = (xs[-1][0] + chip // 2, cy + chip // 2)
-    pygame.draw.line(surf, (230, 200, 120), start, (start[0], ry), 3)
-    pygame.draw.line(surf, (230, 200, 120), (start[0], ry),
-                     (xs[0][0] + chip // 2, ry), 3)
-    _draw_arrow(surf, (xs[0][0] + chip // 2, ry),
-                (xs[0][0] + chip // 2, cy + chip // 2))
+    # Return loop routed ABOVE the icons (last icon top -> across -> first icon
+    # top), so the line never crosses the Conquer/Produce/Grow labels below.
+    col = (230, 200, 120)
+    ry = max(3, int(top_extra * 0.4))
+    pygame.draw.line(surf, col, (xs[-1], top_extra), (xs[-1], ry), 3)
+    pygame.draw.line(surf, col, (xs[-1], ry), (xs[0], ry), 3)
+    _draw_arrow(surf, (xs[0], ry), (xs[0], top_extra))
     _CACHE[key] = surf
     return surf
 
 
 def attack_defend_diagram(target_h=None):
     """Kingdom window: you attack rival lands; rivals attack yours, so you
-    defend. Warriors -> land <- Tower."""
+    defend. Warriors -> land <- Fortress."""
     _SH = settings.SCREEN_HEIGHT
     target_h = int(target_h or 0.16 * _SH)
     key = ('attackdefend', target_h)
@@ -801,33 +944,302 @@ def attack_defend_diagram(target_h=None):
     return surf
 
 
+def _card_fan(cards_spec, card_h):
+    """A small overlapping hand of cards (gentle arc) that reads as a whole
+    collection, not a single card."""
+    fronts = []
+    for (r, s) in cards_spec:
+        f = _card_surface(s, r, card_h)
+        if f:
+            fronts.append(f)
+    n = len(fronts)
+    if n == 0:
+        return pygame.Surface((1, 1), pygame.SRCALPHA)
+    cw = fronts[0].get_width()
+    step_x = int(cw * 0.52)
+    arc = int(card_h * 0.10)
+    mid = (n - 1) / 2.0
+    total_w = step_x * (n - 1) + cw
+    surf = pygame.Surface((total_w, card_h + arc), pygame.SRCALPHA)
+    for i, f in enumerate(fronts):
+        # Cards toward the centre sit a little higher, like a held hand.
+        y = int(arc * (abs(i - mid) / (mid or 1)))
+        surf.blit(f, (i * step_x, y))
+    return surf
+
+
+def _hex_cluster(size, icon_file='gold.png',
+                 fill=(70, 104, 64), rim=(224, 182, 82)):
+    """A honeycomb of adjacent lands (a capital + two neighbours) that reads as
+    a small kingdom rather than one hex."""
+    R = size / (2 * math.sqrt(3))
+    s = R * math.sqrt(3) / 2.0              # half-height of a flat-top hex
+    centers = [(0.0, 0.0), (1.5 * R, -s), (1.5 * R, s)]
+    min_x, min_y, pad = -R, -2 * s, 1
+    w = int(3.5 * R) + pad * 2
+    h = int(4 * s) + pad * 2
+    surf = pygame.Surface((max(1, w), max(1, h)), pygame.SRCALPHA)
+    placed = [(cx - min_x + pad, cy - min_y + pad) for cx, cy in centers]
+    for ox, oy in placed:
+        pygame.draw.polygon(surf, fill, _hex_points(ox, oy, R))
+    for ox, oy in placed:
+        pygame.draw.polygon(surf, rim, _hex_points(ox, oy, R), max(2, int(R * 0.1)))
+    if icon_file:
+        ic = (_scaled(_load(_asset('img', 'resource_icons', icon_file)), int(R * 0.9))
+              or _scaled(_load(_asset('img', 'dialogue_box', 'icons', icon_file)), int(R * 0.9)))
+        if ic:
+            surf.blit(ic, ic.get_rect(center=placed[0]))
+    return surf
+
+
+def kingdom_journey_diagram(target_h=None):
+    """Big-picture opener: collection -> figures -> a kingdom of lands -> crown.
+
+    Shows the whole loop ending on the crown, so a new player sees the goal
+    ("become King of Nepal") and the path to it in one glance.
+    """
+    _SH = settings.SCREEN_HEIGHT
+    cell = int(target_h or 0.12 * _SH)
+    key = ('journey', cell)
+    if key in _CACHE:
+        return _CACHE[key]
+
+    cards = _card_fan([('K', 'Spades'), ('A', 'Hearts'), ('9', 'Diamonds')],
+                      int(cell * 0.92))
+    figure = field_figure_icon('Gorkha Warriors', 'army1.png', label='',
+                               target_h=cell)
+    land = _hex_cluster(cell)
+    crown = _scaled(_load(_asset('img', 'kingdom', 'ranking', 'kingdom_gold.png')),
+                    cell)
+    cells = [
+        _label_below(cards, 'Your cards', bold=True),
+        _label_below(figure, 'Build figures', bold=True),
+        _label_below(land, 'Conquer land', bold=True),
+        _label_below(crown if crown else _chip(None, cell), 'Rule Nepal', bold=True),
+    ]
+    arrow_w = int(0.035 * settings.SCREEN_WIDTH)
+    cy = cell // 2  # arrows ride the icon band, above the labels
+    total_w = sum(c.get_width() for c in cells) + arrow_w * (len(cells) - 1)
+    h = max(c.get_height() for c in cells)
+    surf = pygame.Surface((total_w, h), pygame.SRCALPHA)
+    x = 0
+    for i, c in enumerate(cells):
+        surf.blit(c, (x, 0))
+        x += c.get_width()
+        if i < len(cells) - 1:
+            _draw_arrow(surf, (x + 3, cy), (x + arrow_w - 3, cy))
+            x += arrow_w
+    _CACHE[key] = surf
+    return surf
+
+
+def battle_flow_diagram(target_h=None):
+    """Battle window 1: the three beats of a battle, shown as labelled icons —
+    the prelude spell (Health Boost), then figures, then three tactic rounds."""
+    _SH = settings.SCREEN_HEIGHT
+    chip = int(target_h or 0.12 * _SH)
+    key = ('battleflow', chip)
+    if key in _CACHE:
+        return _CACHE[key]
+    spell = _spell_chip('Health Boost', chip)
+    figure = field_figure_icon('Gorkha Warriors', 'army1.png', label='', target_h=chip)
+    tactic = _battle_move_chip('castle.png', chip, accent=(224, 182, 82))
+    cells = [
+        _label_below(spell, 'Prelude', bold=True),
+        _label_below(figure, 'Figures', bold=True),
+        _label_below(tactic, 'Tactics ×3', bold=True),
+    ]
+    arrow_w = int(0.04 * settings.SCREEN_WIDTH)
+    cy = chip // 2
+    total_w = sum(c.get_width() for c in cells) + arrow_w * (len(cells) - 1)
+    h = max(c.get_height() for c in cells)
+    surf = pygame.Surface((total_w, h), pygame.SRCALPHA)
+    x = 0
+    for i, c in enumerate(cells):
+        surf.blit(c, (x, 0))
+        x += c.get_width()
+        if i < len(cells) - 1:
+            _draw_arrow(surf, (x + 3, cy), (x + arrow_w - 3, cy))
+            x += arrow_w
+    _CACHE[key] = surf
+    return surf
+
+
+def battle_matchup_diagram(target_h=None):
+    """Battle window 2: your battle figure vs the defender, each with its power
+    pill, so 'figure power decides most' reads as a head-to-head matchup."""
+    _SH = settings.SCREEN_HEIGHT
+    target_h = int(target_h or 0.2 * _SH)
+    key = ('matchup', target_h)
+    if key in _CACHE:
+        return _CACHE[key]
+    icon_h = int(target_h * 0.8)
+    header_font = settings.get_font(getattr(settings, 'FS_SMALL', 18), bold=True)
+    header_gap = max(4, int(0.01 * _SH))
+
+    def column(title, color, fam, fb, lbl):
+        icon = field_figure_icon(fam, fb, label=lbl, target_h=icon_h)
+        header = header_font.render(title, True, color)
+        col_w = max(icon.get_width(), header.get_width())
+        col = pygame.Surface((col_w, header.get_height() + header_gap + icon.get_height()),
+                             pygame.SRCALPHA)
+        col.blit(header, header.get_rect(midtop=(col_w // 2, 0)))
+        col.blit(icon, icon.get_rect(midtop=(col_w // 2, header.get_height() + header_gap)))
+        return col
+
+    you = column('YOU', (232, 200, 120), 'Gorkha Warriors', 'army1.png', 'Warriors')
+    foe = column('DEFENDER', (130, 178, 224), 'Small Yack Farm', 'yack_farm1.png', 'Yack Farm')
+    vs_font = settings.get_font(getattr(settings, 'FS_HEADING', 28), bold=True)
+    vs = vs_font.render('vs', True, (235, 222, 190))
+    gap = int(0.03 * settings.SCREEN_WIDTH)
+    total_w = you.get_width() + gap + vs.get_width() + gap + foe.get_width()
+    h = max(you.get_height(), foe.get_height())
+    surf = pygame.Surface((total_w, h), pygame.SRCALPHA)
+    x = 0
+    surf.blit(you, (x, 0)); x += you.get_width() + gap
+    surf.blit(vs, vs.get_rect(center=(x + vs.get_width() // 2, h // 2))); x += vs.get_width() + gap
+    surf.blit(foe, (x, 0))
+    _CACHE[key] = surf
+    return surf
+
+
+def starter_tactics_diagram(target_h=None):
+    """Battle window 3: the player's three starter tactics as labelled icons —
+    Call King, Call Villager, Block."""
+    _SH = settings.SCREEN_HEIGHT
+    box = int(target_h or 0.13 * _SH)
+    key = ('startertactics', box)
+    if key in _CACHE:
+        return _CACHE[key]
+    items = [
+        ('castle.png', 'Call King', (224, 182, 82)),
+        ('village.png', 'Call Villager', (224, 182, 82)),
+        ('block.png', 'Block', (130, 178, 224)),
+    ]
+    cells = [_label_below(_battle_move_chip(icon, box, accent=accent), label, bold=True)
+             for icon, label, accent in items]
+    gap = int(0.04 * settings.SCREEN_WIDTH)
+    total_w = sum(c.get_width() for c in cells) + gap * (len(cells) - 1)
+    h = max(c.get_height() for c in cells)
+    surf = pygame.Surface((total_w, h), pygame.SRCALPHA)
+    x = 0
+    for c in cells:
+        surf.blit(c, (x, 0))
+        x += c.get_width() + gap
+    _CACHE[key] = surf
+    return surf
+
+
+def _breakdown_column(title, items, icon_h, _SH, cards_col=None):
+    """A labelled column of ALIGNED recipe rows: cards (right-aligned to a
+    shared column) → arrow (shared vertical axis) → a large result icon, with
+    the label centred below the icon. ``cards_col`` may be supplied so several
+    columns share one arrow axis."""
+    header_font = settings.get_font(getattr(settings, 'FS_SMALL', 18), bold=True)
+    label_font = settings.get_font(getattr(settings, 'FS_TINY', 16), bold=True)
+    gap = max(2, int(0.003 * settings.SCREEN_WIDTH))
+    arrow_w = int(0.03 * settings.SCREEN_WIDTH)
+    card_h = int(icon_h * 0.62)
+    label_gap = max(2, int(0.004 * _SH))
+    row_gap = int(0.014 * _SH)
+    hgap = max(4, int(0.012 * _SH))
+
+    built = []
+    for cards, kind, ref, label in items:
+        card_surfs = [_card_surface(s, r, card_h) for (r, s) in cards]
+        cards_w = sum(c.get_width() for c in card_surfs) + gap * max(0, len(card_surfs) - 1)
+        result = _result_surface(kind, ref, icon_h)
+        lbl = label_font.render(label, True, (235, 222, 190))
+        built.append((card_surfs, cards_w, result, lbl))
+
+    cards_col = cards_col if cards_col is not None else max(b[1] for b in built)
+    result_col = max(b[2].get_width() for b in built)
+    arrow_x0 = cards_col + gap
+    arrow_x1 = arrow_x0 + arrow_w
+    result_x = arrow_x1 + gap
+    row_w = result_x + result_col
+    # Labels are centred under the (right-side) result icon, so a wide label can
+    # overhang the row on either side; size the column to fit that overhang.
+    icon_center = result_x + result_col / 2.0
+    max_lbl = max(b[3].get_width() for b in built)
+    left_overhang = max(0, int(round(max_lbl / 2 - icon_center)))
+    right_extent = max(row_w, int(round(icon_center + max_lbl / 2)))
+    block_w = left_overhang + right_extent
+    header = header_font.render(title, True, (240, 210, 140))
+    col_w = max(block_w, header.get_width())
+    base_x = (col_w - block_w) // 2 + left_overhang  # row origin (cards left)
+
+    row_heights = [b[2].get_height() + label_gap + b[3].get_height() for b in built]
+    total_h = (header.get_height() + hgap + sum(row_heights)
+               + row_gap * max(0, len(built) - 1))
+    col = pygame.Surface((col_w, total_h), pygame.SRCALPHA)
+    col.blit(header, header.get_rect(midtop=(col_w // 2, 0)))
+    y = header.get_height() + hgap
+    for (card_surfs, cards_w, result, lbl), rh in zip(built, row_heights):
+        ih = result.get_height()
+        cy = y + ih // 2
+        cx = base_x + cards_col - cards_w  # right-align cards to the shared column
+        for c in card_surfs:
+            col.blit(c, (cx, cy - c.get_height() // 2))
+            cx += c.get_width() + gap
+        _draw_arrow(col, (base_x + arrow_x0, cy), (base_x + arrow_x1, cy))
+        col.blit(result, (base_x + result_x, y))
+        col.blit(lbl, lbl.get_rect(
+            midtop=(int(base_x + icon_center), y + ih + label_gap)))
+        y += rh + row_gap
+    return col
+
+
 def starter_set_breakdown(kind, suit, target_h=None):
-    """Window 5: the granted cards mapped to the figures / spell / tactics
-    they build (offensive or defensive set)."""
+    """The granted cards mapped to what they build, in two columns: figures on
+    the left, the spell + tactics on the right (icons large, labels below,
+    arrows aligned on one axis across both columns)."""
     if kind == 'offensive':
-        entries = [
-            {'cards': [('K', suit)], 'kind': 'figure', 'ref': 'Djungle King',
-             'label': 'King'},
-            {'cards': [('J', suit), ('7', suit)], 'kind': 'figure',
-             'ref': 'Small Rice Farm', 'label': 'Farm'},
-            {'cards': [('A', suit), ('7', suit)], 'kind': 'figure',
-             'ref': 'Gorkha Warriors', 'label': 'Warriors'},
-            {'cards': [('8', suit)], 'kind': 'spell', 'ref': 'Draw 2 MainCards',
-             'label': 'Prelude'},
-            {'cards': [('8', suit), ('9', suit), ('10', suit)], 'kind': 'dagger',
-             'ref': None, 'label': '3 Daggers'},
+        _SH = settings.SCREEN_HEIGHT
+        cache_key = ('starter_breakdown', kind, suit, int(target_h or 0))
+        if cache_key in _CACHE:
+            return _CACHE[cache_key]
+        icon_h = int(target_h or 0.085 * _SH)
+        fig_items = [
+            ([('K', suit)], 'figure', 'Djungle King', 'King'),
+            ([('J', suit), ('10', suit)], 'figure', 'Small Rice Farm', 'Farm'),
+            ([('A', suit), ('9', suit)], 'figure', 'Gorkha Warriors', 'Warriors'),
         ]
-    else:
-        entries = [
-            {'cards': [('K', suit)], 'kind': 'figure', 'ref': 'Himalaya King',
-             'label': 'King'},
-            {'cards': [('J', suit), ('7', suit)], 'kind': 'figure',
-             'ref': 'Small Yack Farm', 'label': 'Farm'},
-            {'cards': [('A', suit), ('7', suit)], 'kind': 'figure',
-             'ref': 'Wooden Fortress', 'label': 'Fortress'},
-            {'cards': [('8', suit), ('9', suit), ('10', suit)], 'kind': 'dagger',
-             'ref': None, 'label': '3 Daggers'},
+        tac_items = [
+            ([('3', suit), ('3', suit)], 'spell', 'Health Boost', 'Health Boost'),
+            ([('K', suit)], 'call', 'castle.png', 'Call King'),
+            ([('J', suit)], 'call', 'village.png', 'Call Villager'),
+            ([('Q', suit)], 'block', None, 'Block'),
         ]
+        # Shared cards column so EVERY arrow (both columns) lands on one axis.
+        gap = max(2, int(0.003 * settings.SCREEN_WIDTH))
+        card_h = int(icon_h * 0.62)
+        cards_col = 0
+        for items in (fig_items, tac_items):
+            for cards, _k, _r, _l in items:
+                cws = [_card_surface(s, r, card_h) for (r, s) in cards]
+                cards_col = max(cards_col, sum(c.get_width() for c in cws)
+                                + gap * max(0, len(cws) - 1))
+        left = _breakdown_column('Figures', fig_items, icon_h, _SH, cards_col)
+        right = _breakdown_column('Spell & Tactics', tac_items, icon_h, _SH, cards_col)
+        col_gap = int(0.035 * settings.SCREEN_WIDTH)
+        w = left.get_width() + col_gap + right.get_width()
+        h = max(left.get_height(), right.get_height())
+        surf = pygame.Surface((w, h), pygame.SRCALPHA)
+        surf.blit(left, (0, 0))
+        surf.blit(right, (left.get_width() + col_gap, 0))
+        _CACHE[cache_key] = surf
+        return surf
+    entries = [
+        {'cards': [('K', suit)], 'kind': 'figure', 'ref': 'Himalaya King',
+         'label': 'King'},
+        {'cards': [('J', suit), ('7', suit)], 'kind': 'figure',
+         'ref': 'Small Yack Farm', 'label': 'Farm'},
+        {'cards': [('A', suit), ('7', suit)], 'kind': 'figure',
+         'ref': 'Wooden Fortress', 'label': 'Fortress'},
+        {'cards': [('8', suit), ('9', suit), ('10', suit)], 'kind': 'dagger',
+         'ref': None, 'label': '3 Daggers'},
+    ]
     return _recipe_diagram(('starter_breakdown', kind, suit, int(target_h or 0)),
                            entries, target_h)
 
