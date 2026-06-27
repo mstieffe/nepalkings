@@ -149,6 +149,58 @@ class TestRekeyConfigLockTypes:
         assert db.session.get(CollectionCard, c1.id).lock_type == 'defence_figure'
         assert db.session.get(CollectionCard, c2.id).lock_type == 'defence_figure'
 
+    def test_rekeys_battle_move_cards(self, app, db, two_users):
+        # Tactics carry over into the converted defence, so their card locks
+        # must be re-keyed conquer_move -> defence_move alongside figures.
+        from routes.games import _rekey_config_lock_types
+        from models import CollectionCard, LandConfigBattleMove
+        u, _ = two_users
+        cfg = _mk_config(db, u.id)
+        move_card = _mk_card(db, u.id, rank='8', value=8,
+                             lock_type='conquer_move', lock_ref_id=1)
+        db.session.add(LandConfigBattleMove(
+            config_id=cfg.id, family_name='Dagger', card_id=move_card.id,
+            suit='spades', rank='8', value=8, round_index=0))
+        db.session.commit()
+
+        _rekey_config_lock_types(cfg, 'defence')
+        db.session.commit()
+
+        assert db.session.get(CollectionCard, move_card.id).lock_type == 'defence_move'
+
+
+class TestReturnConfigAttackOnlyCards:
+    def test_keeps_battle_moves_and_returns_attack_only_cards(self, app, db, two_users):
+        # The winning attack becomes the new defence: figures + tactics stay
+        # committed; only the attack-only prelude/spell/modifier cards return.
+        from routes.games import _return_config_attack_only_cards
+        from models import CollectionCard, LandConfigBattleMove
+        u, _ = two_users
+        cfg = _mk_config(db, u.id)
+        move_card = _mk_card(db, u.id, rank='8', value=8,
+                             lock_type='conquer_move', lock_ref_id=1)
+        db.session.add(LandConfigBattleMove(
+            config_id=cfg.id, family_name='Dagger', card_id=move_card.id,
+            suit='spades', rank='8', value=8, round_index=0))
+        prelude = _mk_card(db, u.id, rank='Q', lock_type='conquer_prelude',
+                           lock_ref_id=cfg.id)
+        cfg.prelude_spell_card_ids = [prelude.id]
+        cfg.prelude_spell_name = 'spy'
+        db.session.commit()
+        move_card_id, prelude_id = move_card.id, prelude.id
+
+        _return_config_attack_only_cards(cfg)
+        db.session.commit()
+
+        # Tactic survives and stays locked; the prelude card is returned.
+        assert LandConfigBattleMove.query.filter_by(config_id=cfg.id).count() == 1
+        kept = db.session.get(CollectionCard, move_card_id)
+        assert kept is not None and kept.locked is True
+        returned = db.session.get(CollectionCard, prelude_id)
+        assert returned.locked is False and returned.lock_type is None
+        assert (cfg.prelude_spell_card_ids or []) == []
+        assert cfg.prelude_spell_name is None
+
 
 class TestOrphanLockSweep:
     """`_lock_collection_cards` and the startup sweep should release stale locks."""

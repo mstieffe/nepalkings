@@ -22,10 +22,15 @@ from security_settings import (  # noqa: F401  (public re-export)
     SECRET_KEY,
     SECRET_KEY_FROM_ENV,
     CORS_ORIGINS,
+    MAX_CONTENT_LENGTH,
+    RATELIMIT_STORAGE_URI,
     RATE_LIMIT_DEFAULT,
     RATE_LIMIT_LOGIN,
+    RATE_LIMIT_LOOKUP,
     RATE_LIMIT_REGISTER,
     TOKEN_EXPIRY_SECONDS,
+    LEGAL_PRIVACY_VERSION,
+    LEGAL_TERMS_VERSION,
 )
 from database_settings import (  # noqa: F401  (public re-export)
     DB_URL,
@@ -67,6 +72,10 @@ INITIAL_GOLD = 2000
 # and is re-exported above. Set a fixed SECRET_KEY env var in production
 # so tokens survive restarts.
 
+# First-party analytics (append-only Event table, no third parties).
+# See server/analytics.py and scripts/funnel_report.py.
+ANALYTICS_ENABLED = os.getenv('ANALYTICS_ENABLED', 'True').lower() == 'true'
+
 # Email verification settings
 # Set EMAIL_VERIFICATION_ENABLED=True and configure SMTP to send real emails.
 # When disabled (default), the verification URL is logged server-side instead.
@@ -77,6 +86,13 @@ SMTP_USER = os.getenv('SMTP_USER', '')
 SMTP_PASSWORD = os.getenv('SMTP_PASSWORD', '')
 SMTP_FROM = os.getenv('SMTP_FROM', 'noreply@nepalkings.local')
 SERVER_BASE_URL = os.getenv('SERVER_BASE_URL', SERVER_URL)
+
+# Gameplay notification emails (your-turn / challenge received / result).
+# Sent only to offline players who have an email and have not opted out;
+# without SMTP_HOST configured the emails are logged instead of sent.
+NOTIFY_EMAILS_ENABLED = os.getenv('NOTIFY_EMAILS_ENABLED', 'True').lower() == 'true'
+# Public URL of the playable web client, included in notification emails.
+WEB_CLIENT_URL = os.getenv('WEB_CLIENT_URL', '')
 
 # Conquer move model rollout flag.
 # When True (default), new conquer games are created with conquer_move_model='tactics_hand':
@@ -111,8 +127,59 @@ AI_WATCHDOG_RETRY_DELAY = float(os.getenv('AI_WATCHDOG_RETRY_DELAY', '4.0'))
 AI_WATCHDOG_MAX_RETRIES = int(os.getenv('AI_WATCHDOG_MAX_RETRIES', '3'))
 
 # ── v2.0: Collection & Boosters ──
-STARTER_BOOSTER_PACKS = 8                   # Free main-card packs on registration
-STARTER_BOOSTER_PACKS_SIDE = 2              # Free side-card packs on registration
+# A small WELCOME GIFT granted at registration and revealed (as gift boxes) in
+# the third welcome window: gold (INITIAL_GOLD) + a few booster packs to seed
+# the player's permanent collection. Larger amounts are still earned as tutorial
+# milestone rewards (and the first conquest win grants its reward pack).
+STARTER_BOOSTER_PACKS = 2                   # Welcome-gift main packs
+STARTER_BOOSTER_PACKS_SIDE = 1             # Welcome-gift side pack
+
+# Each new player is assigned a random OFFENSIVE (red) suit at registration and
+# granted its starter set, so the first conquer attack is always buildable,
+# independent of booster luck (see _preassemble_tutorial_conquer_attack in
+# routes/kingdom.py). No defensive set is granted: a won conquest converts the
+# conquer config into the land's defence config (see routes/games.py), so the
+# first defence is "just the conquer config".
+OFFENSIVE_SUITS = ('Hearts', 'Diamonds')
+DEFENSIVE_SUITS = ('Clubs', 'Spades')
+
+# Rank-based set templates; the suit is filled in per the assigned suit.
+# Format: (rank, value).
+# Offensive set (red suit): three figures + a Health Boost prelude + three
+# tactics. The tactic TYPE follows the card rank (K->Call King, J->Call
+# Villager, Q->Block; numbers->Dagger), so the tactic cards mirror the figures'
+# key cards (a second K and J, plus a Q):
+#   Djungle King (K)          -> villager_red x2, warrior_red x1
+#   Small Rice Farm (J + 10)  -> food_red x10  (needs villager_red x1)
+#   Gorkha Warriors (A + 9)   -> attacker      (needs warrior_red x1, food_red x9)
+#   Health Boost prelude      -> two 3s (boosts the battle figure)
+#   Call King (K) / Call Villager (J) / Block (Q)  -> one card each
+STARTER_OFFENSIVE_SET = [
+    ('K', 4), ('K', 4),       # Djungle King figure + Call King tactic
+    ('J', 1), ('J', 1),       # Small Rice Farm figure + Call Villager tactic
+    ('A', 3),                 # Gorkha Warriors figure (key)
+    ('Q', 2),                 # Block tactic
+    ('9', 9), ('10', 10),     # Warriors / Rice Farm number cards
+    ('3', 3), ('3', 3),       # Health Boost prelude (two 3s)
+]
+# Defensive set (black suit): mirrors the offensive with defensive families
+#   Himalaya King (K)        -> villager_black x2, warrior_black x1
+#   Small Yack Farm (J + 7)  -> food_black x7  (needs villager_black x1)
+#   Wooden Fortress (A + 7)  -> defender       (needs warrior_black x1, food_black x7)
+#   3x Dagger                -> one number card each (8, 9, 10)
+# The Health-Boost prelude uses two RED 3s (see below), independent of suit.
+STARTER_DEFENSIVE_SET = [
+    ('K', 4), ('A', 3), ('J', 1),
+    ('7', 7), ('7', 7),
+    ('8', 8), ('9', 9), ('10', 10),
+]
+# Two red 3s for the defensive Health-Boost prelude, granted in the (red)
+# offensive suit so the spell is castable regardless of the black defence suit.
+STARTER_DEFENSIVE_PRELUDE_RED_THREES = 2
+
+# Legacy fixed Hearts deck, retained as a fallback when no suit is assigned.
+# Format: (rank, suit, value).
+STARTER_FIGURE_CARDS = [(_r, 'Hearts', _v) for (_r, _v) in STARTER_OFFENSIVE_SET]
 BOOSTER_PACK_PRICE = 100                    # Gold cost per main pack
 BOOSTER_PACK_SIDE_PRICE = 100               # Gold cost per side pack
 BOOSTER_PACK_CARDS = 3                      # Cards drawn per pack (both types)
@@ -124,7 +191,7 @@ DUEL_BOOSTER_REWARD_PROBABILITIES = {       # [DEPRECATED] superseded by DUEL_RE
 }
 
 # ── Maps ──
-STARTER_MAPS = 4                            # Free maps on registration
+STARTER_MAPS = 0                            # Earned via the first-conquest reward
 
 # ── Duel rewards (pool-based) ──
 # Each duel awards N independent draws from a shared reward pool.
@@ -736,5 +803,3 @@ from kingdom_progression import (  # noqa: F401  (public re-export)
 )
 
 # AI defence generation rules and safe fallbacks live in ai/defence/config.py.
-
-

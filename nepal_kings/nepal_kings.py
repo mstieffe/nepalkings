@@ -3,6 +3,7 @@
 import asyncio
 import pygame
 import copy
+import sys as _sys
 from types import SimpleNamespace
 #from pygame.locals import *
 from game.screens.login_screen import LoginScreen
@@ -122,8 +123,28 @@ class Client:
             return
 
         self.screens = {}
+        self._screen_factories = {}
+        self._draw_loading_progress = draw_progress
+        lazy_screen_keys = set()
+        if _sys.platform == 'emscripten':
+            # The browser runtime is far slower at bulk image decode/scale work
+            # than desktop Python. Keep first paint/login light and build each
+            # app screen only when the player navigates there.
+            lazy_screen_keys.update(
+                key for key, *_rest in screen_steps
+                if key != 'login'
+            )
+
+        startup_steps = [
+            step for step in screen_steps
+            if step[0] not in lazy_screen_keys
+        ]
+        total_weight = sum(w for *_, w in startup_steps) or 1
         weight_done = 0
         for key, label, cls, weight in screen_steps:
+            if key in lazy_screen_keys:
+                self._screen_factories[key] = (label, cls, weight)
+                continue
             frac_start = weight_done / total_weight
             frac_end = (weight_done + weight) / total_weight
             draw_progress(frac_start, label)
@@ -141,6 +162,26 @@ class Client:
             draw_progress(frac_end, label)
 
         draw_progress(1.0, 'Ready')
+
+    def _create_screen(self, key):
+        spec = self._screen_factories.get(key)
+        if not spec:
+            return None
+        label, cls, weight = spec
+        draw_progress = getattr(self, '_draw_loading_progress', None)
+        if draw_progress:
+            draw_progress(0.0, label)
+        if weight > 1:
+            def _sub_progress(sub_frac, sub_label, _lbl=label):
+                if draw_progress:
+                    draw_progress(sub_frac, sub_label or _lbl)
+            screen = cls(self.state, progress_callback=_sub_progress)
+        else:
+            screen = cls(self.state)
+        self.screens[key] = screen
+        if draw_progress:
+            draw_progress(1.0, 'Ready')
+        return screen
 
     def _init_perf_conquer_fixture(self, draw_progress):
         draw_progress(0.05, 'Loading active conquer fixture ...')
@@ -202,6 +243,11 @@ class Client:
                 self._perf_tactic(201, 2, 'Shield', 'Clubs', '9', 3,
                                   status='played', played_round=0),
                 self._perf_tactic(202, 2, 'Dagger', 'Spades', 'K', 4,
+                                  status='available'),
+                # Opponent's hidden hand (face-down on the right strip).
+                self._perf_tactic(203, 2, 'Block', 'Clubs', 'Q', 2,
+                                  status='available'),
+                self._perf_tactic(204, 2, 'Dagger', 'Spades', '9', 9,
                                   status='available'),
             ],
             cached_active_spells=[],
@@ -383,7 +429,9 @@ class Client:
             if self.state.screen == 'restart':
                 self._restart_game()
                 return
-            elif self.state.screen in self.screens:
+            elif self.state.screen in self.screens or self.state.screen in self._screen_factories:
+                if self.state.screen not in self.screens:
+                    self._create_screen(self.state.screen)
                 await self.run_screen(self.state.screen)
             else:
                 self.running = False

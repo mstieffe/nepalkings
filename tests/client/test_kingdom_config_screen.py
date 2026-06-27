@@ -248,26 +248,19 @@ class TestKingdomConfigInteractions:
         screen._loot_gained_rect = pygame.Rect(440, 276, 120, 60)
 
         step = KingdomConfigScreen._current_kingdom_config_coach_step(screen)
-        assert step['id'] == 'kingdom_config_header'
-
-        screen.state.user_dict['onboarding']['menu_hints_seen'] = ['kingdom_config_header']
-        step = KingdomConfigScreen._current_kingdom_config_coach_step(screen)
-        assert step['id'] == 'kingdom_config_production'
+        assert step['id'] == 'kingdom_config_essentials'
+        # Essentials points at the production/skills controls (collect first).
         assert step['rect'] == screen._collect_btn_rect
 
-        screen.state.user_dict['onboarding']['menu_hints_seen'] = [
-            'kingdom_config_header',
-            'kingdom_config_production',
-        ]
+        screen.state.user_dict['onboarding']['menu_hints_seen'] = ['kingdom_config_essentials']
         step = KingdomConfigScreen._current_kingdom_config_coach_step(screen)
-        assert step['id'] == 'kingdom_config_skills'
-        assert step['rect'] == screen._kingdom_config_skill_button_rect
+        assert step['id'] == 'kingdom_config_shields_style'
 
-    def test_coach_visibility_helper_scrolls_skills_panel_into_view(self):
+    def test_coach_visibility_helper_scrolls_shields_panel_into_view(self):
         KingdomConfigScreen, screen = _screen_base()
         screen._kingdom = _kingdom_payload()
         screen.state.user_dict['onboarding'] = {
-            'menu_hints_seen': ['kingdom_config_header', 'kingdom_config_production'],
+            'menu_hints_seen': ['kingdom_config_essentials'],
             'completed_steps': ['finish_first_conquer_battle'],
         }
         layout = {
@@ -282,11 +275,12 @@ class TestKingdomConfigInteractions:
         }
         screen._content_scroll = 0
 
+        # Shields/cosmetics sit below the fold, so the helper scrolls down.
         KingdomConfigScreen._ensure_kingdom_config_coach_visible(screen, layout)
 
         assert screen._content_scroll > 0
 
-    def test_coach_visibility_helper_does_not_oscillate_for_oversized_skills_panel(self):
+    def test_coach_visibility_helper_does_not_oscillate_for_oversized_panel(self):
         KingdomConfigScreen, screen = _screen_base()
         screen._kingdom = _kingdom_payload()
         layout = {
@@ -297,24 +291,25 @@ class TestKingdomConfigInteractions:
             'loot_h': 120,
             'skills_h': 360,
             'cosmetics_h': 260,
-            'shield_h': 150,
+            'shield_h': 360,  # taller than the viewport
         }
         screen._content_scroll = 0
 
         KingdomConfigScreen._ensure_kingdom_config_coach_visible(
-            screen, layout, step_id='kingdom_config_skills')
+            screen, layout, step_id='kingdom_config_shields_style')
         first_scroll = screen._content_scroll
         KingdomConfigScreen._ensure_kingdom_config_coach_visible(
-            screen, layout, step_id='kingdom_config_skills')
+            screen, layout, step_id='kingdom_config_shields_style')
 
-        assert first_scroll == 292
+        # Oversized panel pins to its top and stays put (no oscillation).
+        assert first_scroll == 276
         assert screen._content_scroll == first_scroll
 
     def test_coach_step_clips_scrolled_content_rects_to_visible_viewport(self):
         KingdomConfigScreen, screen = _screen_base()
         screen._kingdom = _kingdom_payload()
         screen.state.user_dict['onboarding'] = {
-            'menu_hints_seen': ['kingdom_config_header'],
+            'menu_hints_seen': [],
             'completed_steps': ['finish_first_conquer_battle'],
         }
         screen._content_scroll_area = pygame.Rect(20, 100, 360, 120)
@@ -323,7 +318,7 @@ class TestKingdomConfigInteractions:
 
         step = KingdomConfigScreen._current_kingdom_config_coach_step(screen)
 
-        assert step['id'] == 'kingdom_config_production'
+        assert step['id'] == 'kingdom_config_essentials'
         assert step['rect'] == pygame.Rect(60, 100, 90, 24)
         assert step['rects'][1] == pygame.Rect(40, 100, 300, 120)
 
@@ -332,9 +327,9 @@ class TestKingdomConfigInteractions:
         screen._kingdom = _kingdom_payload()
         screen._buttons = [('upgrade_skill', 'gold_production', pygame.Rect(90, 90, 120, 30))]
         screen._current_kingdom_config_coach_step = lambda: {
-            'id': 'kingdom_config_header',
+            'id': 'kingdom_config_essentials',
             'rect': pygame.Rect(10, 10, 200, 60),
-            'title': 'Header',
+            'title': 'Essentials',
             'body': 'Body',
         }
         screen._handle_menu_coach_events = MagicMock(return_value=True)

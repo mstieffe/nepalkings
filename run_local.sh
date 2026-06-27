@@ -14,10 +14,18 @@ cd "$SCRIPT_DIR"
 
 echo "=== Nepal Kings — Local Development ==="
 
+if [ -z "${PYTHON:-}" ]; then
+    if [ -x "$SCRIPT_DIR/.venv/bin/python" ]; then
+        PYTHON="$SCRIPT_DIR/.venv/bin/python"
+    else
+        PYTHON="python"
+    fi
+fi
+
 # ── Start local server ─────────────────────────────────────────────
 echo "Starting local server on http://localhost:5000 ..."
 cd server
-python server.py &
+"$PYTHON" server.py &
 SERVER_PID=$!
 cd "$SCRIPT_DIR"
 
@@ -36,4 +44,4 @@ done
 # ── Launch client ──────────────────────────────────────────────────
 echo "Launching client..."
 cd nepal_kings
-python main.py --server-url http://localhost:5000 "$@"
+"$PYTHON" main.py --server-url http://localhost:5000 "$@"

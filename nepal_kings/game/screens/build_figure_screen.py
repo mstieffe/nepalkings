@@ -147,6 +147,8 @@ class BuildFigureScreen(SubScreen):
 
             if response.get('success'):
                 logger.debug(f"Figure {selected_figure.name} created successfully in the database.")
+                from utils import sound
+                sound.play('figure_place')
             else:
                 logger.error(f"Failed to create figure: {response.get('message', 'Unknown error')}")
                 self.game.unlock_actions()
@@ -1011,6 +1013,63 @@ class BuildFigureScreen(SubScreen):
             self.scroll_text_list.sort(key=lambda x: x["_sort_power"], reverse=True)
         self.scroll_text_list_shifter.set_displayed_texts(self.scroll_text_list)
 
+    def _second_build_tutorial_active(self):
+        """True during the player's guided second conquest build.
+
+        The first conquer attack is pre-assembled; this teaches the player to
+        build the next one by hand. Gated to exactly one finished conquer battle
+        so the hint shows only for the second conquest.
+        """
+        onboarding = (getattr(self.state, 'user_dict', None) or {}).get('onboarding') or {}
+        if not onboarding or onboarding.get('onboarding_skipped'):
+            return False
+        completed = set(onboarding.get('completed_steps') or [])
+        if 'finish_first_conquer_battle' not in completed:
+            return False
+        facts = onboarding.get('facts') or {}
+        return int(facts.get('conquer_battles') or 0) == 1
+
+    def _second_build_hint_text(self):
+        """Progressive instruction reflecting what has been built so far.
+
+        Mirrors the pre-assembled starter attack: a King (castle) feeds people,
+        a Farm (village) makes food, and Warriors (military) spend food to
+        fight. The hint advances as each field is filled.
+        """
+        fields = {
+            str(fig.get('field') or '').lower()
+            for fig in self._kingdom_figures()
+        }
+        if 'castle' not in fields:
+            return 'Build your King first — pick the glowing King recipe, then press "create!".'
+        if 'village' not in fields:
+            return 'King built! Now build a Farm (village) — it turns a villager into food.'
+        if 'military' not in fields:
+            return 'Now build your Warriors (military) — they spend the Farm’s food to fight.'
+        return 'Army ready! Close the builder, then set three Daggers as your tactics.'
+
+    def _draw_second_build_hint(self):
+        """Draw a progressive instruction banner along the bottom of the builder.
+
+        Anchored low so it never overlaps the figure icons or hierarchy diagram
+        in the middle of the screen.
+        """
+        text = self._second_build_hint_text()
+        font = settings.get_font(getattr(settings, 'FS_SMALL', settings.FS_TINY))
+        screen_w = self.window.get_width()
+        screen_h = self.window.get_height()
+        label = font.render(text, True, (255, 240, 200))
+        pad_x, pad_y = 18, 10
+        banner_w = min(screen_w - 16, label.get_width() + pad_x * 2)
+        banner_h = label.get_height() + pad_y * 2
+        x = max(8, (screen_w - banner_w) // 2)
+        y = int(0.88 * screen_h)
+        surf = pygame.Surface((banner_w, banner_h), pygame.SRCALPHA)
+        pygame.draw.rect(surf, (40, 28, 14, 238), surf.get_rect(), border_radius=8)
+        pygame.draw.rect(surf, (224, 182, 82), surf.get_rect(), 2, border_radius=8)
+        self.window.blit(surf, (x, y))
+        self.window.blit(label, (x + pad_x, y + pad_y))
+
     def draw(self):
         """Draw the screen, including buttons and background."""
         super().draw()
@@ -1047,6 +1106,9 @@ class BuildFigureScreen(SubScreen):
             self._draw_suit_filter()
             self._draw_castle_cap_badge()
             self._draw_resource_strip()
+
+        if self.mode == 'conquer' and self._second_build_tutorial_active():
+            self._draw_second_build_hint()
 
         super().draw_on_top()
 

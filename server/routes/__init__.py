@@ -11,3 +11,4 @@ from .battle_shop import battle_shop
 from .collection import collection
 from .kingdom import kingdom
 from .onboarding import onboarding
+from .legal import legal

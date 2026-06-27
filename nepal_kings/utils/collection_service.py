@@ -49,20 +49,22 @@ def buy_booster_side(quantity=1):
     return response.json()
 
 
-def open_booster():
+def open_booster(quantity=1):
     """POST /collection/open_booster — returns {cards, booster_packs}."""
     response = requests.post(
         f'{settings.SERVER_URL}/collection/open_booster',
+        json={'quantity': quantity},
         timeout=10,
     )
     response.raise_for_status()
     return response.json()
 
 
-def open_booster_side():
+def open_booster_side(quantity=1):
     """POST /collection/open_booster_side — returns {cards, booster_packs_side}."""
     response = requests.post(
         f'{settings.SERVER_URL}/collection/open_booster_side',
+        json={'quantity': quantity},
         timeout=10,
     )
     response.raise_for_status()

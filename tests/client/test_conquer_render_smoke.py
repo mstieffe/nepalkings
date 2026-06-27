@@ -343,6 +343,37 @@ def test_tactics_rail_action_buttons_adapt_to_selected_tactic():
     rail._selected_id = 2
     rail.draw()
     assert set(rail._action_button_rects) == {ACTION_PLAY, ACTION_GAMBLE, ACTION_COMBINE}
+    action_tray = rail._dyn_action_tray_rect
+    hand_list = rail._dyn_hand_list_rect
+    assert action_tray is not None
+    assert hand_list is not None
+    assert hand_list.bottom <= action_tray.top
+    play_rect = rail._action_button_rects[ACTION_PLAY]
+    gamble_rect = rail._action_button_rects[ACTION_GAMBLE]
+    combine_rect = rail._action_button_rects[ACTION_COMBINE]
+    assert action_tray.contains(play_rect)
+    assert action_tray.contains(gamble_rect)
+    assert action_tray.contains(combine_rect)
+    assert play_rect.width > gamble_rect.width
+    assert not play_rect.colliderect(gamble_rect)
+    assert not play_rect.colliderect(combine_rect)
+    assert not gamble_rect.colliderect(combine_rect)
+    if rail._action_tray_uses_stacked_layout(action_tray.width, rail._normalized_action_specs()):
+        assert play_rect.bottom < gamble_rect.top
+    else:
+        assert play_rect.left < gamble_rect.left
+
+    narrow_rects = rail._layout_action_buttons(
+        pygame.Rect(0, 0, 101, 98), rail._normalized_action_specs())
+    narrow_by_key = {key: rect for key, _label, _disabled, rect, _role in narrow_rects}
+    assert narrow_by_key[ACTION_PLAY].width == 101
+    assert narrow_by_key[ACTION_PLAY].bottom < narrow_by_key[ACTION_GAMBLE].top
+    assert narrow_by_key[ACTION_GAMBLE].width == 101
+    assert narrow_by_key[ACTION_GAMBLE].bottom < narrow_by_key[ACTION_COMBINE].top
+    assert narrow_by_key[ACTION_COMBINE].width == 101
+    assert not narrow_by_key[ACTION_PLAY].colliderect(narrow_by_key[ACTION_GAMBLE])
+    assert not narrow_by_key[ACTION_PLAY].colliderect(narrow_by_key[ACTION_COMBINE])
+    assert not narrow_by_key[ACTION_GAMBLE].colliderect(narrow_by_key[ACTION_COMBINE])
 
     rail._selected_id = 3
     rail.draw()
@@ -1693,6 +1724,45 @@ def test_current_conquer_tactics_filters_by_displayed_step(monkeypatch):
     # 'spell_purged' status so live actions cannot fire on them.
     assert replayed['status'] == 'spell_purged'
     assert replayed.get('_render_ghost') is True
+
+
+def test_opponent_hidden_hand_count_is_timeline_gated():
+    """Opponent hidden hand starts from the displayed timeline step, not the
+    server's final post-spell count."""
+    from game.screens.conquer_game_screen import ConquerGameScreen
+
+    screen = ConquerGameScreen.__new__(ConquerGameScreen)
+    game = SimpleNamespace(
+        game_id=42, player_id=7,
+        battle_turn_player_id=None, battle_round=0,
+        _game_data_version=0, conquer_resolution_step=2,
+        conquer_tactics=[
+            {'id': 1, 'player_id': 9, 'status': 'spell_purged',
+             'played_round': None, 'discarded_step_index': 2},
+            {'id': 2, 'player_id': 9, 'status': 'spell_purged',
+             'played_round': None, 'discarded_step_index': 2},
+            {'id': 3, 'player_id': 9, 'status': 'spell_purged',
+             'played_round': None, 'discarded_step_index': 2},
+            {'id': 4, 'player_id': 9, 'status': 'available',
+             'played_round': None, 'revealed_step_index': 2},
+            {'id': 5, 'player_id': 9, 'status': 'available',
+             'played_round': None, 'revealed_step_index': 2},
+            {'id': 6, 'player_id': 7, 'status': 'available',
+             'played_round': None},
+        ],
+    )
+    screen.state = SimpleNamespace(game=game)
+    screen._is_tactics_hand_game = lambda: True
+    screen._conquer_timeline_panel = SimpleNamespace(
+        currently_resolved_step_index=lambda *a, **kw: 1,
+    )
+
+    assert screen._opponent_hidden_hand_count() == 3
+
+    screen._conquer_timeline_panel = SimpleNamespace(
+        currently_resolved_step_index=lambda *a, **kw: 2,
+    )
+    assert screen._opponent_hidden_hand_count() == 2
 
 
 def test_current_conquer_tactics_uses_cached_state_without_sync_fetch(monkeypatch):

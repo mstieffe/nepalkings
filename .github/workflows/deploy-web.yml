@@ -28,19 +28,21 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install pygbag
-        run: pip install pygbag==0.9.3
+      - name: Install build dependencies
+        run: pip install pygbag==0.9.3 Pillow
 
-      - name: Build web bundle
-        run: python -m pygbag --build nepal_kings
+      - name: Build optimized web bundle
+        # Stages the app, downscales + quantizes images for the web (source
+        # art untouched), then runs pygbag. See scripts/build_web.sh.
+        run: bash scripts/build_web.sh
 
-      - name: Apply custom index.html
-        run: cp nepal_kings/web/index.html nepal_kings/build/web/index.html
+      - name: Report bundle size
+        run: du -sh build/web-staging/nepal_kings/build/web
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: nepal_kings/build/web
+          path: build/web-staging/nepal_kings/build/web
 
   deploy:
     needs: build

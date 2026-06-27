@@ -8,7 +8,7 @@ from models import (db, User, Land, LandConfig, LandConfigFigure,
                     LandConfigBattleMove, CollectionCard, Game, Player,
                     Figure, ActiveSpell, BattleMove, ConquerTactic)
 from tests.server.test_land_battle import (
-    _auth_headers, _make_user, _make_land,
+    _auth_headers, _make_user, _make_land, _mark_first_conquer_done,
     _make_conquer_config, _make_defence_config,
     _scripted_ai_template, _add_conquer_config_figure,
 )
@@ -858,6 +858,9 @@ class TestConquerInvaderSwapGameFlow:
         """Swapped AI invaders still use ConquerTactic rows and safe state data."""
         with app.app_context():
             attacker = _make_user(db, username='atk')
+            # Past the tutorial so the patched template is used (not the
+            # tutorial-safe defender, whose Draw 2 prelude adds drawn tactics).
+            _mark_first_conquer_done(attacker)
             land = _make_land(db, tier=1)
             cfg = _make_conquer_config(db, attacker, land)
             _set_prelude_invader_swap(db, cfg)

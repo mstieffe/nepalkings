@@ -1,5 +1,7 @@
 # ── Build artifacts ────────────────────────────────────────────────
 /artifacts/
+/build/
+/dist/
 nepal_kings/build/
 nepal_kings/dist/
 *.app
@@ -59,3 +61,4 @@ nepal_kings/img/old_cards/
 server_bu.py
 server_test.py
 /BUILD/
+backups/

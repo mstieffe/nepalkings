@@ -18,7 +18,9 @@ from game_service.conquer_tactics_idempotency import (
     get_cached_response as _conquer_idem_get,
     store_response as _conquer_idem_store,
 )
-from routes.auth import require_token, verify_player_ownership
+from routes.auth import get_game_membership, require_token, verify_game_membership, verify_player_ownership
+from routes.serialization import serialize_game_for_viewer, serialize_spell_for_viewer, viewer_has_all_seeing_eye
+from analytics import track
 from ai.defence.config import AI_DEFENCE_RANK_VALUES
 from ai.defence.generator import get_ai_defence_template_for_land
 
@@ -269,7 +271,7 @@ _USER_ACTION_LOG_TYPES = (
     'card_changed', 'spell_cast', 'spell_end', 'counter_spell',
     'battle_move', 'battle_skip', 'battle_decision', 'battle_start',
     'battle_win', 'battle_draw',
-    'advance', 'counter_advance',
+    'advance', 'counter_advance', 'select_defender',
     'auto_loss', 'fold_win', 'deficit_loss', 'civil_war_skip',
     'game_start',
 )
@@ -1086,6 +1088,16 @@ def _duel_reward_expectations(game_limit):
     }
 
 
+def _game_duration_seconds(game):
+    """Whole seconds between game creation and finish, or None."""
+    try:
+        if game.date and game.finished_at:
+            return max(0, int((game.finished_at - game.date).total_seconds()))
+    except Exception:
+        pass
+    return None
+
+
 def _check_game_over(game):
     """Check if any player has reached the game's point limit.
 
@@ -1313,6 +1325,18 @@ def _finalize_game_over(game, winner_player, reason='stake', checkmate_figure_na
         rounds_played=game.current_round,
     )
     db.session.add(result)
+
+    track(
+        'game_finished',
+        user_id=winner_player.user_id,
+        game_id=game.id,
+        mode=game.mode or 'duel',
+        reason=reason,
+        vs_ai=bool((winner_user and winner_user.is_ai) or (loser_user and loser_user.is_ai)),
+        rounds=game.current_round,
+        game_limit=game_limit,
+        duration_s=_game_duration_seconds(game),
+    )
 
     # Log the game result
     log_entry = LogEntry(
@@ -2068,20 +2092,17 @@ def _get_opponent_turn_summary(game, current_player_id):
     return summary
 
 @games.route('/get_games', methods=['GET'])
+@require_token
 def get_games():
     try:
-        username = request.args.get('username')
-        user = User.query.filter_by(username=username).first()
-        if not user:
-            return jsonify({'success': False, 'error': 'User not found'}), 400
-
         # Explicitly specify the onclause to avoid ambiguity
         games = Game.query.join(Player, Player.game_id == Game.id).filter(
-            Player.user_id == user.id
+            Player.user_id == g.user_id
         ).all()
 
         return jsonify({
-            'games': [game.serialize() for game in games]
+            'success': True,
+            'games': [serialize_game_for_viewer(game, g.user_id) for game in games]
         })
     except Exception as e:
         db.session.rollback()
@@ -2090,9 +2111,13 @@ def get_games():
 
 
 @games.route('/get_game', methods=['GET'])
+@require_token
 def get_game():
     try:
-        game_id = request.args.get('game_id')
+        game_id = request.args.get('game_id', type=int)
+        membership_err = verify_game_membership(game_id)
+        if membership_err:
+            return membership_err
         game = db.session.get(Game, game_id)
 
         if not game:
@@ -2107,7 +2132,7 @@ def get_game():
         _check_conquer_round_timeout(game)
         deadline = _conquer_round_deadline_for(game)
 
-        serialized = game.serialize()
+        serialized = serialize_game_for_viewer(game, g.user_id)
         if deadline is not None:
             serialized['conquer_round_deadline_ts'] = deadline
             serialized['conquer_round_timeout_sec'] = CONQUER_ROUND_TIMEOUT_SEC
@@ -2408,6 +2433,9 @@ def create_game():
         db.session.expire(challenge)          # ensure fresh read before update
         challenge.status = ChallengeStatus.ACCEPTED
         challenge.game_id = game.id
+        track('game_started', user_id=g.user_id, game_id=game.id, mode='duel',
+              vs_ai=bool(user1.is_ai or user2.is_ai),
+              stake=game_stake, game_limit=game_limit)
         db.session.commit()
 
         logger.info(f"Challenge {challenge.id} accepted → game {game.id} "
@@ -2416,7 +2444,7 @@ def create_game():
         return jsonify({
             'success': True,
             'message': 'Game created successfully',
-            'game': game.serialize()
+            'game': serialize_game_for_viewer(game, g.user_id)
         })
 
     except Exception as e:
@@ -2476,9 +2504,13 @@ def delete_game():
 
 
 @games.route('/get_hand', methods=['GET'])
+@require_token
 def get_hand():
     try:
-        player_id = request.args.get('player_id')
+        player_id = request.args.get('player_id', type=int)
+        err = verify_player_ownership(player_id)
+        if err:
+            return err
 
         main_cards = MainCard.query.filter_by(player_id=player_id).all()
         side_cards = SideCard.query.filter_by(player_id=player_id).all()
@@ -2811,7 +2843,7 @@ def conquer_defender_counter_spell():
                 'success': True,
                 'spell_name': spell_name,
                 'status': 'no_valid_target',
-                'game': game.serialize(),
+                'game': serialize_game_for_viewer(game, g.user_id),
             })
 
         effect_data = dict(spell_data or {}) if isinstance(spell_data, dict) else {}
@@ -2909,7 +2941,7 @@ def conquer_defender_counter_spell():
             'status': post_data.get('counter_status'),
             'result': result,
             'defender_replenished_battle_moves': replenish_info,
-            'game': game.serialize(),
+            'game': serialize_game_for_viewer(game, g.user_id),
         })
 
     except Exception:
@@ -3178,7 +3210,7 @@ def advance_figure():
             'civil_war_color': civil_war_color,
             'is_second_pick': is_second_pick,
             'figure_name': figure.name,
-            'game': game.serialize()
+            'game': serialize_game_for_viewer(game, g.user_id)
         })
 
     except Exception as e:
@@ -3208,6 +3240,9 @@ def select_defender():
         game = db.session.get(Game, game_id)
         if not game:
             return jsonify({'success': False, 'message': 'Game not found'}), 404
+        player = db.session.get(Player, player_id)
+        if not player:
+            return jsonify({'success': False, 'message': 'Player not found'}), 404
 
         # There must be an active advance
         if not game.advancing_figure_id:
@@ -3304,7 +3339,7 @@ def select_defender():
                         'is_second_pick': False,
                         'civil_war_second_rejected': True,
                         'message': msg,
-                        'game': game.serialize()
+                        'game': serialize_game_for_viewer(game, g.user_id)
                     })
                 game.defending_figure_id_2 = figure_id
                 is_second_pick = True
@@ -3343,6 +3378,20 @@ def select_defender():
             defender_name = defender_user.username if defender_user else f"Player {defender_owner_id}"
             return _resolve_deficit_loss(game, invader_player, defender_player, invader_name, defender_name, figure.name)
 
+        user = db.session.get(User, player.user_id)
+        username = user.username if user else f"Player {player_id}"
+        pick_label = 'second defender' if is_second_pick else 'defender'
+        log_entry = LogEntry(
+            game_id=game_id,
+            player_id=player_id,
+            round_number=game.current_round,
+            turn_number=player.turns_left,
+            message=f"{username} selected {figure.name} as the {pick_label}.",
+            author=username,
+            type='select_defender',
+        )
+        db.session.add(log_entry)
+
         db.session.commit()
 
         return jsonify({
@@ -3351,7 +3400,7 @@ def select_defender():
             'civil_war_need_second': civil_war_need_second,
             'civil_war_color': civil_war_color,
             'is_second_pick': is_second_pick,
-            'game': game.serialize()
+            'game': serialize_game_for_viewer(game, g.user_id)
         })
 
     except Exception as e:
@@ -3427,7 +3476,7 @@ def skip_civil_war_second():
 
         return jsonify({
             'success': True,
-            'game': game.serialize()
+            'game': serialize_game_for_viewer(game, g.user_id)
         })
 
     except Exception as e:
@@ -3592,7 +3641,7 @@ def conquer_select_own_defender():
                         'is_second_pick': False,
                         'civil_war_second_rejected': True,
                         'message': msg,
-                        'game': game.serialize()
+                        'game': serialize_game_for_viewer(game, g.user_id)
                     })
                 game.defending_figure_id_2 = figure_id
                 is_second_pick = True
@@ -3645,7 +3694,7 @@ def conquer_select_own_defender():
             'civil_war_need_second': civil_war_need_second,
             'civil_war_color': civil_war_color,
             'is_second_pick': is_second_pick,
-            'game': game.serialize(),
+            'game': serialize_game_for_viewer(game, g.user_id),
         })
 
     except Exception as e:
@@ -3694,7 +3743,7 @@ def _resolve_conquer_auto_loss(game, winner_player, loser_player,
     # message even though the game is already 'finished'.
     result['auto_loss_reason'] = auto_loss_reason
     result['auto_loss_detail'] = auto_loss_detail
-    result['game'] = game.serialize()
+    result['game'] = serialize_game_for_viewer(game, g.user_id)
 
     db.session.commit()
     logger.info(
@@ -3785,7 +3834,7 @@ def conquer_withdraw():
     except Exception as e:
         db.session.rollback()
         logger.exception(f"[CONQUER_WITHDRAW] Error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
+        return jsonify({'success': False, 'message': 'Failed to withdraw from conquest'}), 500
 
 
 @games.route('/cannot_advance_loss', methods=['POST'])
@@ -3900,7 +3949,7 @@ def cannot_advance_loss():
                 'success': True,
                 'outcome': 'auto_loss',
                 'game_over': game_over_info,
-                'game': game.serialize(),
+                'game': serialize_game_for_viewer(game, g.user_id),
             })
 
         # Start new round — opponent (winner) becomes invader, draws side cards
@@ -3919,7 +3968,7 @@ def cannot_advance_loss():
             'loser': username,
             'winner': opponent_name,
             'points': 10,
-            'game': game.serialize()
+            'game': serialize_game_for_viewer(game, g.user_id)
         })
 
     except Exception as e:
@@ -3975,14 +4024,15 @@ def defender_no_figures_loss():
         opponent_user = db.session.get(User, opponent.user_id) if opponent else None
         opponent_name = opponent_user.username if opponent_user else "Opponent"
 
+        if _has_selectable_defender(game, opponent.id if opponent else None):
+            return jsonify({
+                'success': False,
+                'message': 'Defender still has a selectable battle figure',
+                'reason': 'selectable_defender_exists',
+            }), 400
+
         # ── Conquer mode: single-battle game, no new round / side cards. ──
         if game.mode == 'conquer':
-            if _has_selectable_defender(game, opponent.id if opponent else None):
-                return jsonify({
-                    'success': False,
-                    'message': 'Defender still has a selectable battle figure',
-                    'reason': 'selectable_defender_exists',
-                }), 400
             return jsonify(_resolve_conquer_auto_loss(
                 game,
                 winner_player=player,
@@ -4040,7 +4090,7 @@ def defender_no_figures_loss():
                 'success': True,
                 'outcome': 'auto_loss',
                 'game_over': game_over_info,
-                'game': game.serialize(),
+                'game': serialize_game_for_viewer(game, g.user_id),
             })
 
         # Start new round — invader (winner) stays invader, draws side cards
@@ -4059,7 +4109,7 @@ def defender_no_figures_loss():
             'loser': opponent_name,
             'winner': username,
             'points': 10,
-            'game': game.serialize()
+            'game': serialize_game_for_viewer(game, g.user_id)
         })
 
     except Exception as e:
@@ -4118,7 +4168,7 @@ def battle_decision():
                 'outcome': 'fold',
                 'fold_outcome': game.fold_outcome,
                 'already_resolved': True,
-                'game': game.serialize(),
+                'game': serialize_game_for_viewer(game, g.user_id),
             })
 
         # Guard: battle already confirmed — no new decisions allowed
@@ -4127,7 +4177,7 @@ def battle_decision():
                 'success': True,
                 'resolved': True,
                 'outcome': 'battle',
-                'game': game.serialize()
+                'game': serialize_game_for_viewer(game, g.user_id)
             })
 
         if not game.advancing_figure_id or not game.defending_figure_id:
@@ -4164,7 +4214,7 @@ def battle_decision():
                 'resolved': False,
                 'waiting': True,
                 'already_decided': True,
-                'game': game.serialize(),
+                'game': serialize_game_for_viewer(game, g.user_id),
             })
 
         # Get player info
@@ -4279,7 +4329,7 @@ def battle_decision():
                     'success': True,
                     'resolved': True,
                     'outcome': 'battle',
-                    'game': game.serialize()
+                    'game': serialize_game_for_viewer(game, g.user_id)
                 })
 
     except Exception as e:
@@ -4398,7 +4448,7 @@ def _resolve_deficit_loss(game, winner_player, loser_player, winner_name, loser_
             'success': True,
             'deficit_loss': True,
             'game_over': game_over_info,
-            'game': game.serialize()
+            'game': serialize_game_for_viewer(game, g.user_id)
         })
 
     # Start new round — winner becomes invader, draws side cards
@@ -4418,7 +4468,7 @@ def _resolve_deficit_loss(game, winner_player, loser_player, winner_name, loser_
         'winner': winner_name,
         'loser': loser_name,
         'points': 10,
-        'game': game.serialize()
+        'game': serialize_game_for_viewer(game, g.user_id)
     })
 
 
@@ -4482,7 +4532,7 @@ def _resolve_fold(game, winner_player, loser_player, winner_name, loser_name):
             'resolved': True,
             'outcome': 'fold_win',
             'game_over': game_over_info,
-            'game': game.serialize()
+            'game': serialize_game_for_viewer(game, g.user_id)
         })
 
     # Start new round — winner becomes invader, draws side cards
@@ -4502,7 +4552,7 @@ def _resolve_fold(game, winner_player, loser_player, winner_name, loser_name):
         'winner': winner_name,
         'loser': loser_name,
         'points': 10,
-        'game': game.serialize()
+        'game': serialize_game_for_viewer(game, g.user_id)
     })
 
 
@@ -5571,7 +5621,7 @@ def play_conquer_tactic():
                 'battle_round': game.battle_round,
                 'battle_turn_player_id': game.battle_turn_player_id,
                 'battle_complete': _battle_all_rounds_complete(game),
-                'game': game.serialize(),
+                'game': serialize_game_for_viewer(game, g.user_id),
                 'already_played': True,
             }
             _conquer_idem_store(game_id, player_id,
@@ -5629,7 +5679,7 @@ def play_conquer_tactic():
             'battle_round': game.battle_round,
             'battle_turn_player_id': game.battle_turn_player_id,
             'battle_complete': _battle_all_rounds_complete(game),
-            'game': game.serialize(),
+            'game': serialize_game_for_viewer(game, g.user_id),
         }
         _conquer_idem_store(game_id, player_id,
                            'play_conquer_tactic', client_action_id,
@@ -5759,7 +5809,7 @@ def _gamble_conquer_tactic_impl(game_id, player_id, tactic_id, client_action_id)
         'sacrificed': sacrificed_data,
         'new_tactics': new_tactics,
         'new_moves': new_tactics,
-        'game': game.serialize(),
+        'game': serialize_game_for_viewer(game, g.user_id),
     }
     _conquer_idem_store(game_id, player_id,
                        'gamble_conquer_tactic', client_action_id,
@@ -5846,7 +5896,7 @@ def combine_conquer_tactics():
             'combined_tactic': combined_data,
             'combined_move': combined_data,
             'removed_ids': [a.id, b.id],
-            'game': game.serialize(),
+            'game': serialize_game_for_viewer(game, g.user_id),
         }
         _conquer_idem_store(game_id, player_id,
                            'combine_conquer_tactics', client_action_id,
@@ -5929,7 +5979,7 @@ def dismantle_conquer_tactic():
                 'message': 'Original tactics are no longer available',
                 'restored_tactics': restored,
                 'restored_moves': restored,
-                'game': game.serialize(),
+                'game': serialize_game_for_viewer(game, g.user_id),
             }), 400
 
         removed_id = combined.id
@@ -5941,7 +5991,7 @@ def dismantle_conquer_tactic():
             'restored_tactics': restored,
             'restored_moves': restored,
             'removed_id': removed_id,
-            'game': game.serialize(),
+            'game': serialize_game_for_viewer(game, g.user_id),
         }
         _conquer_idem_store(game_id, player_id,
                            'dismantle_conquer_tactic', client_action_id,
@@ -6090,7 +6140,7 @@ def play_battle_move():
         'success': True,
         'battle_round': game.battle_round,
         'battle_turn_player_id': game.battle_turn_player_id,
-        'game': game.serialize(),
+        'game': serialize_game_for_viewer(game, g.user_id),
     })
 
 
@@ -6143,11 +6193,15 @@ def get_battle_state():
                 else:
                     opponent_tactics.append({
                         'id': tactic.id,
+                        'game_id': tactic.game_id,
                         'player_id': tactic.player_id,
                         'status': tactic.status,
                         'played_round': None,
+                        'revealed_step_index': tactic.revealed_step_index,
+                        'discarded_step_index': tactic.discarded_step_index,
                     })
 
+        reveal_spells = viewer_has_all_seeing_eye(game.serialize(), player_id)
         payload = {
             'success': True,
             'battle_confirmed': bool(game.battle_confirmed),
@@ -6170,7 +6224,7 @@ def get_battle_state():
             'conquer_round_timeout_sec': CONQUER_ROUND_TIMEOUT_SEC if deadline is not None else None,
             'battle_modifier': game.battle_modifier,
             'active_spells': [
-                spell.serialize()
+                serialize_spell_for_viewer(spell, player_id, reveal_spells)
                 for spell in ActiveSpell.query.filter_by(game_id=game_id).all()
                 if _conquer_spell_visible_in_live_state(spell)
             ],
@@ -6256,7 +6310,7 @@ def skip_battle_turn():
             'battle_skipped_rounds': game.battle_skipped_rounds or {},
             'battle_complete': True,
             'already_skipped': True,
-            'game': game.serialize(),
+            'game': serialize_game_for_viewer(game, g.user_id),
         })
 
     if game.battle_turn_player_id != player_id:
@@ -6364,7 +6418,7 @@ def skip_battle_turn():
         'battle_skipped_rounds': game.battle_skipped_rounds or {},
         'battle_complete': _battle_all_rounds_complete(game),
         'already_skipped': already_skipped,
-        'game': game.serialize(),
+        'game': serialize_game_for_viewer(game, g.user_id),
     })
 
 
@@ -6460,7 +6514,7 @@ def finish_battle():
             'destroyed_figure_name': saved.get('destroyed_figure_name', 'figure'),
             'destroyed_figure_family': saved.get('destroyed_figure_family', ''),
             'returnable_cards': returnable_cards,
-            'game': game.serialize(),
+            'game': serialize_game_for_viewer(game, g.user_id),
         }
         # Conquer mode: surface loot/consumption details (resolver is idempotent;
         # if it has already run, this just rebuilds the cached payload).
@@ -6519,7 +6573,7 @@ def finish_battle():
             'destroyed_figure_name': saved.get('destroyed_figure_name', 'figure'),
             'destroyed_figure_family': saved.get('destroyed_figure_family', ''),
             'returnable_cards': [],
-            'game': game.serialize(),
+            'game': serialize_game_for_viewer(game, g.user_id),
         })
 
     # Determine who the invader/defender is
@@ -6530,6 +6584,20 @@ def finish_battle():
                                                         return_breakdown=True)
     # server_diff > 0 means invader wins; convert to caller's perspective
     total_diff = server_diff if is_invader else -server_diff
+
+    # Figure-vs-tactic split for the result dialog (invader/attacker
+    # perspective: fig_diff = attacker figure power − defender figure power,
+    # round_diff = attacker tactic total − defender tactic total).  The client
+    # orients these to the viewer.  Surfaced so players learn that figures,
+    # not tactics, usually decide a conquer battle.
+    battle_math = {}
+    if isinstance(breakdown, dict):
+        battle_math = {
+            'fig_diff': breakdown.get('fig_diff'),
+            'round_diff': breakdown.get('round_diff'),
+            'adv_power': breakdown.get('adv_power'),
+            'def_power': breakdown.get('def_power'),
+        }
 
     # ── Discrepancy check ──
     # Compare client value with server value (both in caller perspective)
@@ -6585,6 +6653,8 @@ def finish_battle():
             game.finished_at = _utcnow()
             # No winner — draw
             game.winner_player_id = None
+            track('game_finished', game_id=game.id, mode='conquer',
+                  reason='draw', duration_s=_game_duration_seconds(game))
 
             atk_cfg = (db.session.get(LandConfig, game.conquer_config_id)
                        if game.conquer_config_id else None)
@@ -6600,6 +6670,7 @@ def finish_battle():
                 'conquer_loot_gained_cards': [],
                 'conquer_loot_lost_cards': [],
                 'cards_spent': 0,
+                **battle_math,
             }
             flag_modified(game, 'last_battle_result')
 
@@ -6628,7 +6699,8 @@ def finish_battle():
                 'loot_gained_cards': [],
                 'loot_lost_cards': [],
                 'cards_spent': 0,
-                'game': game.serialize(),
+                **battle_math,
+                'game': serialize_game_for_viewer(game, g.user_id),
             })
 
         # Collect remaining (played) battle move cards from BOTH players
@@ -6659,7 +6731,7 @@ def finish_battle():
             'total_diff': 0,
             'defender_player_id': defender_player_id,
             'returnable_cards': returnable_cards,
-            'game': game.serialize(),
+            'game': serialize_game_for_viewer(game, g.user_id),
         })
 
     else:
@@ -6762,6 +6834,7 @@ def finish_battle():
             'destroyed_figure_name': destroyed_name,
             'destroyed_figure_family': destroyed_family,
             'checkmate_figure_name': checkmate_game_over.get('checkmate_figure_name') if checkmate_game_over else None,
+            **battle_math,
             **preserved_game_over,
         }
         _set_post_battle_pending_choice(
@@ -6811,7 +6884,8 @@ def finish_battle():
             'destroyed_figure_family': destroyed_family,
             'total_diff': total_diff,
             'returnable_cards': returnable_cards,
-            'game': game.serialize(),
+            **battle_math,
+            'game': serialize_game_for_viewer(game, g.user_id),
         }
         if game_over_info:
             response['game_over_pending'] = True
@@ -7210,15 +7284,18 @@ def _wipe_land_config_return_unlooted(cfg, looted_card_ids=None):
     db.session.delete(cfg)
 
 
-def _return_config_non_figure_cards(cfg):
-    """Unlock and remove non-figure cards from a surviving config."""
-    from models import CollectionCard, LandConfigBattleMove
+def _return_config_attack_only_cards(cfg):
+    """Unlock and clear the attack-only cards from a surviving config.
+
+    Used when a winning attacker's conquer config becomes the new defence: its
+    figures AND its battle-move tactics carry over to the defence (so the
+    conquered land is defended automatically), while the attack-only prelude
+    spell, battle modifier, in-battle spell and counter spell are unlocked and
+    returned to the collection.
+    """
+    from models import CollectionCard
 
     card_ids = []
-    for move in list(cfg.battle_moves):
-        if move.card_id:
-            card_ids.append(move.card_id)
-        db.session.delete(move)
     for arr in (cfg.modifier_card_ids, cfg.spell_card_ids,
                 cfg.prelude_spell_card_ids, cfg.counter_spell_card_ids):
         if arr:
@@ -7276,6 +7353,15 @@ def _resolve_conquer_battle(game, winner, requesting_player):
     land = db.session.get(Land, game.land_id)
     is_ai_land = defender_user and defender_user.is_ai
     old_land_owner_id = land.owner_user_id if land else None
+    # A brand-new player's FIRST conquest attempt (no land won yet). Used to make
+    # the tutorial's first battle a no-penalty retry (no loot on a loss) and to
+    # recognise the eventual win as the first conquest even after lost attempts.
+    attacker_first_conquest_attempt = bool(
+        attacker_user
+        and LandAttackLog.query.filter_by(
+            attacker_user_id=attacker_user.id, result='attacker_won'
+        ).count() == 0
+    )
     lost_kingdom_id = land.kingdom_id if land else None
     lost_kingdom_name = None
     if lost_kingdom_id:
@@ -7292,6 +7378,16 @@ def _resolve_conquer_battle(game, winner, requesting_player):
     game.state = 'finished'
     game.winner_player_id = winner.id
     game.finished_at = _utcnow()
+
+    track(
+        'game_finished',
+        user_id=winner.user_id,
+        game_id=game.id,
+        mode='conquer',
+        reason='battle',
+        winner_is_attacker=bool(winner.id == game.invader_player_id),
+        duration_s=_game_duration_seconds(game),
+    )
 
     # Sigil achievement check (conquer battle finish — covers win_battles
     # and win_conquer_battles for the winner).  Best-effort.
@@ -7363,13 +7459,14 @@ def _resolve_conquer_battle(game, winner, requesting_player):
             else:
                 land.conquer_cooldown_until = None
 
-        # Convert attacker's conquer config to defence config.  Only figure
-        # cards remain committed to the new defence; attack-only battle,
-        # modifier, and spell cards return instead of being consumed.
+        # Convert attacker's conquer config to defence config.  Figures and
+        # battle-move tactics carry over so the conquered land is defended
+        # automatically; attack-only modifier, prelude, and spell cards return
+        # instead of being consumed.
         if game.conquer_config_id:
             atk_cfg = db.session.get(LandConfig, game.conquer_config_id)
             if atk_cfg:
-                _return_config_non_figure_cards(atk_cfg)
+                _return_config_attack_only_cards(atk_cfg)
                 atk_cfg.config_type = 'defence'
                 atk_cfg.land_id = game.land_id
                 _rekey_config_lock_types(atk_cfg, 'defence')
@@ -7466,8 +7563,12 @@ def _resolve_conquer_battle(game, winner, requesting_player):
 
     else:
         # ── Defender wins: loot from attacker config by tier + defender skill ──
+        # The tutorial's first conquest is a no-penalty retry: a brand-new
+        # player who loses their first AI-land battle keeps every card (nothing
+        # is looted) so they can immediately attack the same land again.
+        tutorial_first_loss = bool(attacker_first_conquest_attempt and is_ai_land)
         extra_chance = 0.0
-        if lost_kingdom_id:
+        if lost_kingdom_id and not tutorial_first_loss:
             try:
                 from kingdom_service import kingdom_skill_level
                 level = kingdom_skill_level(lost_kingdom_id, 'loot_chance')
@@ -7477,20 +7578,23 @@ def _resolve_conquer_battle(game, winner, requesting_player):
         if game.conquer_config_id:
             atk_cfg = db.session.get(LandConfig, game.conquer_config_id)
             if atk_cfg:
-                defender_looted_cards = _select_conquer_loot_cards(
-                    attack_loot_pool,
-                    land.tier if land else 1,
-                    extra_chance=extra_chance,
-                    rng=_random,
-                )
-                loot_gained_cards = _loot_cards_public(defender_looted_cards)
-                looted_lost_cards = list(loot_gained_cards)
-                if looted_lost_cards:
-                    card_lost_suit = looted_lost_cards[0].get('suit')
-                    card_lost_rank = looted_lost_cards[0].get('rank')
-                looted_ids = {
-                    c.get('id') for c in defender_looted_cards if c.get('id')
-                }
+                if tutorial_first_loss:
+                    looted_ids = set()  # no penalty -> every card returns
+                else:
+                    defender_looted_cards = _select_conquer_loot_cards(
+                        attack_loot_pool,
+                        land.tier if land else 1,
+                        extra_chance=extra_chance,
+                        rng=_random,
+                    )
+                    loot_gained_cards = _loot_cards_public(defender_looted_cards)
+                    looted_lost_cards = list(loot_gained_cards)
+                    if looted_lost_cards:
+                        card_lost_suit = looted_lost_cards[0].get('suit')
+                        card_lost_rank = looted_lost_cards[0].get('rank')
+                    looted_ids = {
+                        c.get('id') for c in defender_looted_cards if c.get('id')
+                    }
                 _wipe_land_config_return_unlooted(atk_cfg, looted_ids)
 
     consumed_cards = []
@@ -7512,9 +7616,23 @@ def _resolve_conquer_battle(game, winner, requesting_player):
     )
     db.session.add(log)
     db.session.flush()
+    attacker_first_conquest = False
     try:
         from onboarding_service import mark_step
-        if attacker_user:
+        if attacker_user and attacker_won:
+            # Base "first conquest" on prior WINS only, so a no-penalty tutorial
+            # loss earlier does not disqualify this win from seeding production /
+            # awarding the reward booster.
+            prior_attacker_wins = LandAttackLog.query.filter(
+                LandAttackLog.attacker_user_id == attacker_user.id,
+                LandAttackLog.result == 'attacker_won',
+                LandAttackLog.id != log.id,
+            ).count()
+            attacker_first_conquest = (prior_attacker_wins == 0)
+        # A brand-new player's first battle marks the step only on a win, so a
+        # no-penalty tutorial loss keeps the retry path open; all other battles
+        # mark it as before.
+        if attacker_user and (attacker_won or not attacker_first_conquest_attempt):
             mark_step(attacker_user, 'finish_first_conquer_battle')
         if defender_user and not is_ai_land:
             mark_step(defender_user, 'finish_first_conquer_battle')
@@ -7523,6 +7641,26 @@ def _resolve_conquer_battle(game, winner, requesting_player):
 
     if attacker_won:
         gained_kingdom_id = land.kingdom_id if land else None
+        if attacker_first_conquest and gained_kingdom_id:
+            try:
+                from kingdom_service import seed_first_conquest_production
+                seeded_kingdom = db.session.get(Kingdom, gained_kingdom_id)
+                if seeded_kingdom and seeded_kingdom.owner_user_id == attacker_user.id:
+                    seed_first_conquest_production(seeded_kingdom, now=_utcnow())
+            except Exception:
+                logger.exception("Failed to seed first-conquest production")
+        if attacker_first_conquest and attacker_user is not None:
+            # Award the first main booster as the conquest "reward pack" so the
+            # open-a-booster tutorial beat is genuinely earned (boosters are no
+            # longer dumped at registration).
+            try:
+                attacker_user.booster_packs = int(attacker_user.booster_packs or 0) + 1
+            except Exception:
+                logger.exception("Failed to grant first-conquest reward pack")
+            # No separate defence draft is staged for the tutorial: the won
+            # land's conquer config is converted into its defence config above,
+            # so the first defence is "just the conquer config". (New players are
+            # granted only an offensive starter set.)
         lost_user_for_event = None if is_ai_land else (defender_user.id if defender_user else None)
         _create_kingdom_loot_events(
             attack_log_id=log.id,
@@ -7620,14 +7758,24 @@ def _resolve_conquer_battle(game, winner, requesting_player):
         'victory_review_available': victory_review_available,
         'victory_review_config_id': victory_review_config_id if victory_review_available else None,
         'victory_review_land_id': game.land_id if victory_review_available else None,
-        'game': game.serialize(),
+        'game': serialize_game_for_viewer(game, g.user_id),
     }
 
 
-def _serialize_finished_conquer_result(game):
+def _serialize_finished_conquer_result(game, viewer_user_id=None):
     """Return a stable conquer_result payload for an already-finished conquer game."""
     if not game or game.mode != 'conquer' or game.state != 'finished':
         return None
+    if viewer_user_id is None:
+        try:
+            viewer_user_id = getattr(g, 'user_id', None)
+        except RuntimeError:
+            viewer_user_id = None
+    serialized_game = (
+        serialize_game_for_viewer(game, viewer_user_id)
+        if viewer_user_id is not None
+        else game.serialize()
+    )
 
     land = db.session.get(Land, game.land_id) if game.land_id else None
     attacker_player = _conquer_attacker_player(game)
@@ -7651,7 +7799,7 @@ def _serialize_finished_conquer_result(game):
         'land_id': game.land_id,
         'land_gold_rate': land.gold_rate if land else 0,
         'land_tier': land.tier if land else None,
-        'game': game.serialize(),
+        'game': serialized_game,
     }
 
     card_detail_keys = ('card_won_suit', 'card_won_rank',
@@ -7956,12 +8104,16 @@ def _rekey_config_lock_types(cfg, new_config_type):
         'conquer_counter':  f'{new_config_type}_counter',
     }
 
-    # Gather every card id that is part of this cfg (figures only at this
-    # point — battle/modifier/spell cards have already been consumed).
+    # Gather every card id still locked by this cfg: figure cards and the
+    # battle-move (tactic) cards that now carry over into the defence. The
+    # attack-only modifier/prelude/spell cards were already returned.
     card_ids = []
     for fig in cfg.figures:
         if fig.card_ids:
             card_ids.extend(fig.card_ids)
+    for move in cfg.battle_moves:
+        if move.card_id:
+            card_ids.append(move.card_id)
     if not card_ids:
         return
 
@@ -8017,7 +8169,7 @@ def finish_battle_pick_card():
         return jsonify({
             'success': True,
             'message': 'Battle already resolved.',
-            'game': game.serialize(),
+            'game': serialize_game_for_viewer(game, g.user_id),
         })
 
     # Return unplayed battle move cards to their owners (safety — normally
@@ -8130,7 +8282,7 @@ def finish_battle_pick_card():
             'success': True,
             'message': 'Game over!',
             'game_over': game_over_info,
-            'game': game.serialize(),
+            'game': serialize_game_for_viewer(game, g.user_id),
         })
 
     # Start a new round — battle winner becomes invader
@@ -8146,7 +8298,7 @@ def finish_battle_pick_card():
     return jsonify({
         'success': True,
         'message': 'Battle resolved. New round started.',
-        'game': game.serialize(),
+        'game': serialize_game_for_viewer(game, g.user_id),
     })
 
 
@@ -8346,7 +8498,7 @@ def finish_battle_draw():
             'choice': choice,
             'message': result_msg,
             'game_over': game_over_info,
-            'game': game.serialize(),
+            'game': serialize_game_for_viewer(game, g.user_id),
         })
 
     # Start a new round — defender (the choosing player) becomes invader
@@ -8364,7 +8516,7 @@ def finish_battle_draw():
         'outcome': 'draw',
         'choice': choice,
         'message': result_msg,
-        'game': game.serialize(),
+        'game': serialize_game_for_viewer(game, g.user_id),
     })
 
 
@@ -8456,7 +8608,7 @@ def _default_winner_pick_after_timeout(game, requester):
             'message': 'Post-battle choice defaulted. Game over!',
             'defaulted': True,
             'game_over': game_over_info,
-            'game': game.serialize(),
+            'game': serialize_game_for_viewer(game, g.user_id),
         })
 
     _start_new_round(game, winner)
@@ -8478,7 +8630,7 @@ def _default_winner_pick_after_timeout(game, requester):
         'message': 'Post-battle card pick defaulted. New round started.',
         'defaulted': True,
         'choice': 'winner_pick_default',
-        'game': game.serialize(),
+        'game': serialize_game_for_viewer(game, g.user_id),
     })
 
 
@@ -8521,7 +8673,7 @@ def _default_draw_choice_after_timeout(game, requester):
             'defaulted': True,
             'message': 'Draw choice defaulted to 10 points. Game over!',
             'game_over': game_over_info,
-            'game': game.serialize(),
+            'game': serialize_game_for_viewer(game, g.user_id),
         })
 
     _start_new_round(game, defender)
@@ -8534,7 +8686,7 @@ def _default_draw_choice_after_timeout(game, requester):
         'choice': 'points',
         'defaulted': True,
         'message': 'Draw choice defaulted to 10 points. New round started.',
-        'game': game.serialize(),
+        'game': serialize_game_for_viewer(game, g.user_id),
     })
 
 
@@ -8577,7 +8729,7 @@ def resolve_pending_battle_choice():
             'success': True,
             'message': 'No pending post-battle choice.',
             'already_resolved': True,
-            'game': game.serialize(),
+            'game': serialize_game_for_viewer(game, g.user_id),
         })
 
     if not _pending_choice_expired(pending):
@@ -8586,7 +8738,7 @@ def resolve_pending_battle_choice():
             'message': 'Post-battle choice timeout has not expired yet.',
             'reason': 'pending_choice_not_expired',
             'deadline_at': pending.get('deadline_at'),
-            'game': game.serialize(),
+            'game': serialize_game_for_viewer(game, g.user_id),
         }), 400
 
     try:
@@ -8602,20 +8754,24 @@ def resolve_pending_battle_choice():
 
 
 @games.route('/game_results', methods=['GET'])
+@require_token
 def game_results():
-    """Get game results for a user (for statistics/ranking).
+    """Get detailed game results for the authenticated user.
     
     Query params:
-        username: str — the player whose results to fetch
+        username: str (optional) — must match the authenticated user
         limit: int (optional) — max number of results (default 50)
     """
     try:
         username = request.args.get('username')
         max_results = request.args.get('limit', 50, type=int)
 
-        user = User.query.filter_by(username=username).first()
+        user = db.session.get(User, g.user_id)
         if not user:
             return jsonify({'success': False, 'message': 'User not found'}), 404
+        if username and username != user.username:
+            return jsonify({'success': False, 'message': 'Forbidden'}), 403
+        max_results = max(1, min(max_results or 50, 100))
 
         results = GameResult.query.filter(
             (GameResult.winner_user_id == user.id) | (GameResult.loser_user_id == user.id)
@@ -8627,7 +8783,7 @@ def game_results():
 
         return jsonify({
             'success': True,
-            'username': username,
+            'username': user.username,
             'gold': user.gold,
             'wins': wins,
             'losses': losses,

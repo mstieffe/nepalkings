@@ -7,7 +7,8 @@ import logging
 from flask import Blueprint, request, jsonify, current_app, g
 from models import db, Game, Player, MainCard, SideCard, BattleMove, User, LogEntry
 import server_settings as settings
-from routes.auth import require_token, verify_player_ownership
+from routes.auth import require_token, verify_game_membership, verify_player_ownership
+from routes.serialization import serialize_battle_moves_for_viewer, serialize_game_for_viewer
 
 battle_shop = Blueprint('battle_shop', __name__)
 
@@ -237,7 +238,7 @@ def buy_battle_move():
     return jsonify({
         'success': True,
         'battle_move': battle_move.serialize(),
-        'game': game.serialize(),
+        'game': serialize_game_for_viewer(game, g.user_id),
     })
 
 
@@ -303,11 +304,12 @@ def return_battle_move():
     return jsonify({
         'success': True,
         'message': 'Battle move returned',
-        'game': game.serialize(),
+        'game': serialize_game_for_viewer(game, g.user_id),
     })
 
 
 @battle_shop.route('/get_battle_moves', methods=['GET'])
+@require_token
 def get_battle_moves():
     """Get all battle moves for a player in a game.
 
@@ -318,11 +320,24 @@ def get_battle_moves():
 
     if not game_id or not player_id:
         return jsonify({'success': False, 'message': 'Missing game_id or player_id'}), 400
+    membership_err = verify_game_membership(game_id)
+    if membership_err:
+        return membership_err
+    game = db.session.get(Game, game_id)
+    player = db.session.get(Player, player_id)
+    if not player or player.game_id != game_id:
+        return jsonify({'success': False, 'message': 'Player not found in this game'}), 404
+    viewer = Player.query.filter_by(game_id=game_id, user_id=g.user_id).first()
+    reveal = False
+    if viewer:
+        from routes.serialization import viewer_has_all_seeing_eye
+        reveal = viewer_has_all_seeing_eye(game.serialize(), viewer.id)
 
     moves = BattleMove.query.filter_by(game_id=game_id, player_id=player_id).all()
     return jsonify({
         'success': True,
-        'battle_moves': [m.serialize() for m in moves],
+        'battle_moves': serialize_battle_moves_for_viewer(
+            moves, viewer.id if viewer else None, reveal),
     })
 
 
@@ -366,7 +381,7 @@ def confirm_battle_moves():
         return jsonify({
             'success': True,
             'both_ready': True,
-            'game': game.serialize(),
+            'game': serialize_game_for_viewer(game, g.user_id),
             **_battle_move_requirement_payload(game, player_id),
         })
 
@@ -428,7 +443,7 @@ def confirm_battle_moves():
     return jsonify({
         'success': True,
         'both_ready': both_ready,
-        'game': game.serialize(),
+        'game': serialize_game_for_viewer(game, g.user_id),
         **_battle_move_requirement_payload(game, player_id),
     })
 
@@ -622,7 +637,7 @@ def gamble_battle_move():
         'success': True,
         'sacrificed': sacrificed_data,
         'new_moves': new_moves,
-        'game': game.serialize(),
+        'game': serialize_game_for_viewer(game, g.user_id),
     })
 
 
@@ -722,7 +737,7 @@ def _gamble_conquer(game, player, bm, gamble_counts, pid_str,
         'success': True,
         'sacrificed': sacrificed_data,
         'new_moves': new_moves,
-        'game': game.serialize(),
+        'game': serialize_game_for_viewer(game, g.user_id),
     })
 
 
@@ -843,7 +858,7 @@ def combine_battle_moves():
         'success': True,
         'combined_move': combined_data,
         'removed_ids': removed_ids,
-        'game': game.serialize(),
+        'game': serialize_game_for_viewer(game, g.user_id),
     })
 
 
@@ -943,5 +958,5 @@ def dismantle_battle_move():
         'success': True,
         'restored_moves': [dagger_a.serialize(), dagger_b.serialize()],
         'removed_id': removed_id,
-        'game': game.serialize(),
+        'game': serialize_game_for_viewer(game, g.user_id),
     })

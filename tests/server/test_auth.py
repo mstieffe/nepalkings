@@ -6,69 +6,121 @@ from datetime import datetime, timedelta
 from werkzeug.security import generate_password_hash
 
 
+def _register_data(username='newuser', password='securepass', **overrides):
+    data = {
+        'username': username,
+        'password': password,
+        'age_confirmed': 'true',
+        'terms_accepted': 'true',
+        'privacy_accepted': 'true',
+    }
+    data.update(overrides)
+    return data
+
+
 class TestRegister:
     def test_register_new_user(self, client):
-        resp = client.post('/auth/register', data={
-            'username': 'newuser',
-            'password': 'securepass',
-        })
+        resp = client.post('/auth/register', data=_register_data())
         data = resp.get_json()
         assert resp.status_code == 200
         assert data['success'] is True
         assert 'token' in data
         assert data['user']['username'] == 'newuser'
 
+    def test_starter_set_is_deferred_then_grants_buildable_deck(self, client):
+        """The starter set is NOT granted at signup. It is granted (random
+        offensive suit + curated set) on the first booster open / on skip, and
+        is enough to build the first conquer attack independent of booster luck."""
+        import server_settings as settings
+        from ai.figure_recipes import find_buildable_figures
+        from models import CollectionCard, User
+        from onboarding_service import get_starter_suits, grant_starter_set
+
+        resp = client.post('/auth/register', data=_register_data(username='deckuser'))
+        assert resp.status_code == 200
+        user = User.query.filter_by(username='deckuser').first()
+
+        # Deferred: a fresh account has no starter cards, and the set is unflagged.
+        assert CollectionCard.query.filter_by(user_id=user.id).count() == 0
+        assert not (user.onboarding_state or {}).get('starter_set_granted')
+
+        # Granting (as on the first booster open) assigns the suit + set.
+        offensive = grant_starter_set(user, commit=True)
+        assert offensive in settings.OFFENSIVE_SUITS
+        assert get_starter_suits(user)['offensive'] == offensive
+
+        cards = CollectionCard.query.filter_by(user_id=user.id).all()
+        assert len(cards) == len(settings.STARTER_OFFENSIVE_SET)
+        assert all(c.suit == offensive for c in cards)
+
+        # Offensive set builds the red attack figures.
+        off_hand = [{'id': c.id, 'rank': c.rank, 'suit': c.suit,
+                     'value': c.value, 'card_type': 'main'} for c in cards]
+        off_names = {b['name'] for b in find_buildable_figures(off_hand, [], [])}
+        assert {'Djungle King', 'Small Rice Farm', 'Gorkha Warriors'} <= off_names
+
+        # Idempotent: a second grant does not duplicate the set.
+        grant_starter_set(user, commit=True)
+        assert CollectionCard.query.filter_by(
+            user_id=user.id).count() == len(settings.STARTER_OFFENSIVE_SET)
+
     def test_register_duplicate_username_fails(self, client):
-        client.post('/auth/register', data={'username': 'dup', 'password': 'pass123'})
-        resp = client.post('/auth/register', data={'username': 'dup', 'password': 'pass123'})
+        client.post('/auth/register', data=_register_data('dup', 'pass1234'))
+        resp = client.post('/auth/register', data=_register_data('dup', 'pass1234'))
         data = resp.get_json()
         assert resp.status_code == 409
         assert data['success'] is False
 
     def test_register_missing_username_fails(self, client):
-        resp = client.post('/auth/register', data={'password': 'pass123'})
+        resp = client.post('/auth/register', data=_register_data(username=''))
         assert resp.status_code == 400
         assert resp.get_json()['success'] is False
 
     def test_register_missing_password_fails(self, client):
-        resp = client.post('/auth/register', data={'username': 'someuser'})
+        resp = client.post('/auth/register', data=_register_data('someuser', ''))
         assert resp.status_code == 400
         assert resp.get_json()['success'] is False
 
+    def test_register_requires_age_terms_and_privacy(self, client):
+        resp = client.post('/auth/register', data={
+            'username': 'legaluser',
+            'password': 'securepass',
+            'age_confirmed': 'true',
+            'terms_accepted': 'false',
+            'privacy_accepted': 'true',
+        })
+        data = resp.get_json()
+        assert resp.status_code == 400
+        assert data['success'] is False
+
     def test_register_username_too_short(self, client):
-        resp = client.post('/auth/register', data={'username': 'ab', 'password': 'pass123'})
+        resp = client.post('/auth/register', data=_register_data('ab', 'pass1234'))
         assert resp.status_code == 400
 
     def test_register_username_too_long(self, client):
-        resp = client.post('/auth/register', data={
-            'username': 'a' * 31,
-            'password': 'pass123',
-        })
+        resp = client.post('/auth/register', data=_register_data('a' * 31, 'pass1234'))
         assert resp.status_code == 400
 
     def test_register_password_too_short(self, client):
-        resp = client.post('/auth/register', data={'username': 'validuser', 'password': 'abc'})
+        resp = client.post('/auth/register', data=_register_data('validuser', 'abc'))
         assert resp.status_code == 400
 
     def test_register_invalid_username_chars(self, client):
-        resp = client.post('/auth/register', data={
-            'username': 'bad user!',
-            'password': 'pass123',
-        })
+        resp = client.post('/auth/register', data=_register_data('bad user!', 'pass1234'))
         assert resp.status_code == 400
 
 
 class TestLogin:
     def test_login_success_returns_token(self, client):
-        client.post('/auth/register', data={'username': 'loginuser', 'password': 'pass123'})
-        resp = client.post('/auth/login', data={'username': 'loginuser', 'password': 'pass123'})
+        client.post('/auth/register', data=_register_data('loginuser', 'pass1234'))
+        resp = client.post('/auth/login', data={'username': 'loginuser', 'password': 'pass1234'})
         data = resp.get_json()
         assert resp.status_code == 200
         assert data['success'] is True
         assert 'token' in data
 
     def test_login_wrong_password_fails(self, client):
-        client.post('/auth/register', data={'username': 'loginuser2', 'password': 'pass123'})
+        client.post('/auth/register', data=_register_data('loginuser2', 'pass1234'))
         resp = client.post('/auth/login', data={'username': 'loginuser2', 'password': 'wrongpass'})
         data = resp.get_json()
         assert resp.status_code == 401
@@ -109,8 +161,8 @@ class TestTokenDecorator:
         assert resp.status_code == 401
 
     def test_require_token_accepts_valid_token(self, client, app):
-        client.post('/auth/register', data={'username': 'tokenuser', 'password': 'pass123'})
-        login_resp = client.post('/auth/login', data={'username': 'tokenuser', 'password': 'pass123'})
+        client.post('/auth/register', data=_register_data('tokenuser', 'pass1234'))
+        login_resp = client.post('/auth/login', data={'username': 'tokenuser', 'password': 'pass1234'})
         token = login_resp.get_json()['token']
         resp = client.post('/auth/heartbeat', headers={'Authorization': f'Bearer {token}'})
         assert resp.status_code == 200
@@ -120,7 +172,12 @@ class TestTokenDecorator:
 class TestGetUsers:
     def test_get_users_returns_others(self, client, two_users):
         u1, u2 = two_users
-        resp = client.get(f'/auth/get_users?username={u1.username}')
+        from routes.auth import generate_token
+        token = generate_token(u1.id)
+        resp = client.get(
+            f'/auth/get_users?username={u1.username}',
+            headers={'Authorization': f'Bearer {token}'},
+        )
         data = resp.get_json()
         assert resp.status_code == 200
         usernames = [u['username'] for u in data['users']]
@@ -129,14 +186,28 @@ class TestGetUsers:
 
     def test_get_user_success(self, client, two_users):
         u1, _ = two_users
-        resp = client.get(f'/auth/get_user?username={u1.username}')
+        from routes.auth import generate_token
+        token = generate_token(u1.id)
+        resp = client.get(
+            f'/auth/get_user?username={u1.username}',
+            headers={'Authorization': f'Bearer {token}'},
+        )
         data = resp.get_json()
         assert resp.status_code == 200
         assert data['success'] is True
         assert data['user']['username'] == u1.username
 
-    def test_get_user_not_found(self, client):
-        resp = client.get('/auth/get_user?username=doesnotexist')
+    def test_get_user_not_found(self, client, db):
+        from models import User
+        from routes.auth import generate_token
+        user = User(username='lookup_user', password_hash=generate_password_hash('pass1234'))
+        db.session.add(user)
+        db.session.commit()
+        token = generate_token(user.id)
+        resp = client.get(
+            '/auth/get_user?username=doesnotexist',
+            headers={'Authorization': f'Bearer {token}'},
+        )
         assert resp.status_code == 404
 
 

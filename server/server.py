@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
 # See LICENSE file in the project root for full license information.
 # server.py
-from flask import Flask
+from flask import Flask, g, jsonify, request
 from flask_cors import CORS
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
@@ -12,7 +12,7 @@ import signal
 import sys
 
 import server_settings as settings
-from routes import games, challenges, auth, msg, figures, spells, battle_shop, collection, kingdom, onboarding
+from routes import games, challenges, auth, msg, figures, spells, battle_shop, collection, kingdom, onboarding, legal
 
 games.settings = settings
 challenges.settings = settings
@@ -22,9 +22,11 @@ figures.settings = settings
 spells.settings = settings
 battle_shop.settings = settings
 onboarding.settings = settings
+legal.settings = settings
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = settings.SECRET_KEY
+app.config['MAX_CONTENT_LENGTH'] = settings.MAX_CONTENT_LENGTH
 
 # ── Production safety guard ───────────────────────────────────────
 # In any non-development environment, refuse to boot if SECRET_KEY is
@@ -62,8 +64,53 @@ limiter = Limiter(
     get_remote_address,
     app=app,
     default_limits=[settings.RATE_LIMIT_DEFAULT],
-    storage_uri='memory://',
+    # memory:// keeps per-process counters, so the effective limit is
+    # limit × worker_count; point RATELIMIT_STORAGE_URI at Redis or
+    # similar for shared counters across workers.
+    storage_uri=settings.RATELIMIT_STORAGE_URI,
 )
+
+# ── JSON error for oversized request bodies ──
+# Werkzeug only raises 413 lazily when a view reads the body, where the
+# routes' blanket except-blocks would turn it into a 500 — so reject
+# based on the declared Content-Length before any view runs.
+@app.before_request
+def _reject_oversized_body():
+    length = request.content_length
+    if length is not None and length > app.config['MAX_CONTENT_LENGTH']:
+        return jsonify({'success': False, 'message': 'Request too large'}), 413
+
+
+@app.errorhandler(413)
+def _request_too_large(_e):
+    return jsonify({'success': False, 'message': 'Request too large'}), 413
+
+# ── Async-play email notifications ──
+@app.after_request
+def _turn_notification_hook(response):
+    """After any state-changing POST that names a game, check whether an
+    offline player should be emailed (it's-your-turn / game finished).
+    Debouncing and eligibility live in notification_service."""
+    try:
+        if (request.method == 'POST'
+                and getattr(settings, 'NOTIFY_EMAILS_ENABLED', True)
+                and response.status_code < 400):
+            game_id = None
+            try:
+                if request.is_json and request.json:
+                    game_id = request.json.get('game_id')
+                elif request.form:
+                    game_id = request.form.get('game_id')
+            except Exception:
+                game_id = None
+            if game_id:
+                from notification_service import maybe_notify_turn_or_finish
+                maybe_notify_turn_or_finish(
+                    game_id, requester_user_id=getattr(g, 'user_id', None))
+    except Exception:
+        logging.getLogger('nepalkings').exception('turn notification hook failed')
+    return response
+
 
 # ── Security response headers ──
 @app.after_request
@@ -71,6 +118,20 @@ def _set_security_headers(response):
     response.headers['X-Content-Type-Options'] = 'nosniff'
     response.headers['X-Frame-Options'] = 'DENY'
     response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+    response.headers['Content-Security-Policy'] = (
+        "default-src 'self'; "
+        "base-uri 'self'; "
+        "frame-ancestors 'none'; "
+        "object-src 'none'; "
+        "form-action 'self'"
+    )
+    response.headers['Permissions-Policy'] = (
+        'camera=(), microphone=(), geolocation=(), payment=()'
+    )
+    if not _IS_DEV:
+        response.headers['Strict-Transport-Security'] = (
+            'max-age=31536000; includeSubDomains'
+        )
     return response
 
 # ── Logging configuration ──
@@ -141,32 +202,16 @@ with app.app_context():
     db.create_all()
 
     try:
-        from kingdom_service import (ensure_conquer_tactics_schema,
-                                     ensure_duel_game_limit_columns,
-                                     ensure_game_ai_seed_column,
-                                     ensure_game_victory_reviewed_at_column,
-                                     ensure_kingdom_production_columns)
-        from onboarding_service import ensure_onboarding_state_column
-        added_columns = ensure_kingdom_production_columns()
-        if added_columns:
-            logger.info("Kingdom production schema upgraded: added %s",
-                        ', '.join(added_columns))
-        ensured_conquer_schema = ensure_conquer_tactics_schema()
-        if ensured_conquer_schema:
-            logger.info("Conquer tactics schema ensured: %s",
-                        ', '.join(ensured_conquer_schema))
-        added_duel_columns = ensure_duel_game_limit_columns()
-        if added_duel_columns:
-            logger.info("Duel game-limit schema upgraded: added %s",
-                        ', '.join(added_duel_columns))
-        if ensure_game_ai_seed_column():
-            logger.info("Game schema upgraded: added ai_seed column")
-        if ensure_game_victory_reviewed_at_column():
-            logger.info("Game schema upgraded: added victory_reviewed_at column")
-        if ensure_onboarding_state_column():
-            logger.info("User schema upgraded: added onboarding_state column")
-    except Exception as _kingdom_schema_err:  # pragma: no cover — safety net
-        logger.exception("Kingdom production schema upgrade failed: %s", _kingdom_schema_err)
+        from migration_runner import run_migrations
+        _applied = run_migrations()
+        if _applied:
+            logger.info("Applied schema migrations: %s",
+                        ', '.join(f'{v:04d}' for v in _applied))
+    except Exception as _migration_err:  # pragma: no cover — safety net
+        logger.exception("Schema migration failed: %s — the app will start "
+                         "anyway, but the database may be missing recent "
+                         "schema changes. Investigate before accepting "
+                         "traffic.", _migration_err)
         db.session.rollback()
 
     logger.info("Database initialized")
@@ -276,10 +321,24 @@ app.register_blueprint(battle_shop, url_prefix='/battle_shop')
 app.register_blueprint(collection, url_prefix='/collection')
 app.register_blueprint(kingdom, url_prefix='/kingdom')
 app.register_blueprint(onboarding, url_prefix='/onboarding')
+app.register_blueprint(legal, url_prefix='/legal')
 
 # ── Stricter rate limits for auth-sensitive endpoints ──
 limiter.limit(settings.RATE_LIMIT_LOGIN)(app.view_functions['auth.login'])
 limiter.limit(settings.RATE_LIMIT_REGISTER)(app.view_functions['auth.register'])
+
+_lookup_views = (
+    'auth.get_user',
+    'auth.get_users',
+    'auth.get_rankings',
+    'kingdom.get_kingdom_rankings',
+    'challenges.open_challenges',
+    'games.game_results',
+)
+for _view_name in _lookup_views:
+    _view_fn = app.view_functions.get(_view_name)
+    if _view_fn is not None:
+        limiter.limit(settings.RATE_LIMIT_LOOKUP)(_view_fn)
 
 # ── Per-user rate limits for kingdom mutation endpoints ──
 _kingdom_mutate_views = (
@@ -309,18 +368,8 @@ if __name__ == '__main__':
     try:
         with app.app_context():
             db.create_all()
-            from kingdom_service import (ensure_conquer_tactics_schema,
-                                         ensure_duel_game_limit_columns,
-                                         ensure_game_ai_seed_column,
-                                         ensure_game_victory_reviewed_at_column,
-                                         ensure_kingdom_production_columns)
-            from onboarding_service import ensure_onboarding_state_column
-            ensure_kingdom_production_columns()
-            ensure_conquer_tactics_schema()
-            ensure_duel_game_limit_columns()
-            ensure_game_ai_seed_column()
-            ensure_game_victory_reviewed_at_column()
-            ensure_onboarding_state_column()
+            from migration_runner import run_migrations
+            run_migrations()
         app.run(host='0.0.0.0', port=5000)
     except Exception as e:
         logger.error(f'Application failed to start: {e}')

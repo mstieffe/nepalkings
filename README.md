@@ -4,13 +4,23 @@
 
 # Nepal Kings
 
-**Nepal Kings** is a two-player online card game. Some call it *the chess of cards*.  
-It is a strategic duel built around the principle of **attack and defense**, played in two main phases:
+**Build your kingdom, conquer the land, and duel for the crown.**
 
-1. **Build Phase** – players prepare their field, set up figures, and ready their battle cards.  
-2. **Battle Phase** – the actual fight takes place, points are awarded, and attacker/defender roles may switch.  
+**Nepal Kings** is a tactical card game you can play solo or against other
+rulers. Your starter army is ready for a first conquest, booster packs grow
+your collection, and AI-held lands fall one battle at a time as your kingdom
+expands — then test yourself in head-to-head duels when you are ready. Some
+call the duel *the chess of cards*.
 
-The first player to reach the pre-set score (21, 35, or 49 points) wins the game.  
+- **Single-player first.** The full conquest loop — conquer lands, defend
+  them, collect their production, and expand your kingdom — plays entirely
+  against the built-in AI opponent. No other players required.
+- **Duels when you want them.** Challenge the AI or another player to a duel:
+  a strategic clash of **attack and defense** across a Build Phase and a
+  Battle Phase. Pick the length that suits you — **Quick (7)**,
+  **Standard (21)**, or **Epic (35)** points.
+
+The sections below describe the duel rules in detail.
 
 ---
 
@@ -282,22 +292,45 @@ Nepal Kings can be played directly in the browser — no installation required. 
 
 ### How it's deployed
 
-The web client is built and deployed automatically via GitHub Actions whenever changes are pushed to the `web-client` branch (see `.github/workflows/deploy-web.yml`). The workflow:
+The web client is built and deployed automatically via GitHub Actions on
+pushes to `main` (see `.github/workflows/deploy-web.yml`). The workflow runs
+`scripts/build_web.sh`, which:
 
-1. Builds the pygame app into a WebAssembly bundle using `pygbag 0.9.3`
-2. Applies the custom `nepal_kings/web/index.html`
-3. Deploys to GitHub Pages
+1. Stages a clean copy of `nepal_kings/` into `build/web-staging/` (the
+   committed source art is never modified).
+2. Downscales and quantizes the staged images for the web
+   (`scripts/assets/optimize_web_pngs.py`) — this roughly **halves** the
+   bundle (≈79 MB → ≈35 MB), so the game loads much faster on a cold visit.
+3. Builds the WebAssembly bundle with `pygbag 0.9.3` and applies the custom
+   `nepal_kings/web/index.html`.
+4. Deploys `build/web-staging/nepal_kings/build/web` to GitHub Pages.
 
 After a push, the live site updates within a few minutes (build + CDN cache).
 
-### Running the web client locally
+### Building the web client locally
+
+Optimized build (matches CI), then serve it:
+
+```bash
+pip install pygbag==0.9.3 Pillow
+NK_WEB_SERVE=1 scripts/build_web.sh        # builds + serves on :8000
+```
+
+Quick unoptimized build (full-size art, for a fast dev loop):
 
 ```bash
 pip install pygbag==0.9.3
-python -m pygbag nepal_kings
+python -m pygbag nepal_kings               # serves on :8000
 ```
 
-Then open `http://localhost:8000` in your browser.
+### Packaging for itch.io
+
+```bash
+scripts/package_itch.sh                     # → dist/nepal_kings-itch.zip
+```
+
+Upload that zip on itch.io as an HTML game (see `docs/launch/itch_page.md`
+for the full page copy and embed settings).
 
 > **Note:** Do not log in as the same player from multiple clients (desktop + web) simultaneously. This can cause state conflicts during battles.
 

@@ -76,6 +76,11 @@ def test_get_battle_state_hides_opponent_unplayed_conquer_tactics(app, db):
     client, attacker, _defender, game, attacker_player, defender_player = (
         _start_player_owned_conquer(app, db)
     )
+    defender_tactic = ConquerTactic.query.filter_by(
+        game_id=game.id, player_id=defender_player.id).first()
+    defender_tactic.revealed_step_index = 2
+    defender_tactic.discarded_step_index = 3
+    db.session.commit()
 
     resp = client.get(
         '/games/get_battle_state',
@@ -91,6 +96,8 @@ def test_get_battle_state_hides_opponent_unplayed_conquer_tactics(app, db):
     hidden = payload['opponent_tactics'][0]
     assert hidden['player_id'] == defender_player.id
     assert hidden['status'] == 'available'
+    assert hidden['revealed_step_index'] == 2
+    assert hidden['discarded_step_index'] == 3
     assert 'family_name' not in hidden
     assert 'value' not in hidden
 

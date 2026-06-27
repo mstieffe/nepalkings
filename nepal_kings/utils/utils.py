@@ -6,6 +6,7 @@ import pygame
 from pygame.locals import *
 from game.core.input_state import get_pressed as _get_pressed
 from utils import haptics
+from utils import sound
 
 def get_opp_color(color):
     if color == "offensive":
@@ -231,6 +232,7 @@ class GameButton:
                 self.clicked = False
 
             haptics.tap_edge(self)
+            sound.tap_edge(self)
 
 
 class Button:
@@ -340,6 +342,7 @@ class Button:
             self.hovered = self.collide()
             self.clicked = self.hovered and _get_pressed()[0]
         haptics.tap_edge(self)
+        sound.tap_edge(self)
 
 
 class SubScreenButton:
@@ -493,6 +496,7 @@ class SubScreenButton:
             self.hovered = self.collide()
             self.clicked = self.hovered and _get_pressed()[0]
         haptics.tap_edge(self)
+        sound.tap_edge(self)
 
 
 class ColorTogglePill:
@@ -538,6 +542,7 @@ class ColorTogglePill:
         self.hovered = self.collide()
         self.clicked = self.hovered and _get_pressed()[0]
         haptics.tap_edge(self)
+        sound.tap_edge(self)
 
     def draw(self):
         r = self.corner_r

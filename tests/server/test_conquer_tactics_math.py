@@ -542,3 +542,54 @@ def test_finish_battle_pick_card_handles_played_conquer_tactic_card_fate(app, db
     assert second_pick_resp.status_code == 200, second_pick_resp.get_json()
     assert second_pick_resp.get_json()['conquer_result'] == 'attacker_won'
     assert LandAttackLog.query.filter_by(land_id=game.land_id).count() == 1
+
+
+def test_finish_battle_win_response_includes_figure_tactic_breakdown(app, db):
+    client = app.test_client()
+    game, attacker, defender, _attacker_fig, _defender_fig = _setup_tactics_battle(
+        db.session, land_bonus=True)
+    _add_tactic(db.session, game, attacker, family_name='Dagger', rank='10',
+                value=10, played_round=0, status='played')
+    _add_tactic(db.session, game, defender, family_name='Dagger', rank='7',
+                value=7, played_round=0, status='played')
+    db.session.commit()
+
+    resp = client.post(
+        '/games/finish_battle',
+        json={'game_id': game.id, 'player_id': attacker.id, 'total_diff': 0},
+        headers=_auth_headers(attacker.user_id),
+    )
+
+    assert resp.status_code == 200, resp.get_json()
+    data = resp.get_json()
+    assert data['outcome'] == 'win'
+    # Attacker figure is Hearts (base 4 + land Hearts bonus 3 = 7); defender
+    # figure is Spades (base 4).  Tactics favour the attacker by 10 − 7 = 3.
+    assert data['adv_power'] == 7
+    assert data['def_power'] == 4
+    assert data['fig_diff'] == 3
+    assert data['round_diff'] == 3
+
+
+def test_finish_battle_draw_response_includes_figure_tactic_breakdown(app, db):
+    client = app.test_client()
+    game, attacker, defender, _attacker_fig, _defender_fig = _setup_tactics_battle(
+        db.session)
+    _add_tactic(db.session, game, attacker, family_name='Dagger', rank='7',
+                value=7, played_round=0, status='played')
+    _add_tactic(db.session, game, defender, family_name='Dagger', rank='7',
+                value=7, played_round=0, status='played')
+    db.session.commit()
+
+    resp = client.post(
+        '/games/finish_battle',
+        json={'game_id': game.id, 'player_id': attacker.id, 'total_diff': 0},
+        headers=_auth_headers(attacker.user_id),
+    )
+
+    assert resp.status_code == 200, resp.get_json()
+    data = resp.get_json()
+    assert data['outcome'] == 'draw'
+    # Equal figures (4 vs 4) and equal tactics (7 vs 7) → both diffs zero.
+    assert data['fig_diff'] == 0
+    assert data['round_diff'] == 0

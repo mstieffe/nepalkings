@@ -24,7 +24,8 @@ logger = logging.getLogger('nk.screens.new_game')
 _SW, _SH = settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT
 
 DEFAULT_STAKE = 45
-DEFAULT_GAME_LIMIT = DEFAULT_STAKE
+DEFAULT_GAME_LIMIT = 21          # points to win (Quick 7 / Standard 21 / Epic 35)
+GAME_LIMIT_PRESETS = [('Quick', 7), ('Standard', 21), ('Epic', 35)]
 MAX_GAME_LIMIT = int(getattr(settings, 'MAX_GAME_LIMIT', 100) or 100)
 DUEL_REWARD_GOLD_AMOUNT = int(getattr(settings, 'DUEL_REWARD_GOLD_AMOUNT', 80) or 0)
 DUEL_REWARD_POOL_PROBABILITIES = getattr(settings, 'DUEL_REWARD_POOL_PROBABILITIES', {
@@ -133,6 +134,7 @@ class NewGameScreen(MenuScreenMixin, Screen):
 
         self._header_font = settings.get_font(settings.SUB_SCREEN_HEADER_FONT_SIZE)
         self._panel_font = settings.get_font(settings.LIST_BTN_FONT_SIZE)
+        self._panel_font_small = settings.get_font(int(0.017 * _SH))
         self._tag_font = settings.get_font(int(0.016 * _SH), bold=True)
         self._reward_font = settings.get_font(int(0.017 * _SH))
         self._reward_title_font = settings.get_font(int(0.018 * _SH), bold=True)
@@ -176,7 +178,8 @@ class NewGameScreen(MenuScreenMixin, Screen):
             self.window, field_x, cfg_row2,
             "Game Limit (points)", str(DEFAULT_GAME_LIMIT), False, False,
             max_length=3, width=field_w, height=field_h)
-        self._game_limit_synced = True
+        self._game_limit_synced = False
+        self._preset_rects = []  # (rect, points) for the game-length presets
 
         # Smaller fonts for config-panel input fields
         _cfg_font_sz  = int(0.022 * _SH)
@@ -431,12 +434,57 @@ class NewGameScreen(MenuScreenMixin, Screen):
 
             self.stake_field.draw()
             self.game_limit_field.draw()
+            self._draw_game_limit_presets()
             self._draw_expected_rewards()
             self._draw_send_button()
         else:
             hint_text = "Preparing beginner AI duel..." if self._first_duel_incomplete() else "Select an opponent to configure a challenge"
             hint = self._panel_font.render(hint_text, True, (140, 140, 140))
             self.window.blit(hint, (_COL1_X, _CONFIG_Y + int(0.038 * _SH)))
+
+    def _draw_game_limit_presets(self):
+        """Quick / Standard / Epic chips that set the game-limit field."""
+        self._preset_rects = []
+        fld = self.game_limit_field
+        chip_h = int(0.030 * _SH)
+        chip_gap = int(0.006 * _SW)
+        x = fld.x + fld.width + int(0.015 * _SW)
+        y = fld.y + max(0, (fld.height - chip_h) // 2)
+        mx, my = pygame.mouse.get_pos()
+        try:
+            current = int(self.game_limit_field.content)
+        except (TypeError, ValueError):
+            current = None
+        for label, points in GAME_LIMIT_PRESETS:
+            text = f'{label} {points}'
+            surf = self._panel_font_small.render(text, True, (235, 225, 208))
+            chip_w = surf.get_width() + int(0.014 * _SW)
+            rect = pygame.Rect(x, y, chip_w, chip_h)
+            selected = current == points
+            hovered = rect.collidepoint(mx, my)
+            if selected:
+                bg, bdr = (100, 80, 40), (250, 221, 0)
+            elif hovered:
+                bg, bdr = (75, 65, 48), (180, 160, 130)
+            else:
+                bg, bdr = (50, 45, 35), (120, 105, 75)
+            pygame.draw.rect(self.window, bg, rect, border_radius=9)
+            pygame.draw.rect(self.window, bdr, rect, 1, border_radius=9)
+            self.window.blit(surf, (rect.x + (rect.w - surf.get_width()) // 2,
+                                    rect.y + (rect.h - surf.get_height()) // 2))
+            self._preset_rects.append((rect, points))
+            x += chip_w + chip_gap
+
+    def _handle_preset_click(self, pos):
+        for rect, points in self._preset_rects:
+            if rect.collidepoint(pos):
+                self.game_limit_field.content = str(points)
+                self.game_limit_field.cursor_pos = len(self.game_limit_field.content)
+                self._game_limit_synced = False
+                from utils import sound
+                sound.play('ui_click')
+                return True
+        return False
 
     def _draw_close_x_button(self):
         r = self._btn_close_rect
@@ -607,6 +655,9 @@ class NewGameScreen(MenuScreenMixin, Screen):
                 return
 
             if self._selected_opponent:
+                if (event.type == MOUSEBUTTONUP and event.button == 1
+                        and self._handle_preset_click(event.pos)):
+                    continue
                 self._handle_config_field_event(event)
 
             # Scroll wheel
@@ -760,7 +811,7 @@ class NewGameScreen(MenuScreenMixin, Screen):
         self._selected_opponent = opponent
         self.stake_field.content = '10'
         self.stake_field.cursor_pos = len(self.stake_field.content)
-        self.game_limit_field.content = '15'
+        self.game_limit_field.content = '7'
         self.game_limit_field.cursor_pos = len(self.game_limit_field.content)
         self._game_limit_synced = False
         self.stake_field.deactivate()

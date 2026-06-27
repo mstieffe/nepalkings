@@ -208,6 +208,20 @@ def _selectable_defender_targets_if_ai_passes(game_dict, ai_player):
     return targets
 
 
+def _defender_matches_battle_modifier(fig, *, has_peasant_war=False,
+                                      has_civil_war=False,
+                                      civil_war_color=None):
+    """Return True when a serialized defender candidate satisfies battle modifiers."""
+    if has_peasant_war and fig.get('field') != 'village':
+        return False
+    if has_civil_war:
+        if fig.get('field') != 'village':
+            return False
+        if civil_war_color and fig.get('color') != civil_war_color:
+            return False
+    return True
+
+
 def _should_force_defender_counter_advance(game_dict, ai_player):
     """Return (force, reason) for defender-side counter-advance policy."""
     targets = _selectable_defender_targets_if_ai_passes(game_dict, ai_player)
@@ -705,13 +719,9 @@ def _enum_select_defender(game_dict, ai_player, opponent):
     has_peasant_war = any(m.get('type') == 'Peasant War' for m in modifiers)
     has_civil_war = any(m.get('type') == 'Civil War' for m in modifiers)
 
-    # For Civil War, determine the color of the AI's advancing figure
+    # Civil War first defender selection is village-only.  Same-color is
+    # enforced only for the optional second defender after the first is chosen.
     civil_war_color = None
-    if has_civil_war:
-        for fig in ai_player.get('figures', []):
-            if fig['id'] == adv_fig_id:
-                civil_war_color = fig.get('color')
-                break
 
     checkmate_fallback = []
     eligible = []
@@ -722,19 +732,16 @@ def _enum_select_defender(game_dict, ai_player, opponent):
         # Skip figures that cannot defend
         if fig.get('cannot_defend'):
             continue
+        if not _defender_matches_battle_modifier(
+                fig,
+                has_peasant_war=has_peasant_war,
+                has_civil_war=has_civil_war,
+                civil_war_color=civil_war_color):
+            continue
         # Checkmate figures are normally skipped; keep as fallback
         if fig.get('checkmate'):
             checkmate_fallback.append(fig)
             continue
-        # Peasant War: only village figures can be selected
-        if has_peasant_war and fig.get('field') != 'village':
-            continue
-        # Civil War: only village figures of matching color
-        if has_civil_war:
-            if fig.get('field') != 'village':
-                continue
-            if civil_war_color and fig.get('color') != civil_war_color:
-                continue
         eligible.append(fig)
 
     # Enforce must_be_attacked: if any eligible figure has this flag,
@@ -778,6 +785,22 @@ def _enum_select_defender(game_dict, ai_player, opponent):
                 'params': {'figure_id': fig['id']},
             })
             action_id += 1
+
+    if not actions:
+        modifier_note = ""
+        if has_peasant_war:
+            modifier_note = " under Peasant War"
+        elif has_civil_war:
+            modifier_note = " under Civil War"
+        actions.append({
+            'id': action_id,
+            'type': 'defender_no_figures_loss',
+            'description': (
+                f"Opponent has no legal defending figure{modifier_note} — "
+                "trigger defender auto-loss."
+            ),
+            'params': {},
+        })
 
     return actions
 

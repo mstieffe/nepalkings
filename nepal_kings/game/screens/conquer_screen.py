@@ -144,6 +144,11 @@ _RIGHT_SECTION_INFO = {
 
 _RED_SUITS = {'Hearts', 'Diamonds'}
 _BLACK_SUITS = {'Clubs', 'Spades'}
+_CALL_FIELD_MAP = {
+    'Call Villager': 'village',
+    'Call Military': 'military',
+    'Call King': 'castle',
+}
 
 
 class ConquerScreen(MenuScreenMixin, Screen):
@@ -1306,12 +1311,9 @@ class ConquerScreen(MenuScreenMixin, Screen):
         self._draw_menu_coach(self._current_conquer_coach_step())
 
     def _conquer_coach_ready(self):
-        completed = self._onboarding_completed_steps()
-        return (
-            'finish_first_duel' in completed
-            and 'open_first_main_booster' in completed
-            and 'open_first_side_booster' in completed
-        )
+        # The starter conquer config is preassembled server-side, so the first
+        # battle can happen before the player opens any boosters.
+        return 'finish_first_conquer_battle' not in self._onboarding_completed_steps()
 
     def _conquer_field_coach_rect(self):
         rects = [rect for rect in getattr(self, '_field_rects', {}).values() if rect]
@@ -1334,63 +1336,89 @@ class ConquerScreen(MenuScreenMixin, Screen):
             bounds.union_ip(rect)
         return bounds
 
+    def _second_build_coach_ready(self):
+        """True during the player's guided second conquest (build-it-yourself).
+
+        The first conquer attack is pre-assembled; this coaches the *next* one,
+        which the player builds by hand. Gated to exactly one finished conquer
+        battle so it fires only for the second conquest and never again.
+        """
+        onboarding = (getattr(self.state, 'user_dict', None) or {}).get('onboarding') or {}
+        if not onboarding or onboarding.get('onboarding_skipped'):
+            return False
+        completed = set(onboarding.get('completed_steps') or [])
+        if 'finish_first_conquer_battle' not in completed:
+            return False
+        facts = onboarding.get('facts') or {}
+        return int(facts.get('conquer_battles') or 0) == 1
+
+    def _second_build_coach_step(self, seen):
+        if not self._second_build_coach_ready():
+            return None
+        figures = (self._config or {}).get('figures', []) if self._config else []
+        if self._btn_build and 'conquer_build_yourself' not in seen:
+            return {
+                'id': 'conquer_build_yourself',
+                'rect': self._btn_build,
+                'title': 'Now Build It Yourself',
+                'body': 'This land has no army yet. Tap Build, pick a glowing recipe — start with your King — then confirm. Add a Farm and Warriors the same way.',
+                'action': 'click',
+                'mark_on_click': True,
+                'max_lines': 5,
+            }
+        if not figures:
+            # Wait until the player has actually built a figure before moving on.
+            return None
+        battle_plan_rect = self._conquer_combined_rect(
+            self._battle_plan_rect, self._btn_buy_move)
+        if battle_plan_rect and 'conquer_build_yourself_tactics' not in seen:
+            return {
+                'id': 'conquer_build_yourself_tactics',
+                'rect': battle_plan_rect,
+                'title': 'Add Your Tactics',
+                'body': 'Now set your battle plan: add three Daggers as tactics, just like your first attack.',
+                'action': 'next',
+                'button_label': 'Got it',
+                'max_lines': 4,
+            }
+        if self._btn_battle and 'conquer_build_yourself_battle' not in seen:
+            return {
+                'id': 'conquer_build_yourself_battle',
+                'rect': self._btn_battle,
+                'title': 'Start When Ready',
+                'body': 'Once you have at least one figure and three tactics, Start Battle lights up. This land has a real defender — your build decides it.',
+                'action': 'next',
+                'button_label': 'Got it',
+                'max_lines': 5,
+            }
+        return None
+
     def _current_conquer_coach_step(self):
-        if not self._menu_coach_allowed_common() or not self._conquer_coach_ready():
+        if not self._menu_coach_allowed_common():
             return None
         if (self._loading or self._error or not self._config or not self._layout_built
                 or self._active_subscreen or self._figure_detail_box or self._move_detail_box
                 or self._active_info_key):
             return None
         seen = self._menu_coach_seen()
-        field_rect = self._conquer_field_coach_rect()
-        if field_rect and 'conquer_config_field' not in seen:
-            return {
-                'id': 'conquer_config_field',
-                'rect': field_rect,
-                'title': 'Conquer Field',
-                'body': 'Your field prepares the attack. Castle, village, and military figures shape the resources and strength you bring into conquest. Note that the number of kings in your castle is limited by the tier of land you are conquering.',
-                'action': 'next',
-                'max_lines': 5,
-            }
-        if self._btn_build and 'conquer_config_build_edit' not in seen:
-            return {
-                'id': 'conquer_config_build_edit',
-                'rect': self._btn_build,
-                'title': 'Build Figures',
-                'body': 'Use this edit button to add or replace figures before the battle. Figures are the engine behind your conquer resources.',
-                'action': 'next',
-                'max_lines': 5,
-            }
-        battle_plan_rect = self._conquer_combined_rect(self._battle_plan_rect, self._btn_buy_move)
-        if battle_plan_rect and 'conquer_config_battle_plan' not in seen:
-            return {
-                'id': 'conquer_config_battle_plan',
-                'rect': battle_plan_rect,
-                'title': 'Battle Plan',
-                'body': 'This edit button opens battle move shopping. Those moves become your tactics during the battle.',
-                'action': 'next',
-                'max_lines': 5,
-            }
-        prelude_rect = self._conquer_combined_rect(
-            self._prelude_panel_rect, self._btn_prelude_edit, self._prelude_spell_rect)
-        if prelude_rect and 'conquer_config_prelude' not in seen:
-            return {
-                'id': 'conquer_config_prelude',
-                'rect': prelude_rect,
-                'title': 'Prelude Spell',
-                'body': 'A prelude spell fires before the conquest begins. It is optional, but it can swing the opening state in your favour.',
-                'action': 'next',
-                'max_lines': 5,
-            }
+        # Guided second conquest: pay off the "build it yourself" promise.
+        second = self._second_build_coach_step(seen)
+        if second is not None:
+            return second
+        if not self._conquer_coach_ready():
+            return None
+        # The first attack is pre-assembled, so a single window orients the
+        # player and sends them straight into battle. The mechanics (tactics,
+        # prelude, loot) are taught in context once the battle is under way.
         if self._btn_battle and 'conquer_config_to_battle' not in seen:
             return {
                 'id': 'conquer_config_to_battle',
                 'rect': self._btn_battle,
-                'title': 'Start Conquer Battle',
-                'body': 'When ready, Start Battle opens the live conquest. Submitted cards can be looted if you lose; unlooted cards return. The next screen explains the timeline, tactics, ledger, and result.',
+                'title': 'Your Attack Is Ready',
+                'body': 'We pre-built this attack from your starter cards: figures, three tactics, and a prelude spell. Tap Start Battle — the prelude draws cards, then you play tactics each round. Lose and only looted cards are gone; the rest return.',
                 'action': 'next',
                 'button_label': 'Got it',
-                'max_lines': 5,
+                'max_lines': 6,
             }
         return None
 
@@ -1564,7 +1592,8 @@ class ConquerScreen(MenuScreenMixin, Screen):
 
                 draw_battle_move_icon(
                     self.window, cx, cy,
-                    m['family_name'], m['suit'], m.get('value', 0),
+                    m['family_name'], m['suit'],
+                    self._battle_move_display_power(m),
                     self._slot_glow_cache, self._slot_icon_cache,
                     self._slot_frame_cache, self._suit_icon_cache,
                     self._slot_font, sw,
@@ -1594,6 +1623,90 @@ class ConquerScreen(MenuScreenMixin, Screen):
                 self.window.blit(self._slot_diamond, dr.topleft)
                 rlbl = self._small_font.render(f'R{i + 1}', True, (100, 100, 100))
                 self.window.blit(rlbl, rlbl.get_rect(centerx=cx, top=cy + int(sw * 0.55)))
+
+    def _figure_by_id(self, figure_id):
+        return next((
+            fig for fig in self._figure_objects
+            if str(getattr(fig, 'id', None)) == str(figure_id)
+        ), None)
+
+    def _figure_has_deficit(self, figure):
+        icon = self._figure_icons.get(getattr(figure, 'id', None))
+        if icon is not None:
+            return bool(getattr(icon, 'has_deficit', False))
+        return False
+
+    def _call_figure_power_bonus(self, figure):
+        icon = self._figure_icons.get(getattr(figure, 'id', None))
+        return int(getattr(icon, 'buffs_allies_bonus', 0) or 0) if icon else 0
+
+    def _call_figure_power_bonuses(self):
+        return {
+            getattr(fig, 'id', None): self._call_figure_power_bonus(fig)
+            for fig in self._figure_objects
+        }
+
+    def _call_figure_matches_move(self, move, figure):
+        field = getattr(getattr(figure, 'family', None), 'field', None)
+        if field != _CALL_FIELD_MAP.get(move.get('family_name')):
+            return False
+        if getattr(figure, 'cannot_be_targeted', False):
+            return False
+        if self._figure_has_deficit(figure):
+            return False
+        suit = getattr(figure, 'suit', None)
+        move_is_red = move.get('suit') in _RED_SUITS
+        return suit in (_RED_SUITS if move_is_red else _BLACK_SUITS)
+
+    def _eligible_call_figures(self, move, *, include_bound=True):
+        if move.get('family_name') not in _CALL_FIELD_MAP:
+            return []
+        eligible = [
+            fig for fig in self._figure_objects
+            if self._call_figure_matches_move(move, fig)
+        ]
+        if include_bound and move.get('call_figure_id') is not None:
+            bound = self._figure_by_id(move.get('call_figure_id'))
+            if bound is not None and bound not in eligible:
+                eligible.insert(0, bound)
+        return eligible
+
+    def _call_figure_effective_power(self, move, figure):
+        try:
+            base = int(figure.get_value() or 0)
+        except Exception:
+            base = 0
+        total = base + self._call_figure_power_bonus(figure)
+        if ((getattr(figure, 'suit', '') or '').lower()
+                == (move.get('suit', '') or '').lower()):
+            total += int(move.get('value') or 0)
+        return total
+
+    def _battle_move_display_power(self, move):
+        if move.get('family_name') == 'Block':
+            return 0
+        if move.get('family_name') not in _CALL_FIELD_MAP:
+            return move.get('value', 0)
+        bound = self._figure_by_id(move.get('call_figure_id'))
+        if bound is not None:
+            return self._call_figure_effective_power(move, bound)
+        eligible = self._eligible_call_figures(move, include_bound=False)
+        if not eligible:
+            return move.get('value', 0)
+        return max(self._call_figure_effective_power(move, fig) for fig in eligible)
+
+    def _best_call_figure_index(self, move, eligible):
+        if not eligible:
+            return 0
+        call_figure_id = move.get('call_figure_id')
+        if call_figure_id is not None:
+            for idx, fig in enumerate(eligible):
+                if str(getattr(fig, 'id', None)) == str(call_figure_id):
+                    return idx
+        return max(
+            range(len(eligible)),
+            key=lambda idx: self._call_figure_effective_power(move, eligible[idx]),
+        )
 
     def _draw_prelude_spell(self):
         """Draw the prelude spell section with a single spell icon slot."""
@@ -2351,10 +2464,15 @@ class ConquerScreen(MenuScreenMixin, Screen):
                     moves = self._config.get('battle_moves', [])
                     for m in moves:
                         if m['round_index'] == self._hovered_slot:
+                            eligible = self._eligible_call_figures(m)
                             self._move_detail_box = BattleMoveDetailBox(
                                 self.window, m,
                                 self._move_manager.families_by_name,
                                 None,
+                                eligible_figures=eligible,
+                                best_figure_index=self._best_call_figure_index(
+                                    m, eligible),
+                                figure_power_bonuses=self._call_figure_power_bonuses(),
                             )
                             break
                     continue

@@ -162,6 +162,8 @@ class GameScreen(Screen):
     def make_dialogue_box(self, message, actions=None, images=None, icon=None, title="", auto_close_delay=None, message_after_images=None):
         """Create a dialogue box with specified message, actions, images, and icon."""
         from game.components.dialogue_box import DialogueBox
+        from utils import sound
+        sound.play_for_dialogue(title)
         self._active_dialogue_type = None  # Clear — callers via queue_or_show set it after
         self.dialogue_box = DialogueBox(self.window, message, actions=actions, images=images, icon=icon, title=title, auto_close_delay=auto_close_delay, message_after_images=message_after_images)
 
@@ -3448,6 +3450,10 @@ class GameScreen(Screen):
             'is_ai_defender': bool(last.get('is_ai_defender')),
             'conquer_attacker_player_id': last.get('conquer_attacker_player_id'),
             'conquer_defender_player_id': last.get('conquer_defender_player_id'),
+            'fig_diff': last.get('fig_diff'),
+            'round_diff': last.get('round_diff'),
+            'adv_power': last.get('adv_power'),
+            'def_power': last.get('def_power'),
         }
         return result
 
@@ -3502,7 +3508,17 @@ class GameScreen(Screen):
             land_label = f'Tier {land_tier} land' if land_tier else 'this land'
             title = 'Land Conquered!'
             icon = 'victory'
-            message = f'You have conquered {land_label}!'
+            # First conquest is a milestone — celebrate it (the dialog already
+            # plays the conquer_win fanfare via sound.play_for_dialogue).
+            _onboarding = (getattr(self.state, 'user_dict', None) or {}).get('onboarding') or {}
+            _first_conquest = ('finish_first_conquer_battle'
+                               not in set(_onboarding.get('completed_steps') or []))
+            if _first_conquest:
+                message = (f'Your first land is yours! You conquered {land_label}, '
+                           'and this kingdom now grows from the map. '
+                           'Next, return to your kingdom to finish the conquer tutorial.')
+            else:
+                message = f'You have conquered {land_label}!'
             if gold_rate:
                 message += f'\n\nGold production increased by {gold_rate:.1f} gold/hour.'
             loot_cards = result.get('loot_gained_cards') or result.get('loot_lost_cards') or []
@@ -3589,6 +3605,10 @@ class GameScreen(Screen):
                         f'• {line}' for line in loot_lines)
                     message += '\n\nCollect looted cards from the Loot Inbox in your kingdom configuration.'
 
+        breakdown_line = self._conquer_result_breakdown_line(result, is_attacker)
+        if breakdown_line:
+            message = f'{message}\n\n{breakdown_line}'
+
         if reason_text:
             message = f'{reason_text}\n\n{message}'
 
@@ -3641,6 +3661,35 @@ class GameScreen(Screen):
                     return str(old_invader_id) == str(getattr(game, 'player_id', None))
 
         return bool(getattr(game, 'invader', False))
+
+    def _conquer_result_breakdown_line(self, result, is_attacker):
+        """One-line figure-vs-tactic split for the conquer result dialog.
+
+        The server stores ``fig_diff`` / ``round_diff`` in attacker
+        perspective; flip them for a viewer who defended.  Surfacing this
+        teaches players that figure power, not tactics, usually decides a
+        conquer battle.  Returns '' when the breakdown is absent (e.g.
+        auto-loss / withdrawal outcomes) so the line collapses cleanly.
+        """
+        if not isinstance(result, dict):
+            return ''
+        if result.get('fig_diff') is None or result.get('round_diff') is None:
+            return ''
+        try:
+            fig = int(result.get('fig_diff') or 0)
+            rounds = int(result.get('round_diff') or 0)
+        except (TypeError, ValueError):
+            return ''
+        if not is_attacker:
+            fig = -fig
+            rounds = -rounds
+        total = fig + rounds
+
+        def _signed(value):
+            return f'+{value}' if value >= 0 else str(value)
+
+        return (f'Battle math — Figures {_signed(fig)} · '
+                f'Tactics {_signed(rounds)} · Total {_signed(total)}')
 
     def _try_handle_finished_conquer_game(self):
         """Safety net for finished conquer games resolved outside BattleScreen."""
@@ -4769,9 +4818,11 @@ class GameScreen(Screen):
         )
         
         if result.get('success'):
+            from utils import sound
+            sound.play('booster_reveal')  # spell-cast sparkle (duel + conquer counter)
             self.need_to_respond_to_spell = False
             self._last_resolved_spell_id = self.state.game.pending_spell_id
-            
+
             # Clear spell cache immediately so next spell gets fresh data
             self.pending_spell_details = None
             self._cached_castable_spells = None
@@ -5146,11 +5197,11 @@ class GameScreen(Screen):
         seen = set((self._duel_onboarding() or {}).get('duel_hints_seen') or [])
         steps = [
             {'id': 'field', 'button': self.field_button, 'subscreen': 'field', 'title': 'Playing Board',
-             'body': 'The field shows the figures you and your opponent have built. Each round consists of 6 turns to build, cast spells or change cards before battle.'},
+             'body': 'The field shows figures built from card recipes. Each round gives 6 setup turns to build figures, cast spells, or change cards before battle.'},
             {'id': 'build', 'button': self.build_button, 'subscreen': 'build_figure', 'title': 'Build Figures',
-             'body': 'Build turns cards into figures on the board. Figures produce resources, have skills, attack, and defend.'},
+             'body': 'Build spends recipe cards to create figures. For example, a King is a castle figure and a Farm is a village figure. Figures produce, consume, attack, and defend.'},
             {'id': 'cast_spell', 'button': self.cast_spell_button, 'subscreen': 'cast_spell', 'title': 'Cast Spells',
-             'body': 'Spells are powerful turn options to influence the game. Use them to alter cards and figures of yours or your opponent.'},
+             'body': 'Spells are recipes too, but they create one-time effects instead of figures. Use them to draw, protect, damage, or alter cards and figures.'},
             {'id': 'change_cards', 'rects': self._duel_change_cards_rects(), 'subscreen': 'field', 'title': 'Change Cards',
              'separate_highlights': True,
              'body': 'Use the round-arrow buttons beside your hands to swap selected cards when your hand needs better options.'},
@@ -5176,7 +5227,7 @@ class GameScreen(Screen):
             {'id': 'battle_move_panel', 'rects': self._duel_battle_move_panel_rects(), 'subscreen': 'battle', 'title': 'Play Battle Moves',
              'body': 'In battle, click one of your move icons to open its actions. Each player plays one move per round for 3 rounds.'},
             {'id': 'battle_move_actions', 'rects': self._duel_battle_move_action_rects(), 'subscreen': 'battle', 'title': 'Move Actions',
-             'body': 'Use plays the move. Gamble sacrifices it for 2 random moves. Daggers can combine with same-colour daggers, and Double Daggers can dismantle.',
+             'body': 'Use plays the move. Gamble trades it for 2 random moves. Combine same-colour Daggers into a Double Dagger; Dismantle splits one back.',
              'requires_seen': 'battle_move_panel'},
             {'id': 'battle_figure_diff', 'rects': self._duel_battle_figure_diff_rects(), 'subscreen': 'battle', 'title': 'Figure Difference',
              'body': 'This middle value compares the battling figures before battle moves are added. Positive is good for you; negative favours the opponent.'},
