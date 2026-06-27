@@ -385,11 +385,10 @@ function show_infobox() {
 
         function cap(){ return done ? 1 : ((pyReady || canvasUp) ? BOOT_CAP : DL_CAP); }
 
-        // Only hand off once the canvas is actually sized on screen —
-        // otherwise the fade reveals a black 1px canvas, because pygbag
-        // resizes the canvas only after main() is already running. pyReady
-        // just lets the bar fill smoothly to ~99% before that happens.
-        function maybeFinish(){ if (canvasUp) done = true; }
+        // Hand off only after Python has shown its first frame and pygbag has
+        // sized the canvas. A canvas resize alone can otherwise reveal a blank
+        // surface between the loader and the login screen.
+        function maybeFinish(){ if (pyReady && canvasUp) done = true; }
 
         function label(p){
             if (done || p > 0.965) return 'Starting game\u2026';
