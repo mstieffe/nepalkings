@@ -824,8 +824,8 @@ class Land(db.Model):
         # Resolve AI name from the deterministic defence generator when unowned.
         ai_name = None
         if not self.owner_user_id:
-            from ai.defence.generator import get_ai_defence_template_for_land
-            ai_name = get_ai_defence_template_for_land(self).get('ai_name')
+            from ai.defence.generator import get_ai_defence_name_for_land
+            ai_name = get_ai_defence_name_for_land(self)
         return {
             'id': self.id,
             'col': self.col,

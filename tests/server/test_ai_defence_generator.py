@@ -12,6 +12,7 @@ from ai.defence.config import (
     AI_DEFENCE_SUITS,
 )
 from ai.defence.generator import (
+    get_ai_defence_name_for_land,
     get_ai_defence_template_for_land,
     template_resource_deficit_map,
     validate_ai_defence_template,
@@ -133,6 +134,14 @@ class TestAiDefenceGenerator:
     def test_generation_is_deterministic_for_same_land(self):
         land = _land(tier=4, suit='Spades', seed=98765, land_id=44, col=8, row=9)
         assert get_ai_defence_template_for_land(land) == get_ai_defence_template_for_land(land)
+
+    def test_lightweight_name_matches_full_template_name(self):
+        for tier in (1, 2, 3, 4, 5, 6):
+            for suit in (*AI_DEFENCE_SUITS, 'Neutral'):
+                land = _land(tier=tier, suit=suit, seed=42, land_id=7000 + tier)
+                assert get_ai_defence_name_for_land(land) == (
+                    get_ai_defence_template_for_land(land)['ai_name']
+                )
 
     def test_generation_varies_with_land_seed(self):
         first = get_ai_defence_template_for_land(
