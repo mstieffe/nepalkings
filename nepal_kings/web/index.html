@@ -361,53 +361,98 @@ function show_infobox() {
 
     globalThis.__canvas_resized = (self, ecw, ech) => {}
 
-    // ── Loading-bar progress hook ────────────────────────
+    // ── Unified loading-progress controller ──────────────
     (function(){
-        var bar = document.getElementById('nk-bar');
-        var stat = document.getElementById('nk-status');
-        var prog = document.getElementById('progress');
-        // Watch the hidden pygbag <progress> element
-        if (prog) {
-            var obs = new MutationObserver(function(){
-                var v = prog.value, m = prog.max || 100;
-                var pct = Math.min(100, Math.round(v / m * 100));
-                if (bar) bar.style.width = pct + '%';
-                if (stat) {
-                    if (pct < 30) stat.textContent = 'Downloading assets\u2026';
-                    else if (pct < 80) stat.textContent = 'Preparing game engine\u2026';
-                    else stat.textContent = 'Almost ready\u2026';
-                }
-            });
-            obs.observe(prog, {attributes: true});
-        }
-        // Also hook XHR progress if pygbag fires it
-        var origXHR = XMLHttpRequest.prototype.send;
-        XMLHttpRequest.prototype.send = function(){
-            var x = this;
-            x.addEventListener('progress', function(e){
-                if (e.lengthComputable && bar) {
-                    var pct = Math.round(e.loaded / e.total * 100);
-                    bar.style.width = pct + '%';
-                }
-            });
-            return origXHR.apply(this, arguments);
-        };
-    })();
-
-    // Hide loader when canvas gets its first real resize
-    (function(){
-        var c = document.getElementById('canvas');
+        var bar    = document.getElementById('nk-bar');
+        var statEl = document.getElementById('nk-status');
+        var prog   = document.getElementById('progress');
         var loader = document.getElementById('nk-loader');
-        if (!c || !loader) return;
-        var obs = new MutationObserver(function(){
-            if (parseInt(c.width) > 1 && parseInt(c.height) > 1) {
+        var canvas = document.getElementById('canvas');
+        if (!bar || !loader) return;
+
+        // Single owner of the bar so the real signals (pygbag's <progress>,
+        // XHR byte progress, and the Python boot phase) can never fight each
+        // other or drag the bar backwards.
+        //   download phase : 0% .. 90%   (CDN runtime + nepal_kings bundle)
+        //   python boot    : 90% .. 99%  (via window.nk_set_progress)
+        //   ready          : -> 100% then fade out
+        var shown = 0, target = 0;   // 0..1
+        var done = false;            // fully ready -> fill to 100% and fade
+        var canvasUp = false;        // pygame owns the screen
+        var DL_CAP = 0.90;           // download phase ceiling
+        var BOOT_CAP = 0.99;         // python-boot ceiling before "done"
+
+        function cap(){ return done ? 1 : (canvasUp ? BOOT_CAP : DL_CAP); }
+
+        function label(p){
+            if (done || p > 0.965) return 'Starting game\u2026';
+            if (canvasUp)          return 'Preparing game\u2026';
+            if (p < 0.5)           return 'Downloading assets\u2026';
+            return 'Preparing game engine\u2026';
+        }
+
+        // Raise the real target; never let it move backwards.
+        function bump(p){ if (p > target) target = Math.min(p, cap()); }
+
+        function finish(){ done = true; }
+
+        function tick(){
+            var c = cap();
+            // Asymptotic trickle so a stalled download still inches forward.
+            if (target < c) target += (c - target) * 0.012;
+            var goal = done ? 1 : target;
+            shown += (goal - shown) * 0.14;
+            if (done && goal - shown < 0.004) shown = 1;
+            bar.style.width = (Math.max(0, Math.min(1, shown)) * 100).toFixed(1) + '%';
+            if (statEl) statEl.textContent = label(shown);
+            if (done && shown >= 1){
+                loader.style.transition = 'opacity .45s ease';
                 loader.style.opacity = '0';
-                loader.style.transition = 'opacity .4s ease';
                 setTimeout(function(){ loader.style.display = 'none'; }, 500);
-                obs.disconnect();
+                return;                       // stop animating
             }
-        });
-        obs.observe(c, {attributes: true, attributeFilter: ['width','height']});
+            requestAnimationFrame(tick);
+        }
+        requestAnimationFrame(tick);
+
+        // Real signal #1: pygbag's hidden <progress> (runtime + bundle).
+        if (prog){
+            new MutationObserver(function(){
+                var m = prog.max || 100;
+                if (m) bump(prog.value / m * DL_CAP);
+            }).observe(prog, {attributes: true});
+        }
+
+        // Real signal #2: XHR byte progress, folded into the same target
+        // instead of writing the bar directly.
+        var origSend = XMLHttpRequest.prototype.send;
+        XMLHttpRequest.prototype.send = function(){
+            this.addEventListener('progress', function(e){
+                if (e.lengthComputable && e.total) bump(e.loaded / e.total * DL_CAP);
+            });
+            return origSend.apply(this, arguments);
+        };
+
+        // Real signal #3: the Python boot phase (screen construction) maps
+        // its own 0..1 into the 90%..99% band. See nepal_kings.py.
+        window.nk_set_progress = function(frac){
+            frac = Math.max(0, Math.min(1, +frac || 0));
+            bump(DL_CAP + (BOOT_CAP - DL_CAP) * frac);
+        };
+        window.nk_loader_done = finish;
+
+        // Readiness: canvas gets a real size once pygame takes the screen.
+        // Keep the branded loader up through the Python boot phase; a
+        // fallback timer guarantees it fades even if nk_loader_done() is
+        // never called (e.g. an older cached build).
+        if (canvas){
+            new MutationObserver(function(){
+                if (parseInt(canvas.width) > 1 && parseInt(canvas.height) > 1){
+                    canvasUp = true;
+                    setTimeout(finish, 6000);
+                }
+            }).observe(canvas, {attributes: true, attributeFilter: ['width','height']});
+        }
     })();
 
     // ── Lock to landscape on supporting browsers ─────────

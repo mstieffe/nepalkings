@@ -66,8 +66,8 @@ class GameScreen(Screen):
 
         _report(0.12, 'Loading cards …')
         # Initialize hands for the game (main and side hands)
-        self.main_hand = Hand(self.window, self.state.game, x=settings.MAIN_HAND_X, y=settings.MAIN_HAND_Y)
-        self.side_hand = Hand(self.window, self.state.game, x=settings.SIDE_HAND_X, y=settings.SIDE_HAND_Y, type="side_card")
+        self.main_hand = Hand(self.window, self.state, x=settings.MAIN_HAND_X, y=settings.MAIN_HAND_Y)
+        self.side_hand = Hand(self.window, self.state, x=settings.SIDE_HAND_X, y=settings.SIDE_HAND_Y, type="side_card")
 
         _report(0.20, 'Loading buttons …')
         # Initialize buttons and add to the game_buttons list

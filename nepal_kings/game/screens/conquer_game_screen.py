@@ -141,9 +141,9 @@ class ConquerGameScreen(GameScreen):
         # Hands are kept as data sources for prelude-drawn cards and battle-shop
         # eligibility, but they are not exposed as conquer UI chrome.
         _report(0.20, 'Loading conquer cards ...')
-        self.main_hand = Hand(self.window, self.state.game,
+        self.main_hand = Hand(self.window, self.state,
                               x=settings.MAIN_HAND_X, y=settings.MAIN_HAND_Y)
-        self.side_hand = Hand(self.window, self.state.game,
+        self.side_hand = Hand(self.window, self.state,
                               x=settings.SIDE_HAND_X, y=settings.SIDE_HAND_Y,
                               type="side_card")
 

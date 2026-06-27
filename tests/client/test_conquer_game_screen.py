@@ -48,6 +48,101 @@ def _game_screen_class():
     return GameScreen
 
 
+def test_conquer_game_screen_constructs_with_lightweight_game():
+    code = r'''
+import pygame
+from config import settings
+pygame.init()
+pygame.display.set_mode((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+from game.core.state import State
+from game.core.game import Game
+from game.screens.conquer_game_screen import ConquerGameScreen
+
+def figure(fid, player_id):
+    return {
+        'id': fid,
+        'player_id': player_id,
+        'game_id': 999,
+        'name': 'Castle',
+        'family_name': 'Castle',
+        'suit': 'black',
+        'field': 'castle',
+        'cards': [],
+        'is_visible': True,
+        'is_secret': False,
+        'points': 0,
+        'level': 1,
+        'health': 10,
+        'max_health': 10,
+    }
+
+game_dict = {
+    'id': 999,
+    'state': 'open',
+    'mode': 'conquer',
+    'conquer_move_model': 'tactics_hand',
+    'land_id': 123,
+    'land_tier': 1,
+    'date': '2026-06-27T00:00:00',
+    'stake': 0,
+    'game_limit': 45,
+    'turn_time_limit': None,
+    'winner_player_id': None,
+    'finished_at': None,
+    'last_battle_result': {},
+    'players': [
+        {'id': 10, 'user_id': 1, 'username': 'Player', 'turns_left': 0, 'points': 0, 'status': 'active', 'is_online': True, 'main_hand': [], 'side_hand': [], 'figures': [figure(100, 10)]},
+        {'id': 20, 'user_id': 2, 'username': '[AI] Defender', 'turns_left': 0, 'points': 0, 'status': 'active', 'is_online': False, 'main_hand': [], 'side_hand': [], 'figures': [figure(200, 20)]},
+    ],
+    'main_cards': [],
+    'side_cards': [],
+    'current_round': 1,
+    'invader_player_id': 10,
+    'turn_player_id': 10,
+    'ceasefire_active': False,
+    'ceasefire_start_turn': None,
+    'pending_spell_id': None,
+    'battle_modifier': None,
+    'waiting_for_counter_player_id': None,
+    'advancing_figure_id': None,
+    'advancing_figure_id_2': None,
+    'advancing_player_id': None,
+    'defending_figure_id': None,
+    'defending_figure_id_2': None,
+    'battle_decisions': None,
+    'battle_confirmed': False,
+    'fold_outcome': None,
+    'fold_winner_id': None,
+    'auto_loss_reason': None,
+    'auto_loss_detail': None,
+    'resting_figure_ids': [],
+    'battle_moves_confirmed': None,
+    'battle_round': 0,
+    'battle_turn_player_id': None,
+    'battle_skipped_rounds': {},
+    'conquer_round_deadline_ts': None,
+    'conquer_round_timeout_sec': None,
+    'conquer_resolution_step': 0,
+    'conquer_tactics': [],
+    'battle_gamble_counts': {},
+    'post_battle_drawn_cards': None,
+    'battle_moves': [],
+    'active_spells': [],
+}
+state = State()
+state.user_dict = {'id': 1, 'username': 'Player'}
+state.game = Game(game_dict, state.user_dict, lightweight=True)
+state.screen = 'conquer_game'
+state.subscreen = 'field'
+screen = ConquerGameScreen(state)
+screen.on_enter()
+screen.update([])
+screen.render()
+print('ok')
+'''
+    _run_mobile_geometry_check(code)
+
+
 def _base_conquer_screen(game=None):
     ConquerGameScreen = _conquer_screen_class()
     screen = ConquerGameScreen.__new__(ConquerGameScreen)
@@ -1048,6 +1143,9 @@ def test_opponent_hidden_hand_count_counts_available_only():
     ConquerGameScreen = _conquer_screen_class()
     screen = ConquerGameScreen.__new__(ConquerGameScreen)
     screen.state = SimpleNamespace(game=SimpleNamespace(
+        mode='conquer',
+        conquer_move_model='tactics_hand',
+        game_id=1,
         player_id=10,
         conquer_tactics=[
             {'player_id': 10, 'status': 'available', 'played_round': None},  # yours

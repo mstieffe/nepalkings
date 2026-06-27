@@ -91,8 +91,30 @@ class Client:
         ]
         total_weight = sum(w for *_, w in screen_steps)
 
+        # On web the branded HTML loader (web/index.html) stays on top of the
+        # canvas through this boot phase; bridge our fraction into its bar so
+        # the user sees one continuous fill instead of a second bar at 0%.
+        _web_embed = None
+        if _sys.platform == 'emscripten':
+            try:
+                import embed as _web_embed  # noqa: F401
+            except Exception:
+                _web_embed = None
+
+        def _web_loader(fraction):
+            if _web_embed is None:
+                return
+            try:
+                _web_embed.js(
+                    "if(window.nk_set_progress)window.nk_set_progress(%s)"
+                    % min(1.0, max(0.0, float(fraction)))
+                )
+            except Exception:
+                pass
+
         def draw_progress(fraction, label):
             """Draw the progress bar.  fraction is 0.0 – 1.0."""
+            _web_loader(fraction)
             surf = pygame.display.get_surface()
             surf.blit(bg, (0, 0))
             # Title
@@ -162,6 +184,13 @@ class Client:
             draw_progress(frac_end, label)
 
         draw_progress(1.0, 'Ready')
+
+        # Boot complete: let the web loader fade and hand off to the canvas.
+        if _web_embed is not None:
+            try:
+                _web_embed.js("if(window.nk_loader_done)window.nk_loader_done()")
+            except Exception:
+                pass
 
     def _create_screen(self, key):
         spec = self._screen_factories.get(key)
