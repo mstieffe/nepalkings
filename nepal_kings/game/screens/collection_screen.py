@@ -1394,18 +1394,22 @@ class CollectionScreen(MenuScreenMixin, Screen):
         """Show confirmation dialogue for opening a booster."""
         self._pending_booster_type = pack_type
         info = settings.COLLECTION_PACK_PREVIEWS[pack_type]
+        count = self._boosters if pack_type == 'main' else self._boosters_side
         pack_icon = self._booster_icon_dialog if pack_type == 'main' else self._booster_side_icon_dialog
+        actions = ['Open', 'cancel']
+        if count > 1:
+            actions.insert(1, 'Open all')
         self.dialogue_box = DialogueBox(
             self.window,
-            f'Open {info["title"]}?',
-            actions=['open', 'cancel'],
+            f'Open {info["title"]}?\nOwned: {count}',
+            actions=actions,
             images=[pack_icon],
             title='Open Booster')
 
-    def _perform_open_booster(self):
+    def _perform_open_booster(self, quantity=1):
         """Start the open booster API call and show reveal overlay when done."""
         pack_type = getattr(self, '_pending_booster_type', 'main')
-        self._start_booster_request('open', pack_type)
+        self._start_booster_request('open', pack_type, quantity=quantity)
 
     def _apply_open_booster_result(self, pack_type, result):
         """Apply an open-booster response and show the reveal overlay."""
@@ -1460,10 +1464,21 @@ class CollectionScreen(MenuScreenMixin, Screen):
                     'layout': 'text_image_text',
                     'lines': [
                         'Key cards have jewels. Number cards have numbers.',
-                        'Together they form the resources for figures, spells,',
-                        'and battle tactics.',
+                        'Grey, orange, and golden outlines show card rarity.',
+                        'Golden rare cards are the most valuable.',
+                    ],
+                    'image': lambda: td.card_rarity_code_diagram(),
+                },
+                {
+                    'title': 'Cards Become Actions',
+                    'layout': 'text_image_text',
+                    'lines': [
+                        'Figures, spells, and battle tactics can come from',
+                        'a single card or from a card recipe. But don\'t worry,',
+                        'you don\'t need to memorize all the recipes.',
                     ],
                     'image': lambda: td.card_recipe_examples(),
+                    'image_caption': 'Some examples.',
                     'lines_below': [
                         'Open a booster pack to add more cards.',
                     ],
@@ -1518,8 +1533,8 @@ class CollectionScreen(MenuScreenMixin, Screen):
                     'image': lambda: td.suit_roulette_diagram(),
                     'image_caption': 'One of the four suits — drawn at random.',
                     'lines': [
-                        'We want to equip you with a starter set of cards',
-                        'to get you ready for your first conquest.',
+                        'To get you going, we want to equip you with',
+                        'a random starter set of cards.',
                         'Spin the roulette to reveal which suit you received.',
                     ],
                 },
@@ -1625,28 +1640,17 @@ class CollectionScreen(MenuScreenMixin, Screen):
                 'mark_on_click': True,
                 'max_lines': 4,
             }
-        # No reward-pack round-trip: after the first conquest the kingdom screen
-        # (and the menu) guide collecting production, so the collection screen no
-        # longer nudges the player back and forth.
-        if ('finish_tutorial' in completed
-                and 'open_first_side_booster' not in completed):
-            return {
-                'id': 'collection_open_side_booster',
-                'rect': self._btn_open_side_rect,
-                'title': 'Open A Side Booster',
-                'body': 'Open a side booster. Side cards unlock advanced figures and effects.',
-                'action': 'click',
-                'mark_on_click': True,
-                'max_lines': 4,
-            }
+        # No reward-pack round-trip and no side-booster nudge: after the first
+        # conquest the kingdom screen closes the first-land tutorial, so the
+        # collection screen no longer coaches the player.
         return None
 
-    def _open_booster_sync_result(self, pack_type):
+    def _open_booster_sync_result(self, pack_type, quantity=1):
         try:
             if pack_type == 'main':
-                data = collection_service.open_booster()
+                data = collection_service.open_booster(quantity=quantity)
             else:
-                data = collection_service.open_booster_side()
+                data = collection_service.open_booster_side(quantity=quantity)
             return {'ok': True, 'data': data}
         except Exception as e:
             return {'ok': False, 'error': str(e)}
@@ -1702,12 +1706,12 @@ class CollectionScreen(MenuScreenMixin, Screen):
         self.state.set_msg('Booster pack purchased!')
         self._spawn_booster_floater(pack_type)
 
-    def _buy_booster_sync_result(self, pack_type):
+    def _buy_booster_sync_result(self, pack_type, quantity=1):
         try:
             if pack_type == 'main':
-                data = collection_service.buy_booster()
+                data = collection_service.buy_booster(quantity=quantity)
             else:
-                data = collection_service.buy_booster_side()
+                data = collection_service.buy_booster_side(quantity=quantity)
             return {'ok': True, 'data': data}
         except Exception as e:
             return {'ok': False, 'error': str(e)}
@@ -1728,14 +1732,16 @@ class CollectionScreen(MenuScreenMixin, Screen):
         except Exception as e:
             return {'ok': False, 'status': status_code, 'error': str(e)}
 
-    def _start_booster_request(self, action, pack_type):
+    def _start_booster_request(self, action, pack_type, quantity=1):
         if self._booster_poller:
             return
+        quantity = max(1, int(quantity or 1))
         if action == 'open':
             func = self._open_booster_sync_result
             endpoint = 'open_booster' if pack_type == 'main' else 'open_booster_side'
             self._draw_menu_coach(self._current_collection_coach_step())
-            self.state.set_msg('Opening booster pack...')
+            label = 'booster pack' if quantity == 1 else 'booster packs'
+            self.state.set_msg(f'Opening {quantity} {label}...')
         else:
             func = self._buy_booster_sync_result
             endpoint = 'buy_booster' if pack_type == 'main' else 'buy_booster_side'
@@ -1744,12 +1750,12 @@ class CollectionScreen(MenuScreenMixin, Screen):
         self._booster_pack_type = pack_type
         self._booster_poller = BackgroundPoller(
             func,
-            args=(pack_type,),
+            args=(pack_type, quantity),
             async_requests=[{
                 'key': 'response',
                 'method': 'POST',
                 'url': f'{settings.SERVER_URL}/collection/{endpoint}',
-                'data': {'quantity': 1} if action == 'buy' else {},
+                'data': {'quantity': 1},
             }],
             async_transform=self._booster_async_transform,
         )
@@ -1843,6 +1849,15 @@ class CollectionScreen(MenuScreenMixin, Screen):
         if self.state.action['status'] == 'open':
             self.reset_action()
             self._perform_open_booster()
+            return
+        if self.state.action['status'] == 'open all':
+            pack_type = getattr(self, '_pending_booster_type', 'main')
+            quantity = self._boosters if pack_type == 'main' else self._boosters_side
+            self.reset_action()
+            if quantity > 0:
+                self._perform_open_booster(quantity=quantity)
+            else:
+                self.state.set_msg('No booster packs to open')
             return
         if self.state.action['status'] == 'buy':
             self.reset_action()

@@ -49,7 +49,7 @@ def test_register_sets_welcome_present_pending(client):
     data = resp.get_json()
     assert resp.status_code == 200
     onboarding = data['user']['onboarding']
-    assert onboarding['coach_version'] == 'first_session_v3'
+    assert onboarding['coach_version'] == 'first_session_v4'
     assert onboarding['journey_phase'] == 'open_starter_pack'
     assert onboarding['next_action'] == {
         'screen': 'collection',
@@ -80,21 +80,11 @@ def test_journey_metadata_progresses_with_first_session_steps(db, two_users):
 
     mark_step(u1, 'finish_first_conquer_battle')
     onboarding = serialize_onboarding_state(u1)
-    # The duel is excluded from the mandatory tutorial; the kingdom core loop
-    # continues with production collection, then the kingdom-config tour.
-    assert onboarding['journey_phase'] == 'collect_production'
-    assert onboarding['next_action'] == {
-        'screen': 'kingdom',
-        'label': 'Collect Production',
-        'target_id': 'kingdom_production_intro',
-    }
-
-    # Collecting the conquered land's production completes the tutorial -- it
-    # ends on that payoff, with no kingdom-config tour or duel required.
-    mark_step(u1, 'collect_first_kingdom_production')
-    onboarding = serialize_onboarding_state(u1)
+    # The duel is excluded from the mandatory tutorial; the first conquered
+    # land now completes it, with no production collection or duel required.
     assert onboarding['journey_phase'] == 'complete'
     assert onboarding['next_action'] is None
+    assert 'finish_tutorial' in onboarding['completed_steps']
 
 
 def test_existing_user_has_no_pending_welcome(client, two_users):
@@ -352,7 +342,7 @@ def test_menu_hint_marks_are_persisted(client, auth_headers_user1):
     assert unknown.status_code == 400
 
 
-def test_finish_tutorial_reward_unlocks_on_production_collection(client, db, two_users, auth_headers_user1):
+def test_finish_tutorial_reward_unlocks_on_first_conquered_land(client, db, two_users, auth_headers_user1):
     u1, u2 = two_users
     u1.booster_packs = 0
     db.session.commit()
@@ -365,17 +355,7 @@ def test_finish_tutorial_reward_unlocks_on_production_collection(client, db, two
     assert initial_steps['finish_tutorial']['claimable'] is False
 
     from onboarding_service import mark_step
-    # The conquer battle alone is not enough -- production must be collected too.
     mark_step(u1, 'finish_first_conquer_battle')
-    db.session.commit()
-    midway = client.get('/onboarding/state', headers=auth_headers_user1).get_json()['onboarding']
-    steps = {step['id']: step for step in midway['core_steps']}
-    assert 'finish_tutorial' not in midway['completed_steps']
-    assert steps['finish_tutorial']['completed'] is False
-    assert steps['finish_tutorial']['claimable'] is False
-
-    # Collecting production completes the tutorial -- no menu hint or duel needed.
-    mark_step(u1, 'collect_first_kingdom_production')
     db.session.commit()
 
     finished = client.get('/onboarding/state', headers=auth_headers_user1).get_json()['onboarding']

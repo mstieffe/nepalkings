@@ -6193,9 +6193,12 @@ def get_battle_state():
                 else:
                     opponent_tactics.append({
                         'id': tactic.id,
+                        'game_id': tactic.game_id,
                         'player_id': tactic.player_id,
                         'status': tactic.status,
                         'played_round': None,
+                        'revealed_step_index': tactic.revealed_step_index,
+                        'discarded_step_index': tactic.discarded_step_index,
                     })
 
         reveal_spells = viewer_has_all_seeing_eye(game.serialize(), player_id)

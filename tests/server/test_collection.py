@@ -281,6 +281,36 @@ class TestOpenBooster:
         db_cards = CollectionCard.query.filter_by(user_id=u1.id).all()
         assert len(db_cards) == 6  # 3 + 3
 
+    def test_open_quantity_opens_many_in_one_response(self, client, db, two_users,
+                                                       auth_headers_user1):
+        u1, _ = two_users
+        u1.booster_packs = 4
+        # Isolate the booster draw from the first-open starter-set grant.
+        u1.onboarding_state = dict(u1.onboarding_state or {}, starter_set_granted=True)
+        db.session.commit()
+
+        rv = client.post('/collection/open_booster', headers=auth_headers_user1,
+                         json={'quantity': 4})
+        data = rv.get_json()
+
+        assert data['success'] is True
+        assert data['opened_boosters'] == 4
+        assert data['booster_packs'] == 0
+        assert len(data['cards']) == 12
+        assert CollectionCard.query.filter_by(user_id=u1.id).count() == 12
+
+    def test_open_quantity_rejects_more_than_owned(self, client, db, two_users,
+                                                   auth_headers_user1):
+        u1, _ = two_users
+        u1.booster_packs = 2
+        db.session.commit()
+
+        rv = client.post('/collection/open_booster', headers=auth_headers_user1,
+                         json={'quantity': 3})
+
+        assert rv.status_code == 400
+        assert 'Not enough booster packs' in rv.get_json()['message']
+
 
 # ═══════════════════════════════════════════════════════════════════
 #  POST /collection/open_booster_side
@@ -316,6 +346,21 @@ class TestOpenBoosterSide:
 
         rv = client.post('/collection/open_booster_side', headers=auth_headers_user1)
         assert rv.status_code == 400
+
+    def test_open_quantity_side(self, client, db, two_users, auth_headers_user1):
+        u1, _ = two_users
+        u1.booster_packs_side = 3
+        db.session.commit()
+
+        rv = client.post('/collection/open_booster_side', headers=auth_headers_user1,
+                         json={'quantity': 3})
+        data = rv.get_json()
+
+        assert data['success'] is True
+        assert data['opened_boosters'] == 3
+        assert data['booster_packs_side'] == 0
+        assert len(data['cards']) == 9
+        assert CollectionCard.query.filter_by(user_id=u1.id).count() == 9
 
 
 # ═══════════════════════════════════════════════════════════════════

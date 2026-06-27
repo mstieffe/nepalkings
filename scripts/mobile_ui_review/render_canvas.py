@@ -42,6 +42,7 @@ CONQUER_GAME_ALIASES = {
     "conquer_game_field": "field",
     "conquer_game_battle_shop": "battle_shop",
     "conquer_game_battle": "battle",
+    "conquer_game_battle_dagger": "battle_dagger",
     "conquer_game_battle_collapsed": "battle_collapsed",
 }
 
@@ -55,6 +56,10 @@ KINGDOM_SCREEN_ALIASES = {
 KINGDOM_CONFIG_ALIASES = {
     "kingdom_config": "top",
     "kingdom_config_shield": "shield",
+}
+
+BOOSTER_REVEAL_ALIASES = {
+    "collection_booster_reveal_special": "special",
 }
 
 MAIN_RANKS = {"7", "8", "9", "10", "J", "Q", "K", "A"}
@@ -742,7 +747,7 @@ def populate_duel_game(client, screen, subscreen: str) -> None:
 
 def populate_conquer_game(client, subscreen: str):
     requested_subscreen = subscreen
-    subscreen = "battle" if requested_subscreen == "battle_collapsed" else subscreen
+    subscreen = "battle" if requested_subscreen in {"battle_collapsed", "battle_dagger"} else subscreen
     client._init_perf_conquer_fixture(progress_noop)
     client.state.screen = "conquer_game"
     client.state.subscreen = subscreen
@@ -820,6 +825,14 @@ def populate_conquer_game(client, subscreen: str):
         if requested_subscreen == "battle_collapsed":
             screen._conquer_timeline_hover_open = False
             screen._conquer_timeline_last_layout_mode = "battle"
+        if requested_subscreen == "battle_dagger":
+            rail = getattr(screen, "_tactics_rail", None)
+            if rail is not None:
+                rail._expanded_groups.add("Dagger")
+                for move in rail._hand_moves():
+                    if move.get("family_name") == "Dagger" and not move.get("card_id_b"):
+                        rail._selected_id = move.get("id")
+                        break
     return screen
 
 
@@ -1048,6 +1061,8 @@ def populate_kingdom_config(screen, section: str) -> None:
 
 
 def canonical_screen_name(screen_name: str) -> str:
+    if screen_name in BOOSTER_REVEAL_ALIASES:
+        return "collection"
     if screen_name in KINGDOM_SCREEN_ALIASES:
         return "kingdom"
     if screen_name in KINGDOM_CONFIG_ALIASES:
@@ -1065,11 +1080,44 @@ def uses_fixture(screen_name: str) -> bool:
         or screen_name in KINGDOM_CONFIG_ALIASES
         or screen_name in DUEL_SCREEN_ALIASES
         or screen_name in CONQUER_GAME_ALIASES
+        or screen_name in BOOSTER_REVEAL_ALIASES
         or screen_name in {"conquer", "defence"}
     )
 
 
+def populate_collection_booster_reveal(screen, variant: str):
+    import pygame
+    from game.components.booster_reveal import BoosterRevealOverlay
+    from config import settings
+
+    cards = [
+        {"suit": "Hearts", "rank": "7", "value": 7, "tier": 1},
+        {"suit": "Clubs", "rank": "J", "value": 1, "tier": 2},
+        {"suit": "Spades", "rank": "K", "value": 4, "tier": 3},
+    ]
+    overlay = BoosterRevealOverlay(screen.window, cards, pack_type="main")
+    if variant == "special":
+        now = pygame.time.get_ticks()
+        overlay._states = ["revealed"] * len(cards)
+        overlay._reveal_started_at = [
+            now - settings.COLLECTION_REVEAL_FLIP_MS - 80,
+            now - settings.COLLECTION_REVEAL_FLIP_MS - 140,
+            now - settings.COLLECTION_REVEAL_FLIP_MS - 220,
+        ]
+
+    def render():
+        screen.window.fill((16, 13, 10))
+        overlay.draw()
+
+    return SimpleNamespace(render=render)
+
+
 def prepare_screen(client, screen_name: str):
+    if screen_name in BOOSTER_REVEAL_ALIASES:
+        screen = client.screens["collection"]
+        return populate_collection_booster_reveal(
+            screen, BOOSTER_REVEAL_ALIASES[screen_name])
+
     if screen_name in CONQUER_GAME_ALIASES:
         return populate_conquer_game(client, CONQUER_GAME_ALIASES[screen_name])
 
@@ -1121,6 +1169,7 @@ def render_screens(width: int, height: int, ui_scale: str, screens: list[str]) -
             *CONQUER_GAME_ALIASES.keys(),
             *KINGDOM_SCREEN_ALIASES.keys(),
             *KINGDOM_CONFIG_ALIASES.keys(),
+            *BOOSTER_REVEAL_ALIASES.keys(),
         )
         if screen_name not in known_names:
             print(f"skip {screen_name}: screen not loaded")
@@ -1162,9 +1211,10 @@ def main() -> int:
         default=(
             "login,game_menu,duel_menu,new_game,load_game,rankings,"
             "settings,kingdom,kingdom_config,conquer,defence,collection,"
+            "collection_booster_reveal_special,"
             "game_field,game_battle_shop,game_battle,"
             "conquer_game_field,conquer_game_battle_shop,conquer_game_battle,"
-            "conquer_game_battle_collapsed"
+            "conquer_game_battle_dagger,conquer_game_battle_collapsed"
         ),
     )
     args = parser.parse_args()

@@ -74,7 +74,7 @@ CORE_STEPS = [
     {
         'id': 'finish_tutorial',
         'title': 'Finish the conquer tutorial',
-        'description': 'Conquer a land, collect its production, and finish the kingdom tour.',
+        'description': 'Conquer your first land and finish the kingdom tour.',
         'reward': {'booster_packs': 6, 'booster_packs_side': 2},
     },
 ]
@@ -212,15 +212,15 @@ MENU_HINT_IDS = (
     'kingdom_after_conquer_map',
     'return_to_kingdom_loop', 'open_boosters_first',
     'collection_starter_cards', 'collection_open_main_booster',
-    'new_game', 'beginner_duel', 'send_first_duel_challenge',
-    'collection_open_side_booster',
+    'new_game', 'duel_tutorial_start_window',
+    'beginner_duel', 'send_first_duel_challenge',
     'kingdom_production_intro',
     'defence_intro', 'defence_battle_plan',
     'defence_final_response', 'defence_save',
     'kingdom_config_essentials',
     'kingdom_config_shields_style',
 )
-COACH_VERSION = 'first_session_v3'
+COACH_VERSION = 'first_session_v4'
 
 
 def ensure_onboarding_state_column():
@@ -550,13 +550,10 @@ def _facts(user, state=None):
         completed.add('collect_first_kingdom_production')
     if _saved_defence_count(user_id) >= 1:
         completed.add('save_first_defence_config')
-    # The first-session tutorial completes on the kingdom core loop: conquer a
-    # land and collect its production. It deliberately ends on that payoff --
-    # the kingdom-config tour and defence setup are deferred (each teaches
-    # itself the first time the player opens that screen), and the duel is
-    # offered as an optional next step, never required here.
-    if ('finish_first_conquer_battle' in completed
-            and 'collect_first_kingdom_production' in completed):
+    # The first-session tutorial completes when the player owns their first
+    # conquered land. Production collection remains a normal kingdom action,
+    # but no longer gates the tutorial finish.
+    if 'finish_first_conquer_battle' in completed:
         completed.add('finish_tutorial')
 
     early_completed = set()
@@ -638,10 +635,10 @@ def _journey_metadata(completed_steps):
     """First-session guided path.
 
     The mandatory tutorial is the kingdom core loop: open a starter booster
-    (grow the collection) -> conquer a land -> collect the land's production.
-    It ends on that payoff; the kingdom-config tour and defence setup are
-    deferred to on-demand coaching, and the duel is offered as an optional next
-    step (with its own skippable coaching), not as a tutorial gate.
+    (grow the collection) -> conquer a land. It ends on the first owned land;
+    production, kingdom-config, and defence setup are deferred to on-demand
+    coaching, and the duel is offered as an optional next step, not as a
+    tutorial gate.
     """
     completed = set(completed_steps or [])
     if 'open_first_main_booster' not in completed:
@@ -662,16 +659,6 @@ def _journey_metadata(completed_steps):
                 'screen': 'kingdom',
                 'label': 'Conquer First Land',
                 'target_id': 'recommended_tutorial_land',
-            },
-        }
-    if 'collect_first_kingdom_production' not in completed:
-        return {
-            'coach_version': COACH_VERSION,
-            'journey_phase': 'collect_production',
-            'next_action': {
-                'screen': 'kingdom',
-                'label': 'Collect Production',
-                'target_id': 'kingdom_production_intro',
             },
         }
     return {

@@ -745,14 +745,14 @@ class KingdomScreen(MenuScreenMixin, Screen):
         if getattr(self, 'dialogue_box', None) or getattr(self, '_onboarding_guide_open', False):
             return
         from game.components.tutorial_window import TutorialWindowDialogue
-        from game.components import tutorial_diagrams
         self._kingdom_overview_dialogue = TutorialWindowDialogue(
             self.window,
             [
                 {
                     'title': 'Read Your Map',
                     'layout': 'image_top',
-                    'image': lambda: tutorial_diagrams.kingdom_map_diagram(),
+                    'image': lambda: pygame.image.load(
+                        'img/tutorial/read_your_map.png').convert_alpha(),
                     'image_caption': 'Conquer a neighbour to grow your kingdom.',
                     'lines': [
                         'Your lands form a kingdom; rivals hold the rest.',
@@ -858,32 +858,18 @@ class KingdomScreen(MenuScreenMixin, Screen):
                 'id': 'kingdom_after_conquer_map',
                 'rect': self._map_viewport_rect,
                 'title': 'Your First Land!',
-                'body': 'You took your first land — it joins your kingdom and produces over time. Lose a battle and only looted cards are gone.',
-                'action': 'next',
-                'max_lines': 5,
-            }
-        # The core loop pays off here, and the first-session tutorial ends here:
-        # the freshly conquered land has already filled a gold vault, so point
-        # the player at Collect (conquer -> produce -> grow in a single visit).
-        # Defence and Kingdom Config are no longer pushed during the tutorial;
-        # each teaches itself the first time the player opens that screen.
-        production_rect = (getattr(self, '_collect_all_rect', None)
-                           or getattr(self, '_header_rect', None))
-        if production_rect and 'collect_first_kingdom_production' not in completed:
-            return {
-                'id': 'kingdom_production_intro',
-                'rect': production_rect,
-                'title': 'Collect Your Gold',
-                'body': 'Your new land already filled its gold vault. Tap Collect to bank it — every land you hold keeps producing while you are away.',
-                'action': 'click',
-                'mark_on_click': False,
+                'body': 'You took your first land — it joins your kingdom, produces over time, and proves the conquer loop.',
+                'action': 'coach',
                 'finish_tutorial_button': True,
-                'max_lines': 4,
+                'max_lines': 5,
             }
         return None
 
     def _finish_menu_coach_tutorial(self, step_id):
-        if step_id == 'kingdom_production_intro':
+        if step_id == 'kingdom_after_conquer_map':
+            self._mark_menu_coach_seen(step_id)
+            self._mark_onboarding_step_completed_local('finish_tutorial')
+        elif step_id == 'kingdom_production_intro':
             self._collect_all_gold()
         else:
             self._mark_menu_coach_seen(step_id)
@@ -1833,7 +1819,7 @@ class KingdomScreen(MenuScreenMixin, Screen):
 
     def handle_events(self, events):
         # The conquer-tutorial completion celebration is modal and fires here so
-        # it appears immediately after the final task (collecting production),
+        # it appears immediately after the final first-land task,
         # not only once the player returns to the menu.
         if self._handle_tutorial_completion_events(events):
             return

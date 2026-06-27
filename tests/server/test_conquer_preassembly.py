@@ -230,7 +230,7 @@ def test_first_tier1_ai_conquest_uses_safe_defence_template(client, app, db):
     attack_suit = get_starter_suits(user)['offensive']
     template = _tutorial_safe_ai_defence_template(attack_suit)
     assert template['ai_name'] == 'Tutorial Border Watch'
-    assert template['prelude_spell_name'] == 'All Seeing Eye'
+    assert template['prelude_spell_name'] == 'Draw 2 MainCards'
     assert template['counter_spell_name'] is None
     assert len(template['battle_moves']) == 3
     beaten = _SUIT_ADVANTAGE[attack_suit]

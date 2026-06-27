@@ -8,7 +8,8 @@ overlay and button conventions.
 
     pages = [{'title': str, 'lines': [str, ...],
               'image': pygame.Surface | callable() -> Surface | None,
-              'image_caption': str | None}]
+              'image_caption': str | None,
+              'image_frame': bool | None}]
     win = TutorialWindowDialogue(window, pages, title='...')
     # in the event loop:
     if win.update(events) == 'done':
@@ -271,7 +272,8 @@ class TutorialWindowDialogue:
         def image_block():
             blocks = []
             if img is not None:
-                blocks.append((img, 'image', caption_gap if cap_surfs else block_gap))
+                kind = 'image' if page.get('image_frame', True) else 'image_plain'
+                blocks.append((img, kind, caption_gap if cap_surfs else block_gap))
                 for idx, cap in enumerate(cap_surfs):
                     gap = line_gap if idx < len(cap_surfs) - 1 else block_gap
                     blocks.append((cap, 'caption', gap))

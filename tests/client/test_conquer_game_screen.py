@@ -877,7 +877,7 @@ def test_conquer_counter_poison_does_not_replay_after_pending_churn():
     assert [event[0] for event in effects.spawned] == ['Poison']
 
 
-def test_conquer_card_prelude_spell_flies_to_tactics_rail():
+def test_conquer_both_player_prelude_spell_flies_to_both_hands():
     ConquerGameScreen = _conquer_screen_class()
     screen = ConquerGameScreen.__new__(ConquerGameScreen)
     screen.window = pygame.Surface((900, 620), pygame.SRCALPHA)
@@ -906,7 +906,9 @@ def test_conquer_card_prelude_spell_flies_to_tactics_rail():
     screen._last_announced_battle_round = 0
     screen._round_transition_until_ms = 0
     rail_rect = pygame.Rect(640, 120, 180, 320)
+    strip_rect = pygame.Rect(840, 120, 40, 320)
     screen._tactics_rail = SimpleNamespace(_dyn_hand_list_rect=rail_rect)
+    screen._conquer_opponent_hand_strip_rect = strip_rect
     screen.subscreens = {'field': SimpleNamespace(icon_cache={}, figure_icons=[])}
 
     class _Panel:
@@ -940,13 +942,14 @@ def test_conquer_card_prelude_spell_flies_to_tactics_rail():
 
     ConquerGameScreen._pump_conquer_spell_animations(screen)
 
-    assert effects.to_rect
-    assert effects.to_rect[0][0] == 'Dump Cards'
-    assert effects.to_rect[0][2] == rail_rect
-    assert effects.to_rect[0][3]['floating_text'] == 'redraw'
+    # Dump Cards mutates BOTH hands -> flies to the player rail AND the
+    # opponent hand strip.
+    assert [(e[0], e[2]) for e in effects.to_rect] == [
+        ('Dump Cards', rail_rect), ('Dump Cards', strip_rect)]
+    assert all(e[3]['floating_text'] == 'redraw' for e in effects.to_rect)
 
 
-def test_conquer_card_counter_spell_flies_to_tactics_rail():
+def test_conquer_forced_deal_flies_to_both_hands():
     ConquerGameScreen = _conquer_screen_class()
     screen = ConquerGameScreen.__new__(ConquerGameScreen)
     screen.window = pygame.Surface((900, 620), pygame.SRCALPHA)
@@ -977,7 +980,9 @@ def test_conquer_card_counter_spell_flies_to_tactics_rail():
     screen._last_announced_battle_round = 0
     screen._round_transition_until_ms = 0
     rail_rect = pygame.Rect(640, 120, 180, 320)
+    strip_rect = pygame.Rect(840, 120, 40, 320)
     screen._tactics_rail = SimpleNamespace(_dyn_hand_list_rect=rail_rect)
+    screen._conquer_opponent_hand_strip_rect = strip_rect
     screen.subscreens = {'field': SimpleNamespace(icon_cache={}, figure_icons=[])}
 
     class _Panel:
@@ -1011,7 +1016,47 @@ def test_conquer_card_counter_spell_flies_to_tactics_rail():
 
     ConquerGameScreen._pump_conquer_spell_animations(screen)
 
-    assert effects.to_rect == [('Forced Deal', rail_rect, {'floating_text': 'swap'})]
+    # Forced Deal mutates BOTH hands -> flies to the player rail AND the
+    # opponent hand strip.
+    assert effects.to_rect == [
+        ('Forced Deal', rail_rect, {'floating_text': 'swap'}),
+        ('Forced Deal', strip_rect, {'floating_text': 'swap'}),
+    ]
+
+
+def test_conquer_card_spell_target_routing():
+    ConquerGameScreen = _conquer_screen_class()
+    screen = ConquerGameScreen.__new__(ConquerGameScreen)
+    rail = pygame.Rect(640, 120, 180, 320)
+    strip = pygame.Rect(840, 120, 40, 320)
+    screen._tactics_rail = SimpleNamespace(_dyn_hand_list_rect=rail)
+    screen._conquer_opponent_hand_strip_rect = strip
+
+    def route(name, kind):
+        return ConquerGameScreen._conquer_card_spell_target_rects(screen, name, kind)
+
+    # Single-player spells fly only to the caster's hand.
+    assert route('Draw 2 MainCards', 'prelude_own') == [rail]
+    assert route('Draw 2 MainCards', 'prelude_opp') == [strip]
+    assert route('Fill up to 10', 'prelude_own') == [rail]
+    # Both-player spells fly to both hands regardless of caster.
+    assert route('Dump Cards', 'prelude_own') == [rail, strip]
+    assert route('Forced Deal', 'prelude_opp') == [rail, strip]
+
+
+def test_opponent_hidden_hand_count_counts_available_only():
+    ConquerGameScreen = _conquer_screen_class()
+    screen = ConquerGameScreen.__new__(ConquerGameScreen)
+    screen.state = SimpleNamespace(game=SimpleNamespace(
+        player_id=10,
+        conquer_tactics=[
+            {'player_id': 10, 'status': 'available', 'played_round': None},  # yours
+            {'player_id': 20, 'status': 'available', 'played_round': None},  # opp hand
+            {'player_id': 20, 'status': 'available', 'played_round': None},  # opp hand
+            {'player_id': 20, 'status': 'played', 'played_round': 0},        # opp played
+        ],
+    ))
+    assert ConquerGameScreen._opponent_hidden_hand_count(screen) == 2
 
 
 def test_conquer_modifier_prelude_spawns_banner_and_duel_lane_pulse():

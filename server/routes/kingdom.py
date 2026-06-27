@@ -996,9 +996,12 @@ def _tutorial_safe_ai_defence_template(attack_suit=None):
         'battle_figure_index': 1,   # the Yack Farm counter-advances
         'battle_modifier': None,
         'spell': None,
-        # A visible, reveal-only prelude that adds no tactics/power, so the
-        # scripted outcome stays a guaranteed win.
-        'prelude_spell_name': 'All Seeing Eye',
+        # A visible Draw 2 (rank 8) prelude: the defender draws two extra main
+        # cards into its tactics hand, so a new player sees a defender cast a
+        # prelude that actually does something. The defender is still weak (suit
+        # disadvantage, low figures, only 7-Daggers as fixed moves), and a lost
+        # first battle is a no-penalty retry, so it stays new-player-friendly.
+        'prelude_spell_name': 'Draw 2 MainCards',
         'prelude_spell_data': None,
         'counter_spell_name': None,
         'counter_spell_data': None,

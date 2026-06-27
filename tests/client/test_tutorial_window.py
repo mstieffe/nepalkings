@@ -169,6 +169,10 @@ def test_page_rows_order_respects_layout():
                   'lines': ['a']}
     assert _kinds(win, image_only) == ['headline', 'image']
 
+    own_frame = {'title': 'H', 'layout': 'image_top', 'image': img,
+                 'image_frame': False}
+    assert _kinds(win, own_frame) == ['headline', 'image_plain']
+
 
 def _real_window():
     _display()
@@ -224,6 +228,7 @@ def test_new_recipe_and_land_diagrams_build():
     _display()
     from game.components import tutorial_diagrams as td
     td.clear_cache()
+    assert isinstance(td.card_rarity_code_diagram(), pygame.Surface)
     assert isinstance(td.card_recipe_examples(), pygame.Surface)
     assert isinstance(td.figure_anatomy_diagram(), pygame.Surface)
     assert isinstance(td.land_hex_diagram(), pygame.Surface)
@@ -249,6 +254,9 @@ def test_kingdom_and_offdef_diagrams_build():
                td.growth_loop_diagram, td.attack_defend_diagram,
                td.kingdom_journey_diagram, td.battle_flow_diagram,
                td.kingdom_map_diagram, td.suit_roulette_diagram,
+               td.conquer_start_image, td.duel_start_image,
+               td.duel_shared_card_pool_image, td.duel_loop_diagram,
+               td.duel_build_battle_diagram, td.shared_card_pool_diagram,
                td.battle_matchup_diagram, td.starter_tactics_diagram):
         surf = fn()
         assert isinstance(surf, pygame.Surface)

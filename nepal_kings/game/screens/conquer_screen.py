@@ -144,6 +144,11 @@ _RIGHT_SECTION_INFO = {
 
 _RED_SUITS = {'Hearts', 'Diamonds'}
 _BLACK_SUITS = {'Clubs', 'Spades'}
+_CALL_FIELD_MAP = {
+    'Call Villager': 'village',
+    'Call Military': 'military',
+    'Call King': 'castle',
+}
 
 
 class ConquerScreen(MenuScreenMixin, Screen):
@@ -1587,7 +1592,8 @@ class ConquerScreen(MenuScreenMixin, Screen):
 
                 draw_battle_move_icon(
                     self.window, cx, cy,
-                    m['family_name'], m['suit'], m.get('value', 0),
+                    m['family_name'], m['suit'],
+                    self._battle_move_display_power(m),
                     self._slot_glow_cache, self._slot_icon_cache,
                     self._slot_frame_cache, self._suit_icon_cache,
                     self._slot_font, sw,
@@ -1617,6 +1623,90 @@ class ConquerScreen(MenuScreenMixin, Screen):
                 self.window.blit(self._slot_diamond, dr.topleft)
                 rlbl = self._small_font.render(f'R{i + 1}', True, (100, 100, 100))
                 self.window.blit(rlbl, rlbl.get_rect(centerx=cx, top=cy + int(sw * 0.55)))
+
+    def _figure_by_id(self, figure_id):
+        return next((
+            fig for fig in self._figure_objects
+            if str(getattr(fig, 'id', None)) == str(figure_id)
+        ), None)
+
+    def _figure_has_deficit(self, figure):
+        icon = self._figure_icons.get(getattr(figure, 'id', None))
+        if icon is not None:
+            return bool(getattr(icon, 'has_deficit', False))
+        return False
+
+    def _call_figure_power_bonus(self, figure):
+        icon = self._figure_icons.get(getattr(figure, 'id', None))
+        return int(getattr(icon, 'buffs_allies_bonus', 0) or 0) if icon else 0
+
+    def _call_figure_power_bonuses(self):
+        return {
+            getattr(fig, 'id', None): self._call_figure_power_bonus(fig)
+            for fig in self._figure_objects
+        }
+
+    def _call_figure_matches_move(self, move, figure):
+        field = getattr(getattr(figure, 'family', None), 'field', None)
+        if field != _CALL_FIELD_MAP.get(move.get('family_name')):
+            return False
+        if getattr(figure, 'cannot_be_targeted', False):
+            return False
+        if self._figure_has_deficit(figure):
+            return False
+        suit = getattr(figure, 'suit', None)
+        move_is_red = move.get('suit') in _RED_SUITS
+        return suit in (_RED_SUITS if move_is_red else _BLACK_SUITS)
+
+    def _eligible_call_figures(self, move, *, include_bound=True):
+        if move.get('family_name') not in _CALL_FIELD_MAP:
+            return []
+        eligible = [
+            fig for fig in self._figure_objects
+            if self._call_figure_matches_move(move, fig)
+        ]
+        if include_bound and move.get('call_figure_id') is not None:
+            bound = self._figure_by_id(move.get('call_figure_id'))
+            if bound is not None and bound not in eligible:
+                eligible.insert(0, bound)
+        return eligible
+
+    def _call_figure_effective_power(self, move, figure):
+        try:
+            base = int(figure.get_value() or 0)
+        except Exception:
+            base = 0
+        total = base + self._call_figure_power_bonus(figure)
+        if ((getattr(figure, 'suit', '') or '').lower()
+                == (move.get('suit', '') or '').lower()):
+            total += int(move.get('value') or 0)
+        return total
+
+    def _battle_move_display_power(self, move):
+        if move.get('family_name') == 'Block':
+            return 0
+        if move.get('family_name') not in _CALL_FIELD_MAP:
+            return move.get('value', 0)
+        bound = self._figure_by_id(move.get('call_figure_id'))
+        if bound is not None:
+            return self._call_figure_effective_power(move, bound)
+        eligible = self._eligible_call_figures(move, include_bound=False)
+        if not eligible:
+            return move.get('value', 0)
+        return max(self._call_figure_effective_power(move, fig) for fig in eligible)
+
+    def _best_call_figure_index(self, move, eligible):
+        if not eligible:
+            return 0
+        call_figure_id = move.get('call_figure_id')
+        if call_figure_id is not None:
+            for idx, fig in enumerate(eligible):
+                if str(getattr(fig, 'id', None)) == str(call_figure_id):
+                    return idx
+        return max(
+            range(len(eligible)),
+            key=lambda idx: self._call_figure_effective_power(move, eligible[idx]),
+        )
 
     def _draw_prelude_spell(self):
         """Draw the prelude spell section with a single spell icon slot."""
@@ -2374,10 +2464,15 @@ class ConquerScreen(MenuScreenMixin, Screen):
                     moves = self._config.get('battle_moves', [])
                     for m in moves:
                         if m['round_index'] == self._hovered_slot:
+                            eligible = self._eligible_call_figures(m)
                             self._move_detail_box = BattleMoveDetailBox(
                                 self.window, m,
                                 self._move_manager.families_by_name,
                                 None,
+                                eligible_figures=eligible,
+                                best_figure_index=self._best_call_figure_index(
+                                    m, eligible),
+                                figure_power_bonuses=self._call_figure_power_bonuses(),
                             )
                             break
                     continue

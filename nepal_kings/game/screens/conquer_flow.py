@@ -1138,12 +1138,19 @@ def derive_conquer_timeline(game: Any, state: Any = None,
     # 1) Own prelude -----------------------------------------------------
     own_pre_active = bool(pending_prelude)
     own_pre_done = not own_pre_active
+    pending_prelude_name = (
+        pending_prelude.get('spell_name')
+        if isinstance(pending_prelude, dict) else None
+    )
     own_pre_step = TimelineStep(
         kind='prelude_own',
         title='Your Prelude',
         owner='you',
-        icon_kind='spell' if own_preludes else 'none',
-        icon_payload=(own_preludes[0].get('spell_name') if own_preludes else None),
+        icon_kind='spell' if (own_preludes or pending_prelude_name) else 'none',
+        icon_payload=(
+            own_preludes[0].get('spell_name') if own_preludes
+            else pending_prelude_name
+        ),
         sub_icons=tuple(s.get('spell_name') for s in own_preludes[1:]),
         completed=own_pre_done,
         active=own_pre_active,

@@ -47,6 +47,8 @@ ACTION_COMBINE = 'combine'
 ACTION_DISMANTLE = 'dismantle'
 ACTION_SKIP = 'skip'
 
+_PRIMARY_ACTION_KEYS = (ACTION_PLAY, ACTION_SKIP)
+
 
 class ConquerTacticsRail:
     """Stateful left-side tactics rail.
@@ -124,6 +126,7 @@ class ConquerTacticsRail:
         # helpers stay in sync.
         self._dyn_top_strip_rect: Optional[pygame.Rect] = None
         self._dyn_hand_list_rect: Optional[pygame.Rect] = None
+        self._dyn_action_tray_rect: Optional[pygame.Rect] = None
         self._cached_render_key = None
         self._cached_render_surface: Optional[pygame.Surface] = None
 
@@ -767,7 +770,9 @@ class ConquerTacticsRail:
             return True
         # Action buttons
         for key, rect in self._action_button_rects.items():
-            if self._touch_collide(rect, pos):
+            if self._touch_collide(rect, pos,
+                                   settings.TOUCH_COMPACT_MIN,
+                                   settings.TOUCH_COMPACT_MIN):
                 self._trigger_action(key)
                 return True
         # Cell selection
@@ -1024,6 +1029,7 @@ class ConquerTacticsRail:
         top_strip_rect = pygame.Rect(*rail.top_strip_rect)
         selected_detail_rect = pygame.Rect(*rail.selected_detail_rect)
         hand_list_rect = pygame.Rect(*rail.hand_list_rect)
+        action_tray_rect = pygame.Rect(*rail.action_tray_rect)
         # Dynamic top-strip wrap (round 13). Grow the strip downward when
         # the title or banner needs more lines, stealing from the hand
         # list. Floor: keep room for at least 3 cells in the hand list.
@@ -1044,14 +1050,27 @@ class ConquerTacticsRail:
                 if hand_grow:
                     hand_list_rect.y += hand_grow
                     hand_list_rect.height -= hand_grow
+        norm_action_specs = self._normalized_action_specs()
+        action_h = self._preferred_action_tray_height(action_tray_rect.width)
+        if action_h > action_tray_rect.height:
+            min_visible_cells = 1 if self._action_tray_uses_column_layout(
+                action_tray_rect.width, norm_action_specs) else 3
+            min_list_h = min_visible_cells * rail.cell_height
+            hand_slack = max(0, hand_list_rect.height - min_list_h)
+            grow = min(action_h - action_tray_rect.height, hand_slack)
+            if grow > 0:
+                action_tray_rect.y -= grow
+                action_tray_rect.height += grow
+                hand_list_rect.height -= grow
         self._dyn_top_strip_rect = top_strip_rect
         self._dyn_hand_list_rect = hand_list_rect
+        self._dyn_action_tray_rect = action_tray_rect
 
         self._draw_top_strip(top_strip_rect)
         self._draw_hand_list(hand_list_rect, rail.cell_height,
                              rail.cells_visible)
         self._draw_selected_detail(selected_detail_rect)
-        self._draw_action_tray(pygame.Rect(*rail.action_tray_rect))
+        self._draw_action_tray(action_tray_rect)
         self.window.set_clip(previous_clip)
 
         if cache_key is not None:
@@ -1773,6 +1792,89 @@ class ConquerTacticsRail:
             specs.append((ACTION_DISMANTLE, 'Dismantle'))
         return specs
 
+    def _normalized_action_specs(self, specs: Optional[List[tuple]] = None) -> List[tuple]:
+        specs = self._action_specs() if specs is None else specs
+        flight_active = False
+        try:
+            flight_check = getattr(self._parent, 'is_tactic_flight_active', None)
+            flight_active = bool(callable(flight_check) and flight_check())
+        except Exception:
+            flight_active = False
+        if flight_active:
+            return [
+                (spec[0], spec[1], spec[2] if len(spec) > 2 and spec[2] else 'Tactic in flight…')
+                for spec in specs
+            ]
+        return [
+            (spec[0], spec[1], spec[2] if len(spec) > 2 else '')
+            for spec in specs
+        ]
+
+    def _preferred_action_tray_height(self, width: int) -> int:
+        specs = self._normalized_action_specs()
+        if not specs:
+            return 0
+        target_h = max(30, settings.TOUCH_COMPACT_MIN)
+        if self._action_tray_uses_column_layout(width, specs):
+            row_h = max(28, min(target_h, int(width * 0.24)))
+            return row_h * len(specs) + 5 * (len(specs) - 1) + 4
+        if self._action_tray_uses_stacked_layout(width, specs):
+            return target_h * 2 + 8
+        return target_h + 4
+
+    @staticmethod
+    def _action_tray_uses_column_layout(width: int, specs: List[tuple]) -> bool:
+        has_primary = any(spec[0] in _PRIMARY_ACTION_KEYS for spec in specs)
+        has_multiple_secondary = sum(
+            1 for spec in specs if spec[0] not in _PRIMARY_ACTION_KEYS) >= 2
+        return has_primary and has_multiple_secondary and width < 130
+
+    @staticmethod
+    def _action_tray_uses_stacked_layout(width: int, specs: List[tuple]) -> bool:
+        has_primary = any(spec[0] in _PRIMARY_ACTION_KEYS for spec in specs)
+        has_secondary = any(spec[0] not in _PRIMARY_ACTION_KEYS for spec in specs)
+        return has_primary and has_secondary and width < 220
+
+    @staticmethod
+    def _action_label_candidates(key: str, label: str) -> tuple:
+        if label == 'Pick 2nd':
+            return (label, 'Pick 2', '2nd')
+        if key == ACTION_GAMBLE:
+            return (label, 'Swap')
+        if key == ACTION_COMBINE:
+            return (label, 'Join')
+        if key == ACTION_DISMANTLE:
+            return (label, 'Split')
+        return (label,)
+
+    @staticmethod
+    def _fit_action_label(key: str, label: str, max_width: int,
+                          base_size: int, min_size: int = 7):
+        max_width = max(1, int(max_width))
+        for candidate in ConquerTacticsRail._action_label_candidates(key, label):
+            for font_size in range(max(min_size, int(base_size)), min_size - 1, -1):
+                font = settings.get_font(font_size, bold=True)
+                if font.size(candidate)[0] <= max_width:
+                    return font, candidate
+        font = settings.get_font(min_size, bold=True)
+        return font, ConquerTacticsRail._fit_text(label, font, max_width)
+
+    @staticmethod
+    def _action_tooltip_text(key: str, label: str) -> str:
+        if key == ACTION_PLAY:
+            return 'Commit this tactic to the current round.'
+        if key == ACTION_GAMBLE:
+            return 'Trade this tactic for two new tactics.'
+        if key == ACTION_COMBINE:
+            if label == 'Pick 2nd':
+                return 'Pick another same-colour Dagger.'
+            return 'Join two same-colour Daggers into one bigger tactic.'
+        if key == ACTION_DISMANTLE:
+            return 'Split this Double Dagger back into two tactics.'
+        if key == ACTION_SKIP:
+            return 'Pass this round because no tactic is available.'
+        return label
+
     @staticmethod
     def _draw_action_icon(surface: pygame.Surface, key: str,
                           rect: pygame.Rect, color: tuple) -> None:
@@ -1787,17 +1889,21 @@ class ConquerTacticsRail:
                 (cx - s // 2, cy + s),
             ])
         elif key == ACTION_GAMBLE:
-            # Hollow circle with a "?" letter for dice/random.
-            pygame.draw.circle(surface, color, (cx, cy), s, 2)
-            font = settings.get_font(max(9, s * 2 - 2), bold=True)
-            q = font.render('?', True, color)
-            surface.blit(q, q.get_rect(center=(cx, cy)))
+            die = pygame.Rect(cx - s, cy - s, 2 * s, 2 * s)
+            pygame.draw.rect(surface, color, die, 2, border_radius=max(2, s // 3))
+            pip_r = max(1, s // 5)
+            for px, py in ((die.left + s // 2, die.top + s // 2),
+                           (die.centerx, die.centery),
+                           (die.right - s // 2, die.bottom - s // 2)):
+                pygame.draw.circle(surface, color, (px, py), pip_r)
         elif key == ACTION_COMBINE:
             # Two small overlapping squares.
             r1 = pygame.Rect(cx - s, cy - s, s + 2, s + 2)
             r2 = pygame.Rect(cx - 2, cy - 2, s + 2, s + 2)
             pygame.draw.rect(surface, color, r1, 2, border_radius=2)
             pygame.draw.rect(surface, color, r2, 2, border_radius=2)
+            pygame.draw.line(surface, color, (cx - s // 2, cy), (cx + s // 2, cy), 2)
+            pygame.draw.line(surface, color, (cx, cy - s // 2), (cx, cy + s // 2), 2)
         elif key == ACTION_DISMANTLE:
             # X mark.
             pygame.draw.line(surface, color,
@@ -1816,31 +1922,13 @@ class ConquerTacticsRail:
     def _draw_action_tray(self, rect: pygame.Rect):
         """Render only the currently-applicable actions (round 13).
 
-        Replaces the previous always-on row of disabled buttons. Buttons
-        are rounded with a leading icon glyph + label and lift on hover.
+        Play/Skip is treated as the primary action. On narrow rails the
+        primary action takes the full top row and tactical utilities sit on a
+        compact second row, avoiding clipped labels.
         """
-        specs = self._action_specs()
-        # While a played-tactic flight animation is in progress, freeze all
-        # action buttons — they should not appear pressable and click-through
-        # is already blocked by ``_trigger_action``.  Surfacing this visually
-        # prevents the player from queuing a second action mid-animation.
-        flight_active = False
-        try:
-            flight_check = getattr(self._parent, 'is_tactic_flight_active', None)
-            flight_active = bool(callable(flight_check) and flight_check())
-        except Exception:
-            flight_active = False
-        # Normalize to 3-tuples (key, label, disabled_reason or '').
-        if flight_active:
-            norm_specs = [
-                (s[0], s[1], s[2] if len(s) > 2 and s[2] else 'Tactic in flight…')
-                for s in specs
-            ]
-        else:
-            norm_specs = [
-                (s[0], s[1], s[2] if len(s) > 2 else '') for s in specs
-            ]
+        norm_specs = self._normalized_action_specs()
         self._action_button_rects = {}
+        self._disabled_action_reasons = {}
         if not norm_specs:
             # Subtle hint when no actions apply (e.g. opponent's turn,
             # nothing selected). Avoid empty-looking dead space.
@@ -1851,78 +1939,137 @@ class ConquerTacticsRail:
             surf = font.render(hint, True, _TEXT_MUTED)
             self.window.blit(surf, surf.get_rect(center=rect.center))
             return
-        font = settings.get_font(max(10, int(settings.FS_TINY * 0.95)), bold=True)
-        gap = 8
-        n = len(norm_specs)
-        # Compute button width: room for icon (~18 px) + gap (4 px) + label.
-        icon_w = 18
-        labels = [label for _k, label, _d in norm_specs]
-        label_w = max(font.size(lbl)[0] for lbl in labels)
-        natural_w = icon_w + 4 + label_w + 18  # padding 9 px each side
-        max_total = rect.width - gap * (n - 1)
-        bw = min(natural_w, max(60, max_total // n))
-        total_w = bw * n + gap * (n - 1)
-        start_x = rect.left + max(0, (rect.width - total_w) // 2)
-        target_h = max(30, settings.TOUCH_COMPACT_MIN)
-        bh = min(rect.height - 4, target_h)
-        by = rect.top + (rect.height - bh) // 2
         try:
             mx, my = pygame.mouse.get_pos()
         except Exception:
             mx, my = (-1, -1)
         hovered_tooltip: Optional[tuple] = None
-        for i, (key, label, disabled_reason) in enumerate(norm_specs):
-            br = pygame.Rect(start_x + i * (bw + gap), by, bw, bh)
-            hovered = br.collidepoint(mx, my)
+        button_rects = self._layout_action_buttons(rect, norm_specs)
+        for key, label, disabled_reason, base_rect, role in button_rects:
+            hovered = base_rect.collidepoint(mx, my)
             is_disabled = bool(disabled_reason)
-            # Hover lift: shift the button up by 2 px so it visually pops.
-            # Disabled buttons stay put (no affordance for press).
-            draw_rect = br.move(0, -2) if (hovered and not is_disabled) else br
-            shadow = pygame.Rect(br.left, br.bottom - 2, br.width, 4)
-            shadow_surf = pygame.Surface(shadow.size, pygame.SRCALPHA)
-            pygame.draw.rect(shadow_surf, (0, 0, 0, 90), shadow_surf.get_rect(),
-                             border_radius=3)
-            self.window.blit(shadow_surf, shadow.topleft)
+            self._draw_action_button(base_rect, key, label, role, hovered, is_disabled)
+            self._action_button_rects[key] = base_rect
             if is_disabled:
-                colour = (44, 38, 30)
-                border = (110, 96, 70)
-                fg = _TEXT_MUTED
-            else:
-                colour = (84, 66, 44) if hovered else (62, 50, 36)
-                border = (220, 180, 90) if hovered else _BORDER_RGBA
-                fg = _TEXT_PRIMARY
-            pygame.draw.rect(self.window, colour, draw_rect, 0, border_radius=6)
-            pygame.draw.rect(self.window, border, draw_rect, 1, border_radius=6)
-            # Icon on the left.
-            icon_rect = pygame.Rect(draw_rect.left + 8,
-                                    draw_rect.top + (draw_rect.height - 14) // 2,
-                                    14, 14)
-            self._draw_action_icon(self.window, key, icon_rect, fg)
-            # Label centered in the remaining space.
-            label_rect = pygame.Rect(icon_rect.right + 4, draw_rect.top,
-                                     draw_rect.right - icon_rect.right - 12,
-                                     draw_rect.height)
-            ts = font.render(self._fit_text(label, font, label_rect.width),
-                             True, fg)
-            self.window.blit(ts, ts.get_rect(center=label_rect.center))
-            # The click region tracks the *base* rect (not the lifted one),
-            # so hovering doesn't shift the click target. Disabled keys
-            # are recorded so the click handler can surface the reason
-            # rather than silently swallowing the click.
-            self._action_button_rects[key] = br
-            if hovered and is_disabled and hovered_tooltip is None:
-                hovered_tooltip = (br, disabled_reason)
-            if is_disabled:
-                # Remember why so _trigger_action can show a banner.
-                if not hasattr(self, '_disabled_action_reasons'):
-                    self._disabled_action_reasons = {}
                 self._disabled_action_reasons[key] = disabled_reason
-            else:
-                if hasattr(self, '_disabled_action_reasons'):
-                    self._disabled_action_reasons.pop(key, None)
+            if hovered and hovered_tooltip is None:
+                text = disabled_reason or self._action_tooltip_text(key, label)
+                if role == 'secondary' or is_disabled:
+                    hovered_tooltip = (base_rect, text)
         # Draw any active tooltip last so it sits above the buttons.
         if hovered_tooltip is not None:
             self._draw_action_tooltip(*hovered_tooltip)
+
+    def _layout_action_buttons(self, rect: pygame.Rect, specs: List[tuple]) -> List[tuple]:
+        gap = 5
+        pad_y = 2
+        target_h = max(30, settings.TOUCH_COMPACT_MIN)
+        primary = [spec for spec in specs if spec[0] in _PRIMARY_ACTION_KEYS]
+        secondary = [spec for spec in specs if spec[0] not in _PRIMARY_ACTION_KEYS]
+        out = []
+        if primary and secondary and self._action_tray_uses_column_layout(rect.width, specs):
+            row_count = len(specs)
+            row_h = min(target_h, max(18, (rect.height - gap * (row_count - 1) - pad_y * 2) // row_count))
+            y = rect.top + pad_y
+            for index, spec in enumerate((primary[0], *secondary)):
+                role = 'primary' if index == 0 else 'secondary'
+                out.append((*spec, pygame.Rect(rect.left, y, rect.width, row_h), role))
+                y += row_h + gap
+            return out
+        if primary and secondary and self._action_tray_uses_stacked_layout(rect.width, specs):
+            row_h = min(target_h, max(18, (rect.height - gap - pad_y * 2) // 2))
+            top = rect.top + pad_y
+            primary_rect = pygame.Rect(rect.left, top, rect.width, row_h)
+            out.append((*primary[0], primary_rect, 'primary'))
+            sec_top = primary_rect.bottom + gap
+            sec_h = max(16, min(target_h, rect.bottom - pad_y - sec_top))
+            sec_count = len(secondary)
+            sec_w = max(1, (rect.width - gap * (sec_count - 1)) // sec_count)
+            for index, spec in enumerate(secondary):
+                x = rect.left + index * (sec_w + gap)
+                width = rect.right - x if index == sec_count - 1 else sec_w
+                out.append((*spec, pygame.Rect(x, sec_top, width, sec_h), 'secondary'))
+            return out
+        if primary and secondary:
+            bh = min(target_h, max(18, rect.height - pad_y * 2))
+            y = rect.top + (rect.height - bh) // 2
+            secondary_count = len(secondary)
+            secondary_total = min(
+                max(54 * secondary_count + gap * (secondary_count - 1), int(rect.width * 0.45)),
+                max(1, rect.width - 78 - gap),
+            )
+            primary_w = max(70, rect.width - gap - secondary_total)
+            primary_rect = pygame.Rect(rect.left, y, primary_w, bh)
+            out.append((*primary[0], primary_rect, 'primary'))
+            sec_x = primary_rect.right + gap
+            sec_w = max(1, (rect.right - sec_x - gap * (secondary_count - 1)) // secondary_count)
+            for index, spec in enumerate(secondary):
+                x = sec_x + index * (sec_w + gap)
+                width = rect.right - x if index == secondary_count - 1 else sec_w
+                out.append((*spec, pygame.Rect(x, y, width, bh), 'secondary'))
+            return out
+        count = len(specs)
+        bh = min(target_h, max(18, rect.height - pad_y * 2))
+        y = rect.top + (rect.height - bh) // 2
+        bw = max(1, (rect.width - gap * (count - 1)) // count)
+        for index, spec in enumerate(specs):
+            x = rect.left + index * (bw + gap)
+            width = rect.right - x if index == count - 1 else bw
+            role = 'primary' if spec[0] in _PRIMARY_ACTION_KEYS else 'secondary'
+            out.append((*spec, pygame.Rect(x, y, width, bh), role))
+        return out
+
+    def _draw_action_button(self, base_rect: pygame.Rect, key: str, label: str,
+                            role: str, hovered: bool, is_disabled: bool) -> None:
+        draw_rect = base_rect.move(0, -2) if (hovered and not is_disabled) else base_rect
+        shadow = pygame.Rect(base_rect.left, base_rect.bottom - 2, base_rect.width, 4)
+        shadow_surf = pygame.Surface(shadow.size, pygame.SRCALPHA)
+        pygame.draw.rect(shadow_surf, (0, 0, 0, 90), shadow_surf.get_rect(),
+                         border_radius=4)
+        self.window.blit(shadow_surf, shadow.topleft)
+        if is_disabled:
+            colour = (44, 38, 30)
+            border = (110, 96, 70)
+            fg = _TEXT_MUTED
+        elif role == 'primary':
+            colour = (112, 78, 34) if hovered else (88, 62, 32)
+            border = (248, 204, 94) if hovered else (222, 168, 72)
+            fg = (255, 238, 190)
+        else:
+            colour = (50, 62, 58) if key in (ACTION_GAMBLE, ACTION_COMBINE) else (58, 50, 44)
+            if hovered:
+                colour = tuple(min(255, c + 18) for c in colour)
+            border = (112, 190, 176) if key == ACTION_GAMBLE else (
+                (122, 174, 226) if key == ACTION_COMBINE else _BORDER_RGBA)
+            fg = _TEXT_PRIMARY
+        pygame.draw.rect(self.window, colour, draw_rect, 0, border_radius=6)
+        pygame.draw.rect(self.window, border, draw_rect, 1, border_radius=6)
+        compact = role == 'secondary' and draw_rect.width < 68
+        if compact:
+            icon_size = min(13, max(9, draw_rect.height // 2 - 1))
+            icon_rect = pygame.Rect(0, 0, icon_size, icon_size)
+            icon_rect.center = (draw_rect.centerx, draw_rect.top + icon_size // 2 + 3)
+            self._draw_action_icon(self.window, key, icon_rect, fg)
+            label_top = icon_rect.bottom
+            label_rect = pygame.Rect(draw_rect.left + 2, label_top,
+                                     draw_rect.width - 4, draw_rect.bottom - label_top - 1)
+            font, fitted = self._fit_action_label(
+                key, label, label_rect.width, max(8, int(settings.FS_TINY * 0.72)), 7)
+            text = font.render(fitted, True, fg)
+            self.window.blit(text, text.get_rect(center=label_rect.center))
+            return
+        icon_size = 14 if role == 'secondary' else 16
+        icon_rect = pygame.Rect(draw_rect.left + 8,
+                                draw_rect.top + (draw_rect.height - icon_size) // 2,
+                                icon_size, icon_size)
+        self._draw_action_icon(self.window, key, icon_rect, fg)
+        label_rect = pygame.Rect(icon_rect.right + 5, draw_rect.top,
+                                 draw_rect.right - icon_rect.right - 12,
+                                 draw_rect.height)
+        base_size = max(10, int(settings.FS_TINY * (1.02 if role == 'primary' else 0.88)))
+        font, fitted = self._fit_action_label(key, label, label_rect.width, base_size, 8)
+        text = font.render(fitted, True, fg)
+        self.window.blit(text, text.get_rect(center=label_rect.center))
 
     def _draw_action_tooltip(self, anchor_rect: pygame.Rect, text: str) -> None:
         if not text:

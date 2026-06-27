@@ -1730,7 +1730,7 @@ class ConquerGameScreen(GameScreen):
         spell_info = self._resolve_spell_step_info(kind, spell_name)
         if self._is_conquer_card_effect_spell(spell_name, spell_info):
             impact_ms = self._spawn_conquer_card_spell_animation(
-                spell_name, anchor_rect, spell_info)
+                spell_name, anchor_rect, spell_info, step_kind=kind)
             if impact_ms is not None:
                 self._conquer_spell_anim_impact_ms[step_key] = int(impact_ms)
             return True
@@ -2360,21 +2360,43 @@ class ConquerGameScreen(GameScreen):
             return 'redraw'
         return 'cards'
 
-    def _spawn_conquer_card_spell_animation(self, spell_name, anchor_rect, spell_info=None):
-        """Spawn the card-effect spell animation aimed at the tactics rail.
+    # Card-effect spells that mutate BOTH players' hands, so the animation flies
+    # to both the player's tactics rail and the opponent's hand strip. Every
+    # other card-effect spell is single-player and flies only to the caster.
+    _BOTH_PLAYER_CARD_SPELLS = frozenset({'Dump Cards', 'Forced Deal'})
 
-        Returns the ms timestamp at which the animation reaches the rail —
-        callers gate the spell's resolution-step mutation on this so the
-        effect appears exactly when the projectile lands.  Banner-only
-        fallbacks (no rail rect / no projectile helper) return ``now`` so
-        the reveal is not stalled.
+    def _conquer_card_spell_target_rects(self, spell_name, step_kind):
+        """Destination rect(s) for a card-effect spell's projectile.
+
+        Both-player spells (Dump Cards / Forced Deal) hit both hands; single
+        spells (Draw 2 / Fill up to 10) hit only the caster's hand — the player
+        tactics rail for own preludes, the opponent hand strip for opponent
+        preludes.
+        """
+        player_rail = self._conquer_tactics_rail_target_rect()
+        opp_strip = self._conquer_opponent_hand_target_rect()
+        if spell_name in self._BOTH_PLAYER_CARD_SPELLS:
+            return [r for r in (player_rail, opp_strip) if r is not None]
+        cast_by_opponent = (step_kind == 'prelude_opp')
+        target = opp_strip if cast_by_opponent else player_rail
+        return [target] if target is not None else []
+
+    def _spawn_conquer_card_spell_animation(self, spell_name, anchor_rect,
+                                            spell_info=None, step_kind=None):
+        """Spawn the card-effect spell animation aimed at the affected hand(s).
+
+        Returns the ms timestamp at which the animation reaches its target —
+        callers gate the spell's resolution-step mutation on this so the effect
+        appears exactly when the projectile lands.  Banner-only fallbacks (no
+        target rect / no projectile helper) return ``now`` so the reveal is not
+        stalled.
         """
         now = pygame.time.get_ticks()
         effects = getattr(self, '_conquer_effects', None)
         if effects is None:
             return now
-        target_rect = self._conquer_tactics_rail_target_rect()
-        if target_rect is None:
+        targets = self._conquer_card_spell_target_rects(spell_name, step_kind)
+        if not targets:
             spawn_banner = getattr(effects, 'spawn_banner', None)
             if callable(spawn_banner):
                 spawn_banner(spell_name, (80, 185, 230), duration_ms=900)
@@ -2382,14 +2404,16 @@ class ConquerGameScreen(GameScreen):
         floating_text = self._card_spell_floating_text(spell_name, spell_info)
         spawn_to_rect = getattr(effects, 'spawn_spell_to_rect', None)
         if callable(spawn_to_rect):
-            spawn_to_rect(spell_name, anchor_rect, target_rect,
-                          floating_text=floating_text)
+            for target_rect in targets:
+                spawn_to_rect(spell_name, anchor_rect, target_rect,
+                              floating_text=floating_text)
             projectile_ms = int(getattr(effects, 'PROJECTILE_MS', 420) or 0)
             return now + projectile_ms
         spawn_banner = getattr(effects, 'spawn_banner', None)
         if callable(spawn_banner):
-            spawn_banner(spell_name, (80, 185, 230), duration_ms=900,
-                         anchor_rect=target_rect)
+            for target_rect in targets:
+                spawn_banner(spell_name, (80, 185, 230), duration_ms=900,
+                             anchor_rect=target_rect)
         return now
 
     def _spawn_conquer_modifier_spell_animation(self, spell_name, anchor_rect=None):
@@ -4189,9 +4213,16 @@ class ConquerGameScreen(GameScreen):
         animation to keep pre-mutation tactics visible until the animation
         completes.
         """
+        cached = getattr(self, '_conquer_resolution_step_server', None)
+        game = self.state.game
+        server_step = int(cached) if cached is not None else (
+            int(getattr(game, 'conquer_resolution_step', 0) or 0) if game else 0
+        )
         timeline = getattr(self, '_conquer_timeline_panel', None) \
             or getattr(self, 'conquer_timeline_panel', None)
         if timeline is not None:
+            if getattr(timeline, '_deriving_display_steps', False):
+                return server_step
             getter = getattr(timeline, 'currently_resolved_step_index', None)
             if callable(getter):
                 try:
@@ -4207,11 +4238,7 @@ class ConquerGameScreen(GameScreen):
                     return int(result)
         # Fall back to the server's current step. Use either the cached value
         # from the most recent get_battle_state call or the snapshot on Game.
-        cached = getattr(self, '_conquer_resolution_step_server', None)
-        if cached is not None:
-            return int(cached)
-        game = self.state.game
-        return int(getattr(game, 'conquer_resolution_step', 0) or 0) if game else 0
+        return server_step
 
     def _filter_conquer_tactics_by_displayed_step(self, tactics):
         """Apply spell-timeline replay to a serialized tactics list."""
@@ -4254,11 +4281,11 @@ class ConquerGameScreen(GameScreen):
         game_id = getattr(game, 'game_id', None)
         player_id = getattr(game, 'player_id', None)
         if not game_id or not player_id:
-            return [
+            return self._filter_conquer_tactics_by_displayed_step([
                 dict(move)
                 for move in (getattr(game, 'conquer_opponent_tactics', []) or [])
                 if isinstance(move, dict)
-            ]
+            ])
 
         cache_key = self._battle_state_cache_key()
         if cache_key != getattr(self, '_conquer_opponent_tactic_cache_key', None):
@@ -4274,13 +4301,17 @@ class ConquerGameScreen(GameScreen):
                 else:
                     tactics.append({
                         'id': tactic.get('id'),
+                        'game_id': tactic.get('game_id'),
                         'player_id': tactic.get('player_id'),
                         'status': tactic.get('status'),
                         'played_round': None,
+                        'revealed_step_index': tactic.get('revealed_step_index'),
+                        'discarded_step_index': tactic.get('discarded_step_index'),
                     })
             if tactics:
-                return list(tactics)
-        return list(getattr(self, '_conquer_opponent_tactic_cache', []) or [])
+                return self._filter_conquer_tactics_by_displayed_step(tactics)
+        return self._filter_conquer_tactics_by_displayed_step(
+            list(getattr(self, '_conquer_opponent_tactic_cache', []) or []))
 
     def _current_conquer_battle_moves(self):
         game = self.state.game
@@ -7513,6 +7544,118 @@ class ConquerGameScreen(GameScreen):
             self._conquer_duel_lane_render_cache_surface = None
             self._conquer_duel_lane_render_cache_rect = None
 
+    def _opponent_hidden_hand_count(self):
+        """How many face-down tactics the opponent currently holds (unplayed).
+
+        The server sends the opponent's available tactics as redacted stubs
+        (identities hidden, ``played_round`` None), so we only ever know the
+        COUNT — never the cards.
+        """
+        def _available(t):
+            return (isinstance(t, dict)
+                    and t.get('played_round') is None
+                    and t.get('status') != 'played')
+
+        return sum(1 for t in self._current_conquer_opponent_tactics()
+                   if _available(t))
+
+    def _conquer_opponent_hand_strip(self):
+        """The far-right strip rect reserved for the opponent's hidden hand."""
+        try:
+            layout = compute_conquer_layout(
+                settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT,
+                mode=self._conquer_effective_layout_mode())
+            strip = pygame.Rect(layout.battlefield.opp_hand_strip)
+            return strip if strip.width > 0 and strip.height > 0 else None
+        except Exception:
+            return None
+
+    def _conquer_opponent_hand_target_rect(self):
+        """Animation destination for opponent-bound card-effect spells."""
+        rect = getattr(self, '_conquer_opponent_hand_strip_rect', None)
+        if rect is not None:
+            try:
+                return pygame.Rect(rect)
+            except Exception:
+                pass
+        return self._conquer_opponent_hand_strip()
+
+    @staticmethod
+    def _draw_face_down_card(window, rect):
+        """A small stylised face-down tactic card (no identity revealed)."""
+        radius = max(3, rect.width // 6)
+        surf = pygame.Surface(rect.size, pygame.SRCALPHA)
+        br = surf.get_rect()
+        # Slate card-back with warm gold trim and a centred diamond emblem so it
+        # reads as a real (hidden) card rather than an empty frame.
+        pygame.draw.rect(surf, (34, 38, 58), br, border_radius=radius)
+        pygame.draw.rect(surf, (58, 64, 92), br.inflate(-3, -3), border_radius=radius)
+        pygame.draw.rect(surf, (196, 162, 92), br, 2, border_radius=radius)
+        cx, cy = br.center
+        d = max(3, int(min(rect.width, rect.height) * 0.22))
+        diamond = [(cx, cy - d), (cx + d, cy), (cx, cy + d), (cx - d, cy)]
+        pygame.draw.polygon(surf, (150, 124, 76), diamond)
+        pygame.draw.polygon(surf, (214, 184, 112), diamond, 1)
+        window.blit(surf, rect.topleft)
+
+    def _draw_conquer_opponent_hand_strip(self):
+        """Draw the opponent's hidden hand as a fanned column of face-down
+        tactic cards on the far-right strip — count-only, since identities are
+        withheld server-side. Gives card-effect spells a truthful destination.
+        """
+        if self.state.subscreen not in ('field', 'battle'):
+            return
+        if not self._is_tactics_hand_game():
+            return
+        strip = self._conquer_opponent_hand_strip()
+        if strip is None:
+            return
+        self._conquer_opponent_hand_strip_rect = strip.copy()
+        count = self._opponent_hidden_hand_count()
+        if count <= 0:
+            return
+
+        pad_x = max(1, int(strip.width * 0.08))
+        card_w = max(8, strip.width - 2 * pad_x)
+        card_h = int(card_w * 1.42)
+
+        # Overlapping fan: each card reveals ~55% of the one beneath it. Up to
+        # MAX_VISIBLE cards show; the badge always reports the true total.
+        MAX_VISIBLE = 6
+        visible = min(count, MAX_VISIBLE)
+        step = int(card_h * 0.55)
+        stack_h = card_h + (visible - 1) * step
+
+        # Count badge dimensions (centred just below the fan).
+        font = settings.get_font(max(9, int(settings.FS_TINY * 0.82)), bold=True)
+        label = font.render(str(count), True, (244, 232, 200))
+        badge_gap = max(2, int(card_h * 0.16))
+        bw, bh = label.get_width() + 12, label.get_height() + 4
+        group_h = stack_h + badge_gap + bh
+
+        # Shrink the overlap if the whole group would overflow the strip.
+        max_group = strip.height - int(strip.height * 0.06)
+        if group_h > max_group and visible > 1:
+            step = max(int(card_h * 0.26),
+                       (max_group - card_h - badge_gap - bh) // (visible - 1))
+            stack_h = card_h + (visible - 1) * step
+            group_h = stack_h + badge_gap + bh
+
+        x = strip.x + (strip.width - card_w) // 2
+        y = strip.y + max(int(strip.height * 0.03), (strip.height - group_h) // 2)
+        for _ in range(visible):
+            self._draw_face_down_card(self.window, pygame.Rect(x, y, card_w, card_h))
+            y += step
+        stack_bottom = y - step + card_h
+
+        bx = strip.x + (strip.width - bw) // 2
+        by = stack_bottom + badge_gap
+        badge = pygame.Surface((bw, bh), pygame.SRCALPHA)
+        pygame.draw.rect(badge, (26, 21, 16, 235), badge.get_rect(), border_radius=bh // 2)
+        pygame.draw.rect(badge, (150, 120, 70), badge.get_rect(), 1, border_radius=bh // 2)
+        self.window.blit(badge, (bx, by))
+        self.window.blit(label, (bx + 6, by + 2))
+
     def render(self):
         with perf_section('conquer.fill'):
             self.window.fill(settings.BACKGROUND_COLOR)
@@ -7550,6 +7693,11 @@ class ConquerGameScreen(GameScreen):
                         overlay()
                 except Exception:
                     pass
+
+        # Opponent's hidden hand: face-down tactic cards on the far-right strip,
+        # a truthful destination for opponent card-effect spell animations.
+        with perf_section('conquer.opp_hand'):
+            self._draw_conquer_opponent_hand_strip()
 
         with perf_section('conquer.timeline_header'):
             use_collapsed_header = self._should_use_collapsed_conquer_header()

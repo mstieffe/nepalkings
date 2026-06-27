@@ -32,6 +32,14 @@ _BUBBLE_GAP = 14
 _INFO_MIN_W = 320
 _INFO_PAD = 12
 _FIGURE_FRAME_FILL = 0.84
+_INFO_VISUAL_KINDS = {'spell', 'figure', 'tactic'}
+_INFO_VISUAL_DOCK_GAP = 12
+_INFO_VISUAL_DOCK_MIN_W = 130
+_INFO_VISUAL_DOCK_MAX_W = 252
+_INFO_VISUAL_TEXT_MIN_W = 128
+_INFO_VISUAL_ICON_MIN = 52
+_INFO_VISUAL_ICON_MAX = 112
+_COUNTDOWN_SIZE = 22
 
 # Auto-advance hold for non-interactive steps (ms).
 AUTO_ADVANCE_MS = 4000
@@ -478,13 +486,18 @@ class ConquerTimelinePanel:
         cached = getattr(self, '_display_steps_cache', None)
         if cached is not None and cached[0] == cache_key:
             return cached[1]
-        steps = self._derive_steps(screen)
-        steps = self._apply_sequence_gates(screen, steps)
-        battle_steps = getattr(screen, '_conquer_battle_timeline_steps', None)
-        if callable(battle_steps):
-            steps = battle_steps(steps)
-        self._display_steps_cache = (cache_key, steps)
-        return steps
+        was_deriving = getattr(self, '_deriving_display_steps', False)
+        self._deriving_display_steps = True
+        try:
+            steps = self._derive_steps(screen)
+            steps = self._apply_sequence_gates(screen, steps)
+            battle_steps = getattr(screen, '_conquer_battle_timeline_steps', None)
+            if callable(battle_steps):
+                steps = battle_steps(steps)
+            self._display_steps_cache = (cache_key, steps)
+            return steps
+        finally:
+            self._deriving_display_steps = was_deriving
 
     def _apply_sequence_gates(self, screen, steps):
         """Hold resolved sequence beats on screen before later beats appear.
@@ -1082,6 +1095,27 @@ class ConquerTimelinePanel:
 
         # Headline
         headline = step.info_headline or step.title
+        assets = tuple(getattr(step, 'info_assets', ()) or ())
+        countdown_ratio = self._step_countdown_ratio(screen, step)
+        show_countdown = countdown_ratio is not None and not step.interactive
+        visual_assets, supporting_assets = self._split_info_assets(assets)
+        if not visual_assets:
+            visual_assets = self._step_visual_assets(step)
+        visual_dock = self._info_visual_dock_layout(
+            rect, visual_assets, screen, step, has_countdown=show_countdown)
+        support_asset_rect = rect
+        if visual_dock is not None:
+            dock_rect, dock_text_w = visual_dock
+            max_w = dock_text_w
+            support_asset_rect = pygame.Rect(
+                rect.left, rect.top,
+                max(0, dock_rect.left - _INFO_VISUAL_DOCK_GAP - rect.left),
+                rect.height,
+            )
+        else:
+            dock_rect = None
+            supporting_assets = assets
+
         for line in self._wrap(headline, self.info_headline_font, max_w, 2):
             s = self.info_headline_font.render(line, True, border)
             self.window.blit(s, (x, y))
@@ -1089,15 +1123,17 @@ class ConquerTimelinePanel:
         y += 4
 
         # Body
-        assets = tuple(getattr(step, 'info_assets', ()) or ())
         btn_h = max(28, int(settings.SCREEN_HEIGHT * 0.030))
         if settings.TOUCH_TARGET_MIN > 0:
             btn_h = max(btn_h, int(settings.SCREEN_HEIGHT * 0.085))
         button_top = rect.bottom - btn_h - _INFO_PAD
         asset_bottom = button_top - 8
-        min_asset_h = min(92, max(44, rect.height // 3)) if assets else 0
-        body_bottom_limit = (asset_bottom - min_asset_h) if assets else (button_top - 6)
-        max_body_lines = 4 if assets else 6
+        min_asset_h = (
+            min(92, max(44, rect.height // 3)) if supporting_assets else 0)
+        body_bottom_limit = (
+            asset_bottom - min_asset_h if supporting_assets
+            else button_top - 6)
+        max_body_lines = 4 if supporting_assets else 6
         if step.info_body:
             for line in self._wrap(step.info_body, self.info_body_font, max_w, max_body_lines):
                 if y + self.info_body_font.get_height() > body_bottom_limit:
@@ -1106,13 +1142,24 @@ class ConquerTimelinePanel:
                 self.window.blit(s, (x, y))
                 y += s.get_height() + 2
 
-        if assets:
+        if dock_rect is not None:
+            self._draw_info_assets(
+                screen, dock_rect, dock_rect.top, dock_rect.bottom,
+                visual_assets,
+                pad=0,
+                min_size=_INFO_VISUAL_ICON_MIN,
+                max_size=_INFO_VISUAL_ICON_MAX,
+                center_rows=True,
+            )
+
+        if supporting_assets:
             y = max(y + 6, rect.top + _INFO_PAD)
-            self._draw_info_assets(screen, rect, y, asset_bottom, assets)
+            self._draw_info_assets(
+                screen, support_asset_rect, y, asset_bottom,
+                supporting_assets)
 
         # Countdown ring for non-interactive steps
-        countdown_ratio = self._step_countdown_ratio(screen, step)
-        if countdown_ratio is not None and not step.interactive:
+        if show_countdown:
             self._draw_countdown(rect, countdown_ratio)
 
         # Buttons (bottom row)
@@ -1138,7 +1185,22 @@ class ConquerTimelinePanel:
         if button_rects:
             text_right = min(r.left for r in button_rects) - 10
 
+        countdown_ratio = self._step_countdown_ratio(screen, step)
+        show_countdown = countdown_ratio is not None and not step.interactive
+        if show_countdown and not button_rects:
+            text_right = min(text_right, rect.right - _INFO_PAD - _COUNTDOWN_SIZE - 12)
+
         x = rect.left + _INFO_PAD
+
+        assets = tuple(getattr(step, 'info_assets', ()) or ())
+        visual_assets, _supporting_assets = self._split_info_assets(assets)
+        if not visual_assets:
+            visual_assets = self._step_visual_assets(step)
+        visual_items = self._compact_info_visual_layout(
+            rect, visual_assets, x, text_right)
+        if visual_items:
+            visual_layout, x, text_right = visual_items
+
         y = rect.top + _INFO_PAD
         text_w = max(0, text_right - x)
         text_h = max(0, rect.height - 2 * _INFO_PAD)
@@ -1147,7 +1209,7 @@ class ConquerTimelinePanel:
 
         if text_w <= 0 or text_h <= 0:
             countdown_ratio = self._step_countdown_ratio(screen, step)
-            if countdown_ratio is not None and not step.interactive:
+            if countdown_ratio is not None and not step.interactive and not button_rects:
                 self._draw_countdown(rect, countdown_ratio)
             return
 
@@ -1164,19 +1226,222 @@ class ConquerTimelinePanel:
                 body_text, True, (224, 214, 188))
             self.window.blit(body_surf, (x, cursor_y))
 
-        countdown_ratio = self._step_countdown_ratio(screen, step)
-        if countdown_ratio is not None and not step.interactive:
+        if visual_items:
+            self._draw_compact_visual_items(screen, rect, visual_layout)
+
+        if show_countdown and not button_rects:
             self._draw_countdown(rect, countdown_ratio)
 
-    def _draw_info_assets(self, screen, rect, start_y, bottom_limit, assets):
-        layout = self._layout_info_asset_rects(rect, start_y, bottom_limit, assets)
+    def _split_info_assets(self, assets):
+        visual_assets = []
+        supporting_assets = []
+        for asset in assets:
+            if (isinstance(asset, dict)
+                    and asset.get('kind') in _INFO_VISUAL_KINDS):
+                visual_assets.append(asset)
+            else:
+                supporting_assets.append(asset)
+        return tuple(visual_assets), tuple(supporting_assets)
+
+    def _step_visual_assets(self, step):
+        if step.icon_kind == 'spell' and step.icon_payload:
+            return ({'kind': 'spell', 'name': step.icon_payload},)
+        if step.icon_kind == 'figure' and isinstance(step.icon_payload, dict):
+            payload = step.icon_payload
+            figure = payload.get('figure')
+            if figure is not None:
+                return ({
+                    'kind': 'figure',
+                    'figure': figure,
+                    'side': payload.get('side', 'opponent'),
+                    'reveal': bool(payload.get('reveal', False)),
+                },)
+        if step.icon_kind == 'tactic' and step.icon_payload:
+            payload = step.icon_payload
+            move = payload.get('move') if isinstance(payload, dict) else payload
+            if move is not None:
+                return ({'kind': 'tactic', 'move': move},)
+        return ()
+
+    def _info_visual_dock_layout(self, rect, visual_assets, screen, step,
+                                 *, has_countdown=False):
+        usable_assets = tuple(
+            asset for asset in visual_assets[:10] if isinstance(asset, dict))
+        if not usable_assets:
+            return None
+        if rect.width < 280 or rect.height < 96:
+            return None
+
+        dock_top = rect.top + _INFO_PAD
+        dock_bottom = rect.bottom - _INFO_PAD
+        dock_h = dock_bottom - dock_top
+        if dock_h < _INFO_VISUAL_ICON_MIN:
+            return None
+
+        countdown_reserve = (_COUNTDOWN_SIZE + 14) if has_countdown else 0
+        dock_right = rect.right - _INFO_PAD - countdown_reserve
+        if dock_right <= rect.left + _INFO_PAD:
+            return None
+
+        active_button_w = self._active_button_total_width(screen, rect, step)
+        min_text_w = max(_INFO_VISUAL_TEXT_MIN_W, active_button_w + 8)
+        content_left = rect.left + _INFO_PAD
+        available_dock_w = dock_right - (
+            content_left + min_text_w + _INFO_VISUAL_DOCK_GAP)
+        if available_dock_w < _INFO_VISUAL_ICON_MIN:
+            return None
+
+        desired_min_w = (
+            _INFO_VISUAL_DOCK_MIN_W if rect.width >= 500
+            else _INFO_VISUAL_ICON_MIN
+        )
+        dock_w = min(
+            _INFO_VISUAL_DOCK_MAX_W,
+            max(desired_min_w, int(rect.width * 0.34)),
+            available_dock_w,
+        )
+        if dock_w < _INFO_VISUAL_ICON_MIN:
+            return None
+        dock_rect = pygame.Rect(dock_right - dock_w, dock_top, dock_w, dock_h)
+        layout = self._layout_info_asset_rects(
+            dock_rect, dock_rect.top, dock_rect.bottom, usable_assets,
+            pad=0,
+            min_size=_INFO_VISUAL_ICON_MIN,
+            max_size=_INFO_VISUAL_ICON_MAX,
+            center_rows=True,
+        )
+        if len(layout) != len(usable_assets):
+            return None
+
+        text_w = dock_rect.left - _INFO_VISUAL_DOCK_GAP - (rect.left + _INFO_PAD)
+        if text_w < min_text_w:
+            return None
+        return dock_rect, text_w
+
+    def _compact_info_visual_layout(self, rect, visual_assets, text_left, text_right):
+        usable_assets = tuple(
+            asset for asset in visual_assets[:3] if isinstance(asset, dict))
+        if not usable_assets:
+            return None
+
+        vertical_pad = max(5, min(_INFO_PAD // 2, rect.height // 8))
+        dock_h = max(0, rect.height - vertical_pad * 2)
+        if dock_h < 34:
+            return None
+
+        min_text_w = min(150, max(68, int(rect.width * 0.22)))
+        gap = 6
+        badge_gap = 4
+        primary_size = min(_INFO_VISUAL_ICON_MAX, dock_h)
+        badge_assets = usable_assets[1:3]
+        if badge_assets:
+            badge_size = min(
+                30,
+                max(20, (primary_size - badge_gap * (len(badge_assets) - 1))
+                    // len(badge_assets)),
+            )
+            dock_w = primary_size + gap + badge_size
+        else:
+            badge_size = 0
+            dock_w = primary_size
+
+        left_text = text_left + dock_w + _INFO_VISUAL_DOCK_GAP
+        if text_right - left_text >= min_text_w:
+            primary_rect = pygame.Rect(
+                text_left,
+                rect.centery - primary_size // 2,
+                primary_size,
+                primary_size,
+            )
+            layout = [(usable_assets[0], primary_rect)]
+            if badge_assets:
+                total_badge_h = (
+                    badge_size * len(badge_assets)
+                    + badge_gap * (len(badge_assets) - 1)
+                )
+                badge_x = primary_rect.right + gap
+                badge_y = rect.centery - total_badge_h // 2
+                for idx, asset in enumerate(badge_assets):
+                    layout.append((
+                        asset,
+                        pygame.Rect(
+                            badge_x,
+                            badge_y + idx * (badge_size + badge_gap),
+                            badge_size,
+                            badge_size,
+                        ),
+                    ))
+            return layout, left_text, text_right
+
+        dock_right = text_right
+        max_dock_left = rect.left + _INFO_PAD + min_text_w + _INFO_VISUAL_DOCK_GAP
+        available_w = max(0, dock_right - max_dock_left)
+        if available_w < 34:
+            return None
+
+        count = len(usable_assets)
+        icon_size = min(
+            _INFO_VISUAL_ICON_MAX,
+            dock_h,
+            (available_w - gap * max(0, count - 1)) // count,
+        )
+        while icon_size < 34 and count > 1:
+            count -= 1
+            usable_assets = usable_assets[:count]
+            icon_size = min(
+                _INFO_VISUAL_ICON_MAX,
+                dock_h,
+                (available_w - gap * max(0, count - 1)) // count,
+            )
+        if icon_size < 34:
+            return None
+
+        dock_w = icon_size * count + gap * max(0, count - 1)
+        dock_rect = pygame.Rect(
+            dock_right - dock_w,
+            rect.centery - icon_size // 2,
+            dock_w,
+            icon_size,
+        )
+        layout = self._layout_info_asset_rects(
+            dock_rect, dock_rect.top, dock_rect.bottom,
+            usable_assets[:count],
+            pad=0,
+            min_size=max(34, min(_INFO_VISUAL_ICON_MIN, dock_rect.height)),
+            max_size=min(_INFO_VISUAL_ICON_MAX, dock_rect.height),
+            center_rows=True,
+        )
+        if not layout:
+            return None
+        return layout, text_left, dock_rect.left - _INFO_VISUAL_DOCK_GAP
+
+    def _draw_compact_visual_items(self, screen, panel_rect, layout):
+        clip_rect = panel_rect.inflate(-_INFO_PAD, -4)
+        previous_clip = self.window.get_clip()
+        self.window.set_clip(clip_rect)
+        try:
+            for asset, asset_rect in layout:
+                self._draw_info_asset(screen, asset, asset_rect)
+        finally:
+            self.window.set_clip(previous_clip)
+
+    def _draw_info_assets(self, screen, rect, start_y, bottom_limit, assets, *,
+                          pad=_INFO_PAD, min_size=20, max_size=42,
+                          center_rows=False):
+        layout = self._layout_info_asset_rects(
+            rect, start_y, bottom_limit, assets,
+            pad=pad,
+            min_size=min_size,
+            max_size=max_size,
+            center_rows=center_rows,
+        )
         if not layout:
             return
         clip_rect = pygame.Rect(
-            rect.left + _INFO_PAD,
-            max(rect.top + _INFO_PAD, start_y),
-            max(0, rect.width - 2 * _INFO_PAD),
-            max(0, bottom_limit - max(rect.top + _INFO_PAD, start_y)),
+            rect.left + pad,
+            max(rect.top + pad, start_y),
+            max(0, rect.width - 2 * pad),
+            max(0, bottom_limit - max(rect.top + pad, start_y)),
         )
         if clip_rect.width <= 0 or clip_rect.height <= 0:
             return
@@ -1184,46 +1449,49 @@ class ConquerTimelinePanel:
         self.window.set_clip(clip_rect)
         try:
             for asset, asset_rect in layout:
-                kind = asset.get('kind')
-                if kind == 'resource':
-                    self._draw_resource_asset(
-                        asset_rect,
-                        asset.get('label', ''), asset.get('value', ''),
-                        asset.get('tone', 'neutral'),
-                    )
-                    continue
-                if kind == 'card':
-                    self._draw_card_asset(screen, asset_rect, asset.get('card'),
-                                          bool(asset.get('reveal', True)),
-                                          label=asset.get('label', ''),
-                                          tone=asset.get('tone', 'neutral'),
-                                          dim=bool(asset.get('dim', False)),
-                                          crossed=bool(asset.get('crossed', False)))
-                elif kind == 'spell':
-                    self._draw_spell_icon(screen, asset_rect, asset.get('name'), ())
-                elif kind == 'figure':
-                    self._draw_figure_icon(
-                        screen, asset_rect,
-                        asset.get('figure'),
-                        asset.get('side', 'opponent'),
-                        bool(asset.get('reveal', False)),
-                    )
-                elif kind == 'tactic':
-                    self._draw_tactic_icon(
-                        screen, asset_rect, {'move': asset.get('move')})
+                self._draw_info_asset(screen, asset, asset_rect)
         finally:
             self.window.set_clip(previous_clip)
 
-    def _layout_info_asset_rects(self, rect, start_y, bottom_limit, assets):
+    def _draw_info_asset(self, screen, asset, asset_rect):
+        kind = asset.get('kind')
+        if kind == 'resource':
+            self._draw_resource_asset(
+                asset_rect,
+                asset.get('label', ''), asset.get('value', ''),
+                asset.get('tone', 'neutral'),
+            )
+            return
+        if kind == 'card':
+            self._draw_card_asset(screen, asset_rect, asset.get('card'),
+                                  bool(asset.get('reveal', True)),
+                                  label=asset.get('label', ''),
+                                  tone=asset.get('tone', 'neutral'),
+                                  dim=bool(asset.get('dim', False)),
+                                  crossed=bool(asset.get('crossed', False)))
+        elif kind == 'spell':
+            self._draw_spell_icon(screen, asset_rect, asset.get('name'), ())
+        elif kind == 'figure':
+            self._draw_figure_icon(
+                screen, asset_rect,
+                asset.get('figure'),
+                asset.get('side', 'opponent'),
+                bool(asset.get('reveal', False)),
+            )
+        elif kind == 'tactic':
+            self._draw_tactic_icon(
+                screen, asset_rect, {'move': asset.get('move')})
+
+    def _layout_info_asset_rects(self, rect, start_y, bottom_limit, assets, *,
+                                 pad=_INFO_PAD, min_size=20, max_size=42,
+                                 center_rows=False):
         usable_assets = [a for a in assets[:10] if isinstance(a, dict)]
         if not usable_assets:
             return []
 
         gap = 6
-        min_size = 20
-        max_size = 42
-        left = rect.left + _INFO_PAD
-        right = rect.right - _INFO_PAD
+        left = rect.left + pad
+        right = rect.right - pad
         max_w = max(0, right - left)
         available_h = max(0, bottom_limit - start_y)
         if max_w <= 0 or available_h < min_size:
@@ -1245,11 +1513,29 @@ class ConquerTimelinePanel:
                     best_layout = layout
                 break
         if best_layout is not None:
-            return best_layout
-        return self._pack_info_asset_rects(
+            return self._center_info_asset_rows(
+                best_layout, left, right, gap) if center_rows else best_layout
+        fallback = self._pack_info_asset_rects(
             usable_assets, left, right, start_y, max_rows, min_size, gap,
             allow_partial=True,
         ) or []
+        return self._center_info_asset_rows(
+            fallback, left, right, gap) if center_rows else fallback
+
+    @staticmethod
+    def _center_info_asset_rows(layout, left, right, gap):
+        rows = {}
+        for asset, rect in layout:
+            rows.setdefault(rect.top, []).append((asset, rect))
+        centered = []
+        for top in sorted(rows):
+            row = rows[top]
+            row_left = min(rect.left for _asset, rect in row)
+            row_right = max(rect.right for _asset, rect in row)
+            shift = max(0, (right - left - (row_right - row_left)) // 2)
+            for asset, rect in row:
+                centered.append((asset, rect.move(shift, 0)))
+        return centered
 
     def _pack_info_asset_rects(self, assets, left, right, start_y, rows, size,
                                gap, *, allow_partial=False):
@@ -1398,6 +1684,17 @@ class ConquerTimelinePanel:
         if settings.TOUCH_TARGET_MIN > 0:
             btn_h = max(btn_h, int(settings.SCREEN_HEIGHT * 0.085))
         return btn_h
+
+    def _active_button_total_width(self, screen, rect, step):
+        pending = getattr(screen, '_conquer_pending_confirmation', None)
+        btn_w = max(96, int(rect.width * 0.30))
+        if pending and step.kind in ('attacker', 'defender'):
+            return btn_w * 2 + 10
+        if step.interactive:
+            return 0
+        if step.primary_action == 'next':
+            return btn_w
+        return 0
 
     def _draw_active_buttons(self, screen, rect, step, *, align_right=False):
         pending = getattr(screen, '_conquer_pending_confirmation', None)

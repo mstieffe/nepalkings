@@ -3515,8 +3515,8 @@ class GameScreen(Screen):
                                not in set(_onboarding.get('completed_steps') or []))
             if _first_conquest:
                 message = (f'Your first land is yours! You conquered {land_label}, '
-                           'and this kingdom now produces resources over time. '
-                           'Next, return to your kingdom, then try a Quick duel.')
+                           'and this kingdom now grows from the map. '
+                           'Next, return to your kingdom to finish the conquer tutorial.')
             else:
                 message = f'You have conquered {land_label}!'
             if gold_rate:

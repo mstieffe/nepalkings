@@ -706,7 +706,7 @@ class MenuScreenMixin:
     # Ordered: conquer tutorial completes first, the duel tutorial later.
     _TUTORIAL_COMPLETIONS = (
         ('finish_tutorial', 'Conquer Tutorial Complete!', [
-            "You've learned the kingdom loop: conquer a land, build figures, win the battle, and collect production.",
+            "You've learned the kingdom loop: prepare cards, conquer a land, and bring it into your kingdom.",
             "There's also an optional Duel tutorial — start it any time from the Duel menu, or keep expanding your kingdom.",
         ]),
         ('finish_first_duel', 'Duel Tutorial Complete!', [
@@ -733,8 +733,15 @@ class MenuScreenMixin:
                 continue
             if step_id in celebrated:
                 continue
+            if self._tutorial_completion_blocked(step_id):
+                continue
             return step_id, title, lines, payload.get('reward')
         return None
+
+    def _tutorial_completion_blocked(self, step_id):
+        if step_id == 'finish_tutorial':
+            return 'kingdom_after_conquer_map' not in self._menu_coach_seen()
+        return False
 
     def _maybe_show_tutorial_completion(self):
         if getattr(self, '_tutorial_complete_dialogue', None):
@@ -1325,17 +1332,15 @@ class MenuScreenMixin:
         """Client mirror of onboarding_service._journey_metadata.
 
         The mandatory tutorial is the kingdom core loop: open a starter booster
-        -> conquer -> collect production. It ends on that payoff; the
-        kingdom-config tour and defence setup are deferred to on-demand coaching,
-        and the duel is optional, so no phase routes to either.
+        -> conquer the first land. Production, the kingdom-config tour, and
+        defence setup are deferred to on-demand coaching, and the duel is
+        optional, so no phase routes to those areas.
         """
         completed = self._onboarding_completed_steps()
         if 'open_first_main_booster' not in completed:
             return 'open_starter_pack'
         if 'finish_first_conquer_battle' not in completed:
             return 'first_conquest'
-        if 'collect_first_kingdom_production' not in completed:
-            return 'collect_production'
         return 'complete'
 
     def _first_session_next_action(self):
@@ -1351,12 +1356,6 @@ class MenuScreenMixin:
                 'screen': 'kingdom',
                 'label': 'Conquer First Land',
                 'target_id': 'recommended_tutorial_land',
-            }
-        if phase == 'collect_production':
-            return {
-                'screen': 'kingdom',
-                'label': 'Collect Production',
-                'target_id': 'kingdom_production_intro',
             }
         return None
 

@@ -548,6 +548,233 @@ def test_info_asset_layout_contains_many_mixed_icons():
     assert len(layout) == len(assets)
     for _asset, asset_rect in layout:
         assert clip.contains(asset_rect)
+    for idx, (_asset, asset_rect) in enumerate(layout):
+        for _other_asset, other_rect in layout[idx + 1:]:
+            assert not asset_rect.colliderect(other_rect)
+
+
+def test_info_asset_visual_dock_enlarges_spell_and_figure_without_overlaps():
+    from game.components.conquer_timeline_panel import (
+        ConquerTimelinePanel,
+        _COUNTDOWN_SIZE,
+        _INFO_PAD,
+        _INFO_VISUAL_DOCK_GAP,
+        _INFO_VISUAL_ICON_MAX,
+        _INFO_VISUAL_ICON_MIN,
+    )
+    from game.screens.conquer_flow import TimelineStep
+
+    window = pygame.Surface((1200, 240))
+    panel = ConquerTimelinePanel(window)
+    rect = pygame.Rect(100, 20, 640, 136)
+    assets = (
+        {'kind': 'spell', 'name': 'Poison'},
+        {'kind': 'figure', 'figure': _make_figure(), 'side': 'own', 'reveal': True},
+        {'kind': 'resource', 'label': 'Battle power', 'value': '-6'},
+    )
+    step = TimelineStep(
+        kind='prelude_own',
+        title='Your Prelude',
+        primary_action='next',
+        info_assets=assets,
+    )
+    screen = SimpleNamespace(_conquer_pending_confirmation=None)
+
+    visual_assets, supporting_assets = panel._split_info_assets(assets)
+    dock_rect, text_w = panel._info_visual_dock_layout(
+        rect, visual_assets, screen, step, has_countdown=True)
+    layout = panel._layout_info_asset_rects(
+        dock_rect, dock_rect.top, dock_rect.bottom, visual_assets,
+        pad=0,
+        min_size=_INFO_VISUAL_ICON_MIN,
+        max_size=_INFO_VISUAL_ICON_MAX,
+        center_rows=True,
+    )
+    next_rect = pygame.Rect(
+        rect.left + _INFO_PAD,
+        rect.bottom - panel._active_button_height() - _INFO_PAD,
+        max(96, int(rect.width * 0.30)),
+        panel._active_button_height(),
+    )
+    countdown_rect = pygame.Rect(
+        rect.right - _COUNTDOWN_SIZE - 17,
+        rect.top + 6,
+        _COUNTDOWN_SIZE,
+        _COUNTDOWN_SIZE,
+    )
+
+    assert supporting_assets == (assets[-1],)
+    assert dock_rect.left >= rect.left + _INFO_PAD + text_w + _INFO_VISUAL_DOCK_GAP
+    assert not dock_rect.colliderect(next_rect)
+    assert not dock_rect.colliderect(countdown_rect)
+    assert len(layout) == len(visual_assets)
+    assert all(asset_rect.width > 76 for _asset, asset_rect in layout)
+    for _asset, asset_rect in layout:
+        assert dock_rect.contains(asset_rect)
+    for idx, (_asset, asset_rect) in enumerate(layout):
+        for _other_asset, other_rect in layout[idx + 1:]:
+            assert not asset_rect.colliderect(other_rect)
+
+
+def test_info_asset_visual_dock_runs_at_mobile_info_panel_width():
+    from game.components.conquer_timeline_panel import (
+        ConquerTimelinePanel,
+        _COUNTDOWN_SIZE,
+        _INFO_PAD,
+        _INFO_VISUAL_ICON_MAX,
+        _INFO_VISUAL_ICON_MIN,
+    )
+    from game.screens.conquer_flow import TimelineStep
+
+    panel = ConquerTimelinePanel(pygame.Surface((900, 240)))
+    rect = pygame.Rect(100, 20, 320, 136)
+    assets = (
+        {'kind': 'spell', 'name': 'Poison'},
+        {'kind': 'figure', 'figure': _make_figure(), 'side': 'own', 'reveal': True},
+    )
+    step = TimelineStep(
+        kind='prelude_own',
+        title='Your Prelude',
+        primary_action='next',
+        info_assets=assets,
+    )
+    screen = SimpleNamespace(_conquer_pending_confirmation=None)
+
+    dock_rect, text_w = panel._info_visual_dock_layout(
+        rect, assets, screen, step, has_countdown=True)
+    layout = panel._layout_info_asset_rects(
+        dock_rect, dock_rect.top, dock_rect.bottom, assets,
+        pad=0,
+        min_size=_INFO_VISUAL_ICON_MIN,
+        max_size=_INFO_VISUAL_ICON_MAX,
+        center_rows=True,
+    )
+    next_rect = pygame.Rect(
+        rect.left + _INFO_PAD,
+        rect.bottom - panel._active_button_height() - _INFO_PAD,
+        max(96, int(rect.width * 0.30)),
+        panel._active_button_height(),
+    )
+    countdown_rect = pygame.Rect(
+        rect.right - _COUNTDOWN_SIZE - 17,
+        rect.top + 6,
+        _COUNTDOWN_SIZE,
+        _COUNTDOWN_SIZE,
+    )
+
+    assert text_w >= 128
+    assert len(layout) == len(assets)
+    assert all(asset_rect.width > 42 for _asset, asset_rect in layout)
+    assert not dock_rect.colliderect(next_rect)
+    assert not dock_rect.colliderect(countdown_rect)
+    for idx, (_asset, asset_rect) in enumerate(layout):
+        assert dock_rect.contains(asset_rect)
+        for _other_asset, other_rect in layout[idx + 1:]:
+            assert not asset_rect.colliderect(other_rect)
+
+
+def test_compact_info_box_draws_large_visual_asset_clear_of_text_and_button(monkeypatch):
+    from game.components.conquer_timeline_panel import (
+        ConquerTimelinePanel,
+        _INFO_VISUAL_DOCK_GAP,
+    )
+    from game.screens.conquer_flow import TimelineStep
+
+    panel = ConquerTimelinePanel(pygame.Surface((900, 180)))
+    rect = pygame.Rect(20, 20, 420, 72)
+    screen = SimpleNamespace(
+        _conquer_pending_confirmation=None,
+        _conquer_objective_action_rects={},
+        _conquer_timeline_info_text_rect=None,
+        _conquer_timeline_step_started_at={},
+    )
+    step = TimelineStep(
+        kind='prelude_own',
+        title='Your Prelude',
+        active=True,
+        primary_action='next',
+        info_body='Poison resolved against the selected defender.',
+        info_assets=(
+            {'kind': 'spell', 'name': 'Poison'},
+            {'kind': 'figure', 'figure': _make_figure(), 'side': 'own', 'reveal': True},
+        ),
+    )
+    draws = []
+
+    def capture_asset(_screen, asset, asset_rect):
+        draws.append((asset, asset_rect.copy()))
+
+    monkeypatch.setattr(panel, '_draw_info_asset', capture_asset)
+
+    panel._draw_compact_info_box(screen, rect, step, border=(255, 211, 116))
+
+    assert len(draws) == 2
+    _primary_asset, primary_rect = draws[0]
+    text_rect = screen._conquer_timeline_info_text_rect
+    next_rect = screen._conquer_objective_action_rects['next']
+
+    assert primary_rect.height > 42
+    assert text_rect.left >= primary_rect.right + _INFO_VISUAL_DOCK_GAP
+    for _asset, asset_rect in draws:
+        assert not asset_rect.colliderect(text_rect)
+        assert not asset_rect.colliderect(next_rect)
+
+
+def test_compact_info_box_uses_step_icon_when_info_assets_are_empty(monkeypatch):
+    from game.components.conquer_timeline_panel import ConquerTimelinePanel
+    from game.screens.conquer_flow import TimelineStep
+
+    panel = ConquerTimelinePanel(pygame.Surface((900, 180)))
+    rect = pygame.Rect(20, 20, 320, 72)
+    screen = SimpleNamespace(
+        _conquer_pending_confirmation=None,
+        _conquer_objective_action_rects={},
+        _conquer_timeline_info_text_rect=None,
+        _conquer_timeline_step_started_at={},
+    )
+    step = TimelineStep(
+        kind='prelude_own',
+        title='Your Prelude',
+        active=True,
+        icon_kind='spell',
+        icon_payload='Poison',
+        primary_action='next',
+        info_body='Select one of the defender figures on the field.',
+        info_assets=(),
+    )
+    draws = []
+
+    def capture_asset(_screen, asset, asset_rect):
+        draws.append((asset, asset_rect.copy()))
+
+    monkeypatch.setattr(panel, '_draw_info_asset', capture_asset)
+
+    panel._draw_compact_info_box(screen, rect, step, border=(255, 211, 116))
+
+    assert draws
+    asset, asset_rect = draws[0]
+    assert asset == {'kind': 'spell', 'name': 'Poison'}
+    assert asset_rect.height > 42
+
+
+def test_pending_prelude_step_carries_spell_icon_payload():
+    from game.screens.conquer_flow import derive_conquer_timeline
+
+    game = _make_game()
+    state = SimpleNamespace(
+        game=game,
+        pending_conquer_prelude_target={
+            'spell_name': 'Poison',
+            'target_scope': 'opponent',
+        },
+    )
+
+    step = {s.kind: s for s in derive_conquer_timeline(game, state, None, None)}[
+        'prelude_own']
+
+    assert step.active
+    assert step.icon_kind == 'spell'
+    assert step.icon_payload == 'Poison'
 
 
 def test_timeline_figure_art_uses_field_frame_icon_ratio():
@@ -848,6 +1075,55 @@ def test_compact_info_box_shows_next_only_for_held_beat_and_clears_text():
         info_body='Waiting for the defender to play.')
     panel._draw_compact_info_box(screen, rect, round_step, border=(0, 0, 0))
     assert screen._conquer_objective_action_rects.get('next') is None
+
+
+def test_compact_info_box_does_not_draw_countdown_over_button(monkeypatch):
+    from game.components.conquer_timeline_panel import ConquerTimelinePanel
+    from game.screens.conquer_flow import TimelineStep
+
+    panel = ConquerTimelinePanel(pygame.Surface((900, 200)))
+    rect = pygame.Rect(0, 0, 360, 64)
+    screen = SimpleNamespace(
+        _conquer_pending_confirmation=None,
+        _conquer_objective_action_rects={},
+        _conquer_timeline_info_text_rect=None,
+        _conquer_timeline_step_started_at={'overview': pygame.time.get_ticks()},
+    )
+    draws = []
+    monkeypatch.setattr(
+        panel,
+        '_draw_countdown',
+        lambda countdown_rect, ratio: draws.append((countdown_rect.copy(), ratio)),
+    )
+
+    held = TimelineStep(
+        kind='overview',
+        title='Your Prelude',
+        completed=False,
+        active=True,
+        interactive=False,
+        primary_action='next',
+        info_body='Holding the resolved beat on screen for a moment.',
+    )
+    panel._draw_compact_info_box(screen, rect, held, border=(0, 0, 0))
+    assert screen._conquer_objective_action_rects.get('next') is not None
+    assert draws == []
+
+    screen._conquer_objective_action_rects = {}
+    round_step = TimelineStep(
+        kind='battle_round_2_opponent',
+        title='Round 2',
+        completed=False,
+        active=True,
+        interactive=False,
+        primary_action=None,
+        info_body='Waiting for the defender to play.',
+    )
+    screen._conquer_timeline_step_started_at = {
+        'battle_round_2_opponent': pygame.time.get_ticks()
+    }
+    panel._draw_compact_info_box(screen, rect, round_step, border=(0, 0, 0))
+    assert len(draws) == 1
 
 
 def test_opponent_defender_chosen_by_you_requires_explicit_player_pick():
@@ -1243,6 +1519,39 @@ def test_battle_started_timeline_shows_round_steps_without_overview_hold():
 
     assert by_kind['battle_round_1_player'].active is True
     assert by_kind['overview'].active is False
+
+
+def test_battle_timeline_decorator_can_read_displayed_step_without_recursing():
+    from game.components.conquer_timeline_panel import ConquerTimelinePanel
+    from game.screens.conquer_game_screen import ConquerGameScreen
+
+    game = _make_game(
+        battle_confirmed=True,
+        battle_turn_player_id=1,
+        battle_round=0,
+        conquer_resolution_step=2,
+        _game_data_version=1,
+    )
+    panel = ConquerTimelinePanel.__new__(ConquerTimelinePanel)
+    screen = ConquerGameScreen.__new__(ConquerGameScreen)
+    screen.state = _make_state(game)
+    screen.subscreens = {}
+    screen._conquer_timeline_panel = panel
+    screen._conquer_resolution_step_server = 2
+    screen._conquer_acknowledged_step_kinds = set()
+    screen._conquer_timeline_step_started_at = {}
+    observed_steps = []
+
+    def decorate_steps(steps):
+        observed_steps.append(ConquerGameScreen._displayed_conquer_step(screen))
+        return steps
+
+    screen._conquer_battle_timeline_steps = decorate_steps
+
+    steps = panel.derive_display_steps(screen)
+
+    assert steps
+    assert observed_steps == [2]
 
 
 def test_civil_war_second_attacker_is_active_and_shows_pending_figure():

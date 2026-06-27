@@ -515,10 +515,9 @@ class GameMenuScreen(MenuScreenMixin, Screen):
 
         Collection comes first: after the welcome gift, the player opens a
         starter booster (learning how the collection grows) before their first
-        conquest. The conquer battle follows, then collecting the conquered
-        land's production completes the tutorial. The duel is NOT part of this
-        path and is not pushed from here; the completion box points the player
-        to the Duel menu, where the guided beginner duel waits on opt-in.
+        conquest. The conquer battle follows, then the first owned land closes
+        the tutorial. The duel is NOT part of this path and is not pushed from
+        here; the completion box points the player to the Duel menu.
         """
         seen = self._menu_coach_seen()
         if self._main_reward_booster_unopened():
@@ -546,14 +545,14 @@ class GameMenuScreen(MenuScreenMixin, Screen):
                 }
             return None  # the kingdom screens guide the rest
         if not self._first_session_tutorial_complete():
-            # Collecting production is guided by the kingdom screen's own coach;
-            # steer the player back there to finish the tutorial.
+            # The kingdom screen owns the final "Your First Land" tutorial card;
+            # steer the player back there if they left before finishing it.
             if 'return_to_kingdom_loop' not in seen:
                 return {
                     'id': 'return_to_kingdom_loop',
                     'rect': self.button_kingdom.rect,
                     'title': 'Back To Your Kingdom',
-                    'body': 'Return to your Kingdom to collect the gold your land produced.',
+                    'body': 'Return to your Kingdom to close the conquer tutorial with your first land.',
                     'action': 'click',
                     'mark_on_click': True,
                     'max_lines': 4,
@@ -573,9 +572,8 @@ class GameMenuScreen(MenuScreenMixin, Screen):
             return None
         seen = self._menu_coach_seen()
 
-        # Lead with the actionable journey the welcome promised: conquer a
-        # land -> open a reward pack -> collect production. Action-first, not a
-        # generic tour.
+        # Lead with the actionable journey the welcome promised: open a pack,
+        # conquer a land, then let the first-land card close the tour.
         journey = self._current_journey_coach_step()
         if journey is not None:
             return journey
@@ -616,13 +614,14 @@ class GameMenuScreen(MenuScreenMixin, Screen):
                 [
                     {
                         'title': 'Your Path to the Crown',
-                        'layout': 'image_bottom',
-                        'image': lambda: td.kingdom_journey_diagram(),
+                        'layout': 'image_top',
+                        'image': lambda: td.conquer_start_image(int(0.26 * _SH)),
+                        'image_frame': False,
                         'image_caption': '',
                         'lines': [
                             f'Welcome, {username}!',
                             'You want to become the greatest king of Nepal?',
-                            'Turn your cards into figures, conquer lands for gold,',
+                            'Turn your cards into figures and spells, play your moves wisely,',
                             'and grow your kingdom until the crown is yours.',
                         ],
                     },
@@ -706,4 +705,3 @@ class GameMenuScreen(MenuScreenMixin, Screen):
             self._apply_onboarding_payload(data)
         except Exception as exc:
             logger.error("Failed to mark welcome present seen: %s", exc)
-

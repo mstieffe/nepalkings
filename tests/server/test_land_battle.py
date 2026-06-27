@@ -346,6 +346,9 @@ class TestConquerStartBattle:
         """Tactics-hand games create ConquerTactic rows from configs/templates."""
         with app.app_context():
             user = _make_user(db)
+            # Past the tutorial so the patched template is used (not the
+            # tutorial-safe defender, whose Draw 2 prelude adds drawn tactics).
+            _mark_first_conquer_done(user)
             land = _make_land(db, tier=1)
             _make_conquer_config(db, user, land)
             template = _scripted_ai_template()
@@ -391,6 +394,9 @@ class TestConquerStartBattle:
         with app.app_context():
             monkeypatch.setattr(config, 'CONQUER_TACTICS_HAND_ENABLED', False)
             user = _make_user(db)
+            # Past the tutorial so the patched template is used (not the
+            # tutorial-safe defender, whose Draw 2 prelude adds drawn tactics).
+            _mark_first_conquer_done(user)
             land = _make_land(db, tier=1)
             _make_conquer_config(db, user, land)
             template = _scripted_ai_template()

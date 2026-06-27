@@ -59,6 +59,17 @@ def _make_instant_charge_family():
     return family, description
 
 
+def _make_power_figure(figure_id, *, field='village', suit='Hearts', value=10,
+                       cannot_be_targeted=False):
+    return SimpleNamespace(
+        id=figure_id,
+        suit=suit,
+        family=SimpleNamespace(field=field),
+        cannot_be_targeted=cannot_be_targeted,
+        get_value=lambda value=value: value,
+    )
+
+
 class TestConquerScreenInit:
 
     def test_initial_state(self):
@@ -168,6 +179,49 @@ class TestBattleReadiness:
         screen = ConquerScreen(state)
         screen._config = None
         assert screen._is_battle_ready() is False
+
+
+class TestConquerBattleMovePower:
+
+    def test_call_tactic_power_uses_bound_field_figure_and_healer_bonus(self):
+        from game.screens.conquer_screen import ConquerScreen
+
+        screen = object.__new__(ConquerScreen)
+        farm = _make_power_figure(2, field='village', suit='Hearts', value=13)
+        screen._figure_objects = [farm]
+        screen._figure_icons = {
+            2: SimpleNamespace(has_deficit=False, buffs_allies_bonus=4),
+        }
+        move = {
+            'family_name': 'Call Villager',
+            'suit': 'Hearts',
+            'value': 1,
+            'call_figure_id': 2,
+        }
+
+        assert ConquerScreen._battle_move_display_power(screen, move) == 18
+
+    def test_unbound_call_tactic_previews_best_eligible_field_figure(self):
+        from game.screens.conquer_screen import ConquerScreen
+
+        screen = object.__new__(ConquerScreen)
+        weak = _make_power_figure(1, field='castle', suit='Spades', value=6)
+        strong = _make_power_figure(2, field='castle', suit='Clubs', value=11)
+        deficit = _make_power_figure(3, field='castle', suit='Spades', value=20)
+        screen._figure_objects = [weak, strong, deficit]
+        screen._figure_icons = {
+            1: SimpleNamespace(has_deficit=False, buffs_allies_bonus=0),
+            2: SimpleNamespace(has_deficit=False, buffs_allies_bonus=0),
+            3: SimpleNamespace(has_deficit=True, buffs_allies_bonus=0),
+        }
+        move = {
+            'family_name': 'Call King',
+            'suit': 'Clubs',
+            'value': 4,
+            'call_figure_id': None,
+        }
+
+        assert ConquerScreen._battle_move_display_power(screen, move) == 15
 
 
 class TestConquerCoachCopy:

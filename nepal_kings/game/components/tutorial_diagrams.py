@@ -721,6 +721,69 @@ def card_recipe_examples(target_h=None):
     return _recipe_diagram(('recipe_examples', int(target_h or 0)), entries, target_h)
 
 
+def card_rarity_code_diagram(target_h=None):
+    """Collection basics: real cards with the collection rarity colour code."""
+    _SH = settings.SCREEN_HEIGHT
+    card_h = int(target_h or 0.14 * _SH)
+    key = ('card_rarity_code', card_h)
+    if key in _CACHE:
+        return _CACHE[key]
+
+    label_font = settings.get_font(getattr(settings, 'FS_SMALL', 18), bold=True)
+    color_font = settings.get_font(getattr(settings, 'FS_TINY', 16))
+    pad = max(5, int(0.006 * _SH))
+    line_gap = max(3, int(0.004 * _SH))
+    entries = [
+        ('7', 1, 'Common', 'Grey'),
+        ('J', 2, 'Uncommon', 'Orange'),
+        ('K', 3, 'Rare', 'Gold'),
+    ]
+
+    cols = []
+    for rank, tier, rarity, color_name in entries:
+        card = _card_surface('Hearts', rank, card_h)
+        border = settings.COLLECTION_TIER_BORDER_COLORS.get(
+            tier, (180, 180, 180, 160))
+        label_color = settings.COLLECTION_TIER_COLORS.get(tier, (235, 222, 190))
+        framed = pygame.Surface(
+            (card.get_width() + pad * 2, card.get_height() + pad * 2),
+            pygame.SRCALPHA,
+        )
+        framed.blit(card, (pad, pad))
+        pygame.draw.rect(
+            framed,
+            border,
+            framed.get_rect(),
+            3 if tier >= 2 else 2,
+            border_radius=6,
+        )
+        rarity_label = label_font.render(rarity, True, label_color)
+        color_label = color_font.render(color_name, True, (235, 222, 190))
+        col_w = max(framed.get_width(), rarity_label.get_width(),
+                    color_label.get_width())
+        col_h = (framed.get_height() + line_gap + rarity_label.get_height()
+                 + color_label.get_height())
+        col = pygame.Surface((col_w, col_h), pygame.SRCALPHA)
+        y = 0
+        col.blit(framed, framed.get_rect(midtop=(col_w // 2, y)))
+        y += framed.get_height() + line_gap
+        col.blit(rarity_label, rarity_label.get_rect(midtop=(col_w // 2, y)))
+        y += rarity_label.get_height()
+        col.blit(color_label, color_label.get_rect(midtop=(col_w // 2, y)))
+        cols.append(col)
+
+    gap = int(0.022 * settings.SCREEN_WIDTH)
+    total_w = sum(c.get_width() for c in cols) + gap * (len(cols) - 1)
+    total_h = max(c.get_height() for c in cols)
+    surf = pygame.Surface((total_w, total_h), pygame.SRCALPHA)
+    x = 0
+    for col in cols:
+        surf.blit(col, (x, (total_h - col.get_height()) // 2))
+        x += col.get_width() + gap
+    _CACHE[key] = surf
+    return surf
+
+
 def land_hex_diagram(target_h=None):
     """Window 4: a land hex showing gold production and its tier."""
     _SH = settings.SCREEN_HEIGHT
@@ -1029,6 +1092,193 @@ def kingdom_journey_diagram(target_h=None):
         if i < len(cells) - 1:
             _draw_arrow(surf, (x + 3, cy), (x + arrow_w - 3, cy))
             x += arrow_w
+    _CACHE[key] = surf
+    return surf
+
+
+def duel_start_image(target_h=None):
+    """Duel intro page 1: generated banner of two kings playing chess."""
+    _SH = settings.SCREEN_HEIGHT
+    target_h = int(target_h or 0.22 * _SH)
+    key = ('duel_start_image', target_h)
+    if key in _CACHE:
+        return _CACHE[key]
+    img = _load(_asset('img', 'tutorial', 'duel_start.png'))
+    surf = _scaled(img, target_h) if img else pygame.Surface((1, 1), pygame.SRCALPHA)
+    _CACHE[key] = surf
+    return surf
+
+
+def conquer_start_image(target_h=None):
+    """Welcome intro: supplied banner for the conquer tutorial start."""
+    _SH = settings.SCREEN_HEIGHT
+    target_h = int(target_h or 0.22 * _SH)
+    key = ('conquer_start_image', target_h)
+    if key in _CACHE:
+        return _CACHE[key]
+    img = _load(_asset('img', 'tutorial', 'conquer_start.png'))
+    surf = _scaled(img, target_h) if img else pygame.Surface((1, 1), pygame.SRCALPHA)
+    _CACHE[key] = surf
+    return surf
+
+
+def duel_shared_card_pool_image(target_h=None):
+    """Duel intro page 3: supplied bitmap of one shared card deck."""
+    _SH = settings.SCREEN_HEIGHT
+    target_h = int(target_h or 0.22 * _SH)
+    key = ('duel_shared_card_pool_image', target_h)
+    if key in _CACHE:
+        return _CACHE[key]
+    img = _load(_asset('img', 'tutorial', 'duel_shared_card_pool.png'))
+    if img is None:
+        surf = pygame.Surface((1, 1), pygame.SRCALPHA)
+    elif img.get_height() > target_h:
+        surf = _scaled(img, target_h)
+    else:
+        surf = img
+    _CACHE[key] = surf
+    return surf
+
+
+def _score_chip(text, box, accent=(224, 182, 82)):
+    surf = pygame.Surface((box, box), pygame.SRCALPHA)
+    r = surf.get_rect()
+    pygame.draw.circle(surf, (35, 26, 15, 235), r.center, box // 2)
+    pygame.draw.circle(surf, (*accent, 60), r.center, int(box * 0.46))
+    pygame.draw.circle(surf, accent, r.center, int(box * 0.43), 3)
+    font = settings.get_font(max(14, int(box * 0.42)), bold=True)
+    txt = font.render(str(text), True, (255, 244, 210))
+    surf.blit(txt, txt.get_rect(center=r.center))
+    return surf
+
+
+def duel_loop_diagram(target_h=None):
+    """Duel intro: the long match loop from a shared deck to battle points."""
+    _SH = settings.SCREEN_HEIGHT
+    cell = int(target_h or 0.12 * _SH)
+    key = ('duel_loop', cell)
+    if key in _CACHE:
+        return _CACHE[key]
+
+    cards = _card_fan([('K', 'Spades'), ('J', 'Hearts'), ('8', 'Diamonds')],
+                      int(cell * 0.86))
+    figure = field_figure_icon('Gorkha Warriors', 'army1.png', label='', target_h=cell)
+    battle = _battle_move_chip('dagger.png', cell, accent=(218, 154, 106))
+    points = _score_chip('7', cell)
+    cells = [
+        _label_below(cards, 'Draw cards', bold=True),
+        _label_below(figure, 'Build board', bold=True),
+        _label_below(battle, 'Battle', bold=True),
+        _label_below(points, 'Points', bold=True),
+    ]
+    arrow_w = int(0.032 * settings.SCREEN_WIDTH)
+    cy = cell // 2
+    total_w = sum(c.get_width() for c in cells) + arrow_w * (len(cells) - 1)
+    h = max(c.get_height() for c in cells)
+    surf = pygame.Surface((total_w, h), pygame.SRCALPHA)
+    x = 0
+    for i, c in enumerate(cells):
+        surf.blit(c, (x, 0))
+        x += c.get_width()
+        if i < len(cells) - 1:
+            _draw_arrow(surf, (x + 3, cy), (x + arrow_w - 3, cy))
+            x += arrow_w
+    _CACHE[key] = surf
+    return surf
+
+
+def duel_build_battle_diagram(target_h=None):
+    """Duel intro: simple cycle between Build and Battle."""
+    _SH = settings.SCREEN_HEIGHT
+    h = int(target_h or 0.18 * _SH)
+    key = ('duel_build_battle', h)
+    if key in _CACHE:
+        return _CACHE[key]
+
+    w = int(0.42 * settings.SCREEN_WIDTH)
+    surf = pygame.Surface((w, h), pygame.SRCALPHA)
+    font = settings.get_font(getattr(settings, 'FS_HEADING', 28), bold=True)
+    label_color = (255, 244, 210)
+    node_fill = (32, 25, 16, 238)
+    node_border = (224, 182, 82)
+    node_w = max(int(w * 0.25), font.size('Battle')[0] + int(0.05 * w))
+    node_h = max(int(h * 0.32), font.get_height() + int(0.08 * h))
+    build_rect = pygame.Rect(int(w * 0.08), (h - node_h) // 2, node_w, node_h)
+    battle_rect = pygame.Rect(w - int(w * 0.08) - node_w, (h - node_h) // 2,
+                              node_w, node_h)
+
+    def draw_node(rect, label):
+        pygame.draw.rect(surf, node_fill, rect, border_radius=10)
+        pygame.draw.rect(surf, node_border, rect, 3, border_radius=10)
+        txt = font.render(label, True, label_color)
+        surf.blit(txt, txt.get_rect(center=rect.center))
+
+    draw_node(build_rect, 'Build')
+    draw_node(battle_rect, 'Battle')
+
+    gap = int(0.018 * settings.SCREEN_WIDTH)
+    top_y = h // 2 - int(h * 0.19)
+    bottom_y = h // 2 + int(h * 0.19)
+    _draw_arrow(
+        surf,
+        (build_rect.right + gap, top_y),
+        (battle_rect.left - gap, top_y),
+        color=(235, 202, 112),
+        width=max(3, int(h * 0.025)),
+        head=max(10, int(h * 0.075)),
+    )
+    _draw_arrow(
+        surf,
+        (battle_rect.left - gap, bottom_y),
+        (build_rect.right + gap, bottom_y),
+        color=(130, 178, 224),
+        width=max(3, int(h * 0.025)),
+        head=max(10, int(h * 0.075)),
+    )
+    _CACHE[key] = surf
+    return surf
+
+
+def shared_card_pool_diagram(target_h=None):
+    """Duel intro: both players draw from one central card pool."""
+    _SH = settings.SCREEN_HEIGHT
+    cell = int(target_h or 0.13 * _SH)
+    key = ('shared_card_pool', cell)
+    if key in _CACHE:
+        return _CACHE[key]
+
+    you = _label_below(
+        field_figure_icon('Djungle King', 'castle_red.png', label='', target_h=cell),
+        'You',
+        bold=True,
+    )
+    pool = _label_below(
+        _card_fan([('Q', 'Clubs'), ('9', 'Diamonds'), ('A', 'Spades'), ('J', 'Hearts')],
+                  int(cell * 0.86)),
+        'Shared pool',
+        bold=True,
+    )
+    opponent = _label_below(
+        field_figure_icon('Himalaya King', 'castle_black.png', label='', target_h=cell),
+        'Opponent',
+        bold=True,
+    )
+    arrow_w = int(0.05 * settings.SCREEN_WIDTH)
+    gap = int(0.006 * settings.SCREEN_WIDTH)
+    total_w = you.get_width() + pool.get_width() + opponent.get_width() + arrow_w * 2 + gap * 4
+    h = max(you.get_height(), pool.get_height(), opponent.get_height())
+    surf = pygame.Surface((total_w, h), pygame.SRCALPHA)
+    cy = cell // 2
+    x = 0
+    surf.blit(you, (x, (h - you.get_height()) // 2))
+    x += you.get_width() + gap
+    _draw_arrow(surf, (x + arrow_w - 3, cy), (x + 3, cy))
+    x += arrow_w + gap
+    surf.blit(pool, (x, (h - pool.get_height()) // 2))
+    x += pool.get_width() + gap
+    _draw_arrow(surf, (x + 3, cy), (x + arrow_w - 3, cy))
+    x += arrow_w + gap
+    surf.blit(opponent, (x, (h - opponent.get_height()) // 2))
     _CACHE[key] = surf
     return surf
 

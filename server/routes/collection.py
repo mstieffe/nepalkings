@@ -79,6 +79,33 @@ def _draw_cards(count, tier_probs, tier_ranks):
     return cards
 
 
+def _request_quantity(default=1):
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        data = request.form or {}
+    raw = data.get('quantity', default)
+    if raw in (None, ''):
+        raw = default
+    try:
+        quantity = int(raw)
+    except (TypeError, ValueError):
+        return None
+    if quantity < 1:
+        return None
+    return quantity
+
+
+def _add_drawn_cards(user, drawn):
+    for card in drawn:
+        cc = CollectionCard(
+            user_id=user.id,
+            suit=card['suit'],
+            rank=card['rank'],
+            value=card['value'],
+        )
+        db.session.add(cc)
+
+
 # ── GET /collection/cards ───────────────────────────────────────────────────
 
 @collection.route('/cards', methods=['GET'])
@@ -235,27 +262,30 @@ def buy_booster_side():
 @collection.route('/open_booster', methods=['POST'])
 @require_token
 def open_booster():
-    """Open one main-card booster pack, drawing random cards."""
+    """Open one or more main-card booster packs, drawing random cards."""
+    quantity = _request_quantity()
+    if quantity is None:
+        return jsonify({'success': False,
+                        'message': 'Quantity must be a positive integer'}), 400
+
     user = db.session.get(User, g.user_id)
     if not user:
         return jsonify({'success': False, 'message': 'User not found'}), 404
 
     if user.booster_packs < 1:
         return jsonify({'success': False, 'message': 'No booster packs available'}), 400
+    if user.booster_packs < quantity:
+        return jsonify({
+            'success': False,
+            'message': f'Not enough booster packs available (have {user.booster_packs}, need {quantity})',
+        }), 400
 
-    user.booster_packs -= 1
-    drawn = _draw_cards(config.BOOSTER_PACK_CARDS,
+    user.booster_packs -= quantity
+    drawn = _draw_cards(config.BOOSTER_PACK_CARDS * quantity,
                         config.BOOSTER_TIER_PROBABILITIES,
                         config.BOOSTER_TIER_RANKS)
 
-    for card in drawn:
-        cc = CollectionCard(
-            user_id=user.id,
-            suit=card['suit'],
-            rank=card['rank'],
-            value=card['value'],
-        )
-        db.session.add(cc)
+    _add_drawn_cards(user, drawn)
     from onboarding_service import (mark_step, grant_starter_set,
                                     serialize_onboarding_state)
     mark_step(user, 'open_first_main_booster')
@@ -263,12 +293,14 @@ def open_booster():
     # offensive suit and grants its curated set (revealed on the collection
     # screen, just before the first conquest). Idempotent on later opens.
     grant_starter_set(user)
-    track('booster_opened', user_id=user.id, kind='main')
+    track('booster_opened', user_id=user.id, kind='main',
+          quantity=quantity if quantity > 1 else None)
     db.session.commit()
 
     return jsonify({
         'success': True,
         'cards': drawn,
+        'opened_boosters': quantity,
         'booster_packs': user.booster_packs,
         'onboarding': serialize_onboarding_state(user),
     })
@@ -279,35 +311,40 @@ def open_booster():
 @collection.route('/open_booster_side', methods=['POST'])
 @require_token
 def open_booster_side():
-    """Open one side-card booster pack, drawing random cards."""
+    """Open one or more side-card booster packs, drawing random cards."""
+    quantity = _request_quantity()
+    if quantity is None:
+        return jsonify({'success': False,
+                        'message': 'Quantity must be a positive integer'}), 400
+
     user = db.session.get(User, g.user_id)
     if not user:
         return jsonify({'success': False, 'message': 'User not found'}), 404
 
     if user.booster_packs_side < 1:
         return jsonify({'success': False, 'message': 'No side booster packs available'}), 400
+    if user.booster_packs_side < quantity:
+        return jsonify({
+            'success': False,
+            'message': f'Not enough side booster packs available (have {user.booster_packs_side}, need {quantity})',
+        }), 400
 
-    user.booster_packs_side -= 1
-    drawn = _draw_cards(config.BOOSTER_PACK_CARDS,
+    user.booster_packs_side -= quantity
+    drawn = _draw_cards(config.BOOSTER_PACK_CARDS * quantity,
                         config.BOOSTER_SIDE_TIER_PROBABILITIES,
                         config.BOOSTER_SIDE_TIER_RANKS)
 
-    for card in drawn:
-        cc = CollectionCard(
-            user_id=user.id,
-            suit=card['suit'],
-            rank=card['rank'],
-            value=card['value'],
-        )
-        db.session.add(cc)
+    _add_drawn_cards(user, drawn)
     from onboarding_service import mark_step
     mark_step(user, 'open_first_side_booster')
-    track('booster_opened', user_id=user.id, kind='side')
+    track('booster_opened', user_id=user.id, kind='side',
+          quantity=quantity if quantity > 1 else None)
     db.session.commit()
 
     return jsonify({
         'success': True,
         'cards': drawn,
+        'opened_boosters': quantity,
         'booster_packs_side': user.booster_packs_side,
     })
 

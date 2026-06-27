@@ -2420,8 +2420,8 @@ class BattleScreen(SubScreen):
                 message = (
                     "Your first land is yours! You conquered {}.\n\n"
                     "{}"
-                    "It now fills a gold vault — head back to your kingdom and tap "
-                    "Collect to bank it. A Quick duel is open whenever you want one."
+                    "Head back to your kingdom to see it on the map and finish the conquer tutorial. "
+                    "A Quick duel is open whenever you want one."
                 ).format(land_label, why_line)
             else:
                 message = "You have conquered {}!".format(land_label)
