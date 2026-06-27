@@ -912,10 +912,6 @@ def _recommended_tutorial_land_id(user, lands, now=None):
     now = now or _utcnow()
     attack_suit = _user_offensive_suit(user)
     attacker_beats = _SUIT_ADVANTAGE.get(attack_suit)
-    attacker_loses_to = {
-        suit for suit, beaten in _SUIT_ADVANTAGE.items()
-        if beaten == attack_suit
-    }
     candidates = []
     for land in lands:
         if land.owner_user_id is not None:
@@ -924,20 +920,10 @@ def _recommended_tutorial_land_id(user, lands, now=None):
             continue
         if land.conquer_cooldown_until and land.conquer_cooldown_until > now:
             continue
-        try:
-            template = get_ai_defence_template_for_land(land)
-        except Exception:
-            template = {}
-        defender_suit = _ai_template_battle_suit(template)
-        if defender_suit == attacker_beats:
-            matchup_score = 0
-        elif defender_suit in attacker_loses_to:
-            matchup_score = 3
-        else:
-            matchup_score = 1
+        # First-conquest battles use the scripted-safe defender regardless of
+        # the land's normal AI template, so keep map loading cheap here.
         suit_score = 0 if land.suit_bonus_suit == attacker_beats else 1
         candidates.append((
-            matchup_score,
             suit_score,
             -float(land.gold_rate or 0),
             int(land.id or 0),
