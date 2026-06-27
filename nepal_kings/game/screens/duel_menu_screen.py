@@ -86,6 +86,7 @@ class DuelMenuScreen(MenuScreenMixin, Screen):
 
         # Badge font
         self._badge_font = settings.get_font(int(0.018 * _SH * _UI_SCALE), bold=True)
+        self._duel_tutorial_intro_dialogue = None
 
 
     # ── helper: draw a menu button with glow BEHIND ─────────────────
@@ -147,12 +148,17 @@ class DuelMenuScreen(MenuScreenMixin, Screen):
 
         self._draw_menu_overlay()
         self._draw_menu_coach(self._current_duel_menu_coach_step())
+        if getattr(self, '_duel_tutorial_intro_dialogue', None):
+            self._duel_tutorial_intro_dialogue.draw()
 
     def update(self, events):
         super().update()
         self._update_icon_buttons()
+        self._maybe_show_duel_tutorial_intro_window()
 
     def handle_events(self, events):
+        if self._handle_duel_tutorial_intro_events(events):
+            return
         coach_step = self._current_duel_menu_coach_step()
         if self._handle_menu_coach_events(events, coach_step):
             return
@@ -206,8 +212,86 @@ class DuelMenuScreen(MenuScreenMixin, Screen):
         completed = set(onboarding.get('completed_steps') or [])
         return bool(onboarding and 'finish_first_duel' not in completed)
 
+    def _duel_tutorial_intro_allowed(self):
+        onboarding = (getattr(self.state, 'user_dict', None) or {}).get('onboarding') or {}
+        if not onboarding or onboarding.get('onboarding_skipped'):
+            return False
+        if not self._first_duel_incomplete():
+            return False
+        if getattr(self, 'dialogue_box', None) or getattr(self, '_onboarding_guide_open', False):
+            return False
+        return True
+
+    def _duel_tutorial_intro_pages(self):
+        from game.components import tutorial_diagrams
+        return [
+            {
+                'title': 'Duels Are The Heart Of Nepal Kings',
+                'layout': 'image_top',
+                'image': lambda: tutorial_diagrams.duel_start_image(),
+                'image_frame': False,
+                'image_caption': 'Draw, build, battle, and climb toward the point goal.',
+                'lines': [
+                    'A duel is the long, chess-like version of Nepal Kings.',
+                    'Two players take turns planning, building, and threatening each other until a battle breaks out.',
+                ],
+            },
+            {
+                'title': 'Build, Then Battle',
+                'layout': 'image_top',
+                'image': lambda: tutorial_diagrams.duel_build_battle_diagram(),
+                'image_caption': 'Building phases create the board that decides the battle phase.',
+                'lines': [
+                    'The game switches between building phases and battle phases.',
+                    'During building, you turn cards into figures, spells, and support.',
+                    'During battle, the figures you prepared decide who scores points.',
+                ],
+            },
+            {
+                'title': 'One Shared Card Pool',
+                'layout': 'image_top',
+                'image': lambda: tutorial_diagrams.duel_shared_card_pool_image(),
+                'image_frame': False,
+                'image_caption': 'Every draw comes from one pool shared by both players.',
+                'lines': [
+                    'Both players draw from the same pool of cards, so every card you take is a card your opponent cannot draw.',
+                    'You play until someone reaches the agreed point goal through battles.',
+                ],
+            },
+        ]
+
+    def _maybe_show_duel_tutorial_intro_window(self):
+        if getattr(self, '_duel_tutorial_intro_dialogue', None):
+            return
+        if not self._duel_tutorial_intro_allowed():
+            return
+        forced = bool(getattr(self.state, 'pending_duel_tutorial_intro', False))
+        if not forced and 'duel_tutorial_start_window' in self._menu_coach_seen():
+            return
+        from game.components.tutorial_window import TutorialWindowDialogue
+        self._duel_tutorial_intro_dialogue = TutorialWindowDialogue(
+            self.window,
+            self._duel_tutorial_intro_pages(),
+            title='Duel Tutorial',
+        )
+
+    def _handle_duel_tutorial_intro_events(self, events):
+        win = getattr(self, '_duel_tutorial_intro_dialogue', None)
+        if win is None:
+            return False
+        if any(getattr(e, 'type', None) == QUIT for e in events):
+            return False
+        if win.update(events) == 'done':
+            self._duel_tutorial_intro_dialogue = None
+            if hasattr(self.state, 'pending_duel_tutorial_intro'):
+                self.state.pending_duel_tutorial_intro = False
+            self._mark_menu_coach_seen('duel_tutorial_start_window')
+        return True
+
     def _current_duel_menu_coach_step(self):
         if not self._menu_coach_allowed_common() or not self._first_duel_incomplete():
+            return None
+        if getattr(self, '_duel_tutorial_intro_dialogue', None):
             return None
         if 'new_game' in self._menu_coach_seen():
             return None

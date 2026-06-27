@@ -79,6 +79,14 @@ class User(db.Model):
     email_verified = db.Column(db.Boolean, nullable=False, default=False)
     email_verification_token = db.Column(db.String(128), nullable=True)
     email_verification_sent_at = db.Column(db.DateTime, nullable=True)
+    # Opt-out for gameplay notification emails (your-turn / challenge / result)
+    notify_emails_enabled = db.Column(db.Boolean, nullable=False, default=True, server_default='1')
+    age_confirmed = db.Column(db.Boolean, nullable=False, default=False, server_default='0')
+    age_confirmed_at = db.Column(db.DateTime, nullable=True)
+    terms_version = db.Column(db.String(32), nullable=True)
+    terms_accepted_at = db.Column(db.DateTime, nullable=True)
+    privacy_version = db.Column(db.String(32), nullable=True)
+    privacy_accepted_at = db.Column(db.DateTime, nullable=True)
     # v2.0: Collection & Kingdom
     booster_packs = db.Column(db.Integer, nullable=False, default=0)
     booster_packs_side = db.Column(db.Integer, nullable=False, default=0)
@@ -101,6 +109,8 @@ class User(db.Model):
             'is_online': is_online,
             'is_ai': self.is_ai,
             'email_verified': self.email_verified,
+            'has_email': bool(self.email),
+            'notify_emails_enabled': bool(self.notify_emails_enabled),
             'booster_packs': self.booster_packs,
             'booster_packs_side': self.booster_packs_side,
             'maps': int(self.maps or 0),
@@ -188,6 +198,9 @@ class Game(db.Model):
     #  points_awarded, destroyed_figure_name, destroyed_figure_family,
     #  post_battle_pending_choice?}
     last_battle_result = db.Column(db.JSON, nullable=True)
+
+    # Email-notification bookkeeping: {'turn:<user_id>': iso, 'finish:<user_id>': iso}
+    turn_email_log = db.Column(db.JSON, nullable=True)
 
     # Reason for auto-loss/fold so the waiting player knows WHY they won/lost
     # e.g. 'no_figures_to_advance', 'no_defender_figures', 'resource_deficit', 'fold'
@@ -1284,4 +1297,29 @@ class KingdomNotification(db.Model):
             'payload': self.payload or {},
             'seen': self.seen,
             'timestamp': self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# First-party analytics (see server/analytics.py)
+
+class Event(db.Model):
+    """Append-only product-analytics event.
+
+    Written via analytics.track(); read by scripts/funnel_report.py.
+    user_id intentionally has no FK so events survive account deletion.
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, nullable=True, index=True)
+    name = db.Column(db.String(64), nullable=False, index=True)
+    props = db.Column(db.JSON, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=_utcnow, index=True)
+
+    def serialize(self):
+        return {
+            'id': self.id,
+            'user_id': self.user_id,
+            'name': self.name,
+            'props': self.props or {},
+            'created_at': self.created_at.isoformat() if self.created_at else None,
         }

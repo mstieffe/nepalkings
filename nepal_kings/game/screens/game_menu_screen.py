@@ -6,7 +6,6 @@ from datetime import datetime
 from email.utils import parsedate_to_datetime
 from game.screens.screen import Screen
 from game.screens._menu_base import MenuScreenMixin
-from game.components.rewards_reveal_dialogue import RewardsRevealDialogueBox
 from config import settings
 from config.screen_settings import _UI_SCALE
 from utils.utils import Button
@@ -73,10 +72,12 @@ class GameMenuScreen(MenuScreenMixin, Screen):
 
         first_btn_y = self._box_rect.y + settings.GAME_MENU_BOX_PAD_TOP + title_h
 
-        self.button_duel = Button(self.window, btn_x, first_btn_y,
-                                  "Duel", width=_btn_w, height=_btn_h)
-        self.button_kingdom = Button(self.window, btn_x, first_btn_y + _btn_h + _btn_gap,
+        # Kingdom leads the menu: conquest/kingdom play is the core single-player
+        # loop and the game's front door; Duel is the head-to-head mode below it.
+        self.button_kingdom = Button(self.window, btn_x, first_btn_y,
                                   "Kingdom", width=_btn_w, height=_btn_h)
+        self.button_duel = Button(self.window, btn_x, first_btn_y + _btn_h + _btn_gap,
+                                  "Duel", width=_btn_w, height=_btn_h)
         self.button_collection = Button(self.window, btn_x, first_btn_y + 2 * (_btn_h + _btn_gap),
                                   "Collection", width=_btn_w, height=_btn_h)
         self.button_rankings = Button(self.window, btn_x, first_btn_y + 3 * (_btn_h + _btn_gap),
@@ -104,9 +105,15 @@ class GameMenuScreen(MenuScreenMixin, Screen):
         self._badge_timer = 0
         self._badge_interval = 5000          # ms between server polls
         self._badge_font = settings.get_font(int(0.018 * _SH * _UI_SCALE), bold=True)
-        self._welcome_dialogue_opened = False
         self._welcome_dialogue_username = self._current_menu_username()
+        # Welcome sequence: intro window, welcome-gift boxes, then starter suits.
+        self._welcome_stage = 0
         self._welcome_present_dialogue = None
+        self._starter_reveal_dialogue = None
+        # Explicit "tutorial complete" celebrations (conquer + duel tutorials).
+        self._tutorial_complete_dialogue = None
+        self._tutorial_complete_step_id = None
+        self._tutorial_celebrated = set()
 
 
 
@@ -168,6 +175,7 @@ class GameMenuScreen(MenuScreenMixin, Screen):
         # Messages / dialogue / icon buttons (overlay)
         self._draw_menu_overlay()
         self._draw_welcome_present_dialogue()
+        self._draw_tutorial_complete_dialogue()
         self._draw_menu_coach(
             self._current_onboarding_guide_coach_step()
             or self._current_area_coach_step())
@@ -321,6 +329,17 @@ class GameMenuScreen(MenuScreenMixin, Screen):
                 self.state.badge_new_challenges = len(new_ch)
                 self.state._new_challenge_ids = set(new_ch)
 
+            # Chime once when fresh games or challenges arrive
+            try:
+                total_new = (int(self.state.badge_new_games or 0)
+                             + int(self.state.badge_new_challenges or 0))
+                if total_new > getattr(self, '_badge_chimed_count', 0):
+                    from utils import sound
+                    sound.play('your_turn')
+                self._badge_chimed_count = total_new
+            except Exception:
+                pass
+
             # -- accepted challenges (notify challenger) --
             try:
                 self._check_accepted_challenges(user)
@@ -400,10 +419,13 @@ class GameMenuScreen(MenuScreenMixin, Screen):
         if hasattr(self, '_badge_poller') and self._badge_poller and self._badge_poller.has_result():
             self._apply_badge_data(self._badge_poller.result)
         self._maybe_show_welcome_present()
+        self._maybe_show_tutorial_completion()
 
     def handle_events(self, events):
         """Handle button click events."""
         if self._handle_welcome_present_events(events):
+            return
+        if self._handle_tutorial_completion_events(events):
             return
 
         coach_step = (self._current_onboarding_guide_coach_step()
@@ -455,7 +477,11 @@ class GameMenuScreen(MenuScreenMixin, Screen):
                 self.handle_button_clicks()
 
     def handle_button_clicks(self):
-        """Handle clicks on the menu buttons."""
+        """Handle clicks on the menu buttons.
+
+        The click tick comes from the shared Button class (sound.tap_edge),
+        so no explicit play is needed here.
+        """
         if self.button_duel.collide():
             self._mark_menu_coach_seen('duel')
             self.state.screen = 'duel_menu'
@@ -473,38 +499,69 @@ class GameMenuScreen(MenuScreenMixin, Screen):
             self.state.screen = 'rankings'
             logger.debug("Rankings button clicked")
 
-    def _first_duel_incomplete(self):
-        onboarding = (getattr(self.state, 'user_dict', None) or {}).get('onboarding') or {}
+    def _main_reward_booster_unopened(self):
         completed = self._onboarding_completed_steps()
-        return bool(onboarding and 'finish_first_duel' not in completed)
+        return 'open_first_main_booster' not in completed
 
-    def _current_post_duel_coach_step(self):
-        if not self._onboarding():
+    def _first_conquer_incomplete(self):
+        return ('finish_first_conquer_battle'
+                not in self._onboarding_completed_steps())
+
+    def _first_session_tutorial_complete(self):
+        return 'finish_tutorial' in self._onboarding_completed_steps()
+
+    def _current_journey_coach_step(self):
+        """Guided first-session path: open a pack → conquer → kingdom loop.
+
+        Collection comes first: after the welcome gift, the player opens a
+        starter booster (learning how the collection grows) before their first
+        conquest. The conquer battle follows, then the first owned land closes
+        the tutorial. The duel is NOT part of this path and is not pushed from
+        here; the completion box points the player to the Duel menu.
+        """
+        seen = self._menu_coach_seen()
+        if self._main_reward_booster_unopened():
+            if 'open_starter_pack' not in seen:
+                return {
+                    'id': 'open_starter_pack',
+                    'rect': self.button_collection.rect,
+                    'title': 'Open Your Booster Packs',
+                    'body': 'Open your Collection and crack a booster pack to grow your card collection before your first conquest.',
+                    'action': 'click',
+                    'mark_on_click': True,
+                    'max_lines': 4,
+                }
+            return None  # the collection screen guides opening the pack
+        if self._first_conquer_incomplete():
+            if 'post_boosters_kingdom' not in seen:
+                return {
+                    'id': 'post_boosters_kingdom',
+                    'rect': self.button_kingdom.rect,
+                    'title': 'Conquer Your First Land',
+                    'body': 'Open your Kingdom and conquer the marked land. Your starter attack is already prepared.',
+                    'action': 'click',
+                    'mark_on_click': True,
+                    'max_lines': 4,
+                }
+            return None  # the kingdom screens guide the rest
+        if not self._first_session_tutorial_complete():
+            # The kingdom screen owns the final "Your First Land" tutorial card;
+            # steer the player back there if they left before finishing it.
+            if 'return_to_kingdom_loop' not in seen:
+                return {
+                    'id': 'return_to_kingdom_loop',
+                    'rect': self.button_kingdom.rect,
+                    'title': 'Back To Your Kingdom',
+                    'body': 'Return to your Kingdom to close the conquer tutorial with your first land.',
+                    'action': 'click',
+                    'mark_on_click': True,
+                    'max_lines': 4,
+                }
             return None
-        completed = self._onboarding_completed_steps()
-        if 'finish_first_duel' not in completed:
-            return None
-        if ('open_first_main_booster' not in completed
-                or 'open_first_side_booster' not in completed):
-            return {
-                'id': 'post_duel_collection',
-                'rect': self.button_collection.rect,
-                'title': 'Open Your Booster Packs',
-                'body': 'Congrats on your first duel! Next, go to your Collection and open one main booster and one side booster to turn those packs into playable cards to be used in your kingdom. Let\'s see how lucky you are.',
-                'action': 'click',
-                'mark_on_click': True,
-                'max_lines': 5,
-            }
-        if 'post_boosters_kingdom' not in self._menu_coach_seen():
-            return {
-                'id': 'post_boosters_kingdom',
-                'rect': self.button_kingdom.rect,
-                'title': 'Visit Your Kingdom',
-                'body': 'With fresh cards in your collection, the next layer is kingdom play: choose land, inspect it, and prepare a conquer setup.',
-                'action': 'click',
-                'mark_on_click': True,
-                'max_lines': 5,
-            }
+        # Tutorial finished. The duel tutorial is optional and is NOT pushed
+        # from here — the "Conquer Tutorial Complete!" box tells the player they
+        # can start it from the Duel menu whenever they like. Going to Duel ->
+        # New Game still gives the guided beginner-duel setup on opt-in.
         return None
 
     def _current_area_coach_step(self):
@@ -513,41 +570,26 @@ class GameMenuScreen(MenuScreenMixin, Screen):
         onboarding = self._onboarding()
         if onboarding.get('welcome_pending'):
             return None
-        if not self._first_duel_incomplete():
-            return self._current_post_duel_coach_step()
         seen = self._menu_coach_seen()
-        steps = [
-            ('user_items', self._user_item_display_rect, 'Your Items',
-             'Items you own are shown here. The welcome present you just opened added gold, boosters, and maps to this display.'),
-            ('duel', self.button_duel.rect, 'Duel',
-             'Start here. Duels teach the tactical card flow without risking your own cards or lands.'),
-            ('kingdom', self.button_kingdom.rect, 'Kingdom',
-             'Develop your kingdom: conquer lands, defend them, and collect production.'),
-            ('collection', self.button_collection.rect, 'Collection',
-             'Figures in your kingdom require cards from your collection. Open booster packs here, then trade or sell cards you do not need.'),
-            ('rankings', self.button_rankings.rect, 'Rankings',
-             'Check rankings when you want to compare progress and see who is climbing.'),
-            ('home', self._icon_home.rect, 'Home',
-             'This icon always brings you back to the main menu.'),
-        ]
-        for step_id, rect, title, body in steps:
-            if step_id not in seen:
-                return {'id': step_id, 'rect': rect, 'title': title, 'body': body}
-        if 'guide_achievements' not in seen or 'guide_first_duel_reward' not in seen:
+
+        # Lead with the actionable journey the welcome promised: open a pack,
+        # conquer a land, then let the first-land card close the tour.
+        journey = self._current_journey_coach_step()
+        if journey is not None:
+            return journey
+
+        # Once the journey is underway, point at the guide for reward tracking.
+        guide_walkthrough_pending = (
+            not self._first_session_tutorial_complete()
+            and 'guide_first_duel_reward' not in seen
+        )
+        if 'guide' not in seen or guide_walkthrough_pending:
             return {
                 'id': 'guide',
                 'rect': self._icon_guide.rect,
                 'title': 'Guide',
-                'body': 'Open the guide next. It tracks learning achievements and the rewards waiting behind them.',
-            }
-        if 'start_first_duel' not in seen:
-            return {
-                'id': 'start_first_duel',
-                'rect': self.button_duel.rect,
-                'title': 'Start Your First Duel',
-                'body': 'Click Duel and begin your first match against AI Strategos.',
-                'action': 'click',
-                'mark_on_click': True,
+                'body': 'Open the guide any time to track your checklist and reward goals.',
+                'max_lines': 4,
             }
         return None
 
@@ -559,6 +601,60 @@ class GameMenuScreen(MenuScreenMixin, Screen):
 
     # ── Welcome present reveal ─────────────────────────────────────
 
+    # Number of welcome-window stages before the starter-suit reveal.
+    _WELCOME_STAGES = 2
+
+    def _build_welcome_stage(self, stage, username):
+        """Build the dialogue for one welcome stage (or None)."""
+        from game.components.tutorial_window import TutorialWindowDialogue
+        from game.components import tutorial_diagrams as td
+        if stage == 0:
+            return TutorialWindowDialogue(
+                self.window,
+                [
+                    {
+                        'title': 'Your Path to the Crown',
+                        'layout': 'image_top',
+                        'image': lambda: td.conquer_start_image(int(0.26 * _SH)),
+                        'image_frame': False,
+                        'image_caption': '',
+                        'lines': [
+                            f'Welcome, {username}!',
+                            'You want to become the greatest king of Nepal?',
+                            'Turn your cards into figures and spells, play your moves wisely,',
+                            'and grow your kingdom until the crown is yours.',
+                        ],
+                    },
+                ],
+                title='Welcome to Nepal Kings',
+            )
+        if stage == 1:
+            from game.components.rewards_reveal_dialogue import RewardsRevealDialogueBox
+            present = (self._onboarding() or {}).get('starter_present') or {}
+            # The gift is credited only when these boxes are opened, so the
+            # account balance is still 0 here — reveal the starter DEFAULTS.
+            defaults = present.get('starter_defaults') or {}
+            items = self._reward_reveal_items({
+                'gold': defaults.get('gold'),
+                'booster_packs': defaults.get('booster_packs'),
+                'booster_packs_side': defaults.get('booster_packs_side'),
+                'maps': defaults.get('maps'),
+            })
+            return RewardsRevealDialogueBox(
+                self.window,
+                'Your Welcome Gift',
+                'welcome',
+                [
+                    'The basis of your kingdom is your card collection.',
+                    'Open booster packs to expand your collection.',
+                    'Claim your welcome gift to begin:',
+                ],
+                items,
+                footer_when_done='Added to your collection!',
+                hint_text='Click each box to reveal your gift.',
+            )
+        return None
+
     def _maybe_show_welcome_present(self):
         onboarding = self._onboarding()
         if not onboarding:
@@ -566,87 +662,42 @@ class GameMenuScreen(MenuScreenMixin, Screen):
         username = self._current_menu_username() or 'there'
         if getattr(self, '_welcome_dialogue_username', None) != username:
             self._welcome_dialogue_username = username
-            self._welcome_dialogue_opened = False
+            self._welcome_stage = 0
             self._welcome_present_dialogue = None
-        if not onboarding.get('welcome_pending') or self._welcome_dialogue_opened:
+        if not onboarding.get('welcome_pending'):
+            return
+        if self._welcome_present_dialogue is not None or self._welcome_stage >= self._WELCOME_STAGES:
             return
         if self.dialogue_box or getattr(self, '_onboarding_guide_open', False):
             return
-        present = onboarding.get('starter_present') or {}
-        defaults = dict(present.get('starter_defaults') or {})
-        amounts = {
-            'gold': int(defaults.get('gold') if defaults.get('gold') is not None else present.get('gold') or 0),
-            'booster_packs': int(defaults.get('booster_packs') if defaults.get('booster_packs') is not None else present.get('booster_packs') or 0),
-            'booster_packs_side': int(defaults.get('booster_packs_side') if defaults.get('booster_packs_side') is not None else present.get('booster_packs_side') or 0),
-            'maps': int(defaults.get('maps') if defaults.get('maps') is not None else present.get('maps') or 0),
-        }
-        items = []
-        if amounts['gold'] > 0:
-            items.append({
-                'kind': 'gold',
-                'label': f"{amounts['gold']} gold",
-                'description': 'Main currency in the game to purchase booster packs, cosmetics, shields, etc.',
-            })
-        if amounts['booster_packs'] > 0:
-            label = f"{amounts['booster_packs']} main booster"
-            if amounts['booster_packs'] != 1:
-                label += 's'
-            items.append({
-                'kind': 'main_booster',
-                'label': label,
-                'description': 'Booster pack for main cards needed to build the most essential figures, spells and battle moves.',
-            })
-        if amounts['booster_packs_side'] > 0:
-            label = f"{amounts['booster_packs_side']} side booster"
-            if amounts['booster_packs_side'] != 1:
-                label += 's'
-            items.append({
-                'kind': 'side_booster',
-                'label': label,
-                'description': 'Booster pack for side cards for building advanced figures and spells.',
-            })
-        if amounts['maps'] > 0:
-            label = f"{amounts['maps']} map"
-            if amounts['maps'] != 1:
-                label += 's'
-            items.append({
-                'kind': 'map',
-                'label': label,
-                'description': 'Maps to bypass cooldown time after conquering a land.',
-            })
-        if not items:
-            self._mark_welcome_seen()
-            return
-
-        self._welcome_dialogue_opened = True
-        self._welcome_present_dialogue = RewardsRevealDialogueBox(
-            self.window,
-            'Welcome Present',
-            'welcome',
-            [
-                f'Hello {username}!',
-                'Welcome to the NepalKings experience - an online tactical card game where you collect cards, build figures, cast spells, and conquer kingdoms.',
-                'Your starter kit is already waiting in your account.',
-            ],
-            items,
-            footer_when_done='Your starter kit is ready to use.',
-            hint_text='Click each box to reveal an item and its role.',
-        )
+        self._welcome_present_dialogue = self._build_welcome_stage(
+            self._welcome_stage, username)
 
     def _draw_welcome_present_dialogue(self):
         if self._welcome_present_dialogue:
             self._welcome_present_dialogue.draw()
+        if getattr(self, '_starter_reveal_dialogue', None):
+            self._starter_reveal_dialogue.draw()
 
     def _handle_welcome_present_events(self, events):
-        if not self._welcome_present_dialogue:
-            return False
-        if any(event.type == QUIT for event in events):
-            return False
-        response = self._welcome_present_dialogue.update(events)
-        if response:
-            self._welcome_present_dialogue = None
-            self._mark_welcome_seen()
-        return True
+        if self._welcome_present_dialogue:
+            if any(event.type == QUIT for event in events):
+                return False
+            # All three welcome dialogue types return a truthy value when done.
+            if self._welcome_present_dialogue.update(events):
+                self._welcome_present_dialogue = None
+                self._welcome_stage += 1
+                if self._welcome_stage >= self._WELCOME_STAGES:
+                    self._mark_welcome_seen()
+            return True
+        if getattr(self, '_starter_reveal_dialogue', None):
+            if any(event.type == QUIT for event in events):
+                return False
+            if self._starter_reveal_dialogue.update(events) == 'done':
+                self._starter_reveal_dialogue = None
+                self._mark_menu_coach_seen('starter_suit_reveal')
+            return True
+        return False
 
     def _mark_welcome_seen(self):
         try:

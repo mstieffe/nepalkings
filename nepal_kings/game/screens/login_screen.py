@@ -61,6 +61,7 @@ class LoginScreen(Screen):
         super().__init__(state)
         self.loading = False
         self.control_buttons = []
+        self._legal_confirmed = False
 
         # Async auth state (web only)
         self._pending_rid = None   # request-id from http_compat.start_async_post
@@ -78,6 +79,7 @@ class LoginScreen(Screen):
 
         self._field_font = settings.get_font(int(0.026 * _FS))
         self._label_font = settings.get_font(int(0.020 * _FS))
+        self._legal_font = settings.get_font(max(12, int(0.018 * _FS)))
         self._loading_font = settings.get_font(int(0.024 * _FS))
 
         # ── Layout ──────────────────────────────────────────────────
@@ -87,12 +89,14 @@ class LoginScreen(Screen):
         _label_h = self._label_font.get_height() + _LABEL_GAP
         _field_gap   = int(0.020 * _SH)
         _section_gap = int(0.030 * _SH)
+        _legal_gap = int(0.012 * _SH)
+        _legal_h = max(int(0.047 * _SH), self._legal_font.get_height() * 2 + 4)
 
         title_h = self._title_surf.get_height() + settings.GAME_MENU_TITLE_PAD_BOTTOM
 
         content_h = (title_h
                      + _label_h + _FIELD_H + _field_gap
-                     + _label_h + _FIELD_H + _section_gap
+                     + _label_h + _FIELD_H + _legal_gap + _legal_h + _section_gap
                      + _btn_h + _btn_gap + _btn_h)
 
         box_w = _btn_w + settings.GAME_MENU_BOX_PAD_X * 2
@@ -124,7 +128,23 @@ class LoginScreen(Screen):
                                      "password", "", True, False,
                                      max_length=MAX_PASSWORD_LENGTH,
                                      width=_FIELD_W, height=_FIELD_H)
-        y += _FIELD_H + _section_gap
+        y += _FIELD_H + _legal_gap
+
+        # Legal acceptance for registration only.
+        self._legal_rect = pygame.Rect(field_x, y, _FIELD_W, _legal_h)
+        box_size = min(max(14, self._legal_font.get_height()), _legal_h - 4)
+        self._legal_box_rect = pygame.Rect(field_x, y + 2, box_size, box_size)
+        # Tight toggle hit area (checkbox + the plain label only) and the
+        # clickable Terms/Privacy link rects are computed during draw, once
+        # text widths are known.
+        self._legal_toggle_rect = self._legal_box_rect.copy()
+        self._terms_link_rect = pygame.Rect(0, 0, 0, 0)
+        self._privacy_link_rect = pygame.Rect(0, 0, 0, 0)
+        # Scrollable legal-document overlay state.
+        self._legal_doc = None        # {'title', 'lines', 'scroll', 'max_scroll'}
+        self._legal_doc_close_rect = pygame.Rect(0, 0, 0, 0)
+        self._legal_doc_cache = {}    # slug -> wrapped lines
+        y += _legal_h + _section_gap
 
         # Buttons
         self.button_login = Button(self.window, btn_x, y,
@@ -132,6 +152,7 @@ class LoginScreen(Screen):
         y += _btn_h + _btn_gap
         self.button_register = Button(self.window, btn_x, y,
                                       "Register", width=_btn_w, height=_btn_h)
+        self.button_register.disabled = True
 
         # Apply custom button images
         for btn in (self.button_login, self.button_register):
@@ -228,6 +249,205 @@ class LoginScreen(Screen):
                              (cursor_x, cursor_y),
                              (cursor_x, cursor_y + cursor_h), 2)
 
+    _LEGAL_LINK_CLR = (120, 180, 250)
+
+    def _draw_legal_confirmation(self):
+        mouse = pygame.mouse.get_pos()
+        # Checkbox — highlighted when hovered over the toggle area or checked.
+        toggle_hover = self._legal_toggle_rect.collidepoint(mouse)
+        bdr = _FIELD_BDR_ACTIVE if toggle_hover or self._legal_confirmed else _FIELD_BDR_PASSIVE
+        pygame.draw.rect(self.window, bdr, self._legal_box_rect, 1,
+                         border_radius=max(2, _FIELD_CORNER_R // 2))
+        if self._legal_confirmed:
+            x, y = self._legal_box_rect.x, self._legal_box_rect.y
+            w, h = self._legal_box_rect.w, self._legal_box_rect.h
+            pygame.draw.line(self.window, _FIELD_LABEL_CLR,
+                             (x + int(0.22 * w), y + int(0.55 * h)),
+                             (x + int(0.43 * w), y + int(0.76 * h)), 2)
+            pygame.draw.line(self.window, _FIELD_LABEL_CLR,
+                             (x + int(0.41 * w), y + int(0.76 * h)),
+                             (x + int(0.80 * w), y + int(0.24 * h)), 2)
+
+        font = self._legal_font
+        gap = int(0.006 * _SW)
+        x = self._legal_box_rect.right + int(0.008 * _SW)
+        # Line 1: plain label, part of the toggle hit area.
+        label1 = font.render("I'm 13+ and accept the", True, _FIELD_TEXT_CLR)
+        ty1 = self._legal_box_rect.y
+        self.window.blit(label1, (x, ty1))
+        # The toggle hit area = checkbox + line-1 label only (NOT the links),
+        # so clicking far right or on a link no longer toggles acceptance.
+        self._legal_toggle_rect = self._legal_box_rect.union(
+            pygame.Rect(x, ty1, label1.get_width(), label1.get_height()))
+
+        # Line 2: [Terms] & [Privacy] as clickable links.
+        ty2 = ty1 + label1.get_height() + 2
+        terms_surf = font.render('Terms', True, self._LEGAL_LINK_CLR)
+        amp_surf = font.render('  &  ', True, _FIELD_LABEL_CLR)
+        privacy_surf = font.render('Privacy', True, self._LEGAL_LINK_CLR)
+        lx = x
+        self.window.blit(terms_surf, (lx, ty2))
+        self._terms_link_rect = pygame.Rect(lx, ty2, terms_surf.get_width(),
+                                             terms_surf.get_height())
+        lx += terms_surf.get_width()
+        self.window.blit(amp_surf, (lx, ty2))
+        lx += amp_surf.get_width()
+        self.window.blit(privacy_surf, (lx, ty2))
+        self._privacy_link_rect = pygame.Rect(lx, ty2, privacy_surf.get_width(),
+                                               privacy_surf.get_height())
+        # Underline the links so they read as tappable.
+        for r in (self._terms_link_rect, self._privacy_link_rect):
+            underline_clr = (self._LEGAL_LINK_CLR if r.collidepoint(mouse)
+                             else (90, 130, 190))
+            pygame.draw.line(self.window, underline_clr,
+                             (r.x, r.bottom), (r.right, r.bottom), 1)
+
+    # ── Legal-document overlay ──────────────────────────────────────
+
+    def _open_legal_doc(self, slug, title):
+        """Fetch and show a legal document in a scrollable overlay."""
+        lines = self._legal_doc_cache.get(slug)
+        if lines is None:
+            lines = self._fetch_legal_doc_lines(slug)
+            self._legal_doc_cache[slug] = lines
+        self._legal_doc = {'title': title, 'lines': lines, 'scroll': 0}
+        self._recompute_legal_doc_scroll()
+
+    def _fetch_legal_doc_lines(self, slug):
+        """Return word-wrapped lines for the document, or an error notice."""
+        try:
+            resp = _http.get(f'{settings.SERVER_URL}/legal/{slug}', timeout=10)
+            text = getattr(resp, 'text', '') or ''
+            if getattr(resp, 'status_code', 200) != 200 or not text.strip():
+                raise ValueError('empty')
+        except Exception:
+            return ['Could not load this document right now.',
+                    '',
+                    f'You can read it online at:',
+                    f'{settings.SERVER_URL}/legal/{slug}']
+        # Strip simple markdown markers for readability and word-wrap.
+        max_w = self._legal_doc_panel_rect().w - int(0.04 * _SW)
+        wrapped = []
+        for raw in text.replace('\r\n', '\n').split('\n'):
+            line = raw.rstrip()
+            for marker in ('### ', '## ', '# '):
+                if line.startswith(marker):
+                    line = line[len(marker):]
+                    break
+            line = line.replace('**', '').replace('`', '')
+            wrapped.extend(self._wrap_legal_line(line, max_w))
+        return wrapped
+
+    def _wrap_legal_line(self, line, max_w):
+        if not line:
+            return ['']
+        words = line.split(' ')
+        out, cur = [], ''
+        for w in words:
+            cand = (cur + ' ' + w).strip()
+            if self._legal_font.size(cand)[0] <= max_w:
+                cur = cand
+            else:
+                if cur:
+                    out.append(cur)
+                cur = w
+        out.append(cur)
+        return out
+
+    @staticmethod
+    def _legal_doc_panel_rect():
+        w = int(0.74 * _SW)
+        h = int(0.74 * _SH)
+        return pygame.Rect((_SW - w) // 2, (_SH - h) // 2, w, h)
+
+    def _legal_doc_body_rect(self):
+        panel = self._legal_doc_panel_rect()
+        top = panel.y + int(0.012 * _SH) + self._label_font.get_height() + int(0.012 * _SH)
+        return pygame.Rect(panel.x + int(0.02 * _SW), top,
+                           panel.w - int(0.04 * _SW),
+                           panel.bottom - int(0.06 * _SH) - top)
+
+    def _recompute_legal_doc_scroll(self):
+        if not self._legal_doc:
+            return
+        line_h = self._legal_font.get_height() + 2
+        content_h = len(self._legal_doc['lines']) * line_h
+        view_h = self._legal_doc_body_rect().h
+        self._legal_doc['max_scroll'] = max(0, content_h - view_h)
+        self._legal_doc['scroll'] = max(0, min(self._legal_doc['scroll'],
+                                               self._legal_doc['max_scroll']))
+
+    def _draw_legal_doc(self):
+        if not self._legal_doc:
+            return
+        # Dim the screen behind the panel.
+        veil = pygame.Surface((_SW, _SH), pygame.SRCALPHA)
+        veil.fill((0, 0, 0, 180))
+        self.window.blit(veil, (0, 0))
+
+        panel = self._legal_doc_panel_rect()
+        panel_surf = pygame.Surface((panel.w, panel.h), pygame.SRCALPHA)
+        pygame.draw.rect(panel_surf, (28, 26, 22, 252), panel_surf.get_rect(),
+                         border_radius=10)
+        self.window.blit(panel_surf, panel.topleft)
+        pygame.draw.rect(self.window, (120, 105, 75), panel, 2, border_radius=10)
+
+        # Title + close button.
+        title_surf = self._label_font.render(self._legal_doc['title'], True,
+                                              settings.GAME_MENU_TITLE_CLR)
+        self.window.blit(title_surf, (panel.x + int(0.02 * _SW),
+                                      panel.y + int(0.012 * _SH)))
+        close_sz = int(0.030 * _SH)
+        self._legal_doc_close_rect = pygame.Rect(
+            panel.right - close_sz - int(0.012 * _SW),
+            panel.y + int(0.012 * _SH), close_sz, close_sz)
+        cr = self._legal_doc_close_rect
+        ch = cr.collidepoint(pygame.mouse.get_pos())
+        pygame.draw.rect(self.window, (90, 60, 40) if ch else (60, 45, 30), cr,
+                         border_radius=5)
+        pygame.draw.line(self.window, (230, 210, 180),
+                         (cr.x + 6, cr.y + 6), (cr.right - 6, cr.bottom - 6), 2)
+        pygame.draw.line(self.window, (230, 210, 180),
+                         (cr.x + 6, cr.bottom - 6), (cr.right - 6, cr.y + 6), 2)
+
+        # Body text (clipped + scrolled).
+        body = self._legal_doc_body_rect()
+        prev_clip = self.window.get_clip()
+        self.window.set_clip(body)
+        line_h = self._legal_font.get_height() + 2
+        y = body.y - self._legal_doc['scroll']
+        for line in self._legal_doc['lines']:
+            if y + line_h >= body.y and y <= body.bottom:
+                surf = self._legal_font.render(line, True, _FIELD_TEXT_CLR)
+                self.window.blit(surf, (body.x, y))
+            y += line_h
+        self.window.set_clip(prev_clip)
+
+        hint = self._legal_font.render('Scroll to read · click ✕ or outside to close',
+                                       True, _FIELD_LABEL_CLR)
+        self.window.blit(hint, (panel.x + int(0.02 * _SW),
+                                panel.bottom - int(0.035 * _SH)))
+
+    def _handle_legal_doc_events(self, events):
+        """Process events while the doc overlay is open. Returns True if open."""
+        if not self._legal_doc:
+            return False
+        panel = self._legal_doc_panel_rect()
+        for event in events:
+            if event.type == MOUSEWHEEL:
+                self._legal_doc['scroll'] = max(
+                    0, min(self._legal_doc.get('max_scroll', 0),
+                           self._legal_doc['scroll'] - event.y * int(0.05 * _SH)))
+            elif event.type == KEYDOWN and event.key in (K_ESCAPE,):
+                self._legal_doc = None
+                return True
+            elif event.type == MOUSEBUTTONUP and event.button == 1:
+                if (self._legal_doc_close_rect.collidepoint(event.pos)
+                        or not panel.collidepoint(event.pos)):
+                    self._legal_doc = None
+                    return True
+        return True
+
     # ── Render ──────────────────────────────────────────────────────
 
     def render(self):
@@ -245,6 +465,7 @@ class LoginScreen(Screen):
         # Input fields
         self._draw_field(self.field_username, self._username_label_y)
         self._draw_field(self.field_pwd, self._pwd_label_y)
+        self._draw_legal_confirmation()
 
         # Buttons
         if not self.loading:
@@ -255,6 +476,9 @@ class LoginScreen(Screen):
             lx = self._box_rect.centerx - load_surf.get_width() // 2
             ly = self.button_login.rect.y + self.button_login.rect.h // 2
             self.window.blit(load_surf, (lx, ly))
+
+        # Legal-document overlay (above the form, below status messages)
+        self._draw_legal_doc()
 
         # Messages overlay
         super().render()
@@ -281,17 +505,30 @@ class LoginScreen(Screen):
     def handle_register(self):
         if self.loading:
             return
+        if not self._legal_confirmed:
+            self.state.set_msg('Confirm age, Terms, and Privacy before registering.')
+            return
+        legal_data = {
+            'age_confirmed': 'true',
+            'terms_accepted': 'true',
+            'privacy_accepted': 'true',
+        }
         if _IS_WEB:
             self.loading = True
             self._pending_rid = _http.start_async_post(
                 f'{settings.SERVER_URL}/auth/register',
                 data={'username': self.field_username.content,
-                      'password': self.field_pwd.content}
+                      'password': self.field_pwd.content,
+                      **legal_data}
             )
             self._pending_action = 'register'
         else:
             self.loading = True
-            response_data = register(self.field_username.content, self.field_pwd.content)
+            response_data = register(
+                self.field_username.content,
+                self.field_pwd.content,
+                legal_confirmed=True,
+            )
             self.loading = False
             self._apply_register_response(response_data)
 
@@ -372,6 +609,10 @@ class LoginScreen(Screen):
     def handle_events(self, events):
         super().handle_events(events)
 
+        # While a legal document is open, it captures all input.
+        if self._handle_legal_doc_events(events):
+            return
+
         for event in events:
             response_username = self.field_username.handle_event(event)
             response_pwd = self.field_pwd.handle_event(event)
@@ -384,13 +625,20 @@ class LoginScreen(Screen):
                 self.handle_login()
 
             elif event.type == MOUSEBUTTONUP:
-                if self.button_login.collide():
+                if self._terms_link_rect.collidepoint(event.pos):
+                    self._open_legal_doc('terms', 'Terms of Use')
+                elif self._privacy_link_rect.collidepoint(event.pos):
+                    self._open_legal_doc('privacy', 'Privacy Policy')
+                elif self._legal_toggle_rect.collidepoint(event.pos):
+                    self._legal_confirmed = not self._legal_confirmed
+                elif self.button_login.collide():
                     self.handle_login()
                 elif self.button_register.collide():
                     self.handle_register()
 
     def update(self, events):
         super().update()
+        self.button_register.disabled = not self._legal_confirmed
         self.button_login.update()
         self.button_register.update()
         if _IS_WEB:

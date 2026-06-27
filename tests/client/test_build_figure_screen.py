@@ -414,3 +414,65 @@ class TestBuildFigureScreenKingdomExtras:
         assert calls and calls[0]['cap'] == 3
         assert calls[0]['current'] == 2
         assert calls[0]['always'] is True
+
+
+class TestSecondBuildTutorialGating:
+    def _screen(self, completed, conquer_battles, skipped=False):
+        from game.screens.build_figure_screen import BuildFigureScreen
+        screen = BuildFigureScreen.__new__(BuildFigureScreen)
+        screen.mode = 'conquer'
+        screen.state = SimpleNamespace(user_dict={'onboarding': {
+            'completed_steps': completed,
+            'facts': {'conquer_battles': conquer_battles},
+            'onboarding_skipped': skipped,
+        }})
+        return screen
+
+    def test_active_during_second_conquest(self):
+        from game.screens.build_figure_screen import BuildFigureScreen
+        screen = self._screen(['finish_first_conquer_battle'], 1)
+        assert BuildFigureScreen._second_build_tutorial_active(screen) is True
+
+    def test_inactive_before_first_conquest(self):
+        from game.screens.build_figure_screen import BuildFigureScreen
+        screen = self._screen([], 0)
+        assert BuildFigureScreen._second_build_tutorial_active(screen) is False
+
+    def test_inactive_after_two_conquests(self):
+        from game.screens.build_figure_screen import BuildFigureScreen
+        screen = self._screen(['finish_first_conquer_battle'], 2)
+        assert BuildFigureScreen._second_build_tutorial_active(screen) is False
+
+    def test_inactive_when_tutorial_skipped(self):
+        from game.screens.build_figure_screen import BuildFigureScreen
+        screen = self._screen(['finish_first_conquer_battle'], 1, skipped=True)
+        assert BuildFigureScreen._second_build_tutorial_active(screen) is False
+
+
+class TestSecondBuildHintText:
+    def _screen(self, figures):
+        from game.screens.build_figure_screen import BuildFigureScreen
+        screen = BuildFigureScreen.__new__(BuildFigureScreen)
+        screen.mode = 'conquer'
+        screen.game = SimpleNamespace(_config={'figures': figures})
+        return screen
+
+    def _text(self, figures):
+        from game.screens.build_figure_screen import BuildFigureScreen
+        return BuildFigureScreen._second_build_hint_text(self._screen(figures))
+
+    def test_starts_with_king(self):
+        assert 'King' in self._text([])
+
+    def test_advances_to_farm_after_king(self):
+        text = self._text([{'field': 'castle'}])
+        assert 'Farm' in text
+
+    def test_advances_to_warriors_after_farm(self):
+        text = self._text([{'field': 'castle'}, {'field': 'village'}])
+        assert 'Warriors' in text
+
+    def test_done_when_all_fields_built(self):
+        text = self._text([
+            {'field': 'castle'}, {'field': 'village'}, {'field': 'military'}])
+        assert 'Daggers' in text or 'ready' in text.lower()

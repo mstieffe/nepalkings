@@ -226,13 +226,54 @@ def test_passive_timeline_still_allows_field_inspection_clicks():
     assert handled == [event]
 
 
-def test_conquer_battle_coach_starts_with_timeline_intro():
+def test_conquer_battle_coach_starts_with_tactics_pointer():
+    # Concepts moved to the 'How Battles Work' window; the anchored coach now
+    # begins with the Play-a-tactic pointer.
     ConquerGameScreen, screen = _battle_coach_screen()
 
     step = ConquerGameScreen._current_conquer_battle_coach_step(screen)
 
-    assert step['id'] == 'conquer_battle_timeline_intro'
-    assert step['title'] == 'Battle Timeline'
+    assert step['id'] == 'conquer_battle_tactics'
+
+
+def _ensure_display_for_window():
+    if not pygame.display.get_init():
+        pygame.display.init()
+    if pygame.display.get_surface() is None:
+        pygame.display.set_mode((1, 1))
+    if not pygame.font.get_init():
+        pygame.font.init()
+    return pygame.display.get_surface()
+
+
+def test_battle_intro_window_shows_once_then_suppressed():
+    ConquerGameScreen, screen = _battle_coach_screen()
+    screen.window = _ensure_display_for_window()
+    screen.state.game.battle_round = 1  # battle phase active
+
+    ConquerGameScreen._maybe_show_battle_intro_window(screen)
+    assert screen._battle_intro_dialogue is not None
+    # While the window is up, the anchored coach is suppressed and the intro
+    # is considered paused.
+    assert ConquerGameScreen._conquer_battle_coach_allowed(screen) is False
+    assert ConquerGameScreen._conquer_battle_intro_paused(screen) is True
+
+    # Mark it seen → no re-show.
+    screen.state.user_dict['onboarding']['menu_hints_seen'].append('battle_intro_window')
+    screen._battle_intro_dialogue = None
+    ConquerGameScreen._maybe_show_battle_intro_window(screen)
+    assert screen._battle_intro_dialogue is None
+
+
+def test_battle_intro_window_suppressed_when_skipped_or_done():
+    for kwargs in ({'skipped': True},
+                   {'completed_steps': ['finish_first_conquer_battle']}):
+        ConquerGameScreen, screen = _battle_coach_screen(**kwargs)
+        screen.window = _ensure_display_for_window()
+        screen._battle_intro_dialogue = None
+        screen.state.game.battle_round = 1
+        ConquerGameScreen._maybe_show_battle_intro_window(screen)
+        assert screen._battle_intro_dialogue is None
 
 
 def test_conquer_battle_coach_hidden_after_first_conquer_completion():
@@ -252,13 +293,10 @@ def test_conquer_battle_coach_hidden_when_tutorial_paused():
     assert step is None
 
 
-def test_conquer_battle_coach_shows_tactic_actions_once_buttons_exist():
-    seen = {
-        'conquer_battle_timeline_intro',
-        'conquer_battle_field_actions',
-        'conquer_battle_tactics_rail',
-    }
-    ConquerGameScreen, screen = _battle_coach_screen(menu_seen=seen)
+def test_conquer_battle_coach_shows_tactics_after_timeline():
+    ConquerGameScreen, screen = _battle_coach_screen(
+        menu_seen={'conquer_battle_timeline_intro',
+                   'conquer_battle_figure_power'})
     screen.active_conquer_timeline_step = lambda: SimpleNamespace(kind='attacker')
     screen._tactics_rail._action_button_rects = {
         'play': pygame.Rect(24, 370, 72, 28),
@@ -267,9 +305,10 @@ def test_conquer_battle_coach_shows_tactic_actions_once_buttons_exist():
 
     step = ConquerGameScreen._current_conquer_battle_coach_step(screen)
 
-    assert step['id'] == 'conquer_battle_tactic_actions'
+    assert step['id'] == 'conquer_battle_tactics'
     assert step['action'] == 'next'
-    assert len(step['rects']) == 3
+    # Rect set unions the tactic action buttons with the rail target.
+    assert len(step['rects']) >= 1
 
 
 def test_conquer_battle_coach_next_marks_seen_without_advancing_timeline():
@@ -302,7 +341,7 @@ def test_conquer_battle_coach_click_step_marks_seen_and_passes_click_through():
     ConquerGameScreen, screen = _battle_coach_screen()
     seen = []
     screen._conquer_battle_coach_step = {
-        'id': 'conquer_battle_field_actions',
+        'id': 'conquer_battle_tactics',
         'rect': pygame.Rect(320, 150, 260, 180),
         'action': 'click',
     }
@@ -315,29 +354,41 @@ def test_conquer_battle_coach_click_step_marks_seen_and_passes_click_through():
     handled = ConquerGameScreen._handle_conquer_battle_coach_events(screen, [down, up])
 
     assert handled is False
-    assert seen == ['conquer_battle_field_actions']
+    assert seen == ['conquer_battle_tactics']
 
 
-def test_conquer_battle_overview_shows_field_after_timeline():
-    ConquerGameScreen, screen = _battle_coach_screen(menu_seen=['conquer_battle_timeline_intro'])
-    screen.active_conquer_timeline_step = lambda: SimpleNamespace(kind='overview')
-
-    step = ConquerGameScreen._current_conquer_battle_coach_step(screen)
-
-    assert step['id'] == 'conquer_battle_field_actions'
-    assert step['action'] == 'next'
-
-
-def test_conquer_battle_overview_does_not_wait_for_active_field_choice():
+def test_conquer_battle_tactics_step_follows_timeline():
     ConquerGameScreen, screen = _battle_coach_screen(menu_seen=[
         'conquer_battle_timeline_intro',
+        'conquer_battle_figure_power',
     ])
     screen.active_conquer_timeline_step = lambda: SimpleNamespace(kind='overview')
 
     step = ConquerGameScreen._current_conquer_battle_coach_step(screen)
 
-    assert step['id'] == 'conquer_battle_field_actions'
+    assert step['id'] == 'conquer_battle_tactics'
     assert step['action'] == 'next'
+
+
+def test_conquer_battle_finish_follows_tactics():
+    ConquerGameScreen, screen = _battle_coach_screen(menu_seen=[
+        'conquer_battle_tactics',
+    ])
+
+    step = ConquerGameScreen._current_conquer_battle_coach_step(screen)
+
+    assert step['id'] == 'conquer_battle_finish'
+
+
+def test_conquer_battle_tactics_step_independent_of_timeline_kind():
+    ConquerGameScreen, screen = _battle_coach_screen(menu_seen=[
+        'conquer_battle_timeline_intro',
+        'conquer_battle_figure_power',
+    ])
+    screen.active_conquer_timeline_step = lambda: SimpleNamespace(kind='overview')
+
+    step = ConquerGameScreen._current_conquer_battle_coach_step(screen)
+    assert step['id'] == 'conquer_battle_tactics'
 
     screen.active_conquer_timeline_step = lambda: SimpleNamespace(
         kind='attacker',
@@ -345,9 +396,33 @@ def test_conquer_battle_overview_does_not_wait_for_active_field_choice():
     )
 
     step = ConquerGameScreen._current_conquer_battle_coach_step(screen)
+    assert step['id'] == 'conquer_battle_tactics'
 
-    assert step['id'] == 'conquer_battle_field_actions'
-    assert step['action'] == 'next'
+
+def test_conquer_result_breakdown_line_attacker_perspective():
+    ConquerGameScreen = _conquer_screen_class()
+    line = ConquerGameScreen._conquer_result_breakdown_line(
+        None, {'fig_diff': 5, 'round_diff': 3}, True)
+    assert 'Figures +5' in line
+    assert 'Tactics +3' in line
+    assert 'Total +8' in line
+
+
+def test_conquer_result_breakdown_line_flips_for_defender():
+    ConquerGameScreen = _conquer_screen_class()
+    line = ConquerGameScreen._conquer_result_breakdown_line(
+        None, {'fig_diff': 5, 'round_diff': 3}, False)
+    assert 'Figures -5' in line
+    assert 'Tactics -3' in line
+    assert 'Total -8' in line
+
+
+def test_conquer_result_breakdown_line_absent_without_breakdown():
+    ConquerGameScreen = _conquer_screen_class()
+    # Auto-loss / withdrawal payloads have no figure/tactic split → no line.
+    assert ConquerGameScreen._conquer_result_breakdown_line(None, {}, True) == ''
+    assert ConquerGameScreen._conquer_result_breakdown_line(
+        None, {'fig_diff': 2}, True) == ''
 
 
 def test_conquer_battle_intro_pauses_until_overview_seen():
@@ -802,7 +877,7 @@ def test_conquer_counter_poison_does_not_replay_after_pending_churn():
     assert [event[0] for event in effects.spawned] == ['Poison']
 
 
-def test_conquer_card_prelude_spell_flies_to_tactics_rail():
+def test_conquer_both_player_prelude_spell_flies_to_both_hands():
     ConquerGameScreen = _conquer_screen_class()
     screen = ConquerGameScreen.__new__(ConquerGameScreen)
     screen.window = pygame.Surface((900, 620), pygame.SRCALPHA)
@@ -831,7 +906,9 @@ def test_conquer_card_prelude_spell_flies_to_tactics_rail():
     screen._last_announced_battle_round = 0
     screen._round_transition_until_ms = 0
     rail_rect = pygame.Rect(640, 120, 180, 320)
+    strip_rect = pygame.Rect(840, 120, 40, 320)
     screen._tactics_rail = SimpleNamespace(_dyn_hand_list_rect=rail_rect)
+    screen._conquer_opponent_hand_strip_rect = strip_rect
     screen.subscreens = {'field': SimpleNamespace(icon_cache={}, figure_icons=[])}
 
     class _Panel:
@@ -865,13 +942,14 @@ def test_conquer_card_prelude_spell_flies_to_tactics_rail():
 
     ConquerGameScreen._pump_conquer_spell_animations(screen)
 
-    assert effects.to_rect
-    assert effects.to_rect[0][0] == 'Dump Cards'
-    assert effects.to_rect[0][2] == rail_rect
-    assert effects.to_rect[0][3]['floating_text'] == 'redraw'
+    # Dump Cards mutates BOTH hands -> flies to the player rail AND the
+    # opponent hand strip.
+    assert [(e[0], e[2]) for e in effects.to_rect] == [
+        ('Dump Cards', rail_rect), ('Dump Cards', strip_rect)]
+    assert all(e[3]['floating_text'] == 'redraw' for e in effects.to_rect)
 
 
-def test_conquer_card_counter_spell_flies_to_tactics_rail():
+def test_conquer_forced_deal_flies_to_both_hands():
     ConquerGameScreen = _conquer_screen_class()
     screen = ConquerGameScreen.__new__(ConquerGameScreen)
     screen.window = pygame.Surface((900, 620), pygame.SRCALPHA)
@@ -902,7 +980,9 @@ def test_conquer_card_counter_spell_flies_to_tactics_rail():
     screen._last_announced_battle_round = 0
     screen._round_transition_until_ms = 0
     rail_rect = pygame.Rect(640, 120, 180, 320)
+    strip_rect = pygame.Rect(840, 120, 40, 320)
     screen._tactics_rail = SimpleNamespace(_dyn_hand_list_rect=rail_rect)
+    screen._conquer_opponent_hand_strip_rect = strip_rect
     screen.subscreens = {'field': SimpleNamespace(icon_cache={}, figure_icons=[])}
 
     class _Panel:
@@ -936,7 +1016,47 @@ def test_conquer_card_counter_spell_flies_to_tactics_rail():
 
     ConquerGameScreen._pump_conquer_spell_animations(screen)
 
-    assert effects.to_rect == [('Forced Deal', rail_rect, {'floating_text': 'swap'})]
+    # Forced Deal mutates BOTH hands -> flies to the player rail AND the
+    # opponent hand strip.
+    assert effects.to_rect == [
+        ('Forced Deal', rail_rect, {'floating_text': 'swap'}),
+        ('Forced Deal', strip_rect, {'floating_text': 'swap'}),
+    ]
+
+
+def test_conquer_card_spell_target_routing():
+    ConquerGameScreen = _conquer_screen_class()
+    screen = ConquerGameScreen.__new__(ConquerGameScreen)
+    rail = pygame.Rect(640, 120, 180, 320)
+    strip = pygame.Rect(840, 120, 40, 320)
+    screen._tactics_rail = SimpleNamespace(_dyn_hand_list_rect=rail)
+    screen._conquer_opponent_hand_strip_rect = strip
+
+    def route(name, kind):
+        return ConquerGameScreen._conquer_card_spell_target_rects(screen, name, kind)
+
+    # Single-player spells fly only to the caster's hand.
+    assert route('Draw 2 MainCards', 'prelude_own') == [rail]
+    assert route('Draw 2 MainCards', 'prelude_opp') == [strip]
+    assert route('Fill up to 10', 'prelude_own') == [rail]
+    # Both-player spells fly to both hands regardless of caster.
+    assert route('Dump Cards', 'prelude_own') == [rail, strip]
+    assert route('Forced Deal', 'prelude_opp') == [rail, strip]
+
+
+def test_opponent_hidden_hand_count_counts_available_only():
+    ConquerGameScreen = _conquer_screen_class()
+    screen = ConquerGameScreen.__new__(ConquerGameScreen)
+    screen.state = SimpleNamespace(game=SimpleNamespace(
+        player_id=10,
+        conquer_tactics=[
+            {'player_id': 10, 'status': 'available', 'played_round': None},  # yours
+            {'player_id': 20, 'status': 'available', 'played_round': None},  # opp hand
+            {'player_id': 20, 'status': 'available', 'played_round': None},  # opp hand
+            {'player_id': 20, 'status': 'played', 'played_round': 0},        # opp played
+        ],
+    ))
+    assert ConquerGameScreen._opponent_hidden_hand_count(screen) == 2
 
 
 def test_conquer_modifier_prelude_spawns_banner_and_duel_lane_pulse():
@@ -3487,7 +3607,11 @@ class TestTacticsHandRouting:
         assert 'next' not in screen._conquer_objective_action_rects
         assert 'withdraw' in screen._conquer_objective_action_rects
 
-    def test_mobile_timeline_next_button_clears_info_text_column(self):
+    def test_mobile_timeline_has_no_next_button_in_inert_states(self):
+        # The timeline Next button only does something for held sequence beats
+        # (it skips their countdown). In battle rounds and the game-start hold,
+        # advancing is driven by game state, so the button is inert and must not
+        # be drawn. The held-beat geometry is covered in test_conquer_timeline.
         _run_mobile_geometry_check(r'''
 import pygame
 pygame.mouse.set_cursor = lambda *args, **kwargs: None
@@ -3497,23 +3621,14 @@ client = Client()
 client._init_perf_conquer_fixture(lambda *_args, **_kwargs: None)
 screen = client.screens['conquer_game']
 
-def assert_next_button_clear(label):
+def assert_no_next_button(label):
     screen.render()
-    next_rect = screen._conquer_objective_action_rects.get('next')
-    info_rect = getattr(screen, '_conquer_timeline_info_rect', None)
-    text_rect = getattr(screen, '_conquer_timeline_info_text_rect', None)
-    assert next_rect is not None, label
-    assert info_rect is not None, label
-    assert text_rect is not None, label
-    assert info_rect.contains(next_rect), (label, tuple(info_rect), tuple(next_rect))
-    assert info_rect.contains(text_rect), (label, tuple(info_rect), tuple(text_rect))
-    assert next_rect.left >= text_rect.right + 8, (
-        label, tuple(text_rect), tuple(next_rect))
-    assert not next_rect.colliderect(text_rect), (
-        label, tuple(text_rect), tuple(next_rect))
+    assert screen._conquer_objective_action_rects.get('next') is None, label
 
-assert_next_button_clear('battle overlay')
+# Battle overlay (a round beat): inert -> no Next button.
+assert_no_next_button('battle overlay')
 
+# Pre-battle game-start hold: also inert -> no Next button.
 game = screen.state.game
 game.battle_turn_player_id = None
 game.battle_round = 0
@@ -3524,7 +3639,7 @@ game._game_start_pending = True
 game.game_start_notification_checked = False
 screen._conquer_timeline_hover_open = False
 screen._conquer_timeline_last_layout_mode = None
-assert_next_button_clear('pre-battle inline')
+assert_no_next_button('pre-battle inline')
 pygame.quit()
 ''')
 

@@ -2,6 +2,94 @@
 
 All notable changes to this project are documented in this file.
 
+## Unreleased — Player-experience launch prep
+
+Focused on the things between the game and real players: a faster front
+door, a first session that pays off quickly, async-play survivability,
+and the operational safety net to keep early adopters.
+
+### Added
+
+- **First-party analytics.** Append-only `Event` table written via
+  `analytics.track()` (fail-safe, rides the caller's transaction). Hooks at
+  signup, login, challenge creation, game start, all game-finish paths,
+  booster opens, conquer start, and onboarding reward/skip.
+  `scripts/funnel_report.py` prints the new-player funnel, early retention,
+  recent activity, and median duel duration. `ANALYTICS_ENABLED` flag.
+- **Versioned schema migrations.** `server/migration_runner.py` records
+  applied versions in a `schema_version` table and applies ordered,
+  idempotent migrations at startup (the historical `ensure_*()` helpers
+  become migrations 0001–0007). Halts on first failure.
+- **Production data safety.** `deploy_server.sh` now snapshots the live DB
+  into `backups/` before every deploy (keeps 14, aborts on backup failure);
+  `scripts/restore_db_backup.sh` is a confirmed one-command rollback;
+  `RESET_DATABASE.sh` refuses a production `FLASK_ENV` and requires a typed
+  confirmation. Docs rewritten to "migrations, not resets."
+- **Async-play email notifications.** `notification_service.py` emails
+  offline players on challenge-received, your-turn (debounced per game/6h
+  via `Game.turn_email_log`), and game-finished. One-click HMAC unsubscribe,
+  `/auth/set_notifications` toggle, and a Settings → Preferences row. Opt-in
+  by SMTP config; logs instead of sends when unconfigured. `User.notify_emails_enabled`.
+- **Sound effects.** `scripts/assets/generate_sfx.py` synthesizes a 14-sound
+  set (stdlib-only, ~224 KB) into `nepal_kings/sound/`. `utils/sound.py` is a
+  fail-safe engine (lazy mixer, web-gesture-safe, persisted on/off
+  preference) hooked into clicks, cards, boosters, builds, coins, and
+  victory/defeat stingers. Sound toggle in Settings.
+- **Game-length presets** in the new-game screen: Quick (7) / Standard (21) /
+  Epic (35) points; default game limit decoupled from the gold stake.
+- **Web-bundle optimizer** (`scripts/assets/optimize_web_pngs.py`) and build
+  pipeline (`scripts/build_web.sh`): downscales + palette-quantizes a staging
+  copy of the art (source untouched), cutting the browser bundle from
+  ≈79 MB to ≈35 MB. `scripts/package_itch.sh` + `docs/launch/itch_page.md`
+  for an itch.io HTML5 release.
+
+### Changed
+
+- **Conquer-first onboarding.** The new-player journey now runs
+  boosters → first conquest → first duel, so players reach a real battle
+  within minutes. Main menu leads with Kingdom over Duel; beginner AI duel
+  shortened from 15 to 7 points; README, web `index.html`, and welcome copy
+  reframed around the single-player conquest loop. `CORE_STEPS` reordered
+  (display only; completion remains a set, safe for existing accounts).
+- **Action-first coaching.** The menu coach now leads with the actionable
+  journey right after the welcome present instead of a generic area tour;
+  light orientation (rankings/home/guide) follows. Removed dead onboarding
+  hint ids left from the rework.
+- `deploy-web.yml` builds via `scripts/build_web.sh` and triggers on `main`.
+
+### Fixed
+
+- **Opponent figures vanishing.** The security-hardening pass redacted
+  opponent *figure* card data, but field figures are public in Nepal Kings.
+  The nulled rank/suit made `CardImg` raise at draw time, so the AI's
+  duel maharaja and AI-defended-land figures silently disappeared from the
+  field. Figures are now served unredacted (hands and unplayed battle
+  moves/tactics stay secret).
+- **Silent conquer battles.** Added SFX to the conquer battle's tactic
+  actions (play/gamble/combine/dismantle/skip) and errors; the duel sound
+  hooks didn't reach the conquer screen's field/rail flow.
+- **First conquest unbuildable from one booster.** New accounts now get a
+  curated starter deck (K/A/J/J/7/7/8 of Hearts) that builds the full
+  offensive chain (Djungle King → Small Rice Farm → Gorkha Warriors), so the
+  tutorial's first conquer attack is always possible regardless of booster
+  luck.
+- **Sparse audio.** `sound.tap_edge` on the shared button classes now gives
+  almost every button a click tick; added distinct sounds for spell cast,
+  duel battle moves, figure advance, buy booster, and card trade.
+- **Legal terms unviewable / loose hit area.** The registration Terms and
+  Privacy links now open the actual documents in a scrollable overlay, and
+  the accept checkbox only toggles on the box/label (no more far-right
+  toggling).
+- **Onboarding gaps.** The conquer-config coach now explains the
+  attack-force economy and the granted starter deck; a new post-conquer
+  flow explains defending your lands, with a light first-time coach inside
+  the defence config. Welcome copy drops the time estimate. The
+  "Skip tutorial" button is now a muted/secondary style so it isn't
+  confused with "Next".
+- **More + better sound.** Conquer timeline commands (Next/confirm/finish)
+  and coach buttons now click; the win/lose/conquest stingers were enriched
+  (held major chord on win, falling drone on loss, bigger conquest fanfare).
+
 ## Unreleased — Land tiers 1–6, castle cap, loot rank buckets
 
 ### Added

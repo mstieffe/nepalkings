@@ -1058,6 +1058,25 @@ def kingdom_gold_rate_per_hour(kingdom):
     return base_rate * kingdom_gold_multiplier(kingdom)
 
 
+def seed_first_conquest_production(kingdom, *, now=None):
+    """Fill a brand-new tutorial kingdom's gold vault so the first production
+    collection is an immediate, felt payoff (conquer -> produce -> grow).
+
+    Called once, right after a player wins their very first conquest. Tier-1
+    gold rates are only 1-10/hour, so without a seed a new player who returns to
+    collect would see ~0 gold and miss the core-loop payoff. Returns the seeded
+    amount (the vault cap).
+    """
+    if not kingdom:
+        return 0
+    now = now or _utcnow()
+    cap = int(kingdom_vault_cap(kingdom))
+    kingdom.pending_gold = float(cap)
+    kingdom.last_gold_collection_at = now
+    kingdom.updated_at = now
+    return cap
+
+
 def _accrue_pending_gold(kingdom, now=None):
     """Advance ``kingdom.pending_gold`` based on time since last collection.
 

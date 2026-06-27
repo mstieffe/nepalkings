@@ -59,6 +59,17 @@ def _make_instant_charge_family():
     return family, description
 
 
+def _make_power_figure(figure_id, *, field='village', suit='Hearts', value=10,
+                       cannot_be_targeted=False):
+    return SimpleNamespace(
+        id=figure_id,
+        suit=suit,
+        family=SimpleNamespace(field=field),
+        cannot_be_targeted=cannot_be_targeted,
+        get_value=lambda value=value: value,
+    )
+
+
 class TestConquerScreenInit:
 
     def test_initial_state(self):
@@ -170,6 +181,49 @@ class TestBattleReadiness:
         assert screen._is_battle_ready() is False
 
 
+class TestConquerBattleMovePower:
+
+    def test_call_tactic_power_uses_bound_field_figure_and_healer_bonus(self):
+        from game.screens.conquer_screen import ConquerScreen
+
+        screen = object.__new__(ConquerScreen)
+        farm = _make_power_figure(2, field='village', suit='Hearts', value=13)
+        screen._figure_objects = [farm]
+        screen._figure_icons = {
+            2: SimpleNamespace(has_deficit=False, buffs_allies_bonus=4),
+        }
+        move = {
+            'family_name': 'Call Villager',
+            'suit': 'Hearts',
+            'value': 1,
+            'call_figure_id': 2,
+        }
+
+        assert ConquerScreen._battle_move_display_power(screen, move) == 18
+
+    def test_unbound_call_tactic_previews_best_eligible_field_figure(self):
+        from game.screens.conquer_screen import ConquerScreen
+
+        screen = object.__new__(ConquerScreen)
+        weak = _make_power_figure(1, field='castle', suit='Spades', value=6)
+        strong = _make_power_figure(2, field='castle', suit='Clubs', value=11)
+        deficit = _make_power_figure(3, field='castle', suit='Spades', value=20)
+        screen._figure_objects = [weak, strong, deficit]
+        screen._figure_icons = {
+            1: SimpleNamespace(has_deficit=False, buffs_allies_bonus=0),
+            2: SimpleNamespace(has_deficit=False, buffs_allies_bonus=0),
+            3: SimpleNamespace(has_deficit=True, buffs_allies_bonus=0),
+        }
+        move = {
+            'family_name': 'Call King',
+            'suit': 'Clubs',
+            'value': 4,
+            'call_figure_id': None,
+        }
+
+        assert ConquerScreen._battle_move_display_power(screen, move) == 15
+
+
 class TestConquerCoachCopy:
 
     def test_final_conquer_coach_step_uses_new_battle_handoff_copy(self):
@@ -187,12 +241,7 @@ class TestConquerCoachCopy:
         screen._figure_detail_box = None
         screen._move_detail_box = None
         screen._active_info_key = None
-        screen._menu_coach_seen = lambda: {
-            'conquer_config_field',
-            'conquer_config_build_edit',
-            'conquer_config_battle_plan',
-            'conquer_config_prelude',
-        }
+        screen._menu_coach_seen = lambda: set()
         screen._conquer_field_coach_rect = lambda: pygame.Rect(0, 0, 0, 0)
         screen._conquer_combined_rect = lambda *rects: None
         screen._battle_plan_rect = None
@@ -205,11 +254,14 @@ class TestConquerCoachCopy:
 
         step = ConquerScreen._current_conquer_coach_step(screen)
 
+        # The pre-assembled first attack is now taught by a single window that
+        # orients the player and hands off to Start Battle.
         assert step['id'] == 'conquer_config_to_battle'
-        assert step['title'] == 'Start Conquer Battle'
+        assert step['title'] == 'Your Attack Is Ready'
         assert 'guided tour ends here' not in step['body']
-        assert 'timeline, tactics, ledger, and result' in step['body']
-        assert 'can be looted if you lose' in step['body']
+        assert 'pre-built this attack' in step['body']
+        assert 'prelude draws cards' in step['body']
+        assert 'only looted cards are gone' in step['body']
         assert step['button_label'] == 'Got it'
 
 

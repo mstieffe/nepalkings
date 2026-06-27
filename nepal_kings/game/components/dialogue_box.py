@@ -695,6 +695,8 @@ class DialogueBox:
             if event.type == pygame.MOUSEBUTTONUP and getattr(event, 'button', 0) == 1:
                 for button in self.buttons:
                     if button.collide():
+                        from utils import sound
+                        sound.play('ui_click')
                         return button.text.lower()
         return None
 

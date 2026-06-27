@@ -773,6 +773,9 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         collected_main = int(data.get('collected_main_boosters', 0) or 0)
         collected_side = int(data.get('collected_side_boosters', 0) or 0)
         collected_maps = int(data.get('collected_maps', 0) or 0)
+        if collected > 0 or collected_main or collected_side or collected_maps:
+            from utils import sound
+            sound.play('coin')
         if collected > 0 and hasattr(self, '_suppress_next_gold_floater'):
             self._suppress_next_gold_floater()
         if 'gold' in data:
@@ -942,6 +945,10 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         self._select_kingdom_at(self._selected_kingdom_index() + delta)
 
     def handle_events(self, events):
+        # The conquer-tutorial completion celebration fires here (the final
+        # coach card lives on this screen) and is modal.
+        if self._handle_tutorial_completion_events(events):
+            return
         if self._handle_pending_purchase_dialogue(events):
             return
         super().handle_events(events)
@@ -1234,6 +1241,7 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
     def update(self, events=None):
         super().update()
         self._update_icon_buttons()
+        self._maybe_show_tutorial_completion()
 
     def _current_kingdom_config_coach_id(self):
         if not self._menu_coach_allowed_common():
@@ -1246,10 +1254,7 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
             return None
         seen = self._menu_coach_seen()
         for step_id in (
-                'kingdom_config_header',
-                'kingdom_config_production',
-                'kingdom_config_skills',
-                'kingdom_config_loot_inbox',
+                'kingdom_config_essentials',
                 'kingdom_config_shields_style'):
             if step_id not in seen:
                 return step_id
@@ -1268,15 +1273,9 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
             return
         gap = int(layout.get('gap', 0) or 0)
         targets = {
-            'kingdom_config_production': (0, layout.get('vault_h', 0)),
-            'kingdom_config_loot_inbox': (
-                layout.get('vault_h', 0) + gap,
-                layout.get('loot_h', 0),
-            ),
-            'kingdom_config_skills': (
-                layout.get('vault_h', 0) + gap + layout.get('loot_h', 0) + gap,
-                layout.get('skills_h', 0),
-            ),
+            # Essentials spans the vault (top) through skills; pin to the top so
+            # the production panel is in view.
+            'kingdom_config_essentials': (0, layout.get('vault_h', 0)),
             'kingdom_config_shields_style': (
                 layout.get('cosmetics_h', 0) + gap,
                 layout.get('shield_h', 0),
@@ -1323,34 +1322,10 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
 
     def _current_kingdom_config_coach_step(self):
         step_id = self._current_kingdom_config_coach_id()
-        if step_id == 'kingdom_config_header':
-            rect = getattr(self, '_kingdom_config_header_rect', None)
-            if rect is not None:
-                return {
-                    'id': step_id,
-                    'rect': rect,
-                    'title': 'Kingdom Header',
-                    'body': "The header shows this kingdom's lands, level, XP, and next-level progress. Each newly connected land gives XP based on tier; each level grants skill points.",
-                    'action': 'next',
-                    'max_lines': 5,
-                }
-        if step_id == 'kingdom_config_production':
+        if step_id == 'kingdom_config_essentials':
             rects = self._clip_kingdom_config_coach_rects(
                 getattr(self, '_collect_btn_rect', None),
                 getattr(self, '_kingdom_config_vault_rect', None),
-            )
-            if rects:
-                return {
-                    'id': step_id,
-                    'rect': rects[0],
-                    'rects': rects,
-                    'title': 'Production Vault',
-                    'body': 'This panel shows pending gold, packs, and maps. A full vault stops adding that item, so collect production when it is ready.',
-                    'action': 'next',
-                    'max_lines': 5,
-                }
-        if step_id == 'kingdom_config_skills':
-            rects = self._clip_kingdom_config_coach_rects(
                 getattr(self, '_kingdom_config_skill_button_rect', None),
                 getattr(self, '_kingdom_config_skills_rect', None),
             )
@@ -1359,26 +1334,10 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
                     'id': step_id,
                     'rect': rects[0],
                     'rects': rects,
-                    'title': 'Spend Skill Points',
-                    'body': 'Skill points come from kingdom levels. Start with Gold Production or Gold Vault; later add packs, maps, shields, or loot upgrades.',
+                    'title': 'Production & Skills',
+                    'body': 'Collect pending gold, packs, and maps here, and spend kingdom-level skill points — start with Gold Production.',
                     'action': 'next',
-                    'max_lines': 5,
-                }
-        if step_id == 'kingdom_config_loot_inbox':
-            rects = self._clip_kingdom_config_coach_rects(
-                getattr(self, '_loot_gained_rect', None),
-                getattr(self, '_loot_lost_rect', None),
-                getattr(self, '_kingdom_config_loot_rect', None),
-            )
-            if rects:
-                return {
-                    'id': step_id,
-                    'rect': rects[0],
-                    'rects': rects,
-                    'title': 'Loot Inbox',
-                    'body': 'Cards won or lost through conquest appear here. Collect gained loot, and check lost-card notices to see what did not return.',
-                    'action': 'next',
-                    'max_lines': 5,
+                    'max_lines': 4,
                 }
         if step_id == 'kingdom_config_shields_style':
             rects = self._clip_kingdom_config_coach_rects(
@@ -1391,9 +1350,9 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
                     'rect': rects[0],
                     'rects': rects,
                     'title': 'Shields and Style',
-                    'body': 'Shields protect a kingdom for a time. Cosmetics change how it appears on the map. Use these after production and skills feel familiar.',
+                    'body': 'Shields protect a kingdom for a time; cosmetics change how it looks on the map.',
                     'action': 'next',
-                    'max_lines': 5,
+                    'max_lines': 4,
                 }
         return None
 
@@ -2609,3 +2568,4 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         self._floating_text.draw(self.window)
         self._draw_menu_overlay()
         self._draw_menu_coach(self._current_kingdom_config_coach_step())
+        self._draw_tutorial_complete_dialogue()

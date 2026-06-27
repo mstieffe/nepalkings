@@ -713,7 +713,10 @@ class TestBattleShopAdvancedActions:
         buy = _buy_move(client, auth_token_bs, game, p1, card)
         move_id = buy.get_json()['battle_move']['id']
 
-        resp = client.get(f'/battle_shop/get_battle_moves?game_id={game.id}&player_id={p1.id}')
+        resp = client.get(
+            f'/battle_shop/get_battle_moves?game_id={game.id}&player_id={p1.id}',
+            headers={'Authorization': f'Bearer {auth_token_bs}'},
+        )
         data = resp.get_json()
 
         assert data.get('success') is True

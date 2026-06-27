@@ -246,6 +246,7 @@ class ConquerGameScreen(GameScreen):
         self._conquer_battle_move_cache = []
         self._conquer_battle_move_icon_caches = {}
         self._conquer_battle_move_manager = None
+        self._battle_intro_dialogue = None  # first-battle teaching window
         self._conquer_lane_context_cache_key = None
         self._conquer_lane_context_cache = None
         self._conquer_duel_lane_render_cache_key = None
@@ -430,6 +431,19 @@ class ConquerGameScreen(GameScreen):
         if not game or getattr(game, 'mode', 'duel') != 'conquer':
             return False
         return getattr(game, 'conquer_move_model', 'battle_move') == 'tactics_hand'
+
+    def _first_conquest_tutorial_active(self):
+        """True while the player is still in their first conquer battle.
+
+        Drives one-time educational callouts (e.g. what a Dagger does). The
+        ``finish_first_conquer_battle`` step is only marked once the first
+        conquer battle resolves, so it is reliably absent during it.
+        """
+        onboarding = (getattr(self.state, 'user_dict', None) or {}).get('onboarding') or {}
+        if not onboarding or onboarding.get('onboarding_skipped'):
+            return False
+        completed = set(onboarding.get('completed_steps') or [])
+        return 'finish_first_conquer_battle' not in completed
 
     def _is_battle_phase_active(self):
         """True if any battle round (1..3) is in flight or just resolved."""
@@ -1002,6 +1016,10 @@ class ConquerGameScreen(GameScreen):
                     field.defender_selection_mode = False
                     if hasattr(field, '_reset_defender_selectable'):
                         field._reset_defender_selectable()
+                    # Single-option auto-pick: the player made no real choice, so
+                    # the timeline must not tag this figure "Chosen by you".
+                    field._auto_selected_defender_id = payload
+                    field._player_selected_defender_id = None
             elif kind == 'own_defender':
                 from utils.game_service import select_conquer_own_defender
                 result = select_conquer_own_defender(
@@ -1563,6 +1581,7 @@ class ConquerGameScreen(GameScreen):
             self._spell_anim_seeded = False
             self._spell_anim_fired = set()
             self._spell_anim_target_fired = set()
+            self._spell_sound_fired = set()
             self._conquer_spell_anim_impact_ms = {}
             self._last_announced_battle_round = 0
             self._prev_visible_figure_rects = {}
@@ -1648,6 +1667,7 @@ class ConquerGameScreen(GameScreen):
                     if self._fire_spell_step_animation(
                             key, anchor, step_kind=step_kind, spell_name=spell_name):
                         fired_steps.add(key)
+                        self._play_conquer_spell_cast_sound(key)
                 elif (phase in ('active', 'completed')
                       and key not in getattr(self, '_spell_anim_target_fired', set())):
                     # A prior fire on this step was banner-only because
@@ -1659,6 +1679,10 @@ class ConquerGameScreen(GameScreen):
                         if self._fire_spell_step_animation(
                                 key, anchor, step_kind=step_kind, spell_name=spell_name):
                             fired_steps.add(key)
+                            # Targeted spells (Health Boost / Poison / Explosion)
+                            # only fire for real here, once their target is
+                            # known — the first pass was a banner-only no-op.
+                            self._play_conquer_spell_cast_sound(key)
             self._spell_step_phase_map = dict(current_phase)
 
         # --- Round transition banner (Tier 3.3) ---
@@ -1673,6 +1697,19 @@ class ConquerGameScreen(GameScreen):
             self._last_announced_battle_round = battle_round
         elif not confirmed:
             self._last_announced_battle_round = 0
+
+    def _play_conquer_spell_cast_sound(self, step_key):
+        """Play the spell-cast sparkle once per spell step that fires live
+        (prelude / counter / tactic spell animating during the battle)."""
+        fired = getattr(self, '_spell_sound_fired', None)
+        if fired is None:
+            fired = set()
+            self._spell_sound_fired = fired
+        if step_key in fired:
+            return
+        fired.add(step_key)
+        from utils import sound
+        sound.play('booster_reveal')
 
     def _fire_spell_step_animation(self, step_key, anchor_rect, *,
                                    step_kind=None, spell_name=None):
@@ -1693,7 +1730,7 @@ class ConquerGameScreen(GameScreen):
         spell_info = self._resolve_spell_step_info(kind, spell_name)
         if self._is_conquer_card_effect_spell(spell_name, spell_info):
             impact_ms = self._spawn_conquer_card_spell_animation(
-                spell_name, anchor_rect, spell_info)
+                spell_name, anchor_rect, spell_info, step_kind=kind)
             if impact_ms is not None:
                 self._conquer_spell_anim_impact_ms[step_key] = int(impact_ms)
             return True
@@ -1831,6 +1868,9 @@ class ConquerGameScreen(GameScreen):
             return False
         if onboarding.get('onboarding_skipped'):
             return False
+        # The teaching window is modal; suppress anchored coach cards under it.
+        if getattr(self, '_battle_intro_dialogue', None) is not None:
+            return False
         if 'finish_first_conquer_battle' in self._conquer_completed_onboarding_steps():
             return False
         game = getattr(self.state, 'game', None)
@@ -1875,6 +1915,49 @@ class ConquerGameScreen(GameScreen):
             seen.append(step_id)
         onboarding['menu_hints_seen'] = seen
         ud['onboarding'] = onboarding
+
+    # ── First-battle teaching window (replaces the dense battle coach cards) ──
+    def _maybe_show_battle_intro_window(self):
+        if getattr(self, '_battle_intro_dialogue', None) is not None:
+            return
+        if 'battle_intro_window' in self._conquer_menu_coach_seen():
+            return
+        if not self._conquer_battle_coach_allowed():
+            return
+        # Show the intro as the FIRST thing on the first conquer tutorial battle
+        # — on entering the screen, before any setup/tactics coaching — rather
+        # than waiting for a battle round to be active.
+        from game.components.tutorial_window import TutorialWindowDialogue
+        from game.components import tutorial_diagrams
+        self._battle_intro_dialogue = TutorialWindowDialogue(
+            self.window,
+            [
+                {
+                    'title': 'How a Battle Flows',
+                    'layout': 'image_top',
+                    'image': lambda: tutorial_diagrams.starter_tactics_diagram(),
+                    'image_caption': 'Your three tactics: Call King, Call Villager, Block.',
+                    'lines': [
+                        'A battle runs in three beats: your prelude fires, your figures',
+                        'set the score, then three tactic rounds let you swing it.',
+                        'Each round, Play a tactic — or Gamble it for new cards.',
+                        'Call King or Call Villager adds that figure\'s power; Block cancels the round.',
+                    ],
+                },
+            ],
+            title='How Battles Work',
+        )
+
+    def _handle_battle_intro_window_events(self, events):
+        win = getattr(self, '_battle_intro_dialogue', None)
+        if win is None:
+            return False
+        if any(getattr(e, 'type', None) == QUIT for e in events):
+            return False
+        if win.update(events) == 'done':
+            self._battle_intro_dialogue = None
+            self._mark_conquer_battle_coach_seen('battle_intro_window')
+        return True
 
     @staticmethod
     def _conquer_battle_coach_bounds(rects):
@@ -1989,12 +2072,11 @@ class ConquerGameScreen(GameScreen):
 
     @staticmethod
     def _conquer_battle_intro_step_ids():
+        # The concepts (timeline, figure power, play/gamble/combine) are taught
+        # up front by the 'How Battles Work' window; only two action pointers
+        # remain to guide the player's first Play and Finish.
         return (
-            'conquer_battle_timeline_intro',
-            'conquer_battle_field_actions',
-            'conquer_battle_tactics_rail',
-            'conquer_battle_tactic_actions',
-            'conquer_battle_round_ledger',
+            'conquer_battle_tactics',
             'conquer_battle_finish',
         )
 
@@ -2021,58 +2103,63 @@ class ConquerGameScreen(GameScreen):
                     'rect': (rects or self._conquer_battle_intro_fallback_rects())[0],
                     'rects': rects or self._conquer_battle_intro_fallback_rects(),
                     'title': 'Battle Timeline',
-                    'body': 'This row shows the battle order: setup, spells, tactics, then result.',
+                    'body': 'This row shows setup, prelude, three tactic rounds, and result. The prelude draws cards automatically; then you decide how to use tactics.',
                     'action': 'next',
                     'button_label': 'Got it',
-                    'max_lines': 3,
+                    'max_lines': 5,
                 }
-            if step_id == 'conquer_battle_field_actions':
-                rects = self._conquer_battle_field_overview_rects()
+            if step_id == 'conquer_battle_figure_power':
+                rects = (self._conquer_battle_field_overview_rects()
+                         or self._conquer_battle_intro_fallback_rects())
                 return {
                     'id': step_id,
-                    'rect': (rects or self._conquer_battle_intro_fallback_rects())[0],
-                    'rects': rects or self._conquer_battle_intro_fallback_rects(),
-                    'title': 'Battlefield',
-                    'body': 'Figure choices and spell targets happen here when the timeline asks for them.',
+                    'rect': rects[0],
+                    'rects': rects,
+                    'title': 'Your Figures Decide Most',
+                    'body': "The centre of the lane shows your figures' power versus the defender's, and it counts for most of the result. The three tactic rounds only swing things on top — so bring strong figures.",
                     'action': 'next',
                     'button_label': 'Got it',
-                    'max_lines': 3,
+                    'max_lines': 5,
                 }
-            if step_id == 'conquer_battle_tactics_rail':
+            if step_id == 'conquer_battle_tactics':
+                rects = (self._conquer_battle_tactic_action_rects()
+                         or []) + (self._conquer_battle_tactics_target_rects() or [])
+                rects = rects or self._conquer_battle_intro_fallback_rects()
+                return {
+                    'id': step_id,
+                    'rect': rects[0],
+                    'rects': rects,
+                    'title': 'Play A Tactic',
+                    'body': 'Your goal is to win the round totals. Play commits a tactic value. Gamble trades one tactic for two new ones. Combine joins same-colour Daggers into one bigger tactic.',
+                    'action': 'next',
+                    'button_label': 'Got it',
+                    'max_lines': 6,
+                }
+            if step_id == 'conquer_battle_block_call':
+                rects = (self._conquer_battle_tactics_target_rects()
+                         or self._conquer_battle_intro_fallback_rects())
+                return {
+                    'id': step_id,
+                    'rect': rects[0],
+                    'rects': rects,
+                    'title': 'Block & Call',
+                    'body': "Block cancels a whole round — use it to erase the defender's biggest tactic. Call pulls one of your field figures into the round, adding its power (matching suit also adds the card value).",
+                    'action': 'next',
+                    'button_label': 'Got it',
+                    'max_lines': 5,
+                }
+            if step_id == 'conquer_battle_tactic_recap':
                 rects = self._conquer_battle_tactics_target_rects()
+                rects = rects or self._conquer_battle_intro_fallback_rects()
                 return {
                     'id': step_id,
-                    'rect': (rects or self._conquer_battle_intro_fallback_rects())[0],
-                    'rects': rects or self._conquer_battle_intro_fallback_rects(),
-                    'title': 'Tactic Hand',
-                    'body': 'Your tactics are on the left. Each round uses one tactic.',
+                    'rect': rects[0],
+                    'rects': rects,
+                    'title': 'Play, Gamble, Combine',
+                    'body': 'Use all three tools: Play a strong value, Gamble a weak tactic once per round, and Combine two red/red or black/black Daggers when one big hit can win.',
                     'action': 'next',
                     'button_label': 'Got it',
-                    'max_lines': 3,
-                }
-            if step_id == 'conquer_battle_tactic_actions':
-                rects = self._conquer_battle_tactic_action_rects() or self._conquer_battle_tactics_target_rects()
-                return {
-                    'id': step_id,
-                    'rect': (rects or self._conquer_battle_intro_fallback_rects())[0],
-                    'rects': rects or self._conquer_battle_intro_fallback_rects(),
-                    'title': 'Tactic Actions',
-                    'body': 'Select a tactic, then press Play. The other buttons are optional.',
-                    'action': 'next',
-                    'button_label': 'Got it',
-                    'max_lines': 3,
-                }
-            if step_id == 'conquer_battle_round_ledger':
-                rects = self._conquer_battle_round_ledger_rects()
-                return {
-                    'id': step_id,
-                    'rect': (rects or self._conquer_battle_intro_fallback_rects())[0],
-                    'rects': rects or self._conquer_battle_intro_fallback_rects(),
-                    'title': 'Round Ledger',
-                    'body': 'The ledger tracks each round and the total score.',
-                    'action': 'next',
-                    'button_label': 'Got it',
-                    'max_lines': 3,
+                    'max_lines': 5,
                 }
             if step_id == 'conquer_battle_finish':
                 rects = self._conquer_battle_finish_rects() or self._conquer_battle_timeline_target_rects()
@@ -2089,6 +2176,9 @@ class ConquerGameScreen(GameScreen):
         return None
 
     def _conquer_battle_intro_paused(self):
+        # The teaching window pauses auto-advance/auto-finish while it is up.
+        if getattr(self, '_battle_intro_dialogue', None) is not None:
+            return True
         if not self._conquer_battle_coach_allowed():
             return False
         return self._current_conquer_battle_intro_step(self._conquer_menu_coach_seen()) is not None
@@ -2114,14 +2204,21 @@ class ConquerGameScreen(GameScreen):
             lines.append(current)
         return lines[:max_lines]
 
-    def _draw_conquer_battle_coach_button(self, rect, label, action):
+    def _draw_conquer_battle_coach_button(self, rect, label, action, muted=False):
         mx, my = pygame.mouse.get_pos()
         hovered = rect.collidepoint(mx, my)
-        bg = (96, 70, 34) if hovered else (58, 45, 28)
-        bdr = (235, 204, 105) if hovered else (150, 126, 74)
+        if muted:
+            # Secondary/ghost style so "Skip tutorial" isn't confused with Next.
+            bg = (40, 37, 32) if hovered else (30, 28, 24)
+            bdr = (110, 100, 84) if hovered else (78, 72, 60)
+            txt_clr = (170, 160, 142) if hovered else (132, 124, 108)
+        else:
+            bg = (96, 70, 34) if hovered else (58, 45, 28)
+            bdr = (235, 204, 105) if hovered else (150, 126, 74)
+            txt_clr = (245, 232, 190)
         pygame.draw.rect(self.window, bg, rect, border_radius=4)
         pygame.draw.rect(self.window, bdr, rect, 1, border_radius=4)
-        txt = self._conquer_battle_coach_font.render(label, True, (245, 232, 190))
+        txt = self._conquer_battle_coach_font.render(label, True, txt_clr)
         self.window.blit(txt, txt.get_rect(center=rect.center))
         self._conquer_battle_coach_buttons.append((rect.copy(), action))
 
@@ -2181,11 +2278,11 @@ class ConquerGameScreen(GameScreen):
             self._draw_conquer_battle_coach_button(next_rect, button_label, ('next', step['id']))
         if draws_skip:
             skip_label = 'Skip tutorial'
-            skip_w = max(112, self._conquer_battle_coach_font.size(skip_label)[0] + 24)
+            skip_w = max(96, self._conquer_battle_coach_font.size(skip_label)[0] + 20)
             skip_rect = pygame.Rect(card.x + 14, card.bottom - button_h - 12,
                                     skip_w, button_h)
             self._draw_conquer_battle_coach_button(
-                skip_rect, skip_label, ('skip_tutorial', step['id']))
+                skip_rect, skip_label, ('skip_tutorial', step['id']), muted=True)
 
     @staticmethod
     def _conquer_battle_coach_blocking_event_types():
@@ -2232,6 +2329,8 @@ class ConquerGameScreen(GameScreen):
                     if pressed_action and pressed_action != button_action:
                         return True
                     kind, step_id = button_action
+                    from utils import sound
+                    sound.play('ui_back' if kind == 'skip_tutorial' else 'ui_click')
                     if kind == 'next':
                         self._mark_conquer_battle_coach_seen(step_id)
                     elif kind == 'skip_tutorial':
@@ -2261,21 +2360,43 @@ class ConquerGameScreen(GameScreen):
             return 'redraw'
         return 'cards'
 
-    def _spawn_conquer_card_spell_animation(self, spell_name, anchor_rect, spell_info=None):
-        """Spawn the card-effect spell animation aimed at the tactics rail.
+    # Card-effect spells that mutate BOTH players' hands, so the animation flies
+    # to both the player's tactics rail and the opponent's hand strip. Every
+    # other card-effect spell is single-player and flies only to the caster.
+    _BOTH_PLAYER_CARD_SPELLS = frozenset({'Dump Cards', 'Forced Deal'})
 
-        Returns the ms timestamp at which the animation reaches the rail —
-        callers gate the spell's resolution-step mutation on this so the
-        effect appears exactly when the projectile lands.  Banner-only
-        fallbacks (no rail rect / no projectile helper) return ``now`` so
-        the reveal is not stalled.
+    def _conquer_card_spell_target_rects(self, spell_name, step_kind):
+        """Destination rect(s) for a card-effect spell's projectile.
+
+        Both-player spells (Dump Cards / Forced Deal) hit both hands; single
+        spells (Draw 2 / Fill up to 10) hit only the caster's hand — the player
+        tactics rail for own preludes, the opponent hand strip for opponent
+        preludes.
+        """
+        player_rail = self._conquer_tactics_rail_target_rect()
+        opp_strip = self._conquer_opponent_hand_target_rect()
+        if spell_name in self._BOTH_PLAYER_CARD_SPELLS:
+            return [r for r in (player_rail, opp_strip) if r is not None]
+        cast_by_opponent = (step_kind == 'prelude_opp')
+        target = opp_strip if cast_by_opponent else player_rail
+        return [target] if target is not None else []
+
+    def _spawn_conquer_card_spell_animation(self, spell_name, anchor_rect,
+                                            spell_info=None, step_kind=None):
+        """Spawn the card-effect spell animation aimed at the affected hand(s).
+
+        Returns the ms timestamp at which the animation reaches its target —
+        callers gate the spell's resolution-step mutation on this so the effect
+        appears exactly when the projectile lands.  Banner-only fallbacks (no
+        target rect / no projectile helper) return ``now`` so the reveal is not
+        stalled.
         """
         now = pygame.time.get_ticks()
         effects = getattr(self, '_conquer_effects', None)
         if effects is None:
             return now
-        target_rect = self._conquer_tactics_rail_target_rect()
-        if target_rect is None:
+        targets = self._conquer_card_spell_target_rects(spell_name, step_kind)
+        if not targets:
             spawn_banner = getattr(effects, 'spawn_banner', None)
             if callable(spawn_banner):
                 spawn_banner(spell_name, (80, 185, 230), duration_ms=900)
@@ -2283,14 +2404,16 @@ class ConquerGameScreen(GameScreen):
         floating_text = self._card_spell_floating_text(spell_name, spell_info)
         spawn_to_rect = getattr(effects, 'spawn_spell_to_rect', None)
         if callable(spawn_to_rect):
-            spawn_to_rect(spell_name, anchor_rect, target_rect,
-                          floating_text=floating_text)
+            for target_rect in targets:
+                spawn_to_rect(spell_name, anchor_rect, target_rect,
+                              floating_text=floating_text)
             projectile_ms = int(getattr(effects, 'PROJECTILE_MS', 420) or 0)
             return now + projectile_ms
         spawn_banner = getattr(effects, 'spawn_banner', None)
         if callable(spawn_banner):
-            spawn_banner(spell_name, (80, 185, 230), duration_ms=900,
-                         anchor_rect=target_rect)
+            for target_rect in targets:
+                spawn_banner(spell_name, (80, 185, 230), duration_ms=900,
+                             anchor_rect=target_rect)
         return now
 
     def _spawn_conquer_modifier_spell_animation(self, spell_name, anchor_rect=None):
@@ -2927,6 +3050,14 @@ class ConquerGameScreen(GameScreen):
         rank = move.get('rank') or ''
         rail = getattr(self, '_tactics_rail', None)
         result = None
+        from utils import sound
+        sound.play({
+            ACTION_PLAY: 'card_place',
+            ACTION_GAMBLE: 'card_slide',
+            ACTION_COMBINE: 'figure_place',
+            ACTION_DISMANTLE: 'card_slide',
+            ACTION_SKIP: 'ui_back',
+        }.get(action, 'ui_click'))
         try:
             if self._is_tactics_hand_game() and action == ACTION_PLAY and mid is not None:
                 call_figure = self._conquer_best_call_figure_for_tactic(move)
@@ -2965,6 +3096,7 @@ class ConquerGameScreen(GameScreen):
         except Exception as exc:
             result = {'success': False, 'message': str(exc) or 'Action failed'}
         if isinstance(result, dict) and result.get('success') is False:
+            sound.play('error')
             set_banner = getattr(rail, 'set_result_banner', None) if rail else None
             message = result.get('message') or 'Action failed'
             if callable(set_banner):
@@ -3001,7 +3133,17 @@ class ConquerGameScreen(GameScreen):
         if callable(set_banner):
             label = f"{family} {rank}".strip()
             if action == ACTION_PLAY:
-                set_banner(f"Played {label}", color=(180, 220, 160), ttl_ms=4500)
+                # First-conquest tutorial: explain *why* a Dagger matters the
+                # first time one is played, not just that it was played.
+                if ('Dagger' in str(family)
+                        and self._first_conquest_tutorial_active()
+                        and not getattr(self, '_tutorial_dagger_explained', False)):
+                    self._tutorial_dagger_explained = True
+                    set_banner(
+                        f"Played {label} — Daggers add their value to your attack total.",
+                        color=(180, 220, 160), ttl_ms=6000)
+                else:
+                    set_banner(f"Played {label}", color=(180, 220, 160), ttl_ms=4500)
             elif action == ACTION_GAMBLE:
                 set_banner(f"Gambling {label}…", color=(238, 218, 170), ttl_ms=5500)
             elif action == ACTION_COMBINE:
@@ -3034,6 +3176,8 @@ class ConquerGameScreen(GameScreen):
         self._conquer_tactic_power_cache_key = None
         self._conquer_tactic_power_cache = {}
         self._withdraw_dialogue_open = False
+        self._tutorial_dagger_explained = False
+        self._battle_intro_dialogue = None
         if self.state.game and getattr(self.state.game, 'state', None) != 'finished':
             self.state.game.game_over = False
             self.state.game.pending_game_over = None
@@ -3411,6 +3555,11 @@ class ConquerGameScreen(GameScreen):
     def request_conquer_figure_confirmation(self, kind, figure, icon=None,
                                             message='', title='Confirm'):
         """Ask the timeline panel to confirm a pending field action."""
+        # Soft feedback when a figure is selected for advance/defence (the
+        # confirm itself plays a firmer 'card_slide' via the objective action).
+        if not self._conquer_pending_confirmation:
+            from utils import sound
+            sound.play('ui_click', volume=0.8)
         self._conquer_pending_confirmation = {
             'kind': kind,
             'figure': figure,
@@ -3445,6 +3594,10 @@ class ConquerGameScreen(GameScreen):
             self._conquer_pending_confirmation = None
 
     def _handle_conquer_objective_action(self, action):
+        from utils import sound
+        sound.play({'next': 'ui_click', 'confirm': 'card_slide',
+                    'finish': 'battle_start', 'cancel': 'ui_back',
+                    'withdraw': 'ui_back'}.get(action, 'ui_click'))
         if action == 'next':
             return self._advance_active_timeline_step()
         if action == 'withdraw':
@@ -4060,9 +4213,16 @@ class ConquerGameScreen(GameScreen):
         animation to keep pre-mutation tactics visible until the animation
         completes.
         """
+        cached = getattr(self, '_conquer_resolution_step_server', None)
+        game = self.state.game
+        server_step = int(cached) if cached is not None else (
+            int(getattr(game, 'conquer_resolution_step', 0) or 0) if game else 0
+        )
         timeline = getattr(self, '_conquer_timeline_panel', None) \
             or getattr(self, 'conquer_timeline_panel', None)
         if timeline is not None:
+            if getattr(timeline, '_deriving_display_steps', False):
+                return server_step
             getter = getattr(timeline, 'currently_resolved_step_index', None)
             if callable(getter):
                 try:
@@ -4078,11 +4238,7 @@ class ConquerGameScreen(GameScreen):
                     return int(result)
         # Fall back to the server's current step. Use either the cached value
         # from the most recent get_battle_state call or the snapshot on Game.
-        cached = getattr(self, '_conquer_resolution_step_server', None)
-        if cached is not None:
-            return int(cached)
-        game = self.state.game
-        return int(getattr(game, 'conquer_resolution_step', 0) or 0) if game else 0
+        return server_step
 
     def _filter_conquer_tactics_by_displayed_step(self, tactics):
         """Apply spell-timeline replay to a serialized tactics list."""
@@ -4125,11 +4281,11 @@ class ConquerGameScreen(GameScreen):
         game_id = getattr(game, 'game_id', None)
         player_id = getattr(game, 'player_id', None)
         if not game_id or not player_id:
-            return [
+            return self._filter_conquer_tactics_by_displayed_step([
                 dict(move)
                 for move in (getattr(game, 'conquer_opponent_tactics', []) or [])
                 if isinstance(move, dict)
-            ]
+            ])
 
         cache_key = self._battle_state_cache_key()
         if cache_key != getattr(self, '_conquer_opponent_tactic_cache_key', None):
@@ -4145,13 +4301,17 @@ class ConquerGameScreen(GameScreen):
                 else:
                     tactics.append({
                         'id': tactic.get('id'),
+                        'game_id': tactic.get('game_id'),
                         'player_id': tactic.get('player_id'),
                         'status': tactic.get('status'),
                         'played_round': None,
+                        'revealed_step_index': tactic.get('revealed_step_index'),
+                        'discarded_step_index': tactic.get('discarded_step_index'),
                     })
             if tactics:
-                return list(tactics)
-        return list(getattr(self, '_conquer_opponent_tactic_cache', []) or [])
+                return self._filter_conquer_tactics_by_displayed_step(tactics)
+        return self._filter_conquer_tactics_by_displayed_step(
+            list(getattr(self, '_conquer_opponent_tactic_cache', []) or []))
 
     def _current_conquer_battle_moves(self):
         game = self.state.game
@@ -7384,6 +7544,118 @@ class ConquerGameScreen(GameScreen):
             self._conquer_duel_lane_render_cache_surface = None
             self._conquer_duel_lane_render_cache_rect = None
 
+    def _opponent_hidden_hand_count(self):
+        """How many face-down tactics the opponent currently holds (unplayed).
+
+        The server sends the opponent's available tactics as redacted stubs
+        (identities hidden, ``played_round`` None), so we only ever know the
+        COUNT — never the cards.
+        """
+        def _available(t):
+            return (isinstance(t, dict)
+                    and t.get('played_round') is None
+                    and t.get('status') != 'played')
+
+        return sum(1 for t in self._current_conquer_opponent_tactics()
+                   if _available(t))
+
+    def _conquer_opponent_hand_strip(self):
+        """The far-right strip rect reserved for the opponent's hidden hand."""
+        try:
+            layout = compute_conquer_layout(
+                settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT,
+                mode=self._conquer_effective_layout_mode())
+            strip = pygame.Rect(layout.battlefield.opp_hand_strip)
+            return strip if strip.width > 0 and strip.height > 0 else None
+        except Exception:
+            return None
+
+    def _conquer_opponent_hand_target_rect(self):
+        """Animation destination for opponent-bound card-effect spells."""
+        rect = getattr(self, '_conquer_opponent_hand_strip_rect', None)
+        if rect is not None:
+            try:
+                return pygame.Rect(rect)
+            except Exception:
+                pass
+        return self._conquer_opponent_hand_strip()
+
+    @staticmethod
+    def _draw_face_down_card(window, rect):
+        """A small stylised face-down tactic card (no identity revealed)."""
+        radius = max(3, rect.width // 6)
+        surf = pygame.Surface(rect.size, pygame.SRCALPHA)
+        br = surf.get_rect()
+        # Slate card-back with warm gold trim and a centred diamond emblem so it
+        # reads as a real (hidden) card rather than an empty frame.
+        pygame.draw.rect(surf, (34, 38, 58), br, border_radius=radius)
+        pygame.draw.rect(surf, (58, 64, 92), br.inflate(-3, -3), border_radius=radius)
+        pygame.draw.rect(surf, (196, 162, 92), br, 2, border_radius=radius)
+        cx, cy = br.center
+        d = max(3, int(min(rect.width, rect.height) * 0.22))
+        diamond = [(cx, cy - d), (cx + d, cy), (cx, cy + d), (cx - d, cy)]
+        pygame.draw.polygon(surf, (150, 124, 76), diamond)
+        pygame.draw.polygon(surf, (214, 184, 112), diamond, 1)
+        window.blit(surf, rect.topleft)
+
+    def _draw_conquer_opponent_hand_strip(self):
+        """Draw the opponent's hidden hand as a fanned column of face-down
+        tactic cards on the far-right strip — count-only, since identities are
+        withheld server-side. Gives card-effect spells a truthful destination.
+        """
+        if self.state.subscreen not in ('field', 'battle'):
+            return
+        if not self._is_tactics_hand_game():
+            return
+        strip = self._conquer_opponent_hand_strip()
+        if strip is None:
+            return
+        self._conquer_opponent_hand_strip_rect = strip.copy()
+        count = self._opponent_hidden_hand_count()
+        if count <= 0:
+            return
+
+        pad_x = max(1, int(strip.width * 0.08))
+        card_w = max(8, strip.width - 2 * pad_x)
+        card_h = int(card_w * 1.42)
+
+        # Overlapping fan: each card reveals ~55% of the one beneath it. Up to
+        # MAX_VISIBLE cards show; the badge always reports the true total.
+        MAX_VISIBLE = 6
+        visible = min(count, MAX_VISIBLE)
+        step = int(card_h * 0.55)
+        stack_h = card_h + (visible - 1) * step
+
+        # Count badge dimensions (centred just below the fan).
+        font = settings.get_font(max(9, int(settings.FS_TINY * 0.82)), bold=True)
+        label = font.render(str(count), True, (244, 232, 200))
+        badge_gap = max(2, int(card_h * 0.16))
+        bw, bh = label.get_width() + 12, label.get_height() + 4
+        group_h = stack_h + badge_gap + bh
+
+        # Shrink the overlap if the whole group would overflow the strip.
+        max_group = strip.height - int(strip.height * 0.06)
+        if group_h > max_group and visible > 1:
+            step = max(int(card_h * 0.26),
+                       (max_group - card_h - badge_gap - bh) // (visible - 1))
+            stack_h = card_h + (visible - 1) * step
+            group_h = stack_h + badge_gap + bh
+
+        x = strip.x + (strip.width - card_w) // 2
+        y = strip.y + max(int(strip.height * 0.03), (strip.height - group_h) // 2)
+        for _ in range(visible):
+            self._draw_face_down_card(self.window, pygame.Rect(x, y, card_w, card_h))
+            y += step
+        stack_bottom = y - step + card_h
+
+        bx = strip.x + (strip.width - bw) // 2
+        by = stack_bottom + badge_gap
+        badge = pygame.Surface((bw, bh), pygame.SRCALPHA)
+        pygame.draw.rect(badge, (26, 21, 16, 235), badge.get_rect(), border_radius=bh // 2)
+        pygame.draw.rect(badge, (150, 120, 70), badge.get_rect(), 1, border_radius=bh // 2)
+        self.window.blit(badge, (bx, by))
+        self.window.blit(label, (bx + 6, by + 2))
+
     def render(self):
         with perf_section('conquer.fill'):
             self.window.fill(settings.BACKGROUND_COLOR)
@@ -7421,6 +7693,11 @@ class ConquerGameScreen(GameScreen):
                         overlay()
                 except Exception:
                     pass
+
+        # Opponent's hidden hand: face-down tactic cards on the far-right strip,
+        # a truthful destination for opponent card-effect spell animations.
+        with perf_section('conquer.opp_hand'):
+            self._draw_conquer_opponent_hand_strip()
 
         with perf_section('conquer.timeline_header'):
             use_collapsed_header = self._should_use_collapsed_conquer_header()
@@ -7501,9 +7778,36 @@ class ConquerGameScreen(GameScreen):
 
         with perf_section('conquer.coach'):
             self._draw_conquer_battle_coach()
+            if getattr(self, '_battle_intro_dialogue', None) is not None:
+                self._battle_intro_dialogue.draw()
 
     # ----------------------------------------------------------------- update
+
+    def _play_conquer_transition_sounds(self):
+        """One-shot battle-start drum for the conquer battle. The win/lose/
+        draw result sound is played by the result dialog itself (via
+        sound.play_for_dialogue on its 'Land Conquered!' / 'Land Lost!' /
+        'Draw!' title), which is more reliable than polling game state here."""
+        try:
+            from utils import sound
+            game = self.state.game
+            if not game:
+                return
+            game_key = getattr(game, 'id', None)
+            if getattr(self, '_sound_state_game_id', None) != game_key:
+                self._sound_state_game_id = game_key
+                self._battle_start_played = bool(
+                    getattr(game, 'battle_turn_player_id', None) is not None
+                    or getattr(game, 'last_battle_result', None))
+            if (not self._battle_start_played
+                    and getattr(game, 'battle_turn_player_id', None) is not None):
+                self._battle_start_played = True
+                sound.play('battle_start')
+        except Exception:
+            pass
+
     def update(self, events):
+        self._play_conquer_transition_sounds()
         if not self._ensure_conquer_screen_game():
             return
         self._normalize_conquer_subscreen()
@@ -7547,6 +7851,7 @@ class ConquerGameScreen(GameScreen):
             self._sync_conquer_action_modes()
             self._sync_pending_confirmation_state()
             self._enforce_battle_shop_during_moves()
+            self._maybe_show_battle_intro_window()
             if not self._conquer_battle_intro_paused():
                 self._maybe_auto_trigger_finish_battle()
                 self._maybe_auto_advance_single_option_step()
@@ -7613,6 +7918,9 @@ class ConquerGameScreen(GameScreen):
                 self.dialogue_box = None
                 self.show_next_queued_notification()
                 return
+
+        if self._handle_battle_intro_window_events(events):
+            return
 
         if self._handle_conquer_battle_coach_events(events):
             return

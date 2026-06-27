@@ -61,6 +61,17 @@ def _make_figure_object(figure_id, *, field='castle', cannot_attack=False,
     )
 
 
+def _make_power_figure(figure_id, *, field='village', suit='Hearts', value=10,
+                       cannot_be_targeted=False):
+    return SimpleNamespace(
+        id=figure_id,
+        suit=suit,
+        family=SimpleNamespace(field=field),
+        cannot_be_targeted=cannot_be_targeted,
+        get_value=lambda value=value: value,
+    )
+
+
 def _make_config(**overrides):
     cfg = {
         'figures': [],
@@ -265,6 +276,62 @@ class TestDefenceReadiness:
         screen = DefenceScreen(state)
         screen._config = None
         assert screen._is_defence_ready() is False
+
+
+class TestDefenceBattleMovePower:
+
+    def _screen(self):
+        from game.screens.defence_screen import DefenceScreen
+
+        screen = object.__new__(DefenceScreen)
+        castle = _make_power_figure(7, field='castle', suit='Spades', value=12)
+        screen._figure_objects = [castle]
+        screen._figure_icons = {
+            7: SimpleNamespace(has_deficit=False, buffs_allies_bonus=0),
+        }
+        return DefenceScreen, screen
+
+    def test_call_tactic_power_uses_bound_field_figure(self):
+        DefenceScreen, screen = self._screen()
+        move = {
+            'family_name': 'Call King',
+            'suit': 'Spades',
+            'value': 4,
+            'call_figure_id': 7,
+        }
+
+        assert DefenceScreen._battle_move_display_power(screen, move) == 16
+
+    def test_battle_move_slot_draws_effective_call_power(self):
+        import pygame
+        from config import settings
+
+        DefenceScreen, screen = self._screen()
+        window = pygame.display.get_surface() or pygame.display.set_mode((1, 1))
+        screen.window = window
+        screen._config = _make_config(battle_moves=[{
+            'id': 20,
+            'round_index': 0,
+            'family_name': 'Call King',
+            'suit': 'Spades',
+            'value': 4,
+            'call_figure_id': 7,
+        }])
+        screen._move_slots_rect = pygame.Rect(0, 0, 300, 100)
+        screen._move_slot_size = 40
+        screen._slot_glow_cache = {}
+        screen._slot_icon_cache = {}
+        screen._slot_frame_cache = {}
+        screen._suit_icon_cache = {}
+        screen._slot_font = settings.get_font(settings.FS_TINY)
+        screen._small_font = settings.get_font(settings.FS_TINY)
+        screen._slot_diamond = pygame.Surface((40, 40), pygame.SRCALPHA)
+        screen._x_btn_sz = 12
+
+        with patch('game.screens.defence_screen.draw_battle_move_icon') as draw_icon:
+            DefenceScreen._draw_battle_move_slots(screen)
+
+        assert draw_icon.call_args.args[5] == 16
 
 
 class TestDefenceScreenNavigation:

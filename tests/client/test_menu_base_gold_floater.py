@@ -221,6 +221,63 @@ def test_menu_coach_skip_pauses_without_marking_seen(monkeypatch):
     assert messages == ['Tutorial paused. Open Guide to continue.']
 
 
+def test_final_menu_coach_draws_finish_instead_of_skip():
+    import pygame
+    from config import settings
+
+    _ensure_pygame_display()
+    screen, _ = _screen_with_gold(100)
+    screen.window = pygame.Surface((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+    screen.state.user_dict['onboarding'] = {
+        'onboarding_skipped': False,
+        'menu_hints_seen': [],
+    }
+    screen._menu_coach_font = settings.get_font(
+        max(14, int(0.018 * settings.SCREEN_HEIGHT)))
+    screen._menu_coach_title_font = settings.get_font(
+        max(16, int(0.024 * settings.SCREEN_HEIGHT)), bold=True)
+    step = {
+        'id': 'kingdom_after_conquer_map',
+        'title': 'Your First Land!',
+        'body': 'You took your first land.',
+        'rect': pygame.Rect(120, 120, 96, 32),
+        'action': 'coach',
+        'finish_tutorial_button': True,
+    }
+
+    screen._draw_menu_coach(step)
+
+    actions = [action for _rect, action in screen._menu_coach_buttons]
+    assert ('finish_tutorial', 'kingdom_after_conquer_map') in actions
+    assert all(action[0] != 'skip_tutorial' for action in actions)
+
+
+def test_menu_coach_finish_button_calls_finish_hook():
+    import pygame
+
+    screen, _ = _screen_with_gold(100)
+    screen._menu_coach_step = {
+        'id': 'kingdom_after_conquer_map',
+        'rect': pygame.Rect(10, 10, 120, 40),
+        'action': 'coach',
+        'finish_tutorial_button': True,
+    }
+    finish_rect = pygame.Rect(240, 80, 150, 32)
+    screen._menu_coach_buttons = [
+        (finish_rect, ('finish_tutorial', 'kingdom_after_conquer_map')),
+    ]
+    screen._menu_coach_pressed_button_action = None
+    called = []
+    screen._finish_menu_coach_tutorial = lambda step_id: called.append(step_id)
+
+    down = pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=finish_rect.center)
+    up = pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=finish_rect.center)
+
+    assert screen._handle_menu_coach_events([down]) is True
+    assert screen._handle_menu_coach_events([up]) is True
+    assert called == ['kingdom_after_conquer_map']
+
+
 def test_onboarding_guide_mouse_wheel_scrolls_achievement_viewport():
     import pygame
 
@@ -294,6 +351,45 @@ def test_onboarding_guide_touch_tap_can_still_claim(monkeypatch):
     assert screen._handle_onboarding_guide_events([down]) is True
     assert screen._handle_onboarding_guide_events([up]) is True
     assert claimed == ['first_duel']
+
+
+def test_onboarding_guide_does_not_draw_start_button_for_duel_tutorial():
+    import pygame
+    from config import settings
+
+    _ensure_pygame_display()
+    screen, _ = _screen_with_gold(100)
+    screen.window = pygame.Surface((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+    screen.state.user_dict['onboarding'] = {
+        'completed_steps': ['finish_tutorial'],
+        'onboarding_skipped': False,
+    }
+    screen._onboarding_guide_buttons = []
+    screen._onboarding_guide_item_rects = {}
+    screen._onboarding_guide_section_header_rects = {}
+    screen._onboarding_guide_icon_cache = {}
+    screen._onboarding_guide_section_font = settings.get_font(settings.FS_SMALL, bold=True)
+    screen._onboarding_guide_font = settings.get_font(settings.FS_SMALL)
+    screen._onboarding_guide_small_font = settings.get_font(settings.FS_TINY)
+    icon = pygame.Surface((18, 18), pygame.SRCALPHA)
+    screen._gold_icon = icon
+    screen._booster_icon = icon
+    screen._booster_side_icon = icon
+    screen._map_icon = icon
+
+    screen._draw_onboarding_guide_section(
+        'Checklist',
+        [{
+            'id': 'finish_first_duel',
+            'title': 'Finish the duel tutorial',
+            'description': 'Play a guided duel from start to finish.',
+            'reward': {'booster_packs': 3},
+        }],
+        pygame.Rect(20, 20, 420, 90),
+    )
+
+    actions = [action for _rect, action in screen._onboarding_guide_buttons]
+    assert all(action[0] != 'start_duel_tutorial' for action in actions)
 
 
 def test_current_gold_amount_handles_missing_or_invalid_values():
@@ -416,7 +512,7 @@ def test_onboarding_payload_preserves_local_hint_progress():
     assert onboarding['duel_hints_seen'] == ['field', 'build']
 
 
-def test_main_menu_area_coach_starts_with_user_item_display():
+def test_main_menu_area_coach_leads_with_journey():
     import pygame
     from game.screens.game_menu_screen import GameMenuScreen
 
@@ -437,40 +533,118 @@ def test_main_menu_area_coach_starts_with_user_item_display():
     screen._icon_home = SimpleNamespace(rect=pygame.Rect(760, 20, 42, 42))
     screen._icon_guide = SimpleNamespace(rect=pygame.Rect(760, 70, 42, 42))
 
+    # Action-first: the coach leads straight into the journey (open a starter
+    # booster pack in the collection) — no generic area tour up front.
     step = screen._current_area_coach_step()
-    assert step['id'] == 'user_items'
-    assert step['rect'] == screen._user_item_display_rect
-
-    screen.state.user_dict['onboarding']['menu_hints_seen'] = ['user_items']
-    assert screen._current_area_coach_step()['id'] == 'duel'
+    assert step['id'] == 'open_starter_pack'
+    assert step['rect'] == screen.button_collection.rect
 
 
-def test_main_menu_post_duel_coach_routes_to_collection_then_kingdom():
+def _journey_ready_menu_screen(completed_steps):
+    """A GameMenuScreen with every area + guide hint already seen, so the
+    next coach step comes from the collection-first journey."""
     import pygame
     from game.screens.game_menu_screen import GameMenuScreen
 
+    seen = [
+        'kingdom', 'collection', 'duel', 'rankings',
+        'guide', 'guide_first_duel_reward',
+    ]
     screen = object.__new__(GameMenuScreen)
     screen.state = SimpleNamespace(user_dict={'onboarding': {
-        'menu_hints_seen': [],
+        'menu_hints_seen': list(seen),
         'welcome_pending': False,
-        'completed_steps': ['finish_first_duel'],
+        'completed_steps': list(completed_steps),
     }})
     screen._onboarding_guide_open = False
     screen._welcome_present_dialogue = None
     screen.dialogue_box = None
-    screen.button_collection = SimpleNamespace(rect=pygame.Rect(20, 180, 120, 44))
+    screen._user_item_display_rect = pygame.Rect(8, 10, 180, 36)
+    screen.button_duel = SimpleNamespace(rect=pygame.Rect(20, 80, 120, 44))
     screen.button_kingdom = SimpleNamespace(rect=pygame.Rect(20, 130, 120, 44))
+    screen.button_collection = SimpleNamespace(rect=pygame.Rect(20, 180, 120, 44))
+    screen.button_rankings = SimpleNamespace(rect=pygame.Rect(20, 230, 120, 44))
+    screen._icon_home = SimpleNamespace(rect=pygame.Rect(760, 20, 42, 42))
+    screen._icon_guide = SimpleNamespace(rect=pygame.Rect(760, 70, 42, 42))
+    return screen
 
+
+def test_main_menu_journey_coach_routes_pack_conquer_kingdom_then_quiet():
+    # Fresh account: open a starter booster pack first (collection).
+    screen = _journey_ready_menu_screen(completed_steps=[])
     step = screen._current_area_coach_step()
-    assert step['id'] == 'post_duel_collection'
+    assert step['id'] == 'open_starter_pack'
     assert step['rect'] == screen.button_collection.rect
 
-    screen.state.user_dict['onboarding']['completed_steps'].extend([
-        'open_first_main_booster', 'open_first_side_booster'
-    ])
+    # Pack opened: now conquer the first land.
+    screen.state.user_dict['onboarding']['completed_steps'] = [
+        'open_first_main_booster',
+    ]
     step = screen._current_area_coach_step()
     assert step['id'] == 'post_boosters_kingdom'
     assert step['rect'] == screen.button_kingdom.rect
+
+    # First land conquered but the final kingdom card has not been acknowledged:
+    # steer back to the kingdom, NOT to production collection or a duel.
+    screen.state.user_dict['onboarding']['completed_steps'].append(
+        'finish_first_conquer_battle')
+    step = screen._current_area_coach_step()
+    assert step['id'] == 'return_to_kingdom_loop'
+    assert step['rect'] == screen.button_kingdom.rect
+    assert 'first land' in step['body']
+
+    # Tutorial finished: the duel is NOT pushed here. With the guide hint
+    # already seen, the menu coaching simply goes quiet.
+    screen.state.user_dict['onboarding']['completed_steps'].append(
+        'finish_tutorial')
+    assert screen._current_area_coach_step() is None
+
+
+def test_duel_never_blocks_tutorial_completion_in_journey():
+    # Tutorial complete WITHOUT a duel: the journey coach goes quiet. The duel
+    # is never a journey step and is no longer pushed here — it's mentioned in
+    # the completion box and started from the Duel menu on opt-in.
+    screen = _journey_ready_menu_screen(completed_steps=[
+        'finish_first_conquer_battle',
+        'open_first_main_booster',
+        'finish_tutorial',
+    ])
+    assert screen._current_journey_coach_step() is None
+
+
+def test_guide_prompt_does_not_loop_after_tutorial_complete():
+    screen = _journey_ready_menu_screen(completed_steps=[
+        'finish_first_conquer_battle',
+        'open_first_main_booster',
+        'finish_tutorial',
+        'finish_first_duel',
+    ])
+    screen.state.user_dict['onboarding']['menu_hints_seen'] = [
+        'duel', 'kingdom', 'collection', 'rankings',
+    ]
+
+    step = screen._current_area_coach_step()
+    assert step['id'] == 'guide'
+
+    screen.state.user_dict['onboarding']['menu_hints_seen'].append('guide')
+    assert screen._current_area_coach_step() is None
+
+
+def test_guide_prompt_can_return_to_unfinished_final_land_card():
+    screen = _journey_ready_menu_screen(completed_steps=[
+        'open_first_main_booster',
+        'finish_first_conquer_battle',
+    ])
+    # return_to_kingdom_loop already seen so the journey coach yields to the
+    # guide walkthrough, which should re-show while the final land card is
+    # unfinished.
+    screen.state.user_dict['onboarding']['menu_hints_seen'] = [
+        'duel', 'kingdom', 'collection', 'rankings',
+        'return_to_kingdom_loop', 'guide',
+    ]
+
+    step = screen._current_area_coach_step()
+    assert step['id'] == 'guide'
 
 
 def test_kingdom_coach_progresses_from_map_to_conquer_button():
@@ -479,13 +653,12 @@ def test_kingdom_coach_progresses_from_map_to_conquer_button():
 
     screen = object.__new__(KingdomScreen)
     screen.state = SimpleNamespace(user_dict={'onboarding': {
-        'menu_hints_seen': [],
-        'completed_steps': [
-            'finish_first_duel', 'open_first_main_booster', 'open_first_side_booster'
-        ],
+        'menu_hints_seen': ['kingdom_overview_window'],
+        'completed_steps': [],
     }})
     screen._onboarding_guide_open = False
     screen._welcome_present_dialogue = None
+    screen._kingdom_overview_dialogue = None
     screen.dialogue_box = None
     screen._thread = None
     screen._new_msg_picker = None
@@ -495,10 +668,7 @@ def test_kingdom_coach_progresses_from_map_to_conquer_button():
     screen._error = None
     screen._map_viewport_rect = pygame.Rect(50, 60, 300, 220)
 
-    assert screen._current_kingdom_coach_step()['id'] == 'kingdom_map_intro'
-
-    screen.state.user_dict['onboarding']['menu_hints_seen'] = ['kingdom_map_intro']
-    assert screen._current_kingdom_coach_step()['id'] == 'kingdom_select_land'
+    assert screen._current_kingdom_coach_step()['id'] == 'kingdom_pick_land'
 
     conquer_rect = pygame.Rect(120, 180, 140, 34)
     screen._detail_box = SimpleNamespace(
@@ -509,22 +679,81 @@ def test_kingdom_coach_progresses_from_map_to_conquer_button():
     assert step['rect'] == conquer_rect
 
 
-def test_kingdom_coach_shifts_to_post_battle_map_and_config_steps():
+def test_kingdom_coach_offers_retry_after_lost_first_conquest():
+    # Lost the first conquest (a battle finished but no land won): the coach
+    # re-guides the no-penalty retry, pointing back at the marked land.
     import pygame
     from game.screens.kingdom_screen import KingdomScreen
 
     screen = object.__new__(KingdomScreen)
     screen.state = SimpleNamespace(user_dict={'onboarding': {
-        'menu_hints_seen': [],
+        'menu_hints_seen': ['kingdom_overview_window', 'kingdom_pick_land'],
+        'completed_steps': ['open_first_main_booster'],
+        'facts': {'conquer_battles': 1},
+    }})
+    screen._onboarding_guide_open = False
+    screen._welcome_present_dialogue = None
+    screen._kingdom_overview_dialogue = None
+    screen.dialogue_box = None
+    screen._thread = None
+    screen._new_msg_picker = None
+    screen._detail_box = None
+    screen._hex_map = object()
+    screen._loading = False
+    screen._error = None
+    screen._map_viewport_rect = pygame.Rect(50, 60, 300, 220)
+
+    step = screen._current_kingdom_coach_step()
+    assert step['id'] == 'kingdom_conquer_retry'
+    assert step['rect'] == screen._map_viewport_rect
+    assert step['mark_on_click'] is False  # re-shows until they win
+
+
+def test_kingdom_coach_finishes_on_first_land_card():
+    import pygame
+    from game.screens.kingdom_screen import KingdomScreen
+
+    screen = object.__new__(KingdomScreen)
+    screen.state = SimpleNamespace(user_dict={'onboarding': {
+        'menu_hints_seen': ['kingdom_overview_window'],
+        'completed_steps': ['finish_first_conquer_battle', 'open_first_main_booster'],
+    }})
+    screen._onboarding_guide_open = False
+    screen._welcome_present_dialogue = None
+    screen._kingdom_overview_dialogue = None
+    screen.dialogue_box = None
+    screen._thread = None
+    screen._new_msg_picker = None
+    screen._detail_box = None
+    screen._hex_map = object()
+    screen._loading = False
+    screen._error = None
+    screen._map_viewport_rect = pygame.Rect(50, 60, 300, 220)
+    screen._header_rect = pygame.Rect(40, 20, 420, 80)
+    screen._collect_all_rect = pygame.Rect(340, 32, 110, 34)
+
+    step = screen._current_kingdom_coach_step()
+    assert step['id'] == 'kingdom_after_conquer_map'
+    assert step['action'] == 'coach'
+    assert step['rect'] == screen._map_viewport_rect
+    assert step['finish_tutorial_button'] is True
+
+
+def test_kingdom_coach_ends_after_first_land_finish_card_seen():
+    import pygame
+    from game.screens.kingdom_screen import KingdomScreen
+
+    screen = object.__new__(KingdomScreen)
+    screen.state = SimpleNamespace(user_dict={'onboarding': {
+        'menu_hints_seen': ['kingdom_overview_window'],
         'completed_steps': [
-            'finish_first_duel',
             'open_first_main_booster',
-            'open_first_side_booster',
             'finish_first_conquer_battle',
         ],
     }})
     screen._onboarding_guide_open = False
     screen._welcome_present_dialogue = None
+    screen._kingdom_overview_dialogue = None
     screen.dialogue_box = None
     screen._thread = None
     screen._new_msg_picker = None
@@ -539,38 +768,36 @@ def test_kingdom_coach_shifts_to_post_battle_map_and_config_steps():
 
     assert screen._current_kingdom_coach_step()['id'] == 'kingdom_after_conquer_map'
 
-    screen.state.user_dict['onboarding']['menu_hints_seen'] = ['kingdom_after_conquer_map']
-    assert screen._current_kingdom_coach_step()['id'] == 'kingdom_connected_lands'
-
     screen.state.user_dict['onboarding']['menu_hints_seen'] = [
-        'kingdom_after_conquer_map',
-        'kingdom_connected_lands',
-    ]
-    step = screen._current_kingdom_coach_step()
-    assert step['id'] == 'kingdom_production_intro'
-    assert step['rect'] == screen._collect_all_rect
-
-    screen.state.user_dict['onboarding']['menu_hints_seen'] = [
-        'kingdom_after_conquer_map',
-        'kingdom_connected_lands',
-        'kingdom_production_intro',
-    ]
-    step = screen._current_kingdom_coach_step()
-    assert step['id'] == 'kingdom_config_intro'
-    assert step['action'] == 'click'
-    assert step['rect'] == screen._kingdom_chip_gear_rect
+        'kingdom_overview_window', 'kingdom_after_conquer_map']
+    assert screen._current_kingdom_coach_step() is None
 
 
-def test_conquer_coach_highlights_edit_controls_in_order():
+def test_kingdom_finish_tutorial_button_marks_first_land_seen_and_complete():
+    from game.screens.kingdom_screen import KingdomScreen
+
+    screen = object.__new__(KingdomScreen)
+    marked_seen = []
+    marked_steps = []
+    screen._mark_menu_coach_seen = lambda step_id: marked_seen.append(step_id)
+    screen._mark_onboarding_step_completed_local = lambda step_id: marked_steps.append(step_id)
+
+    screen._finish_menu_coach_tutorial('kingdom_after_conquer_map')
+
+    assert marked_seen == ['kingdom_after_conquer_map']
+    assert marked_steps == ['finish_tutorial']
+
+
+def test_conquer_coach_collapses_to_single_battle_handoff():
     import pygame
     from game.screens.conquer_screen import ConquerScreen
 
     screen = object.__new__(ConquerScreen)
+    # Conquer comes before boosters in onboarding, so the config coach must be
+    # ready for a fresh account.
     screen.state = SimpleNamespace(user_dict={'onboarding': {
         'menu_hints_seen': [],
-        'completed_steps': [
-            'finish_first_duel', 'open_first_main_booster', 'open_first_side_booster'
-        ],
+        'completed_steps': [],
     }})
     screen._onboarding_guide_open = False
     screen._welcome_present_dialogue = None
@@ -593,21 +820,122 @@ def test_conquer_coach_highlights_edit_controls_in_order():
     screen._prelude_spell_rect = pygame.Rect(300, 260, 42, 42)
     screen._btn_battle = pygame.Rect(520, 380, 140, 42)
 
-    expected = [
-        'conquer_config_field',
-        'conquer_config_build_edit',
-        'conquer_config_battle_plan',
-        'conquer_config_prelude',
-        'conquer_config_to_battle',
-    ]
-    seen = []
-    for step_id in expected:
-        screen.state.user_dict['onboarding']['menu_hints_seen'] = list(seen)
-        step = screen._current_conquer_coach_step()
-        assert step['id'] == step_id
-        if step_id == 'conquer_config_to_battle':
-            assert step['button_label'] == 'Got it'
-        seen.append(step_id)
+    # The pre-assembled first attack collapses to a single hand-off window
+    # anchored on Start Battle; once seen, there is no further setup coaching.
+    step = screen._current_conquer_coach_step()
+    assert step['id'] == 'conquer_config_to_battle'
+    assert step['rect'] == screen._btn_battle
+    assert step['action'] == 'next'
+    assert step['button_label'] == 'Got it'
+
+    screen.state.user_dict['onboarding']['menu_hints_seen'] = ['conquer_config_to_battle']
+    assert screen._current_conquer_coach_step() is None
+
+
+def test_conquer_second_build_coach_guides_manual_build():
+    import pygame
+    from game.screens.conquer_screen import ConquerScreen
+
+    screen = object.__new__(ConquerScreen)
+    # First conquest done, exactly one battle finished: the guided second
+    # conquest where the player builds the attack by hand.
+    screen.state = SimpleNamespace(user_dict={'onboarding': {
+        'menu_hints_seen': [],
+        'completed_steps': ['finish_first_conquer_battle'],
+        'facts': {'conquer_battles': 1},
+    }})
+    screen._onboarding_guide_open = False
+    screen._welcome_present_dialogue = None
+    screen.dialogue_box = None
+    screen._loading = False
+    screen._error = None
+    screen._config = {'land_id': 2, 'figures': [], 'battle_moves': []}
+    screen._layout_built = True
+    screen._active_subscreen = None
+    screen._figure_detail_box = None
+    screen._move_detail_box = None
+    screen._active_info_key = None
+    screen._field_rects = {'castle': pygame.Rect(20, 80, 120, 80)}
+    screen._res_rect = pygame.Rect(20, 170, 120, 40)
+    screen._btn_build = pygame.Rect(150, 80, 34, 34)
+    screen._battle_plan_rect = pygame.Rect(260, 80, 180, 120)
+    screen._btn_buy_move = pygame.Rect(450, 80, 34, 34)
+    screen._btn_battle = pygame.Rect(520, 380, 140, 42)
+
+    # Empty config: coach the Build button first (clickable).
+    step = screen._current_conquer_coach_step()
+    assert step['id'] == 'conquer_build_yourself'
+    assert step['action'] == 'click'
+    assert step['rect'] == screen._btn_build
+
+    # Until a figure exists, do not advance past the build step.
+    screen.state.user_dict['onboarding']['menu_hints_seen'] = ['conquer_build_yourself']
+    assert screen._current_conquer_coach_step() is None
+
+    # Once a figure is built, guide tactics then Start Battle.
+    screen._config['figures'] = [{'family_name': 'Djungle King'}]
+    step = screen._current_conquer_coach_step()
+    assert step['id'] == 'conquer_build_yourself_tactics'
+
+    screen.state.user_dict['onboarding']['menu_hints_seen'] = [
+        'conquer_build_yourself', 'conquer_build_yourself_tactics']
+    step = screen._current_conquer_coach_step()
+    assert step['id'] == 'conquer_build_yourself_battle'
+    assert step['rect'] == screen._btn_battle
+
+    # Tutorial-skipped players get no second-build coaching.
+    screen.state.user_dict['onboarding']['onboarding_skipped'] = True
+    screen.state.user_dict['onboarding']['menu_hints_seen'] = []
+    screen._config['figures'] = []
+    assert screen._current_conquer_coach_step() is None
+
+
+def test_conquer_second_build_coach_inactive_after_two_battles():
+    import pygame
+    from game.screens.conquer_screen import ConquerScreen
+
+    screen = object.__new__(ConquerScreen)
+    screen.state = SimpleNamespace(user_dict={'onboarding': {
+        'menu_hints_seen': [],
+        'completed_steps': ['finish_first_conquer_battle'],
+        'facts': {'conquer_battles': 2},
+    }})
+    screen._onboarding_guide_open = False
+    screen._welcome_present_dialogue = None
+    screen.dialogue_box = None
+    screen._loading = False
+    screen._error = None
+    screen._config = {'land_id': 3, 'figures': [], 'battle_moves': []}
+    screen._layout_built = True
+    screen._active_subscreen = None
+    screen._figure_detail_box = None
+    screen._move_detail_box = None
+    screen._active_info_key = None
+    screen._field_rects = {'castle': pygame.Rect(20, 80, 120, 80)}
+    screen._res_rect = pygame.Rect(20, 170, 120, 40)
+    screen._btn_build = pygame.Rect(150, 80, 34, 34)
+    screen._battle_plan_rect = pygame.Rect(260, 80, 180, 120)
+    screen._btn_buy_move = pygame.Rect(450, 80, 34, 34)
+    screen._btn_battle = pygame.Rect(520, 380, 140, 42)
+
+    # Past the second conquest (and first conquest done) -> no coach at all.
+    assert screen._current_conquer_coach_step() is None
+
+
+def test_explicit_missing_coach_step_does_not_use_stale_cached_step():
+    import pygame
+
+    screen, _ = _screen_with_gold(100)
+    screen._menu_coach_step = {
+        'id': 'stale_step',
+        'rect': pygame.Rect(10, 10, 80, 40),
+        'title': 'Old Step',
+        'body': 'This step should not block events after a subscreen opens.',
+    }
+
+    event = pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=(20, 20))
+
+    assert screen._handle_menu_coach_events([event], None) is False
 
 
 def test_menu_coach_next_step_blocks_everything_except_next():
@@ -661,3 +989,259 @@ def test_menu_coach_click_step_allows_only_target_click():
     step['mark_on_click'] = False
     assert screen._handle_menu_coach_events([inside], step) is False
     assert marked == ['start_first_duel']
+
+
+def test_defence_coach_walks_setup_steps_after_tutorial():
+    """Defence is dropped from the first session, so its coaching only appears
+    on-demand once the conquer tutorial is finished: build → battle plan →
+    final response → save."""
+    import pygame
+    from game.screens.defence_screen import DefenceScreen
+
+    screen = object.__new__(DefenceScreen)
+    screen.state = SimpleNamespace(user_dict={'onboarding': {
+        'menu_hints_seen': [],
+        'completed_steps': [
+            'open_first_main_booster', 'open_first_side_booster',
+            'finish_first_conquer_battle', 'collect_first_kingdom_production',
+            'finish_tutorial',
+        ],
+    }})
+    screen._onboarding_guide_open = False
+    screen._welcome_present_dialogue = None
+    screen._logout_dialogue = None
+    screen.dialogue_box = None
+    screen._loading = False
+    screen._error = None
+    screen._config = {'land_id': 1}
+    screen._layout_built = True
+    screen._active_subscreen = None
+    screen._figure_detail_box = None
+    screen._move_detail_box = None
+    screen._active_info_key = None
+    screen._btn_build = pygame.Rect(150, 80, 34, 34)
+    screen._battle_plan_rect = pygame.Rect(260, 80, 180, 120)
+    screen._counter_panel_rect = pygame.Rect(260, 340, 180, 120)
+    screen._btn_save = pygame.Rect(520, 500, 140, 42)
+
+    expected = ['defence_intro', 'defence_battle_plan',
+                'defence_final_response', 'defence_save']
+    seen = []
+    for want in expected:
+        screen.state.user_dict['onboarding']['menu_hints_seen'] = list(seen)
+        step = screen._current_defence_coach_step()
+        assert step is not None and step['id'] == want, (want, step)
+        seen.append(want)
+    screen.state.user_dict['onboarding']['menu_hints_seen'] = list(seen)
+    assert screen._current_defence_coach_step() is None
+
+
+def _menu_screen_for_completion(core_steps, *, welcome_pending=False, skipped=False,
+                                menu_hints_seen=None):
+    from game.screens.game_menu_screen import GameMenuScreen
+    screen = object.__new__(GameMenuScreen)
+    screen.state = SimpleNamespace(user_dict={'onboarding': {
+        'core_steps': core_steps,
+        'menu_hints_seen': list(
+            ['kingdom_after_conquer_map'] if menu_hints_seen is None else menu_hints_seen),
+        'welcome_pending': welcome_pending,
+        'onboarding_skipped': skipped,
+    }})
+    screen._tutorial_celebrated = set()
+    return screen
+
+
+def _core_step(step_id, *, completed, claimed, reward=None):
+    return {'id': step_id, 'completed': completed, 'claimed': claimed,
+            'reward': reward or {}}
+
+
+def test_tutorial_completion_celebrates_conquer_then_duel():
+    from game.screens.game_menu_screen import GameMenuScreen
+    screen = _menu_screen_for_completion([
+        _core_step('finish_tutorial', completed=True, claimed=False,
+                   reward={'booster_packs': 6, 'booster_packs_side': 2}),
+        _core_step('finish_first_duel', completed=True, claimed=False,
+                   reward={'booster_packs': 3}),
+    ])
+    pending = screen._pending_tutorial_completion()
+    assert pending is not None
+    assert pending[0] == 'finish_tutorial'
+    assert 'Conquer Tutorial Complete' in pending[1]
+
+    # Once celebrated, it advances to the duel tutorial.
+    screen._tutorial_celebrated.add('finish_tutorial')
+    pending = screen._pending_tutorial_completion()
+    assert pending[0] == 'finish_first_duel'
+    assert 'Duel Tutorial Complete' in pending[1]
+
+
+def test_tutorial_completion_skips_claimed_and_incomplete():
+    screen = _menu_screen_for_completion([
+        _core_step('finish_tutorial', completed=True, claimed=True),
+        _core_step('finish_first_duel', completed=False, claimed=False),
+    ])
+    assert screen._pending_tutorial_completion() is None
+
+
+def test_tutorial_completion_waits_for_first_land_finish_card():
+    screen = _menu_screen_for_completion([
+        _core_step('finish_tutorial', completed=True, claimed=False),
+    ], menu_hints_seen=[])
+    assert screen._pending_tutorial_completion() is None
+
+
+def test_tutorial_completion_suppressed_while_welcome_pending():
+    screen = _menu_screen_for_completion([
+        _core_step('finish_tutorial', completed=True, claimed=False),
+    ], welcome_pending=True)
+    assert screen._pending_tutorial_completion() is None
+
+
+def test_tutorial_completion_suppressed_when_skipped():
+    screen = _menu_screen_for_completion([
+        _core_step('finish_tutorial', completed=True, claimed=False),
+    ], skipped=True)
+    assert screen._pending_tutorial_completion() is None
+
+
+def test_reward_reveal_items_covers_all_kinds():
+    from game.screens.game_menu_screen import GameMenuScreen
+    items = GameMenuScreen._reward_reveal_items(
+        {'gold': 50, 'booster_packs': 6, 'booster_packs_side': 2, 'maps': 4})
+    kinds = [it['kind'] for it in items]
+    assert kinds == ['gold', 'main_booster', 'side_booster', 'map']
+    assert all(it['label'] and it['description'] for it in items)
+
+
+def _kingdom_overview_screen(seen=None, skipped=False, loaded=True):
+    import pygame
+    from game.screens.kingdom_screen import KingdomScreen
+    if not pygame.display.get_init():
+        pygame.display.init()
+    if pygame.display.get_surface() is None:
+        pygame.display.set_mode((1, 1))
+    if not pygame.font.get_init():
+        pygame.font.init()
+    screen = object.__new__(KingdomScreen)
+    screen.window = pygame.display.get_surface()
+    screen.state = SimpleNamespace(user_dict={'onboarding': {
+        'menu_hints_seen': list(seen or []),
+        'completed_steps': [],
+        'onboarding_skipped': skipped,
+    }})
+    screen._onboarding_guide_open = False
+    screen.dialogue_box = None
+    screen._thread = None
+    screen._new_msg_picker = None
+    screen._detail_box = None
+    screen._kingdom_overview_dialogue = None
+    screen._hex_map = object() if loaded else None
+    screen._loading = not loaded
+    screen._error = None
+    return screen
+
+
+def test_kingdom_overview_window_shows_once_on_first_open():
+    screen = _kingdom_overview_screen(seen=[])
+    screen._maybe_show_kingdom_overview()
+    assert screen._kingdom_overview_dialogue is not None
+    # The kingdom coach is suppressed while the window is up.
+    assert screen._kingdom_coach_ready() is False
+
+
+def test_kingdom_overview_window_suppressed_after_seen():
+    screen = _kingdom_overview_screen(seen=['kingdom_overview_window'])
+    screen._maybe_show_kingdom_overview()
+    assert screen._kingdom_overview_dialogue is None
+    assert screen._kingdom_coach_ready() is True
+
+
+def test_kingdom_overview_window_suppressed_when_skipped():
+    screen = _kingdom_overview_screen(seen=[], skipped=True)
+    screen._maybe_show_kingdom_overview()
+    assert screen._kingdom_overview_dialogue is None
+
+
+def test_kingdom_overview_window_waits_for_map_load():
+    screen = _kingdom_overview_screen(seen=[], loaded=False)
+    screen._maybe_show_kingdom_overview()
+    assert screen._kingdom_overview_dialogue is None
+
+
+def test_kingdom_screen_surfaces_conquer_tutorial_completion():
+    # The conquer tutorial completes on the kingdom screen's first-land finish
+    # card, so the kingdom screen surfaces the completion celebration itself
+    # instead of waiting for the player to return to the menu.
+    screen = _kingdom_overview_screen(seen=[
+        'kingdom_overview_window', 'kingdom_after_conquer_map'])
+    screen.state.user_dict['onboarding']['core_steps'] = [
+        {'id': 'finish_tutorial', 'completed': True, 'claimed': False,
+         'reward': {'booster_packs': 6, 'booster_packs_side': 2}},
+    ]
+    pending = screen._pending_tutorial_completion()
+    assert pending is not None and pending[0] == 'finish_tutorial'
+    assert 'Conquer Tutorial Complete' in pending[1]
+
+
+def test_tutorial_completion_available_on_any_menu_mixin_screen():
+    # The celebration logic lives on MenuScreenMixin, so the tutorial-coach
+    # screens that complete a tutorial can fire it after the last card.
+    from game.screens._menu_base import MenuScreenMixin
+    screen = object.__new__(MenuScreenMixin)
+    screen.state = SimpleNamespace(user_dict={'onboarding': {
+        'core_steps': [
+            {'id': 'finish_tutorial', 'completed': True, 'claimed': False,
+             'reward': {'booster_packs': 6, 'booster_packs_side': 2}},
+        ],
+        'menu_hints_seen': ['kingdom_after_conquer_map'],
+        'welcome_pending': False,
+        'onboarding_skipped': False,
+    }})
+    screen._tutorial_celebrated = set()
+    pending = screen._pending_tutorial_completion()
+    assert pending is not None and pending[0] == 'finish_tutorial'
+    # Items render with explanations.
+    items = MenuScreenMixin._reward_reveal_items(pending[3])
+    assert [it['kind'] for it in items] == ['main_booster', 'side_booster']
+
+
+def test_welcome_sequence_advances_through_stages_then_marks_seen():
+    from game.screens.game_menu_screen import GameMenuScreen
+    screen = object.__new__(GameMenuScreen)
+    screen.state = SimpleNamespace(user_dict={'onboarding': {'welcome_pending': True}})
+    screen._welcome_present_dialogue = None
+    screen._starter_reveal_dialogue = None
+    screen._welcome_stage = 0
+    marked = []
+    screen._mark_welcome_seen = lambda: marked.append(True)
+
+    class _FakeDlg:
+        def update(self, events):
+            return 'done'
+
+    # Three welcome stages: each dismiss advances; the last marks welcome seen.
+    for expected_stage in range(GameMenuScreen._WELCOME_STAGES):
+        screen._welcome_present_dialogue = _FakeDlg()
+        assert screen._handle_welcome_present_events([]) is True
+        assert screen._welcome_stage == expected_stage + 1
+    assert marked == [True]
+
+
+def test_welcome_intro_uses_supplied_conquer_image_without_extra_frame():
+    _ensure_pygame_display()
+    from config import settings
+    from game.components import tutorial_diagrams as td
+    from game.screens.game_menu_screen import GameMenuScreen
+    screen = object.__new__(GameMenuScreen)
+    screen.window = None
+
+    dialogue = screen._build_welcome_stage(0, 'Maya')
+
+    page = dialogue.pages[0]
+    image = page['image']()
+    default_image = td.conquer_start_image()
+    assert page['layout'] == 'image_top'
+    assert page['image_frame'] is False
+    assert image is td.conquer_start_image(int(0.26 * settings.SCREEN_HEIGHT))
+    assert image.get_height() > default_image.get_height()

@@ -39,7 +39,7 @@ Rect = Tuple[int, int, int, int]  # (x, y, w, h) in pixels (post-snap)
 # All values are fractions of the screen width (W) or height (H).
 
 # Outer canvas margins
-_MARGIN_X_PCT = 0.025
+_MARGIN_X_PCT = 0.018
 _MARGIN_BOTTOM_PCT = 0.0333
 
 # Header modes
@@ -57,7 +57,7 @@ _CONTENT_TO_LEDGER_GAP_H_PCT = 0.0167
 _LEDGER_H_PCT = 0.190 if _IS_MOBILE else 0.1685  # ledger band height (pre+battle modes)
 
 # Tactics rail (LEFT) — battlefield (RIGHT)
-_RAIL_X_PCT = 0.025
+_RAIL_X_PCT = 0.018
 _RAIL_W_PCT = 0.160 if _IS_MOBILE else 0.135
 _RAIL_TO_FIELD_GAP_W_PCT = 0.0125
 _FIELD_X_PCT = _RAIL_X_PCT + _RAIL_W_PCT + _RAIL_TO_FIELD_GAP_W_PCT
@@ -70,6 +70,11 @@ _FIELD_INNER_PAD_Y_PCT = 0.024
 # Battlefield columns + duel lane (fractions of the battlefield inner width)
 _FIELD_COL_W_FRAC = 0.115
 _FIELD_LANE_W_FRAC = 0.295
+
+# Far-right strip showing the opponent's hidden hand (face-down tactic cards),
+# carved from the battlefield interior's right edge. Fractions of screen width.
+_OPP_HAND_STRIP_W_PCT = 0.034
+_OPP_HAND_STRIP_GAP_PCT = 0.006
 
 # Tactics rail inner layout
 _RAIL_INNER_PAD_X_PCT = 0.00833
@@ -150,6 +155,7 @@ class BattlefieldLayout:
     inner_rect: Rect      # padded interior (where columns/lane render)
     columns: FieldColumns
     duel_lane: DuelLane
+    opp_hand_strip: Rect = (0, 0, 0, 0)  # far-right opponent hidden-hand strip
 
 
 @dataclass(frozen=True)
@@ -275,20 +281,29 @@ def _compute_battlefield(W: int, H: int,
 
     inner_x, inner_y, inner_w, inner_h = inner
 
-    col_w = int(round(_FIELD_COL_W_FRAC * inner_w))
-    lane_w = int(round(_FIELD_LANE_W_FRAC * inner_w))
+    # Reserve a thin strip on the far-right interior for the opponent's hidden
+    # hand (face-down tactic cards). The columns + duel lane share the rest, so
+    # nothing overlaps the strip. Capped so it can never starve the battlefield.
+    hand_w = int(round(_OPP_HAND_STRIP_W_PCT * W))
+    hand_gap = int(round(_OPP_HAND_STRIP_GAP_PCT * W))
+    hand_w = max(0, min(hand_w, int(inner_w * 0.12)))
+    reserved = (hand_w + hand_gap) if hand_w > 0 else 0
+    columns_w = max(1, inner_w - reserved)
+
+    col_w = int(round(_FIELD_COL_W_FRAC * columns_w))
+    lane_w = int(round(_FIELD_LANE_W_FRAC * columns_w))
     total = 2 * (3 * col_w) + lane_w
-    if total > inner_w and total > 0:
-        scale = inner_w / total
+    if total > columns_w and total > 0:
+        scale = columns_w / total
         col_w = max(1, int(col_w * scale))
         lane_w = max(1, int(lane_w * scale))
 
-    # Lane is centred between the two 3-column blocks, sharing inner_w.
-    # Layout: [c][v][m]  [lane]  [m][v][c]
+    # Lane is centred between the two 3-column blocks, sharing columns_w.
+    # Layout: [c][v][m]  [lane]  [m][v][c]  | [opp hand strip]
     block_w = 3 * col_w
     total = 2 * block_w + lane_w
-    # If inner_w is wider than total, distribute the slack evenly as gutters.
-    slack = max(0, inner_w - total)
+    # If columns_w is wider than total, distribute the slack evenly as gutters.
+    slack = max(0, columns_w - total)
     side_pad = slack // 2
     you_x0 = inner_x + side_pad
 
@@ -336,8 +351,15 @@ def _compute_battlefield(W: int, H: int,
         opp_support_chip_rail=opp_chip,
     )
 
+    if hand_w > 0:
+        opp_hand_strip = _r(inner_x + columns_w + hand_gap, inner_y,
+                            hand_w, inner_h)
+    else:
+        opp_hand_strip = _r(inner_x + inner_w, inner_y, 0, inner_h)
+
     return BattlefieldLayout(
-        rect=rect, inner_rect=inner, columns=columns, duel_lane=duel
+        rect=rect, inner_rect=inner, columns=columns, duel_lane=duel,
+        opp_hand_strip=opp_hand_strip,
     )
 
 

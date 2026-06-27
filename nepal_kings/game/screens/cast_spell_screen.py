@@ -148,6 +148,8 @@ class CastSpellScreen(SubScreen):
             raise
         
         if result.get('success'):
+            from utils import sound
+            sound.play('booster_reveal')
             # Check if waiting for opponent to respond (counterable spell)
             waiting_for_player_id = result.get('waiting_for_player_id')
             if waiting_for_player_id:

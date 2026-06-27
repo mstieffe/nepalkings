@@ -17,6 +17,9 @@ from game.core.input_state import get_pressed as _get_pressed
 from utils import onboarding_service
 
 
+_MENU_COACH_STEP_UNSET = object()
+
+
 # ═══════════════════════════════════════════════════════════════════
 #  _MenuIconButton
 # ═══════════════════════════════════════════════════════════════════
@@ -531,12 +534,18 @@ class MenuScreenMixin:
             return True
         if event.type == pygame.MOUSEBUTTONUP:
             if self._icon_guide.collide():
+                from utils import sound
+                sound.play('ui_click')
                 self._open_onboarding_guide()
                 return True
             if self._icon_settings.collide():
+                from utils import sound
+                sound.play('ui_click')
                 self.state.screen = 'settings'
                 return True
             if self._icon_home.collide():
+                from utils import sound
+                sound.play('ui_back')
                 self.state.screen = 'game_menu'
                 return True
             if self._icon_logout.collide():
@@ -663,6 +672,133 @@ class MenuScreenMixin:
         for key in ('gold', 'booster_packs', 'booster_packs_side', 'maps'):
             if key in balances:
                 self.state.user_dict[key] = balances[key]
+
+    # ── Tutorial completion celebrations (shared across menu-like screens) ──
+    # Shown on whatever tutorial-coach screen completes a tutorial (e.g. the
+    # kingdom-config screen for the conquer tutorial), not only on the menu.
+
+    @staticmethod
+    def _reward_reveal_items(reward):
+        """Turn a reward dict into reveal-dialogue items with explanations."""
+        reward = dict(reward or {})
+        items = []
+        gold = int(reward.get('gold') or 0)
+        if gold > 0:
+            items.append({'kind': 'gold', 'label': f'{gold} gold',
+                          'description': 'Spend it on booster packs, cosmetics, and shields.'})
+        main = int(reward.get('booster_packs') or 0)
+        if main > 0:
+            items.append({'kind': 'main_booster',
+                          'label': f"{main} main booster" + ('' if main == 1 else 's'),
+                          'description': 'Main cards build your core figures, spells, and tactics.'})
+        side = int(reward.get('booster_packs_side') or 0)
+        if side > 0:
+            items.append({'kind': 'side_booster',
+                          'label': f"{side} side booster" + ('' if side == 1 else 's'),
+                          'description': 'Side cards unlock advanced figures and effects.'})
+        maps = int(reward.get('maps') or 0)
+        if maps > 0:
+            items.append({'kind': 'map',
+                          'label': f"{maps} map" + ('' if maps == 1 else 's'),
+                          'description': 'Maps skip the cooldown after conquering a land.'})
+        return items
+
+    # Ordered: conquer tutorial completes first, the duel tutorial later.
+    _TUTORIAL_COMPLETIONS = (
+        ('finish_tutorial', 'Conquer Tutorial Complete!', [
+            "You've learned the kingdom loop: prepare cards, conquer a land, and bring it into your kingdom.",
+            "There's also an optional Duel tutorial — start it any time from the Duel menu, or keep expanding your kingdom.",
+        ]),
+        ('finish_first_duel', 'Duel Tutorial Complete!', [
+            "You've played a full duel: building figures, casting spells, and winning rounds.",
+            "Jump into Quick duels and kingdom conquests whenever you like.",
+        ]),
+    )
+
+    def _pending_tutorial_completion(self):
+        """Return ``(step_id, title, lines, reward)`` for a completed-but-
+        uncelebrated tutorial milestone, or ``None``."""
+        onboarding = self._onboarding()
+        if not onboarding or onboarding.get('welcome_pending'):
+            return None
+        if onboarding.get('onboarding_skipped'):
+            return None
+        celebrated = getattr(self, '_tutorial_celebrated', None)
+        if celebrated is None:
+            celebrated = self._tutorial_celebrated = set()
+        steps = {s.get('id'): s for s in (onboarding.get('core_steps') or [])}
+        for step_id, title, lines in self._TUTORIAL_COMPLETIONS:
+            payload = steps.get(step_id)
+            if not payload or not payload.get('completed') or payload.get('claimed'):
+                continue
+            if step_id in celebrated:
+                continue
+            if self._tutorial_completion_blocked(step_id):
+                continue
+            return step_id, title, lines, payload.get('reward')
+        return None
+
+    def _tutorial_completion_blocked(self, step_id):
+        if step_id == 'finish_tutorial':
+            return 'kingdom_after_conquer_map' not in self._menu_coach_seen()
+        return False
+
+    def _maybe_show_tutorial_completion(self):
+        if getattr(self, '_tutorial_complete_dialogue', None):
+            return
+        if getattr(self, '_welcome_present_dialogue', None):
+            return
+        if getattr(self, '_starter_reveal_dialogue', None):
+            return
+        if getattr(self, 'dialogue_box', None) or getattr(self, '_onboarding_guide_open', False):
+            return
+        pending = self._pending_tutorial_completion()
+        if not pending:
+            return
+        from game.components.rewards_reveal_dialogue import RewardsRevealDialogueBox
+        step_id, title, lines, reward = pending
+        if getattr(self, '_tutorial_celebrated', None) is None:
+            self._tutorial_celebrated = set()
+        self._tutorial_celebrated.add(step_id)
+        self._tutorial_complete_step_id = step_id
+        self._tutorial_complete_dialogue = RewardsRevealDialogueBox(
+            self.window,
+            title,
+            'victory',
+            lines,
+            self._reward_reveal_items(reward),
+            footer_when_done='Reward claimed. Well played!',
+            hint_text='Click each box to reveal your reward.',
+        )
+
+    def _draw_tutorial_complete_dialogue(self):
+        if getattr(self, '_tutorial_complete_dialogue', None):
+            self._tutorial_complete_dialogue.draw()
+
+    def _handle_tutorial_completion_events(self, events):
+        if not getattr(self, '_tutorial_complete_dialogue', None):
+            return False
+        if any(event.type == pygame.QUIT for event in events):
+            return False
+        response = self._tutorial_complete_dialogue.update(events)
+        if response:
+            step_id = getattr(self, '_tutorial_complete_step_id', None)
+            self._tutorial_complete_dialogue = None
+            self._tutorial_complete_step_id = None
+            if step_id:
+                try:
+                    data = onboarding_service.claim_reward(step_id)
+                    reward = (data or {}).get('reward') or {}
+                    if int(reward.get('gold') or 0) and hasattr(self, '_suppress_next_gold_floater'):
+                        self._suppress_next_gold_floater()
+                    self._apply_onboarding_payload(data)
+                    if getattr(self.state, 'set_msg', None) and data.get('reward_label'):
+                        self.state.set_msg(data['reward_label'])
+                except Exception:
+                    import logging
+                    logging.getLogger(__name__).exception(
+                        "Failed to claim tutorial completion reward")
+        return True
 
     def _merge_onboarding_state(self, incoming):
         if not isinstance(incoming, dict):
@@ -848,7 +984,7 @@ class MenuScreenMixin:
             right_limit = self._onboarding_guide_close_rect.left - 12
             self.window.blit(ready, (right_limit - ready.get_width(), rect.y + 24))
 
-        intro = 'Learn the main areas, take a beginner duel, then claim rewards as real milestones unlock.'
+        intro = 'Finish the conquer tutorial, then try the optional duel tutorial. Claim rewards as milestones unlock.'
         intro_surf = self._onboarding_guide_small_font.render(
             self._fit_text(intro, self._onboarding_guide_small_font, rect.w - 44),
             True,
@@ -943,8 +1079,8 @@ class MenuScreenMixin:
             'Where To Go', True, settings.SUB_SCREEN_HEADER_CLR)
         self.window.blit(header, (rect.x, rect.y))
         items = [
-            ('Duel', 'Play full duels against other players.'),
             ('Kingdom', 'Conquer lands and collect production.'),
+            ('Duel', 'Play full duels against other players.'),
             ('Collection', 'Open boosters, trade, and sell cards.'),
             ('Rankings', 'Compare progress with other players.'),
         ]
@@ -1177,6 +1313,10 @@ class MenuScreenMixin:
             return False
         if getattr(self, '_welcome_present_dialogue', None):
             return False
+        if getattr(self, '_starter_reveal_dialogue', None):
+            return False
+        if getattr(self, '_tutorial_complete_dialogue', None):
+            return False
         if getattr(self, 'dialogue_box', None):
             return False
         return True
@@ -1187,6 +1327,37 @@ class MenuScreenMixin:
 
     def _onboarding_completed_steps(self):
         return set((self._onboarding() or {}).get('completed_steps') or [])
+
+    def _first_session_journey_phase(self):
+        """Client mirror of onboarding_service._journey_metadata.
+
+        The mandatory tutorial is the kingdom core loop: open a starter booster
+        -> conquer the first land. Production, the kingdom-config tour, and
+        defence setup are deferred to on-demand coaching, and the duel is
+        optional, so no phase routes to those areas.
+        """
+        completed = self._onboarding_completed_steps()
+        if 'open_first_main_booster' not in completed:
+            return 'open_starter_pack'
+        if 'finish_first_conquer_battle' not in completed:
+            return 'first_conquest'
+        return 'complete'
+
+    def _first_session_next_action(self):
+        phase = self._first_session_journey_phase()
+        if phase == 'open_starter_pack':
+            return {
+                'screen': 'collection',
+                'label': 'Open a Booster Pack',
+                'target_id': 'collection_open_main_booster',
+            }
+        if phase == 'first_conquest':
+            return {
+                'screen': 'kingdom',
+                'label': 'Conquer First Land',
+                'target_id': 'recommended_tutorial_land',
+            }
+        return None
 
     def _mark_onboarding_step_completed_local(self, step_id):
         if not step_id:
@@ -1236,14 +1407,22 @@ class MenuScreenMixin:
             lines.append(current)
         return lines[:max_lines]
 
-    def _draw_menu_coach_button(self, rect, label, action):
+    def _draw_menu_coach_button(self, rect, label, action, muted=False):
         mx, my = pygame.mouse.get_pos()
         hovered = rect.collidepoint(mx, my)
-        bg = (96, 70, 34) if hovered else (58, 45, 28)
-        bdr = (235, 204, 105) if hovered else (150, 126, 74)
+        if muted:
+            # Secondary/ghost style so "Skip tutorial" reads clearly as the
+            # lesser action and isn't confused with the primary "Next".
+            bg = (40, 37, 32) if hovered else (30, 28, 24)
+            bdr = (110, 100, 84) if hovered else (78, 72, 60)
+            txt_clr = (170, 160, 142) if hovered else (132, 124, 108)
+        else:
+            bg = (96, 70, 34) if hovered else (58, 45, 28)
+            bdr = (235, 204, 105) if hovered else (150, 126, 74)
+            txt_clr = (245, 232, 190)
         pygame.draw.rect(self.window, bg, rect, border_radius=4)
         pygame.draw.rect(self.window, bdr, rect, 1, border_radius=4)
-        txt = self._menu_coach_font.render(label, True, (245, 232, 190))
+        txt = self._menu_coach_font.render(label, True, txt_clr)
         self.window.blit(txt, txt.get_rect(center=rect.center))
         self._menu_coach_buttons.append((rect.copy(), action))
 
@@ -1278,8 +1457,12 @@ class MenuScreenMixin:
         body_line_h = self._menu_coach_font.get_height() + 3
         button_h = max(30, self._menu_coach_font.get_height() + 10)
         draws_next = step.get('action', 'next') == 'next'
-        draws_skip = not (self._onboarding() or {}).get('onboarding_skipped')
-        button_space = button_h + 16 if (draws_next or draws_skip) else 8
+        draws_finish = bool(step.get('finish_tutorial_button'))
+        draws_skip = (
+            not draws_finish
+            and not (self._onboarding() or {}).get('onboarding_skipped')
+        )
+        button_space = button_h + 16 if (draws_next or draws_finish or draws_skip) else 8
         card_h = max(152, 22 + title_h + 10 + len(body_lines) * body_line_h + button_space)
         gap = 14
         if target.right + gap + card_w < _SW:
@@ -1308,12 +1491,21 @@ class MenuScreenMixin:
             next_rect = pygame.Rect(card.right - button_w - 14, card.bottom - button_h - 12,
                                     button_w, button_h)
             self._draw_menu_coach_button(next_rect, label, ('next', step['id']))
+        if draws_finish:
+            label = step.get('finish_button_label') or 'Finish tutorial'
+            button_w = max(132, self._menu_coach_font.size(label)[0] + 28)
+            finish_rect = pygame.Rect(card.right - button_w - 14,
+                                      card.bottom - button_h - 12,
+                                      button_w, button_h)
+            self._draw_menu_coach_button(
+                finish_rect, label, ('finish_tutorial', step['id']))
         if draws_skip:
             label = 'Skip tutorial'
-            button_w = max(112, self._menu_coach_font.size(label)[0] + 24)
+            button_w = max(96, self._menu_coach_font.size(label)[0] + 20)
             skip_rect = pygame.Rect(card.x + 14, card.bottom - button_h - 12,
                                     button_w, button_h)
-            self._draw_menu_coach_button(skip_rect, label, ('skip_tutorial', step['id']))
+            self._draw_menu_coach_button(skip_rect, label, ('skip_tutorial', step['id']),
+                                         muted=True)
 
     def _menu_coach_blocking_event_types(self):
         event_types = {
@@ -1328,8 +1520,9 @@ class MenuScreenMixin:
             event_types.add(text_input)
         return event_types
 
-    def _handle_menu_coach_events(self, events, step=None):
-        step = step or getattr(self, '_menu_coach_step', None)
+    def _handle_menu_coach_events(self, events, step=_MENU_COACH_STEP_UNSET):
+        if step is _MENU_COACH_STEP_UNSET:
+            step = getattr(self, '_menu_coach_step', None)
         if not step:
             return False
         action = step.get('action', 'next')
@@ -1362,9 +1555,17 @@ class MenuScreenMixin:
                     if pressed_action and pressed_action != button_action:
                         return True
                     kind, step_id = button_action
+                    from utils import sound
+                    sound.play('ui_back' if kind == 'skip_tutorial' else 'ui_click')
                     if kind == 'next':
                         self._mark_menu_coach_seen(step_id)
                         self._after_menu_coach_next(step_id)
+                    elif kind == 'finish_tutorial':
+                        handler = getattr(self, '_finish_menu_coach_tutorial', None)
+                        if callable(handler):
+                            handler(step_id)
+                        else:
+                            self._mark_menu_coach_seen(step_id)
                     elif kind == 'skip_tutorial':
                         self._pause_onboarding_tutorial()
                     return True
@@ -1379,7 +1580,12 @@ class MenuScreenMixin:
         return False
 
     def _after_menu_coach_next(self, step_id):
-        pass
+        step = getattr(self, '_menu_coach_step', None) or {}
+        if step.get('id') != step_id:
+            return
+        navigate_screen = step.get('navigate_screen')
+        if navigate_screen and getattr(self, 'state', None) is not None:
+            self.state.screen = navigate_screen
 
     def _current_onboarding_guide_coach_step(self):
         if not getattr(self, '_onboarding_guide_open', False):
@@ -1390,32 +1596,20 @@ class MenuScreenMixin:
         if onboarding.get('onboarding_skipped'):
             return None
         completed = set(onboarding.get('completed_steps') or [])
-        if 'finish_first_duel' in completed:
+        if 'finish_tutorial' in completed:
             return None
         seen = self._menu_coach_seen()
-        if 'guide_achievements' not in seen:
-            checklist = self._onboarding_guide_section_header_rects.get('checklist')
-            early_goals = self._onboarding_guide_section_header_rects.get('early_goals')
-            target_rects = [rect for rect in (checklist, early_goals) if rect]
-            guide_rect = self._onboarding_guide_rect().inflate(-18, -18)
-            return {
-                'id': 'guide_achievements',
-                'rect': guide_rect,
-                'rects': target_rects or [guide_rect],
-                'title': 'Achievements & Rewards',
-                'body': 'Checklist and Early Goals track achievements that teach the game step by step. Finish goals here to unlock small rewards as you learn.',
-                'max_lines': 5,
-            }
         if 'guide_first_duel_reward' not in seen:
-            row = self._onboarding_guide_item_rects.get('finish_first_duel')
+            row = (self._onboarding_guide_item_rects.get('finish_tutorial')
+                   or self._onboarding_guide_item_rects.get('collect_first_kingdom_production'))
             if row is None:
                 row = self._onboarding_guide_rect().inflate(-40, -140)
             return {
                 'id': 'guide_first_duel_reward',
+                'title': 'Rewards Track Your Progress',
                 'rect': row,
-                'title': 'Time For Your First Duel',
-                'body': 'Finish a duel against AI Strategos to claim this reward. Go back to the menu and start a Duel against the AI.',
-                'max_lines': 5,
+                'body': 'The checklist and goals grant rewards as you learn. Finish the kingdom tutorial to claim this one.',
+                'max_lines': 4,
             }
         return None
 

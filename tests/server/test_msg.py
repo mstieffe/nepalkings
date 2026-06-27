@@ -149,7 +149,10 @@ class TestChatMessages:
         assert ok_data.get('success') is True
         assert len(ok_data['chat_message']['message']) == 1000
 
-        get_resp = client.get(f'/msg/get_chat_messages?game_id={game.id}')
+        get_resp = client.get(
+            f'/msg/get_chat_messages?game_id={game.id}',
+            headers={'Authorization': f'Bearer {msg_token_p1}'},
+        )
         get_data = get_resp.get_json()
         assert get_data.get('success') is True
         assert len(get_data['chat_messages']) == 1
@@ -207,15 +210,21 @@ class TestLogEntries:
         system_data = system_resp.get_json()
         assert system_data.get('success') is True
 
-        get_resp = client.get(f'/msg/get_log_entries?game_id={game.id}')
+        get_resp = client.get(
+            f'/msg/get_log_entries?game_id={game.id}',
+            headers={'Authorization': f'Bearer {msg_token_p1}'},
+        )
         get_data = get_resp.get_json()
         assert get_data.get('success') is True
         assert len(get_data['log_entries']) == 2
         assert get_data['log_entries'][0]['turn_number'] == 1
         assert len(get_data['log_entries'][0]['message']) == 500
 
-    def test_get_log_entries_requires_game_id(self, client):
-        resp = client.get('/msg/get_log_entries')
+    def test_get_log_entries_requires_game_id(self, client, msg_token_p1):
+        resp = client.get(
+            '/msg/get_log_entries',
+            headers={'Authorization': f'Bearer {msg_token_p1}'},
+        )
         data = resp.get_json()
         assert resp.status_code == 400
         assert data.get('success') is False

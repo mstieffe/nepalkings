@@ -171,7 +171,10 @@ class TestOpenChallenges:
     def test_open_challenges_returns_all_for_user(self, client, db, two_users, auth_headers_user1):
         u1, u2 = two_users
         _make_challenge(client, auth_headers_user1, u1.username, u2.username)
-        resp = client.get(f'/challenges/open_challenges?username={u1.username}')
+        resp = client.get(
+            f'/challenges/open_challenges?username={u1.username}',
+            headers=auth_headers_user1,
+        )
         data = resp.get_json()
         assert len(data['challenges']) == 1
 
@@ -183,13 +186,16 @@ class TestOpenChallenges:
         c = Challenge.query.first()
         c.status = ChallengeStatus.ACCEPTED
         db.session.commit()
-        resp = client.get(f'/challenges/open_challenges?username={u1.username}')
+        resp = client.get(
+            f'/challenges/open_challenges?username={u1.username}',
+            headers=auth_headers_user1,
+        )
         data = resp.get_json()
         assert len(data['challenges']) == 0
 
-    def test_open_challenges_fails_unknown_user(self, client):
+    def test_open_challenges_requires_token(self, client):
         resp = client.get('/challenges/open_challenges?username=nobody')
-        assert resp.status_code == 400
+        assert resp.status_code == 401
         assert resp.get_json()['success'] is False
 
     def test_challenge_serialization(self, client, db, two_users, auth_headers_user1):

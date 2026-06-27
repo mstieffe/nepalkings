@@ -334,3 +334,34 @@ def test_enumerate_actions_invader_last_turn_no_figures_offers_auto_loss():
     assert 'cannot_advance_loss' in action_types
     assert 'change_cards' not in action_types
     assert 'cast_spell' not in action_types
+
+
+def test_select_defender_peasant_war_no_village_offers_defender_auto_loss():
+    game_dict = _base_game_dict(ai_id=41, opp_id=42)
+    game_dict['battle_modifier'] = [{'type': 'Peasant War'}]
+    game_dict['advancing_figure_id'] = 501
+    game_dict['advancing_player_id'] = 41
+    game_dict['turn_player_id'] = 41
+    game_dict['players'][0]['figures'] = [
+        {
+            'id': 501,
+            'name': 'AI Villager',
+            'field': 'village',
+            'color': 'red',
+            'cards_to_figure': [],
+        }
+    ]
+    game_dict['players'][1]['figures'] = [
+        {
+            'id': 601,
+            'name': 'Opponent Maharaja',
+            'field': 'castle',
+            'color': 'red',
+            'checkmate': True,
+            'cards_to_figure': [],
+        }
+    ]
+
+    actions = enumerate_actions(game_dict, 41, 'select_defender')
+
+    assert [a['type'] for a in actions] == ['defender_no_figures_loss']

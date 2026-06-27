@@ -118,6 +118,9 @@ class SettingsScreen(MenuScreenMixin, Screen):
         self._hovered_idx  = -1
         self._restart_btn_rect = None
 
+        # ── Toggle rows (notifications etc.) ────────────────────────
+        self._toggle_rects = {}
+
     # ── Rendering ───────────────────────────────────────────────────
 
     def render(self):
@@ -187,9 +190,14 @@ class SettingsScreen(MenuScreenMixin, Screen):
                 self.window.blit(dot, (tag_x - dot.get_width(),
                                        r.y + (r.h - dot.get_height()) // 2))
 
+        # ── Toggle rows ─────────────────────────────────────────────
+        toggles_y = (_RES_START_Y + len(self._choices) * (_RES_BTN_H + _RES_BTN_GAP)
+                     + int(0.025 * _SH))
+        toggles_y = self._draw_toggle_rows(toggles_y, mx, my)
+
         # ── Restart banner + button ─────────────────────────────────
         if self._restart_pending:
-            after_y = _RES_START_Y + len(self._choices) * (_RES_BTN_H + _RES_BTN_GAP) + int(0.02 * _SH)
+            after_y = toggles_y + int(0.015 * _SH)
 
             # Banner text
             banner_text = (f'Resolution changed to '
@@ -233,6 +241,100 @@ class SettingsScreen(MenuScreenMixin, Screen):
 
         self._draw_menu_overlay()
 
+    # ── Toggle rows ─────────────────────────────────────────────────
+
+    def _toggle_specs(self):
+        """Return the list of toggle rows to draw: (key, label, value, enabled, hint)."""
+        from utils import sound
+        ud = getattr(self.state, 'user_dict', None) or {}
+        has_email = bool(ud.get('has_email'))
+        notify_on = bool(ud.get('notify_emails_enabled', True))
+        if not ud:
+            email_hint = 'Log in to manage notification emails.'
+        elif not has_email:
+            email_hint = 'Add an email at registration to get turn notifications.'
+        else:
+            email_hint = "Emailed when it's your turn and you are offline."
+        return [
+            ('sound', 'Sound effects', sound.is_enabled(), True,
+             'Card, battle, and interface sounds.'),
+            ('notify_emails', 'Email notifications', notify_on,
+             bool(ud) and has_email, email_hint),
+        ]
+
+    def _draw_toggle_rows(self, y, mx, my):
+        """Draw all toggle rows starting at y; returns the y below them."""
+        self._toggle_rects = {}
+        sec_surf = self._section_font.render('Preferences', True, _SECTION_CLR)
+        self.window.blit(sec_surf, (_BOX_X + int(0.04 * _SW), y))
+        y += sec_surf.get_height() + int(0.008 * _SH)
+
+        row_x = _BOX_X + (_BOX_W - _RES_BTN_W) // 2
+        pill_w = int(0.055 * _SW)
+        for key, label, value, enabled, hint in self._toggle_specs():
+            row = pygame.Rect(row_x, y, _RES_BTN_W, _RES_BTN_H)
+            hover = enabled and row.collidepoint(mx, my)
+            bg = settings.LIST_BTN_BG_HOVER_CLR if hover else settings.LIST_BTN_BG_CLR
+            bdr = (settings.LIST_BTN_BORDER_HOVER_CLR if hover
+                   else settings.LIST_BTN_BORDER_CLR)
+            cr = settings.LIST_BTN_CORNER_RADIUS
+            surf = pygame.Surface((row.w, row.h), pygame.SRCALPHA)
+            pygame.draw.rect(surf, bg, surf.get_rect(), border_radius=cr)
+            self.window.blit(surf, row.topleft)
+            pygame.draw.rect(self.window, bdr, row, settings.LIST_BTN_BORDER_W,
+                             border_radius=cr)
+
+            txt_clr = (settings.LIST_BTN_TEXT_CLR if enabled else _HINT_CLR)
+            txt = self._btn_font.render(label, True, txt_clr)
+            self.window.blit(txt, (row.x + int(0.015 * _SW),
+                                   row.y + (row.h - txt.get_height()) // 2))
+
+            # On/Off pill on the right
+            pill = pygame.Rect(row.right - pill_w - int(0.012 * _SW),
+                               row.y + int(0.15 * row.h),
+                               pill_w, int(0.7 * row.h))
+            if not enabled:
+                pill_bg, pill_txt, pill_label = (60, 55, 45), _HINT_CLR, '—'
+            elif value:
+                pill_bg, pill_txt, pill_label = (40, 90, 50), _ACTIVE_CLR, 'On'
+            else:
+                pill_bg, pill_txt, pill_label = (80, 50, 40), (220, 150, 130), 'Off'
+            pygame.draw.rect(self.window, pill_bg, pill, border_radius=10)
+            ptxt = self._hint_font.render(pill_label, True, pill_txt)
+            self.window.blit(ptxt, (pill.x + (pill.w - ptxt.get_width()) // 2,
+                                    pill.y + (pill.h - ptxt.get_height()) // 2))
+            if enabled:
+                self._toggle_rects[key] = row
+            y += row.h + int(0.004 * _SH)
+
+            hint_surf = self._hint_font.render(hint, True, _HINT_CLR)
+            self.window.blit(hint_surf, (row.x + int(0.015 * _SW), y))
+            y += hint_surf.get_height() + int(0.008 * _SH)
+        return y
+
+    def _handle_toggle_click(self, pos):
+        for key, rect in self._toggle_rects.items():
+            if not rect.collidepoint(pos):
+                continue
+            if key == 'sound':
+                from utils import sound
+                sound.set_enabled(not sound.is_enabled())
+                if sound.is_enabled():
+                    sound.play('ui_click')
+            elif key == 'notify_emails':
+                ud = self.state.user_dict or {}
+                new_value = not bool(ud.get('notify_emails_enabled', True))
+                from utils import auth_service
+                result = auth_service.set_notifications(new_value)
+                if result is None:
+                    self.state.set_msg('Could not update notification settings')
+                else:
+                    ud['notify_emails_enabled'] = result
+                    self.state.set_msg(
+                        'Email notifications ' + ('enabled' if result else 'disabled'))
+            return True
+        return False
+
     # ── Update / Events ─────────────────────────────────────────────
 
     def update(self, events):
@@ -252,6 +354,9 @@ class SettingsScreen(MenuScreenMixin, Screen):
                 self.state.screen = 'game_menu'
                 return
             if event.type == MOUSEBUTTONUP and event.button == 1:
+                # Toggle rows (notifications etc.)
+                if self._handle_toggle_click(event.pos):
+                    continue
                 # "Restart Now" button
                 if (self._restart_pending
                         and self._restart_btn_rect

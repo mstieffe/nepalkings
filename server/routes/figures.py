@@ -5,8 +5,9 @@ from sqlalchemy.orm.attributes import flag_modified
 from models import db, Figure, CardToFigure, CardRole, Game, Player, MainCard, SideCard, LogEntry, User, ActiveSpell
 import logging
 import server_settings as settings
-from routes.auth import require_token, verify_player_ownership
+from routes.auth import get_game_membership, require_token, verify_player_ownership
 from routes.games import _guard_must_advance, _guard_pending_conquer_prelude_target
+from routes.serialization import serialize_figure_for_viewer, serialize_game_for_viewer, viewer_has_all_seeing_eye
 
 logger = logging.getLogger('nepalkings.routes.figures')
 
@@ -390,7 +391,7 @@ def create_figure():
         if instant_charge_result is not None:
             response_data['instant_charge'] = instant_charge_result
             # Include updated game state so client can update
-            response_data['game'] = game.serialize()
+            response_data['game'] = serialize_game_for_viewer(game, g.user_id)
 
         return jsonify(response_data)
 
@@ -514,17 +515,26 @@ def update_figure():
 
 
 @figures.route('/get_figure', methods=['GET'])
+@require_token
 def get_figure():
     try:
-        figure_id = request.args.get('figure_id')
+        figure_id = request.args.get('figure_id', type=int)
         if not figure_id:
             return jsonify({'success': False, 'message': 'Figure ID is required'}), 400
 
         figure = db.session.get(Figure, figure_id)
         if not figure:
             return jsonify({'success': False, 'message': 'Figure not found'}), 404
+        viewer, response, status = get_game_membership(figure.game_id)
+        if response is not None:
+            return response, status
+        game = db.session.get(Game, figure.game_id)
+        reveal = viewer_has_all_seeing_eye(game.serialize(), viewer.id)
 
-        return jsonify({'success': True, 'figure': figure.serialize()})
+        return jsonify({
+            'success': True,
+            'figure': serialize_figure_for_viewer(figure, viewer.id, reveal)
+        })
 
     except Exception as e:
         db.session.rollback()
@@ -533,17 +543,32 @@ def get_figure():
 
 
 @figures.route('/get_figures', methods=['GET'])
+@require_token
 def get_figures():
     try:
-        player_id = request.args.get('player_id')
+        player_id = request.args.get('player_id', type=int)
         if not player_id:
             return jsonify({'success': False, 'message': 'Player ID is required'}), 400
+        player = db.session.get(Player, player_id)
+        if not player:
+            return jsonify({'success': False, 'message': 'Player not found'}), 404
+        viewer, response, status = get_game_membership(player.game_id)
+        if response is not None:
+            return response, status
+        game = db.session.get(Game, player.game_id)
+        reveal = viewer_has_all_seeing_eye(game.serialize(), viewer.id)
 
         figures = Figure.query.filter_by(player_id=player_id).all()
         logger.debug(f"[GET_FIGURES] Retrieved {len(figures)} figures for player {player_id}")
         for fig in figures:
             logger.debug(f"[GET_FIGURES] Figure: id={fig.id}, name={fig.name}, family={fig.family_name}")
-        return jsonify({'success': True, 'figures': [figure.serialize() for figure in figures]})
+        return jsonify({
+            'success': True,
+            'figures': [
+                serialize_figure_for_viewer(figure, viewer.id, reveal)
+                for figure in figures
+            ]
+        })
 
     except Exception as e:
         db.session.rollback()

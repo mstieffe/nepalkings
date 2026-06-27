@@ -1692,6 +1692,8 @@ def _execute_action(app, game_id, ai_player_id, action):
             return _exec_end_infinite_hammer(base, game_id, ai_player_id)
         elif action_type == 'cannot_advance_loss':
             return _exec_cannot_advance_loss(base, game_id, ai_player_id)
+        elif action_type == 'defender_no_figures_loss':
+            return _exec_defender_no_figures_loss(base, game_id, ai_player_id)
         else:
             logger.error(f"Unknown action type: {action_type}")
             return False
@@ -2267,4 +2269,18 @@ def _exec_cannot_advance_loss(base, game_id, ai_player_id):
         logger.info("Cannot advance — auto-loss triggered")
         return True
     logger.warning(f"Cannot advance loss failed: {result.get('message')}")
+    return False
+
+
+def _exec_defender_no_figures_loss(base, game_id, ai_player_id):
+    """Trigger defender auto-loss when no legal defender can be selected."""
+    resp = _ai_post(f'{base}/games/defender_no_figures_loss', ai_player_id, json={
+        'game_id': game_id,
+        'player_id': ai_player_id,
+    }, timeout=15)
+    result = resp.json()
+    if result.get('success'):
+        logger.info("Defender has no legal figures — auto-loss triggered")
+        return True
+    logger.warning(f"Defender no-figures loss failed: {result.get('message')}")
     return False

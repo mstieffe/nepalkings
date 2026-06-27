@@ -94,6 +94,23 @@ def test_tactics_rail_is_left_of_battlefield(size, mode):
 
 
 @pytest.mark.parametrize('size', _STANDARD_SIZES)
+def test_desktop_layout_uses_tighter_outer_margins_and_hand_strip(size):
+    layout = compute_conquer_layout(size[0], size[1], mode='battle')
+    if layout.narrow:
+        pytest.skip("narrow layout stacks; desktop margins do not apply")
+
+    rail = layout.tactics_rail.rect
+    ledger = layout.round_ledger.rect
+    hand = layout.battlefield.opp_hand_strip
+
+    assert rail[0] <= int(size[0] * 0.02)
+    assert ledger[0] <= int(size[0] * 0.02)
+    assert size[0] - _x_end(layout.battlefield.rect) <= int(size[0] * 0.02) + 1
+    assert size[0] - _x_end(ledger) <= int(size[0] * 0.02) + 1
+    assert hand[2] <= int(size[0] * 0.037)
+
+
+@pytest.mark.parametrize('size', _STANDARD_SIZES)
 def test_field_columns_mirror_around_duel_lane(size):
     layout = compute_conquer_layout(size[0], size[1], mode='battle')
     cols = layout.battlefield.columns

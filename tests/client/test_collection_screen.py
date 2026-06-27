@@ -146,6 +146,44 @@ class TestCollectionStats:
         assert stats['available_total'] == 3
 
 
+def test_collection_basics_window_splits_rarity_and_recipe_pages():
+    import pygame
+    from game.components import tutorial_diagrams as td
+    from game.screens.collection_screen import CollectionScreen
+
+    if not pygame.display.get_init():
+        pygame.display.init()
+    if pygame.display.get_surface() is None:
+        pygame.display.set_mode((1, 1))
+
+    screen = object.__new__(CollectionScreen)
+    screen.window = None
+    screen._collection_basics_dialogue = None
+    screen._menu_coach_allowed_common = lambda: True
+    screen._onboarding_completed_steps = lambda: set()
+    screen._menu_coach_seen = lambda: set()
+    screen._booster_poller = None
+    screen._reveal_overlay = None
+    screen._sell_dialogue = None
+    screen._trade_dialogue = None
+    screen._profile_dialogue = None
+    screen.dialogue_box = None
+
+    screen._maybe_show_collection_basics()
+
+    dialogue = screen._collection_basics_dialogue
+    assert dialogue is not None
+    assert len(dialogue.pages) == 2
+    first, second = dialogue.pages
+    assert first['title'] == 'Key And Number Cards'
+    assert first['image']() is td.card_rarity_code_diagram()
+    assert 'card rarity' in ' '.join(first['lines'])
+    assert second['title'] == 'Cards Become Actions'
+    assert second['image']() is td.card_recipe_examples()
+    assert 'single card' in ' '.join(second['lines'])
+    assert 'card recipe' in ' '.join(second['lines'])
+
+
 class TestCollectionSettings:
     """Verify collection settings are importable and reasonable."""
 
@@ -339,6 +377,28 @@ class TestBoosterRevealLayout:
         encoded_backs = [pygame.image.tobytes(img, 'RGBA') for img in overlay._back_imgs]
         assert len(set(encoded_backs)) == 1
 
+    def test_hidden_cards_use_their_tier_glow(self):
+        import pygame
+        from config import settings
+        from game.components.booster_reveal import BoosterRevealOverlay
+
+        window = pygame.display.get_surface() or pygame.display.set_mode(
+            (settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+        overlay = BoosterRevealOverlay(window, [
+            {'suit': 'Hearts', 'rank': '7', 'value': 7, 'tier': 1},
+            {'suit': 'Clubs', 'rank': 'J', 'value': 1, 'tier': 2},
+            {'suit': 'Spades', 'rank': 'A', 'value': 3, 'tier': 3},
+        ])
+
+        calls = []
+        overlay._draw_tier_glow = lambda _slot, tier, pulse=False: calls.append(
+            (tier, pulse))
+
+        for i, slot in enumerate(overlay._slots):
+            overlay._draw_hidden_card(i, slot, hovered=(i == 1))
+
+        assert calls == [(1, False), (2, True), (3, False)]
+
     def test_reveal_close_button_does_not_overlap_card_labels(self):
         import pygame
         from config import settings
@@ -360,6 +420,73 @@ class TestBoosterRevealLayout:
         )
         assert overlay._close_rect.top > label_band.bottom
 
+    def test_bulk_reveal_keeps_all_cards_and_paginates(self):
+        import pygame
+        from config import settings
+        from game.components.booster_reveal import BoosterRevealOverlay
+
+        window = pygame.display.get_surface() or pygame.display.set_mode(
+            (settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+        cards = [
+            {'suit': 'Hearts', 'rank': '7', 'value': 7, 'tier': 1}
+            for _ in range(15)
+        ]
+        overlay = BoosterRevealOverlay(window, cards)
+
+        assert len(overlay._cards) == 15
+        assert overlay._page_count >= 2
+        assert len(list(overlay._visible_indices())) <= overlay._page_size
+        overlay.draw()  # must not raise
+
+    def test_bulk_reveal_all_button_animates_every_card(self, monkeypatch):
+        import pygame
+        from config import settings
+        from game.components.booster_reveal import BoosterRevealOverlay
+
+        window = pygame.display.get_surface() or pygame.display.set_mode(
+            (settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+        cards = [
+            {'suit': 'Hearts', 'rank': '7', 'value': 7, 'tier': 1}
+            for _ in range(9)
+        ]
+        overlay = BoosterRevealOverlay(window, cards)
+        monkeypatch.setattr(pygame.time, 'get_ticks', lambda: 1000)
+
+        assert overlay.all_revealed is False
+        assert overlay.handle_click(overlay._reveal_all_rect.center) is False
+        assert overlay.all_revealed is False
+        assert set(overlay._states) == {'revealing'}
+        starts = list(overlay._reveal_started_at)
+        assert starts[0] == 1000
+        assert starts[-1] > starts[0]
+
+        monkeypatch.setattr(
+            pygame.time,
+            'get_ticks',
+            lambda: starts[-1] + settings.COLLECTION_REVEAL_FLIP_MS + 1,
+        )
+        overlay.update()
+        assert overlay.all_revealed is True
+
+    def test_special_card_celebration_tracks_uncommon_and_rare(self, monkeypatch):
+        import pygame
+        from config import settings
+        from game.components.booster_reveal import BoosterRevealOverlay
+
+        window = pygame.display.get_surface() or pygame.display.set_mode(
+            (settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+        overlay = BoosterRevealOverlay(window, [
+            {'suit': 'Hearts', 'rank': '7', 'value': 7, 'tier': 1},
+            {'suit': 'Clubs', 'rank': 'J', 'value': 1, 'tier': 2},
+            {'suit': 'Spades', 'rank': 'K', 'value': 10, 'tier': 3},
+        ])
+        overlay._reveal_started_at = [1000, 1000, 1000]
+        monkeypatch.setattr(pygame.time, 'get_ticks', lambda: 1100)
+
+        assert overlay._celebration_progress(0) is None
+        assert overlay._celebration_progress(1) is not None
+        assert overlay._celebration_progress(2) is not None
+
 
 class TestCollectionService:
     """Verify collection_service module structure."""
@@ -372,6 +499,48 @@ class TestCollectionService:
         assert hasattr(collection_service, 'buy_booster_side')
         assert hasattr(collection_service, 'open_booster')
         assert hasattr(collection_service, 'open_booster_side')
+
+
+def test_open_booster_confirmation_offers_open_all_for_multiple_packs():
+    import pygame
+    from game.screens.collection_screen import CollectionScreen
+
+    window = pygame.display.get_surface() or pygame.display.set_mode((1, 1))
+    screen = object.__new__(CollectionScreen)
+    screen.window = window
+    screen._pending_booster_type = 'main'
+    screen._boosters = 4
+    screen._boosters_side = 1
+    screen._booster_icon_dialog = pygame.Surface((24, 24), pygame.SRCALPHA)
+    screen._booster_side_icon_dialog = pygame.Surface((24, 24), pygame.SRCALPHA)
+
+    screen._confirm_open_booster('main')
+
+    assert screen.dialogue_box.actions == ['Open', 'Open all', 'cancel']
+
+
+def test_open_all_status_starts_bulk_booster_request():
+    from types import SimpleNamespace
+    from game.screens.collection_screen import CollectionScreen
+
+    screen = object.__new__(CollectionScreen)
+    screen.state = SimpleNamespace(
+        screen='collection',
+        action={'task': None, 'content': None, 'status': 'open all'},
+        set_msg=lambda _msg: None,
+    )
+    screen.control_buttons = []
+    screen.dialogue_box = None
+    screen._pending_booster_type = 'main'
+    screen._boosters = 5
+    screen._boosters_side = 2
+    calls = []
+    screen._start_booster_request = lambda action, pack_type, quantity=1: calls.append(
+        (action, pack_type, quantity))
+
+    CollectionScreen.handle_events(screen, [])
+
+    assert calls == [('open', 'main', 5)]
 
 
 class TestCollectionCoach:
@@ -394,20 +563,74 @@ class TestCollectionCoach:
         screen._sell_dialogue = None
         screen._trade_dialogue = None
         screen._profile_dialogue = None
+        screen._panel_rect = pygame.Rect(20, 120, 280, 160)
         screen._btn_open_main_rect = pygame.Rect(10, 20, 80, 32)
         screen._btn_open_side_rect = pygame.Rect(10, 70, 80, 32)
         screen._icon_home = SimpleNamespace(rect=pygame.Rect(200, 20, 40, 40))
         return screen
 
-    def test_coach_requires_main_then_side_then_home(self):
-        screen = self._screen(completed=['finish_first_duel'])
-        assert screen._current_collection_coach_step()['id'] == 'collection_open_main_booster'
+    def test_coach_routes_open_pack_then_kingdom_then_loop(self):
+        screen = self._screen()
+        step = screen._current_collection_coach_step()
+        assert step['id'] == 'collection_starter_cards'
+        assert step['action'] == 'next'
+        assert step['button_label'] == 'Got it'
+        # The full card->figure lesson lives in the collection-basics window;
+        # this card is a brief in-collection reinforcement.
+        assert 'combine into figures' in step['body']
 
+        # Collection-first journey: open a starter pack BEFORE the first
+        # conquest.
+        screen.state.user_dict['onboarding']['menu_hints_seen'].append('collection_starter_cards')
+        step = screen._current_collection_coach_step()
+        assert step['id'] == 'collection_open_main_booster'
+
+        # Once a pack is opened, the player is sent to the Kingdom to conquer.
         screen.state.user_dict['onboarding']['completed_steps'].append('open_first_main_booster')
-        assert screen._current_collection_coach_step()['id'] == 'collection_open_side_booster'
+        step = screen._current_collection_coach_step()
+        assert step['id'] == 'post_boosters_kingdom'
+        assert step['button_label'] == 'Go to Kingdom'
+        assert step['navigate_screen'] == 'kingdom'
 
-        screen.state.user_dict['onboarding']['completed_steps'].append('open_first_side_booster')
-        assert screen._current_collection_coach_step()['id'] == 'collection_return_home'
+        # After the first conquest the collection screen no longer nudges back
+        # and forth (the reward-pack round-trip is gone); the kingdom and menu
+        # coaches steer the player to collect production, so collection coaching
+        # goes quiet here.
+        screen.state.user_dict['onboarding']['completed_steps'].append(
+            'finish_first_conquer_battle')
+        assert screen._current_collection_coach_step() is None
+
+        # After the tutorial completes the collection screen has no further
+        # coaching (the side-booster nudge was removed).
+        screen.state.user_dict['onboarding']['completed_steps'].extend([
+            'collect_first_kingdom_production', 'finish_tutorial'])
+        assert screen._current_collection_coach_step() is None
+
+    def test_coach_never_routes_to_duel_during_tutorial(self):
+        # Reward pack opened, tutorial unfinished: the collection coach must
+        # never navigate to the duel. With the round-trip removed it simply goes
+        # quiet here (the kingdom/menu coaches steer back to production).
+        screen = self._screen(
+            completed=['finish_first_conquer_battle', 'open_first_main_booster'],
+            seen=['collection_starter_cards'])
+        step = screen._current_collection_coach_step()
+        assert step is None or step.get('navigate_screen') != 'duel_menu'
+
+    def test_coach_opens_main_reward_pack_after_conquest_if_intro_seen(self):
+        screen = self._screen(completed=[
+            'finish_first_conquer_battle',
+        ])
+        screen.state.user_dict['onboarding']['next_action'] = {
+            'screen': 'collection',
+            'label': 'Open Reward Pack',
+            'target_id': 'collection_open_main_booster',
+        }
+        screen.state.user_dict['onboarding']['menu_hints_seen'].append(
+            'collection_starter_cards')
+
+        step = screen._current_collection_coach_step()
+
+        assert step['id'] == 'collection_open_main_booster'
 
     def test_open_booster_result_marks_local_onboarding_step(self, monkeypatch):
         from game.screens.collection_screen import CollectionScreen

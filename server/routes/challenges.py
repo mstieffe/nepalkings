@@ -4,7 +4,8 @@ from flask import Blueprint, request, jsonify, current_app, g
 from models import db, User, Challenge, ChallengeStatus
 import logging
 import server_settings as settings
-from routes.auth import require_token, verify_player_ownership
+from analytics import track
+from routes.auth import require_token
 
 challenges = Blueprint('challenges', __name__)
 
@@ -83,11 +84,20 @@ def create_challenge():
         )
 
         db.session.add(challenge)
+        track('challenge_created', user_id=challenger_user.id,
+              vs_ai=bool(opponent_user.is_ai), stake=stake, game_limit=game_limit)
         db.session.commit()
 
         # Auto-accept if the opponent is an AI player (with a short delay)
         if opponent_user.is_ai:
             _schedule_ai_accept(challenge.id, current_app._get_current_object())
+        else:
+            # Tell offline human opponents they have been challenged
+            try:
+                from notification_service import notify_challenge_received
+                notify_challenge_received(challenge)
+            except Exception:
+                logger.exception('challenge notification failed')
 
     except Exception as e:
         db.session.rollback()
@@ -145,10 +155,10 @@ def _schedule_ai_accept(challenge_id, app):
     threading.Thread(target=_do_accept, daemon=True).start()
 
 @challenges.route('/open_challenges', methods=['GET'])
+@require_token
 def open_challenges():
     try:
-        username = request.args.get('username')
-        user = User.query.filter_by(username=username).first()
+        user = db.session.get(User, g.user_id)
         if not user:
             return jsonify({'success': False, 'error': 'User not found'}), 400
 

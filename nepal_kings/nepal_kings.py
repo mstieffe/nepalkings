@@ -203,6 +203,11 @@ class Client:
                                   status='played', played_round=0),
                 self._perf_tactic(202, 2, 'Dagger', 'Spades', 'K', 4,
                                   status='available'),
+                # Opponent's hidden hand (face-down on the right strip).
+                self._perf_tactic(203, 2, 'Block', 'Clubs', 'Q', 2,
+                                  status='available'),
+                self._perf_tactic(204, 2, 'Dagger', 'Spades', '9', 9,
+                                  status='available'),
             ],
             cached_active_spells=[],
             cached_figures_data={1: [], 2: []},

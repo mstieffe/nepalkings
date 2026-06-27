@@ -462,6 +462,9 @@ class Hand:
                         pass  # Battle-move cards are not selectable
                     else:
                         clicked_slot.clicked = not clicked_slot.clicked
+                        from utils import sound
+                        sound.play('card_slide' if clicked_slot.clicked else 'card_place',
+                                   volume=0.8)
                         # Update discard dialogue when selection changes
                         if self.discard_mode:
                             self.update_discard_dialogue()

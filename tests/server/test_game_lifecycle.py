@@ -225,7 +225,7 @@ class TestGameOver:
 
 
 class TestGameResultsRoute:
-    def test_game_results_returns_finished_game_stats(self, client, db, created_game):
+    def test_game_results_returns_finished_game_stats(self, client, db, created_game, auth_headers_user1):
         from models import Game, User
         from routes.games import _check_game_over
 
@@ -239,46 +239,63 @@ class TestGameResultsRoute:
         db.session.commit()
 
         winner_user = db.session.get(User, winner_player.user_id)
-        resp = client.get(f'/games/game_results?username={winner_user.username}')
+        resp = client.get(
+            f'/games/game_results?username={winner_user.username}',
+            headers=auth_headers_user1,
+        )
         data = resp.get_json()
 
         assert data.get('success') is True, data
         assert data.get('wins', 0) >= 1
         assert any(r.get('game_id') == game.id for r in data.get('results', []))
 
-    def test_game_results_returns_404_for_unknown_user(self, client):
-        resp = client.get('/games/game_results?username=unknown_player')
+    def test_game_results_rejects_other_user_lookup(self, client, auth_headers_user1):
+        resp = client.get(
+            '/games/game_results?username=unknown_player',
+            headers=auth_headers_user1,
+        )
         data = resp.get_json()
 
-        assert resp.status_code == 404
+        assert resp.status_code == 403
         assert data.get('success') is False
 
 
 class TestGameRouteCoverage:
-    def test_get_games_lists_games_for_username(self, client, created_game, two_users):
+    def test_get_games_lists_games_for_username(self, client, created_game, two_users, auth_headers_user1):
         u1, _ = two_users
 
-        resp = client.get(f'/games/get_games?username={u1.username}')
+        resp = client.get(
+            f'/games/get_games?username={u1.username}',
+            headers=auth_headers_user1,
+        )
         data = resp.get_json()
 
         assert resp.status_code == 200
         assert any(g.get('id') == created_game['id'] for g in data.get('games', []))
 
-    def test_get_game_returns_serialized_game(self, client, created_game):
-        resp = client.get(f"/games/get_game?game_id={created_game['id']}")
+    def test_get_game_returns_serialized_game(self, client, created_game, auth_headers_user1):
+        resp = client.get(
+            f"/games/get_game?game_id={created_game['id']}",
+            headers=auth_headers_user1,
+        )
         data = resp.get_json()
 
         assert resp.status_code == 200
         assert data.get('game', {}).get('id') == created_game['id']
 
-    def test_get_hand_returns_players_main_and_side_cards(self, client, db, created_game, two_users):
+    def test_get_hand_returns_players_main_and_side_cards(
+        self, client, db, created_game, two_users, auth_headers_user1
+    ):
         from models import Player
 
         u1, _ = two_users
         player = Player.query.filter_by(game_id=created_game['id'], user_id=u1.id).first()
         assert player is not None
 
-        resp = client.get(f'/games/get_hand?player_id={player.id}')
+        resp = client.get(
+            f'/games/get_hand?player_id={player.id}',
+            headers=auth_headers_user1,
+        )
         data = resp.get_json()
 
         assert resp.status_code == 200
@@ -478,7 +495,7 @@ class TestGameRouteCoverage:
         two_users,
         auth_headers_user1,
     ):
-        from models import Figure, Game, Player
+        from models import Figure, Game, LogEntry, Player
 
         u1, u2 = two_users
         game = db.session.get(Game, created_game['id'])
@@ -508,6 +525,12 @@ class TestGameRouteCoverage:
         assert resp.status_code == 200
         assert data.get('success') is True, data
         assert data.get('game', {}).get('defending_figure_id') == defender_figure.id
+        log = LogEntry.query.filter_by(
+            game_id=game.id,
+            player_id=p1.id,
+            type='select_defender',
+        ).one()
+        assert defender_figure.name in log.message
 
     def test_select_defender_requires_must_be_attacked_without_blitzkrieg(
         self,
@@ -854,7 +877,7 @@ class TestGameRouteCoverage:
         two_users,
         auth_headers_user1,
     ):
-        from models import Game, Player
+        from models import Figure, Game, Player
 
         u1, u2 = two_users
         game = db.session.get(Game, created_game['id'])
@@ -866,7 +889,15 @@ class TestGameRouteCoverage:
 
         game.turn_player_id = p1.id
         game.advancing_player_id = p1.id
+        game.advancing_figure_id = Figure.query.filter_by(
+            game_id=game.id,
+            player_id=p1.id,
+        ).first().id
         game.stake = 99
+        for fig in Figure.query.filter_by(game_id=game.id, player_id=p2.id).all():
+            fig.family_name = 'Wall'
+            fig.name = 'Wall'
+            fig.field = 'military'
         points_before = p1.points
         db.session.commit()
 
@@ -881,3 +912,37 @@ class TestGameRouteCoverage:
         assert data.get('success') is True, data
         db.session.refresh(p1)
         assert p1.points == points_before + 10
+
+    def test_defender_no_figures_loss_rejects_selectable_defender(
+        self,
+        client,
+        db,
+        created_game,
+        two_users,
+        auth_headers_user1,
+    ):
+        from models import Figure, Game, Player
+
+        u1, _u2 = two_users
+        game = db.session.get(Game, created_game['id'])
+        p1 = Player.query.filter_by(game_id=game.id, user_id=u1.id).first()
+        assert game is not None
+        assert p1 is not None
+
+        game.turn_player_id = p1.id
+        game.advancing_player_id = p1.id
+        game.advancing_figure_id = Figure.query.filter_by(
+            game_id=game.id,
+            player_id=p1.id,
+        ).first().id
+        db.session.commit()
+
+        resp = client.post(
+            '/games/defender_no_figures_loss',
+            json={'game_id': game.id, 'player_id': p1.id},
+            headers=auth_headers_user1,
+        )
+        data = resp.get_json()
+
+        assert resp.status_code == 400
+        assert data.get('reason') == 'selectable_defender_exists'
