@@ -483,9 +483,47 @@ if __name__ == '__main__':
 
         from nepal_kings import Client
 
+        def _web_show_crash(exc):
+            """Paint a traceback on the canvas so a web crash is visible
+            instead of a dead black screen (pygbag has no crash.log)."""
+            import traceback as _tb
+            text = ''.join(_tb.format_exception(type(exc), exc, exc.__traceback__))
+            print('--- nepal_kings web crash ---')
+            print(text)
+            # Make sure the branded HTML loader is gone so the error shows.
+            try:
+                import embed as _embed
+                _embed.js("var l=document.getElementById('nk-loader');"
+                          "if(l)l.style.display='none';")
+            except Exception:
+                pass
+            try:
+                surf = pygame.display.get_surface()
+                if surf is None:
+                    surf = pygame.display.set_mode((960, 600))
+                surf.fill((24, 16, 16))
+                font = pygame.font.SysFont('monospace', 16)
+                title = pygame.font.SysFont('Arial', 26, bold=True).render(
+                    'Nepal Kings hit an error', True, (255, 120, 120))
+                surf.blit(title, (24, 20))
+                y = 64
+                for line in text.replace('\t', '    ').splitlines():
+                    surf.blit(font.render(line[:160], True, (235, 210, 210)), (24, y))
+                    y += 19
+                pygame.display.flip()
+            except Exception:
+                pass
+
         async def _web_main():
-            client = Client()
-            await client.run()
+            try:
+                client = Client()
+                await client.run()
+            except Exception as exc:        # noqa: BLE001 — last-resort UI
+                _web_show_crash(exc)
+                # Keep the page responsive so the error stays on screen.
+                while True:
+                    pygame.event.pump()
+                    await asyncio.sleep(0.2)
 
         asyncio.run(_web_main())
     else:
