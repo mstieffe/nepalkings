@@ -66,6 +66,23 @@ def _mk_user_dict():
 
 
 class TestGameBattleStateTransitions:
+    def test_lightweight_game_seeds_figures_from_player_payload(self):
+        from game.core.game import Game
+
+        data = _mk_game_dict()
+        data['players'][0]['figures'] = [
+            {'id': 501, 'name': 'Gorkha Soldier', 'cards': []},
+        ]
+        data['players'][1]['figures'] = [
+            {'id': 601, 'name': 'Hidden Defender', 'cards': []},
+        ]
+
+        game = Game(data, _mk_user_dict(), lightweight=True)
+
+        assert game.cached_figures_data[113][0]['id'] == 501
+        assert game.cached_figures_data[114][0]['id'] == 601
+        assert game._figures_data_version == 1
+
     def test_apply_server_data_does_not_bump_figure_version_for_equal_payload(self):
         from game.core.game import Game
 

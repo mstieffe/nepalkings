@@ -2313,7 +2313,7 @@ class ConquerScreen(MenuScreenMixin, Screen):
             if not game_dict:
                 self._error = 'Failed to load battle'
                 return
-            self.state.game = Game(game_dict, self.state.user_dict)
+            self.state.game = Game(game_dict, self.state.user_dict, lightweight=True)
             self.state.screen = gameplay_screen_for(self.state.game)
             logger.info(f'Battle started: game_id={game_id}')
 

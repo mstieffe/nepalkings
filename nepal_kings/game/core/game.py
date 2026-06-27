@@ -78,6 +78,12 @@ class Game:
                 self.opponent_player = player_dict
                 self.opponent_online = player_dict.get('is_online', False)
 
+        for player_dict in self.players:
+            if 'figures' in player_dict:
+                self.cached_figures_data[player_dict['id']] = player_dict.get('figures') or []
+        if self.cached_figures_data:
+            self._figures_data_version += 1
+
         # Whether it is this player's turn
         # Initialize to False so first update() can detect if it's their turn
         self.turn = False

@@ -528,10 +528,17 @@ class TestConquerConfirmData:
                             raising=False)
         monkeypatch.setattr(module.requests, 'start_async_get', _fake_start_get,
                             raising=False)
+
+        created = {}
+
+        def _fake_game(game_dict, user_dict, lightweight=False):
+            created['lightweight'] = lightweight
+            return SimpleNamespace(
+                game_id=game_dict['game_id'], mode=game_dict['mode'])
+
         monkeypatch.setattr(
             module, 'Game',
-            lambda game_dict, user_dict: SimpleNamespace(
-                game_id=game_dict['game_id'], mode=game_dict['mode']))
+            _fake_game)
 
         screen._drain_start_battle_web()
 
@@ -548,6 +555,7 @@ class TestConquerConfirmData:
         screen._drain_start_battle_web()
 
         assert state.game.game_id == 84
+        assert created['lightweight'] is True
         assert state.screen == 'conquer_game'
         assert screen._loading is False
 
