@@ -827,6 +827,56 @@ def test_kingdom_map_uses_async_get_poller_on_web_path(monkeypatch):
     assert created['polled'] is True
 
 
+def test_kingdom_map_fetch_uses_long_read_timeout(monkeypatch):
+    from game.screens import kingdom_screen as module
+
+    captured = {}
+
+    class _Response:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {'lands': []}
+
+    def _fake_get(url, timeout=None):
+        captured['url'] = url
+        captured['timeout'] = timeout
+        return _Response()
+
+    monkeypatch.setattr(module.requests, 'get', _fake_get)
+
+    result = module.KingdomScreen._fetch_map_data()
+
+    assert result['status_code'] == 200
+    assert captured['url'].endswith('/kingdom/map')
+    assert captured['timeout'] == (
+        module._MAP_CONNECT_TIMEOUT_SECONDS,
+        module._MAP_READ_TIMEOUT_SECONDS,
+    )
+
+
+def test_kingdom_map_failure_schedules_retry_backoff(monkeypatch):
+    from game.screens import kingdom_screen as module
+
+    monkeypatch.setattr(module.pygame.time, 'get_ticks', lambda: 5000)
+
+    screen = module.KingdomScreen.__new__(module.KingdomScreen)
+    screen._loading = True
+    screen._map_retry_delay_ms = module._MAP_RETRY_INITIAL_MS
+    screen._next_map_retry_at_ms = 0
+
+    module.KingdomScreen._apply_map_response(
+        screen,
+        {'data': None, 'status_code': 0, 'error': 'Read timed out'},
+    )
+
+    assert screen._loading is False
+    assert screen._error == 'Connection error'
+    assert screen._next_map_retry_at_ms == 5000 + module._MAP_RETRY_INITIAL_MS
+    assert screen._map_retry_delay_ms == module._MAP_RETRY_INITIAL_MS * 2
+
+
 def test_kingdom_activity_uses_parallel_async_requests(monkeypatch):
     from game.screens import kingdom_screen as module
 

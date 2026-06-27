@@ -24,6 +24,10 @@ import logging
 logger = logging.getLogger('nk.screens.kingdom')
 
 _SW, _SH = settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT
+_MAP_RETRY_INITIAL_MS = 10_000
+_MAP_RETRY_MAX_MS = 60_000
+_MAP_CONNECT_TIMEOUT_SECONDS = 10
+_MAP_READ_TIMEOUT_SECONDS = 75
 
 # ── Overall box ─────────────────────────────────────────────────────
 _BOX_PAD    = int(0.020 * _SH)
@@ -113,6 +117,8 @@ class KingdomScreen(MenuScreenMixin, Screen):
         self._loading_started_at_ms = 0
         self._loading_message = 'Loading kingdom map...'
         self._error = None
+        self._map_retry_delay_ms = _MAP_RETRY_INITIAL_MS
+        self._next_map_retry_at_ms = 0
 
         # ── Attack notifications ────────────────────────────────────
         self._notifications = []      # unseen attack notifications
@@ -265,7 +271,10 @@ class KingdomScreen(MenuScreenMixin, Screen):
         ``requests``.
         """
         try:
-            resp = requests.get(f'{settings.SERVER_URL}/kingdom/map', timeout=15)
+            resp = requests.get(
+                f'{settings.SERVER_URL}/kingdom/map',
+                timeout=(_MAP_CONNECT_TIMEOUT_SECONDS, _MAP_READ_TIMEOUT_SECONDS),
+            )
             if resp.status_code != 200:
                 return {'data': None, 'status_code': resp.status_code,
                         'error': 'Failed to load kingdom map'}
@@ -309,6 +318,18 @@ class KingdomScreen(MenuScreenMixin, Screen):
         self._error = None
         self._map_poller.poll()
 
+    def _schedule_map_retry(self):
+        delay = max(
+            _MAP_RETRY_INITIAL_MS,
+            int(getattr(self, '_map_retry_delay_ms', _MAP_RETRY_INITIAL_MS) or 0),
+        )
+        self._next_map_retry_at_ms = pygame.time.get_ticks() + delay
+        self._map_retry_delay_ms = min(delay * 2, _MAP_RETRY_MAX_MS)
+
+    def _clear_map_retry(self):
+        self._map_retry_delay_ms = _MAP_RETRY_INITIAL_MS
+        self._next_map_retry_at_ms = 0
+
     def _drain_map_poller(self):
         """Apply a finished map fetch, if any."""
         poller = self._map_poller
@@ -324,7 +345,9 @@ class KingdomScreen(MenuScreenMixin, Screen):
             self._error = err if err == 'Failed to load kingdom map' else 'Connection error'
             logger.error(f'Kingdom map load failed: {err}')
             self._loading = False
+            self._schedule_map_retry()
             return
+        self._clear_map_retry()
         data = result['data']
         self._map_data = data
         self._cooldown = data.get('conquer_cooldown_remaining', 0)
@@ -1807,7 +1830,13 @@ class KingdomScreen(MenuScreenMixin, Screen):
 
         # Auto-load map on first frame (or re-enter)
         now = pygame.time.get_ticks()
-        if self._hex_map is None and not self._loading and (now - self._last_load_tick > 2000):
+        next_retry_at = getattr(self, '_next_map_retry_at_ms', 0)
+        retry_due = (
+            not next_retry_at
+            or now >= next_retry_at
+        )
+        if (self._hex_map is None and not self._loading and retry_due
+                and (now - self._last_load_tick > 2000)):
             self._last_load_tick = now
             self._load_map()
 

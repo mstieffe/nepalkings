@@ -1255,14 +1255,13 @@ def get_kingdom_map():
     from kingdom_service import (compute_owned_land_components,
                                  describe_kingdom_bonuses, effective_gold_rate_for_lands,
                                  kingdom_shield_block_reason, kingdom_skill_bonuses,
-                                 reconcile_all_kingdoms, serialize_kingdom_config,
+                                 serialize_kingdom_config,
                                  summarize_user_kingdom)
 
     user = db.session.get(User, g.user_id)
     if not user:
         return jsonify({'error': 'User not found'}), 404
 
-    reconcile_all_kingdoms(commit=True)
     now = _utcnow()
     lands = Land.query.order_by(Land.row, Land.col).all()
     kingdom_ids = {land.kingdom_id for land in lands if land.kingdom_id}

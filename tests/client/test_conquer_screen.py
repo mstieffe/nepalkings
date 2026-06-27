@@ -449,6 +449,108 @@ class TestConquerConfirmData:
         mock_confirm.assert_called_once_with(use_map=True)
         mock_start.assert_not_called()
 
+    def test_web_start_battle_uses_async_handoff(self, monkeypatch):
+        from game.screens import conquer_screen as module
+
+        state = _make_state()
+        state.user_dict = {'maps': 2}
+        screen = module.ConquerScreen(state)
+        screen._land_id = 1942
+        screen._cooldown_remaining = 0
+        screen._cooldown_synced_at_ms = 1000
+        monkeypatch.setattr(module._sys, 'platform', 'emscripten')
+        monkeypatch.setattr(module.pygame.time, 'get_ticks', lambda: 1000)
+
+        posted = {}
+
+        def _fake_start_post_json(url, payload):
+            posted['url'] = url
+            posted['payload'] = payload
+            return 7
+
+        def _unexpected_sync_post(*_args, **_kwargs):
+            raise AssertionError('web start battle must not use sync POST')
+
+        monkeypatch.setattr(
+            module.requests, 'start_async_post_json', _fake_start_post_json,
+            raising=False)
+        monkeypatch.setattr(module.requests, 'post', _unexpected_sync_post)
+
+        screen._start_battle(use_map=True)
+
+        assert posted['url'].endswith('/kingdom/conquer/start_battle')
+        assert posted['payload'] == {'land_id': 1942, 'use_map': True}
+        assert screen._start_battle_rid == 7
+        assert screen._loading is True
+        assert screen._loading_message == 'Starting conquer battle...'
+
+    def test_web_start_battle_fetches_game_before_transition(self, monkeypatch):
+        from game.screens import conquer_screen as module
+
+        state = _make_state()
+        state.user_dict = {'maps': 2}
+        screen = module.ConquerScreen(state)
+        screen._land_id = 1942
+        screen._start_battle_rid = 7
+        screen._loading = True
+        monkeypatch.setattr(module._sys, 'platform', 'emscripten')
+
+        class _Response:
+            def __init__(self, status_code, data):
+                self.status_code = status_code
+                self._data = data
+                self.text = ''
+
+            def json(self):
+                return self._data
+
+        def _fake_check_async(rid):
+            if rid == 7:
+                return _Response(200, {
+                    'game_id': 84,
+                    'map_consumed': True,
+                    'maps': 1,
+                })
+            if rid == 8:
+                return _Response(200, {
+                    'game': {'game_id': 84, 'mode': 'conquer'},
+                })
+            raise AssertionError(f'unexpected async rid {rid}')
+
+        fetched = {}
+
+        def _fake_start_get(url, params):
+            fetched['url'] = url
+            fetched['params'] = params
+            return 8
+
+        monkeypatch.setattr(module.requests, 'check_async', _fake_check_async,
+                            raising=False)
+        monkeypatch.setattr(module.requests, 'start_async_get', _fake_start_get,
+                            raising=False)
+        monkeypatch.setattr(
+            module, 'Game',
+            lambda game_dict, user_dict: SimpleNamespace(
+                game_id=game_dict['game_id'], mode=game_dict['mode']))
+
+        screen._drain_start_battle_web()
+
+        assert state.game_id == 84
+        assert state.user_dict['maps'] == 1
+        assert screen._maps_available == 1
+        assert fetched == {
+            'url': module.settings.SERVER_URL + '/games/get_game',
+            'params': {'game_id': 84},
+        }
+        assert screen._start_battle_fetch_game_rid == 8
+        assert screen._loading_message == 'Loading conquer battle...'
+
+        screen._drain_start_battle_web()
+
+        assert state.game.game_id == 84
+        assert state.screen == 'conquer_game'
+        assert screen._loading is False
+
 
 class TestConquerScreenLayout:
 

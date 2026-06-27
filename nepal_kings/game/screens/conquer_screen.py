@@ -45,6 +45,7 @@ from utils import http_compat as requests
 from utils.background_poller import BackgroundPoller
 from utils import collection_service
 import logging
+import sys as _sys
 
 logger = logging.getLogger('nk.screens.conquer')
 
@@ -225,6 +226,9 @@ class ConquerScreen(MenuScreenMixin, Screen):
         self._pending_battle_confirm = False
         self._pending_battle_confirm_use_map = False
         self._pending_map_confirm = False
+        self._start_battle_rid = None
+        self._start_battle_fetch_game_rid = None
+        self._start_battle_fetch_game_id = None
         self._pending_leave_confirm = False
         self._pending_prelude_spell = None   # spell name pending confirmation
         self._pending_prelude_clear = False  # pending clear confirmation
@@ -2174,6 +2178,9 @@ class ConquerScreen(MenuScreenMixin, Screen):
 
     def _start_battle(self, use_map=False):
         """Call start_battle endpoint and transition to the game screen."""
+        if _sys.platform == 'emscripten':
+            self._start_battle_web(use_map=use_map)
+            return
         try:
             if not use_map:
                 remaining = self._current_cooldown_remaining()
@@ -2230,11 +2237,133 @@ class ConquerScreen(MenuScreenMixin, Screen):
             self._error = 'Connection error'
             logger.error(f'Start battle error: {e}')
 
+    def _start_battle_web(self, use_map=False):
+        """Web-only non-blocking start_battle flow."""
+        if self._start_battle_rid or self._start_battle_fetch_game_rid:
+            return
+        if not use_map:
+            remaining = self._current_cooldown_remaining()
+            if remaining > 0:
+                self._show_cooldown_dialogue(remaining)
+                return
+        try:
+            payload = {'land_id': self._land_id}
+            if use_map:
+                payload['use_map'] = True
+            self._loading = True
+            self._loading_started_at_ms = pygame.time.get_ticks()
+            self._loading_message = 'Starting conquer battle...'
+            self._error = None
+            self._start_battle_rid = requests.start_async_post_json(
+                f'{settings.SERVER_URL}/kingdom/conquer/start_battle',
+                payload,
+            )
+        except Exception as e:
+            self._loading = False
+            self._error = 'Connection error'
+            logger.error(f'Start battle async error: {e}')
+
+    def _drain_start_battle_web(self):
+        if _sys.platform != 'emscripten':
+            return
+        if self._start_battle_rid:
+            try:
+                resp = requests.check_async(self._start_battle_rid)
+            except Exception as e:
+                self._start_battle_rid = None
+                self._loading = False
+                self._error = 'Connection error'
+                logger.error(f'Start battle async check error: {e}')
+                return
+            if resp is None:
+                return
+            self._start_battle_rid = None
+            if resp.status_code != 200:
+                self._loading = False
+                err = self._response_json(resp)
+                self._error = err.get('message') or err.get('error') or 'Failed to start battle'
+                logger.warning(f'Start battle failed: {self._error}')
+                return
+            data = self._response_json(resp)
+            self._handle_start_battle_response(data)
+            return
+
+        if self._start_battle_fetch_game_rid:
+            try:
+                resp = requests.check_async(self._start_battle_fetch_game_rid)
+            except Exception as e:
+                self._start_battle_fetch_game_rid = None
+                self._start_battle_fetch_game_id = None
+                self._loading = False
+                self._error = 'Connection error'
+                logger.error(f'Fetch game async check error: {e}')
+                return
+            if resp is None:
+                return
+            game_id = self._start_battle_fetch_game_id
+            self._start_battle_fetch_game_rid = None
+            self._start_battle_fetch_game_id = None
+            self._loading = False
+            if resp.status_code != 200:
+                err = self._response_json(resp)
+                self._error = err.get('message') or err.get('error') or 'Failed to load battle'
+                logger.warning(f'Fetch game after battle start failed: {self._error}')
+                return
+            game_dict = (self._response_json(resp) or {}).get('game')
+            if not game_dict:
+                self._error = 'Failed to load battle'
+                return
+            self.state.game = Game(game_dict, self.state.user_dict)
+            self.state.screen = gameplay_screen_for(self.state.game)
+            logger.info(f'Battle started: game_id={game_id}')
+
+    def _handle_start_battle_response(self, data):
+        if data.get('game_id'):
+            game_id = data['game_id']
+            self.state.game_id = game_id
+            if data.get('map_consumed') and self.state.user_dict is not None:
+                self.state.user_dict['maps'] = int(data.get('maps', 0))
+                self._maps_available = int(data.get('maps', 0))
+            if _sys.platform == 'emscripten':
+                try:
+                    self._loading_message = 'Loading conquer battle...'
+                    self._start_battle_fetch_game_id = game_id
+                    self._start_battle_fetch_game_rid = requests.start_async_get(
+                        f'{settings.SERVER_URL}/games/get_game',
+                        {'game_id': game_id},
+                    )
+                except Exception as e:
+                    self._loading = False
+                    self._error = 'Connection error'
+                    logger.error(f'Fetch game async start error: {e}')
+            return
+        if data.get('code') == 'cooldown':
+            self._loading = False
+            self._set_cooldown_state(data)
+            self._show_cooldown_dialogue(data.get('cooldown_remaining') or 0)
+            return
+        if data.get('code') == 'no_cooldown':
+            self._loading = False
+            self._set_cooldown_state(data)
+            self._start_battle(use_map=False)
+            return
+        if data.get('code') == 'no_maps':
+            self._set_cooldown_state(data)
+        self._loading = False
+        self._error = (
+            data.get('message')
+            or data.get('error')
+            or 'Failed to start battle'
+        )
+        logger.warning(f'Start battle failed: {self._error}')
+
     # ── Update / events ─────────────────────────────────────────────
 
     def update(self, events):
         super().update()
         self._update_icon_buttons()
+
+        self._drain_start_battle_web()
 
         # If subscreen is active, delegate
         if self._active_subscreen and self._subscreen_obj:

@@ -2,6 +2,7 @@
 /artifacts/
 /build/
 /dist/
+/release/
 nepal_kings/build/
 nepal_kings/dist/
 *.app
