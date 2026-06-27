@@ -377,12 +377,19 @@ function show_infobox() {
         //   python boot    : 90% .. 99%  (via window.nk_set_progress)
         //   ready          : -> 100% then fade out
         var shown = 0, target = 0;   // 0..1
-        var done = false;            // fully ready -> fill to 100% and fade
-        var canvasUp = false;        // pygame owns the screen
+        var pyReady = false;         // Python boot finished (nk_loader_done)
+        var canvasUp = false;        // pygame canvas has a real size on screen
+        var done = false;            // both true -> fill to 100% and fade
         var DL_CAP = 0.90;           // download phase ceiling
         var BOOT_CAP = 0.99;         // python-boot ceiling before "done"
 
-        function cap(){ return done ? 1 : (canvasUp ? BOOT_CAP : DL_CAP); }
+        function cap(){ return done ? 1 : ((pyReady || canvasUp) ? BOOT_CAP : DL_CAP); }
+
+        // Only hand off once the canvas is actually sized on screen —
+        // otherwise the fade reveals a black 1px canvas, because pygbag
+        // resizes the canvas only after main() is already running. pyReady
+        // just lets the bar fill smoothly to ~99% before that happens.
+        function maybeFinish(){ if (canvasUp) done = true; }
 
         function label(p){
             if (done || p > 0.965) return 'Starting game\u2026';
@@ -393,8 +400,6 @@ function show_infobox() {
 
         // Raise the real target; never let it move backwards.
         function bump(p){ if (p > target) target = Math.min(p, cap()); }
-
-        function finish(){ done = true; }
 
         function tick(){
             var c = cap();
@@ -439,17 +444,17 @@ function show_infobox() {
             frac = Math.max(0, Math.min(1, +frac || 0));
             bump(DL_CAP + (BOOT_CAP - DL_CAP) * frac);
         };
-        window.nk_loader_done = finish;
+        window.nk_loader_done = function(){ pyReady = true; maybeFinish(); };
 
-        // Readiness: canvas gets a real size once pygame takes the screen.
-        // Keep the branded loader up through the Python boot phase; a
-        // fallback timer guarantees it fades even if nk_loader_done() is
-        // never called (e.g. an older cached build).
+        // Readiness: the canvas only gets a real (>1px) size once pygame
+        // actually paints to it, so this is the reliable hand-off signal —
+        // the branded loader stays up through download + Python boot and
+        // fades only when there's real game content underneath it.
         if (canvas){
             new MutationObserver(function(){
                 if (parseInt(canvas.width) > 1 && parseInt(canvas.height) > 1){
                     canvasUp = true;
-                    setTimeout(finish, 6000);
+                    maybeFinish();
                 }
             }).observe(canvas, {attributes: true, attributeFilter: ['width','height']});
         }
