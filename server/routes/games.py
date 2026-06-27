@@ -7334,11 +7334,18 @@ def _resolve_conquer_battle(game, winner, requesting_player):
     """
     import random as _random
 
+    viewer_user_id = getattr(requesting_player, 'user_id', None)
+    if viewer_user_id is None:
+        try:
+            viewer_user_id = getattr(g, 'user_id', None)
+        except RuntimeError:
+            viewer_user_id = None
+
     # Idempotency: if a previous call already ran the consumption / loot /
     # log side-effects, just rebuild the response from persisted state.
     saved_check = game.last_battle_result if isinstance(game.last_battle_result, dict) else {}
     if saved_check.get('conquer_resolved'):
-        cached = _serialize_finished_conquer_result(game)
+        cached = _serialize_finished_conquer_result(game, viewer_user_id=viewer_user_id)
         if cached is not None:
             return cached
 
@@ -7758,7 +7765,11 @@ def _resolve_conquer_battle(game, winner, requesting_player):
         'victory_review_available': victory_review_available,
         'victory_review_config_id': victory_review_config_id if victory_review_available else None,
         'victory_review_land_id': game.land_id if victory_review_available else None,
-        'game': serialize_game_for_viewer(game, g.user_id),
+        'game': (
+            serialize_game_for_viewer(game, viewer_user_id)
+            if viewer_user_id is not None
+            else game.serialize()
+        ),
     }
 
 
