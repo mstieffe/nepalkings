@@ -81,6 +81,27 @@ class TestOptimizeTree:
         with Image.open(img / 'figures' / 'military' / 'army.png') as im:
             assert im.mode == 'P'  # palette PNG
 
+    def test_keeps_runtime_greyscale_asset_dirs(self, tmp_path):
+        img = tmp_path / 'img'
+        runtime_assets = [
+            img / 'figures' / 'icons_greyscale' / 'castle_black.png',
+            img / 'figures' / 'icons_small_greyscale' / 'castle_black.png',
+            img / 'figures' / 'frames_greyscale' / 'castle.png',
+            img / 'figures' / 'frames_hidden_greyscale' / 'castle.png',
+            img / 'battle' / 'icons_greyscale' / 'dagger.png',
+            img / 'spells' / 'icons_greyscale' / 'eye.png',
+        ]
+        for path in runtime_assets:
+            _write_png(path, (512, 512), opaque=False)
+
+        stats = owp.optimize_tree(str(img), quantize=True)
+
+        assert stats['removed_dirs'] == 0
+        for path in runtime_assets:
+            assert path.exists()
+            with Image.open(path) as im:
+                assert max(im.size) <= 384
+
     def test_no_quantize_keeps_rgba(self, tmp_path):
         img = tmp_path / 'img'
         _write_png(img / 'figures' / 'military' / 'army.png', (512, 512), opaque=True)
