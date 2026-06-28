@@ -99,3 +99,31 @@ def test_dialogue_ignores_mouse_wheel_release_for_actions(monkeypatch):
 
     assert box.update([wheel_release]) is None
     assert box.update([left_release]) == 'sell'
+
+
+def test_dialogue_actions_use_release_position_when_mouse_pos_is_stale(monkeypatch):
+    from config import settings
+    from game.components.dialogue_box import DialogueBox
+    import pygame
+
+    pygame.display.set_mode((1, 1))
+    window = pygame.Surface((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+
+    box = DialogueBox(
+        window,
+        'Start conquer battle?',
+        actions=['Confirm', 'Cancel'],
+        title='To Battle!',
+    )
+
+    # Mobile web touch releases can carry the correct event position while the
+    # global pygame mouse position still points elsewhere.
+    monkeypatch.setattr(pygame.mouse, 'get_pos', lambda: (0, 0))
+    box._created_at = pygame.time.get_ticks() - 500
+
+    release = pygame.event.Event(
+        pygame.MOUSEBUTTONUP,
+        {'button': 1, 'pos': box.buttons[0].rect.center},
+    )
+
+    assert box.update([release]) == 'confirm'

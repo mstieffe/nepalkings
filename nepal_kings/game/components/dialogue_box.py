@@ -46,8 +46,18 @@ class _DlgButton:
         self.active = False
         self.disabled = False
 
-    def collide(self):
-        return self.rect.collidepoint(pygame.mouse.get_pos())
+    def hit_rect(self):
+        if getattr(settings, 'TOUCH_TARGET_MIN', 0) <= 0:
+            return self.rect
+        min_w = max(self.rect.w, getattr(settings, 'TOUCH_COMPACT_MIN', 0) or 0)
+        min_h = max(self.rect.h, getattr(settings, 'TOUCH_TARGET_MIN', 0) or 0)
+        hit = self.rect.inflate(max(0, min_w - self.rect.w),
+                                max(0, min_h - self.rect.h))
+        hit.clamp_ip(pygame.Rect(0, 0, settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+        return hit
+
+    def collide(self, pos=None):
+        return self.hit_rect().collidepoint(pos or pygame.mouse.get_pos())
 
     def update(self):
         if self.disabled:
@@ -694,7 +704,7 @@ class DialogueBox:
         for event in events:
             if event.type == pygame.MOUSEBUTTONUP and getattr(event, 'button', 0) == 1:
                 for button in self.buttons:
-                    if button.collide():
+                    if button.collide(getattr(event, 'pos', None)):
                         from utils import sound
                         sound.play('ui_click')
                         return button.text.lower()
