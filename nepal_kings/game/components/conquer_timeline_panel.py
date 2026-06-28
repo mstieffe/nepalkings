@@ -1198,7 +1198,7 @@ class ConquerTimelinePanel:
     def _draw_compact_info_box(self, screen, rect, step, border):
         """Short mobile timeline rows use a side-by-side text/action layout."""
         button_rects = self._draw_active_buttons(
-            screen, rect, step, align_right=True)
+            screen, rect, step, align_right=True, draw_interactive_hint=False)
         text_right = rect.right - _INFO_PAD
         if button_rects:
             text_right = min(r.left for r in button_rects) - 10
@@ -1714,7 +1714,8 @@ class ConquerTimelinePanel:
             return btn_w
         return 0
 
-    def _draw_active_buttons(self, screen, rect, step, *, align_right=False):
+    def _draw_active_buttons(self, screen, rect, step, *, align_right=False,
+                             draw_interactive_hint=True):
         pending = getattr(screen, '_conquer_pending_confirmation', None)
         btn_h = self._active_button_height()
         btn_w = max(96, int(rect.width * 0.30))
@@ -1736,12 +1737,17 @@ class ConquerTimelinePanel:
             return [confirm_rect, cancel_rect]
 
         if step.interactive:
-            # Selection-based interaction (target on field) — no buttons,
-            # just a hint.
-            hint = self.info_body_font.render(
-                'Use the field to select.',
-                True, (200, 195, 175))
-            self.window.blit(hint, (x_left, btn_y + 4))
+            # Selection-based interaction (target on field) — no buttons, just a
+            # hint pinned to the bottom-left of the (wide) info box. The compact
+            # mobile layout has no bottom strip and its body already instructs
+            # the player to select on the field, so it opts out via
+            # ``draw_interactive_hint=False`` to avoid an overlapping, clipped
+            # hint crammed against the headline.
+            if draw_interactive_hint:
+                hint = self.info_body_font.render(
+                    'Use the field to select.',
+                    True, (200, 195, 175))
+                self.window.blit(hint, (rect.left + _INFO_PAD, btn_y + 4))
             return []
 
         # Next skips the countdown of a held sequence beat. It only does

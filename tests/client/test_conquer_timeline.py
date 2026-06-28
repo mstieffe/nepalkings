@@ -1868,3 +1868,87 @@ def test_fit_timeline_bubbles_keeps_all_when_they_fit():
     assert bubble_w <= _BUBBLE_MAX_W
     span = len(kept) * bubble_w + _BUBBLE_GAP * (len(kept) - 1)
     assert span <= timeline_w
+
+
+class _RenderSpyFont:
+    """Wrap a pygame Font, recording every text passed to ``render``.
+
+    pygame's C Font.render is read-only and can't be monkeypatched, so tests
+    swap in this delegating wrapper to observe which strings get drawn.
+    """
+
+    def __init__(self, font, sink):
+        self._font = font
+        self._sink = sink
+
+    def render(self, text, *args, **kwargs):
+        self._sink.append(text)
+        return self._font.render(text, *args, **kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self._font, name)
+
+
+def _field_select_step():
+    from game.screens.conquer_flow import TimelineStep
+    return TimelineStep(
+        kind='attacker',
+        title='Attacking Figure',
+        owner='you',
+        active=True,
+        interactive=True,
+        primary_action='select_advance',
+        info_headline='Choose your attacker',
+        info_body='Select one of your legal figures on the field to advance.',
+        tone='action',
+    )
+
+
+def _info_box_screen():
+    return SimpleNamespace(
+        _conquer_pending_confirmation=None,
+        _conquer_objective_action_rects={},
+        _conquer_timeline_info_text_rect=None,
+        _conquer_timeline_info_rect=None,
+        _conquer_timeline_step_started_at={},
+    )
+
+
+def test_compact_info_box_suppresses_misplaced_field_select_hint():
+    """The compact mobile info box must not render the 'Use the field to
+    select.' hint: it has no bottom button strip, so the hint used to be
+    right-aligned and overlapped/clipped against the headline. The body
+    already instructs the player to select on the field.
+    """
+    from game.components.conquer_timeline_panel import ConquerTimelinePanel
+
+    panel = ConquerTimelinePanel(pygame.Surface((900, 180)))
+    rect = pygame.Rect(20, 20, 320, 70)  # short row -> compact layout
+    screen = _info_box_screen()
+    step = _field_select_step()
+
+    rendered = []
+    panel.info_body_font = _RenderSpyFont(panel.info_body_font, rendered)
+    assert panel._use_compact_info_layout(rect)
+    panel._draw_compact_info_box(screen, rect, step, border=(255, 211, 116))
+
+    assert 'Use the field to select.' not in rendered
+    # No phantom button rect leaks into the action rects for a selection step.
+    assert 'next' not in screen._conquer_objective_action_rects
+
+
+def test_full_info_box_keeps_field_select_hint():
+    """The wide (desktop) info box still shows the field-select hint."""
+    from game.components.conquer_timeline_panel import ConquerTimelinePanel
+
+    panel = ConquerTimelinePanel(pygame.Surface((1200, 400)))
+    rect = pygame.Rect(40, 40, 500, 150)  # tall + wide -> full layout
+    screen = _info_box_screen()
+    step = _field_select_step()
+
+    rendered = []
+    panel.info_body_font = _RenderSpyFont(panel.info_body_font, rendered)
+    assert not panel._use_compact_info_layout(rect)
+    panel._draw_info_box(screen, rect, step, active_idx=0, steps=[step])
+
+    assert 'Use the field to select.' in rendered

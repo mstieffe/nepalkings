@@ -161,6 +161,10 @@ class TutorialWindowDialogue:
         self._drag_last_y = 0
         self._drag_moved = False
 
+        # Cache the fitted page image per page so the (supersampled) diagram is
+        # composed and scaled once, not every frame.
+        self._scaled_image_cache = {}
+
     # ── helpers ──────────────────────────────────────────────────────
     @staticmethod
     def _wrap(text, font, max_w):
@@ -170,7 +174,10 @@ class TutorialWindowDialogue:
         img = page.get('image')
         if callable(img):
             try:
-                img = img()
+                # Diagram factories compose from screen-relative metrics, so
+                # render them supersampled for crisper art on large canvases.
+                from game.components import tutorial_diagrams
+                img = tutorial_diagrams.render_supersampled(img)
             except Exception:
                 img = None
         return img if isinstance(img, pygame.Surface) else None
@@ -213,9 +220,17 @@ class TutorialWindowDialogue:
         return None
 
     def _scaled_image(self, page):
-        """Page image scaled to a generous, layout-aware box (or None)."""
+        """Page image scaled to a generous, layout-aware box (or None).
+
+        Cached per page (keyed by ``page_index``); ``_page_rows`` only ever asks
+        for the current page, so this avoids recomposing/rescaling each frame.
+        """
+        cache_key = self.page_index
+        if cache_key in self._scaled_image_cache:
+            return self._scaled_image_cache[cache_key]
         img = self._page_image(page)
         if img is None:
+            self._scaled_image_cache[cache_key] = None
             return None
         _SW = settings.SCREEN_WIDTH
         _SH = settings.SCREEN_HEIGHT
@@ -228,6 +243,7 @@ class TutorialWindowDialogue:
             img = pygame.transform.smoothscale(
                 img, (max(1, int(img.get_width() * ratio)),
                       max(1, int(img.get_height() * ratio))))
+        self._scaled_image_cache[cache_key] = img
         return img
 
     def _page_rows(self, page):

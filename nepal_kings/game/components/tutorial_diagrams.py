@@ -7,6 +7,7 @@ slot icons) and cached. Asset loads are guarded so a missing file degrades to a
 smaller/partial diagram rather than crashing the onboarding.
 """
 
+import contextlib
 import math
 import os
 
@@ -15,6 +16,54 @@ import pygame
 from config import settings
 
 _CACHE = {}
+
+# Supersample diagrams on large (desktop) canvases: compose at a higher internal
+# resolution and downscale once, so the raster art (cards, figure frames) keeps
+# its detail instead of looking soft. Small mobile canvases are already sharp and
+# skip this to avoid the extra memory/CPU.
+DIAGRAM_SUPERSAMPLE = 1 if getattr(settings, 'TOUCH_TARGET_MIN', 0) > 0 else 2
+
+
+@contextlib.contextmanager
+def _supersampled_metrics(factor):
+    """Temporarily scale every size source a diagram reads — the screen
+    dimensions AND the fonts — by ``factor`` so the whole composition (art and
+    text) grows uniformly. Restored on exit.
+
+    Fonts matter because diagram labels are sized off fixed ``FS_*`` constants,
+    not the live screen height; scaling the canvas alone would leave the text
+    behind and it would shrink when the result is downscaled.
+    """
+    sw, sh = settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT
+    base_get_font = settings.get_font
+    settings.SCREEN_WIDTH = int(sw * factor)
+    settings.SCREEN_HEIGHT = int(sh * factor)
+    settings.get_font = lambda size, bold=False: base_get_font(
+        max(1, int(round(size * factor))), bold=bool(bold))
+    try:
+        yield
+    finally:
+        settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT = sw, sh
+        settings.get_font = base_get_font
+
+
+def render_supersampled(factory):
+    """Compose ``factory()`` at ``DIAGRAM_SUPERSAMPLE`` resolution and downscale
+    it once to its natural size for crisper raster art on big canvases.
+
+    ``factory`` is a parameterless callable (the diagram functions read the
+    screen size internally). On mobile this is a direct, unscaled call.
+    """
+    if DIAGRAM_SUPERSAMPLE <= 1:
+        return factory()
+    with _supersampled_metrics(DIAGRAM_SUPERSAMPLE):
+        hi = factory()
+    if not isinstance(hi, pygame.Surface):
+        return hi
+    factor = DIAGRAM_SUPERSAMPLE
+    w = max(1, int(round(hi.get_width() / factor)))
+    h = max(1, int(round(hi.get_height() / factor)))
+    return pygame.transform.smoothscale(hi, (w, h))
 
 # Suit-advantage cycle (each suit beats the next): ♥ → ♣ → ♦ → ♠ → ♥.
 _BEATS_ORDER = ('Hearts', 'Clubs', 'Diamonds', 'Spades')
