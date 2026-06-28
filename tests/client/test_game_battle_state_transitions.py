@@ -4,6 +4,10 @@
 
 import logging
 
+import pygame
+
+pygame.display.set_mode((1, 1))
+
 
 def _mk_game_dict(player_id=113, opponent_id=114):
     return {
@@ -229,6 +233,41 @@ class TestGameBattleStateTransitions:
         game._apply_game_dict(confirmed)
 
         assert game.auto_proceed_to_battle is True
+
+    def test_conquer_game_start_pending_clears_without_summary(self):
+        from game.core.game import Game
+
+        initial = _mk_game_dict()
+        initial['mode'] = 'conquer'
+        game = Game(initial, _mk_user_dict(), lightweight=True)
+        game._game_start_pending = True
+        game.game_start_notification_checked = True
+
+        game._apply_start_turn_response({'success': True})
+
+        assert game._game_start_pending is False
+        assert game.pending_opponent_turn_summary is None
+
+    def test_conquer_game_start_pending_waits_for_queued_summary(self):
+        from game.core.game import Game
+
+        initial = _mk_game_dict()
+        initial['mode'] = 'conquer'
+        game = Game(initial, _mk_user_dict(), lightweight=True)
+        game._game_start_pending = True
+        summary = {
+            'action': 'game_start',
+            'mode': 'conquer',
+            'opponent_name': '[AI] Defender',
+        }
+
+        game._apply_start_turn_response({
+            'success': True,
+            'opponent_turn_summary': summary,
+        })
+
+        assert game._game_start_pending is True
+        assert game.pending_opponent_turn_summary is summary
 
     def test_suppress_turn_summary_only_when_turn_is_ours(self):
         """After fold, suppress_next_turn_summary should be True only for the

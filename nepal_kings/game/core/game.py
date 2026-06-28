@@ -1087,6 +1087,8 @@ class Game:
             self._pending_start_turn_rids.append(rid)
         except Exception as e:
             logger.error(f"[START_TURN] async POST failed to start: {e}")
+            if self.mode == 'conquer':
+                self._game_start_pending = False
 
     def drain_pending_start_turn(self):
         """Apply any completed start_turn responses (web async path).
@@ -1117,16 +1119,22 @@ class Game:
                 except Exception:
                     body = resp.text[:200] if hasattr(resp, 'text') else ''
                 logger.error(f"[START_TURN] Failed with status {resp.status_code}: {body}")
+                if self.mode == 'conquer':
+                    self._game_start_pending = False
                 continue
             try:
                 data = resp.json()
             except Exception as e:
                 logger.error(f"[START_TURN] bad JSON: {e}")
+                if self.mode == 'conquer':
+                    self._game_start_pending = False
                 continue
             try:
                 self._apply_start_turn_response(data)
             except Exception as e:
                 logger.error(f"[START_TURN] apply error: {e}")
+                if self.mode == 'conquer':
+                    self._game_start_pending = False
         self._pending_start_turn_rids = still
 
     def _handle_start_turn(self):
@@ -1157,6 +1165,8 @@ class Game:
     def _apply_start_turn_response(self, data):
         """Apply the parsed JSON body returned by ``/games/start_turn``."""
         if not data.get('success'):
+            if self.mode == 'conquer':
+                self._game_start_pending = False
             return
         auto_fill = data.get('auto_fill')
         if auto_fill:
@@ -1213,6 +1223,30 @@ class Game:
                 self._queue_opponent_turn_summary(opponent_turn_summary)
         else:
             logger.debug(f"[START_TURN] No opponent turn summary")
+
+        # Conquer's timeline waits on the game-start summary so prelude spell
+        # snapshots can be seeded before the overview advances.  Some web
+        # start-turn responses legitimately contain no summary (or only an
+        # empty one); in that case there is nothing left to process and the
+        # overview gate must open instead of waiting forever.
+        if self.mode == 'conquer' and getattr(self, '_game_start_pending', False):
+            if not self._has_pending_conquer_game_start_summary():
+                self._game_start_pending = False
+
+    def _has_pending_conquer_game_start_summary(self):
+        """Return True if a queued turn summary still needs game-start handling."""
+        pending = []
+        summary = getattr(self, 'pending_opponent_turn_summary', None)
+        if summary:
+            pending.append(summary)
+        queue = getattr(self, 'pending_opponent_turn_summaries', None) or []
+        pending.extend(queue)
+        for item in pending:
+            if not isinstance(item, dict):
+                continue
+            if item.get('action') == 'game_start' and item.get('mode') == 'conquer':
+                return True
+        return False
 
     def _queue_opponent_turn_summary(self, summary):
         """Queue a turn summary without overwriting an older unseen one."""

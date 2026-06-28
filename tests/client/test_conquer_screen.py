@@ -99,6 +99,20 @@ class TestConquerScreenInit:
         sync_load.assert_not_called()
         async_load.assert_called_once()
 
+    def test_on_enter_clears_web_start_battle_requests(self):
+        from game.screens.conquer_screen import ConquerScreen
+        state = _make_state()
+        screen = ConquerScreen(state)
+        screen._start_battle_rid = 'start-rid'
+        screen._start_battle_fetch_game_rid = 'fetch-rid'
+        screen._start_battle_fetch_game_id = 99
+
+        screen.on_enter()
+
+        assert screen._start_battle_rid is None
+        assert screen._start_battle_fetch_game_rid is None
+        assert screen._start_battle_fetch_game_id is None
+
 
 class TestBattleReadiness:
 

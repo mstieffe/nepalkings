@@ -308,6 +308,9 @@ class ConquerScreen(MenuScreenMixin, Screen):
         self._pending_battle_confirm = False
         self._pending_battle_confirm_use_map = False
         self._pending_map_confirm = False
+        self._start_battle_rid = None
+        self._start_battle_fetch_game_rid = None
+        self._start_battle_fetch_game_id = None
         self._figure_objects = []
         self._figure_icons = {}
         self._figure_detail_box = None
