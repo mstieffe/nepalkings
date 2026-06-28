@@ -331,6 +331,7 @@ def test_tactics_rail_action_buttons_adapt_to_selected_tactic():
     moves = [
         _move(1, family='Call King', suit='Hearts', rank='K', value=4),
         _move(2, family='Dagger', suit='Hearts', rank='9', value=9),
+        _move(4, family='Dagger', suit='Diamonds', rank='5', value=5),
         _move(3, family='Double Dagger', suit='Hearts', suit_b='Diamonds',
               rank='8+9', value=17, card_id_b=203),
     ]
@@ -368,9 +369,11 @@ def test_tactics_rail_action_buttons_adapt_to_selected_tactic():
     narrow_by_key = {key: rect for key, _label, _disabled, rect, _role in narrow_rects}
     assert narrow_by_key[ACTION_PLAY].width == 101
     assert narrow_by_key[ACTION_PLAY].bottom < narrow_by_key[ACTION_GAMBLE].top
-    assert narrow_by_key[ACTION_GAMBLE].width == 101
-    assert narrow_by_key[ACTION_GAMBLE].bottom < narrow_by_key[ACTION_COMBINE].top
-    assert narrow_by_key[ACTION_COMBINE].width == 101
+    assert narrow_by_key[ACTION_GAMBLE].top == narrow_by_key[ACTION_COMBINE].top
+    assert narrow_by_key[ACTION_GAMBLE].bottom == narrow_by_key[ACTION_COMBINE].bottom
+    assert narrow_by_key[ACTION_GAMBLE].right < narrow_by_key[ACTION_COMBINE].left
+    assert narrow_by_key[ACTION_GAMBLE].width < 101
+    assert narrow_by_key[ACTION_COMBINE].width < 101
     assert not narrow_by_key[ACTION_PLAY].colliderect(narrow_by_key[ACTION_GAMBLE])
     assert not narrow_by_key[ACTION_PLAY].colliderect(narrow_by_key[ACTION_COMBINE])
     assert not narrow_by_key[ACTION_GAMBLE].colliderect(narrow_by_key[ACTION_COMBINE])
@@ -378,6 +381,72 @@ def test_tactics_rail_action_buttons_adapt_to_selected_tactic():
     rail._selected_id = 3
     rail.draw()
     assert set(rail._action_button_rects) == {ACTION_PLAY, ACTION_GAMBLE, ACTION_DISMANTLE}
+
+
+def test_tactics_rail_hides_combine_without_matching_partner():
+    from config import settings
+    from game.components.conquer_tactics_rail import (
+        ACTION_COMBINE,
+        ACTION_GAMBLE,
+        ACTION_PLAY,
+        ConquerTacticsRail,
+    )
+
+    window = pygame.Surface((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+    game = SimpleNamespace(
+        mode='conquer',
+        player_id=1,
+        battle_round=1,
+        battle_turn_player_id=1,
+        battle_confirmed=True,
+        battle_gamble_counts={},
+        last_battle_result=None,
+    )
+    moves = [
+        _move(1, family='Dagger', suit='Hearts', rank='7', value=7),
+        _move(2, family='Dagger', suit='Spades', rank='A', value=14),
+    ]
+    rail = ConquerTacticsRail(_ConquerUiParent(window, game, moves))
+
+    rail._selected_id = 1
+    rail.draw()
+
+    assert set(rail._action_button_rects) == {ACTION_PLAY, ACTION_GAMBLE}
+    assert ACTION_COMBINE not in {spec[0] for spec in rail._action_specs()}
+    assert rail._best_combine_partner() is None
+
+
+def test_tactics_rail_combine_uses_strongest_matching_partner():
+    from config import settings
+    from game.components.conquer_tactics_rail import (
+        ACTION_COMBINE,
+        ConquerTacticsRail,
+    )
+
+    window = pygame.Surface((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+    game = SimpleNamespace(
+        mode='conquer',
+        player_id=1,
+        battle_round=1,
+        battle_turn_player_id=1,
+        battle_confirmed=True,
+        battle_gamble_counts={},
+        last_battle_result=None,
+    )
+    dagger = _move(1, family='Dagger', suit='Hearts', rank='3', value=3)
+    weak_partner = _move(2, family='Dagger', suit='Diamonds', rank='5', value=5)
+    strong_partner = _move(3, family='Dagger', suit='Hearts', rank='K', value=13)
+    wrong_color = _move(4, family='Dagger', suit='Spades', rank='A', value=14)
+    rail = ConquerTacticsRail(_ConquerUiParent(
+        window, game, [dagger, weak_partner, strong_partner, wrong_color]))
+
+    rail._selected_id = dagger['id']
+    rail._trigger_action(ACTION_COMBINE)
+    pending = rail.consume_pending_action()
+
+    assert pending and pending['action'] == ACTION_COMBINE
+    assert pending['move']['id'] == dagger['id']
+    assert pending['partner']['id'] == strong_partner['id']
 
 
 def test_tactics_rail_header_shows_per_round_gamble_state():

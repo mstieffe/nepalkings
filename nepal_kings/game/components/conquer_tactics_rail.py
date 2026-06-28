@@ -325,6 +325,36 @@ class ConquerTacticsRail:
         sa, sb = a.get('suit'), b.get('suit')
         return (sa in red and sb in red) or (sa in black and sb in black)
 
+    def _eligible_combine_partners(
+            self, move: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+        """Available same-colour single Daggers that can join ``move``."""
+        move = move or self._selected_move()
+        if move is None or not self._is_single_dagger(move):
+            return []
+        partners: List[Dict[str, Any]] = []
+        for candidate in self._hand_moves():
+            if self._is_ghost_move(candidate):
+                continue
+            if self._can_combine(move, candidate):
+                partners.append(candidate)
+        return partners
+
+    def _best_combine_partner(
+            self, move: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+        """Strongest currently available partner for one-tap Combine."""
+        partners = self._eligible_combine_partners(move)
+        if not partners:
+            return None
+
+        def key(candidate: Dict[str, Any]) -> tuple:
+            try:
+                move_id = int(candidate.get('id') or 0)
+            except (TypeError, ValueError):
+                move_id = 0
+            return (self._power(candidate), move_id)
+
+        return max(partners, key=key)
+
     @staticmethod
     def _is_double_dagger(move: Dict[str, Any]) -> bool:
         return move.get('family_name') in ('Dagger', 'Double Dagger') and bool(move.get('card_id_b'))
@@ -929,6 +959,8 @@ class ConquerTacticsRail:
             return
         if key == ACTION_COMBINE:
             partner = self._combine_partner_move()
+            if partner is None or not self._can_combine(sel, partner):
+                partner = self._best_combine_partner(sel)
             if partner is not None and self._can_combine(sel, partner):
                 self._pending_action = {
                     'action': ACTION_COMBINE,
@@ -938,7 +970,8 @@ class ConquerTacticsRail:
                 self._combine_pending = False
                 self._combine_partner_id = None
             else:
-                self._combine_pending = True
+                self.set_result_banner('No matching Dagger', ttl_ms=1600)
+                self._combine_pending = False
                 self._combine_partner_id = None
 
     # ------------------------------------------------------------------ draw
@@ -1764,7 +1797,6 @@ class ConquerTacticsRail:
         """
         sel = self._selected_move()
         my_turn = self._is_my_battle_turn()
-        partner = self._combine_partner_move()
         hand_empty = not self._hand_moves()
         specs: List[tuple] = []
         if my_turn and hand_empty:
@@ -1783,11 +1815,8 @@ class ConquerTacticsRail:
             # Surface meaningful gates (limit hit, already gambled this
             # round) as a disabled button with a hover tooltip.
             specs.append((ACTION_GAMBLE, 'Gamble', gamble_reason))
-        if self._is_single_dagger(sel):
-            if self._combine_pending and partner is None:
-                specs.append((ACTION_COMBINE, 'Pick 2nd'))
-            else:
-                specs.append((ACTION_COMBINE, 'Combine'))
+        if self._is_single_dagger(sel) and self._best_combine_partner(sel) is not None:
+            specs.append((ACTION_COMBINE, 'Combine'))
         if self._is_double_dagger(sel):
             specs.append((ACTION_DISMANTLE, 'Dismantle'))
         return specs
@@ -1825,9 +1854,9 @@ class ConquerTacticsRail:
     @staticmethod
     def _action_tray_uses_column_layout(width: int, specs: List[tuple]) -> bool:
         has_primary = any(spec[0] in _PRIMARY_ACTION_KEYS for spec in specs)
-        has_multiple_secondary = sum(
-            1 for spec in specs if spec[0] not in _PRIMARY_ACTION_KEYS) >= 2
-        return has_primary and has_multiple_secondary and width < 130
+        secondary_count = sum(
+            1 for spec in specs if spec[0] not in _PRIMARY_ACTION_KEYS)
+        return has_primary and secondary_count >= 3 and width < 130
 
     @staticmethod
     def _action_tray_uses_stacked_layout(width: int, specs: List[tuple]) -> bool:
@@ -1837,8 +1866,6 @@ class ConquerTacticsRail:
 
     @staticmethod
     def _action_label_candidates(key: str, label: str) -> tuple:
-        if label == 'Pick 2nd':
-            return (label, 'Pick 2', '2nd')
         if key == ACTION_GAMBLE:
             return (label, 'Swap')
         if key == ACTION_COMBINE:
@@ -1866,9 +1893,7 @@ class ConquerTacticsRail:
         if key == ACTION_GAMBLE:
             return 'Trade this tactic for two new tactics.'
         if key == ACTION_COMBINE:
-            if label == 'Pick 2nd':
-                return 'Pick another same-colour Dagger.'
-            return 'Join two same-colour Daggers into one bigger tactic.'
+            return 'Join with your strongest same-colour Dagger.'
         if key == ACTION_DISMANTLE:
             return 'Split this Double Dagger back into two tactics.'
         if key == ACTION_SKIP:
