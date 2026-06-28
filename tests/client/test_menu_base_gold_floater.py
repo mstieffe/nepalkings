@@ -1237,8 +1237,12 @@ def test_welcome_intro_uses_supplied_conquer_image_without_extra_frame():
 
     page = dialogue.pages[0]
     image = page['image']()
-    default_image = td.conquer_start_image()
     assert page['layout'] == 'image_top'
+    # The illustration carries its own frame, so the window must not add one.
     assert page['image_frame'] is False
+    # The banner is returned at native resolution regardless of any size hint;
+    # the tutorial window sizes it (a single scale pass), so the same cached
+    # surface comes back whether or not a target height is supplied.
+    assert image is td.conquer_start_image()
     assert image is td.conquer_start_image(int(0.26 * settings.SCREEN_HEIGHT))
-    assert image.get_height() > default_image.get_height()
+    assert image.get_width() > 1 and image.get_height() > 1

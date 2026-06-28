@@ -115,39 +115,6 @@ def test_diagrams_return_surfaces_and_cache():
     assert tutorial_diagrams.suit_advantage_wheel(200) is wheel
 
 
-def test_render_supersampled_matches_native_size_and_restores_metrics():
-    _display()
-    from config import settings
-    from game.components import tutorial_diagrams
-
-    tutorial_diagrams.clear_cache()
-    factory = lambda: tutorial_diagrams.card_combo_to_figure()
-
-    native = factory()
-    sw, sh = settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT
-    base_get_font = settings.get_font
-
-    out = tutorial_diagrams.render_supersampled(factory)
-
-    assert isinstance(out, pygame.Surface)
-    # The downscaled result keeps the diagram's natural footprint (±1px rounding),
-    # so the surrounding layout is unaffected.
-    assert abs(out.get_width() - native.get_width()) <= 1
-    assert abs(out.get_height() - native.get_height()) <= 1
-    # Screen metrics and the font hook are restored after composing.
-    assert (settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT) == (sw, sh)
-    assert settings.get_font is base_get_font
-
-
-def test_render_supersampled_is_noop_when_disabled(monkeypatch):
-    _display()
-    from game.components import tutorial_diagrams
-
-    monkeypatch.setattr(tutorial_diagrams, 'DIAGRAM_SUPERSAMPLE', 1)
-    sentinel = object()
-    assert tutorial_diagrams.render_supersampled(lambda: sentinel) is sentinel
-
-
 def _reveal(suit='Hearts'):
     from game.components.tutorial_window import StarterSuitRevealDialogue
     _display()

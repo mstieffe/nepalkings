@@ -776,6 +776,8 @@ class KingdomScreen(MenuScreenMixin, Screen):
                     'layout': 'image_top',
                     'image': lambda: pygame.image.load(
                         'img/tutorial/read_your_map.png').convert_alpha(),
+                    # The illustration carries its own frame; skip the window's.
+                    'image_frame': False,
                     'image_caption': 'Conquer a neighbour to grow your kingdom.',
                     'lines': [
                         'Your lands form a kingdom; rivals hold the rest.',

@@ -7,7 +7,6 @@ slot icons) and cached. Asset loads are guarded so a missing file degrades to a
 smaller/partial diagram rather than crashing the onboarding.
 """
 
-import contextlib
 import math
 import os
 
@@ -16,54 +15,6 @@ import pygame
 from config import settings
 
 _CACHE = {}
-
-# Supersample diagrams on large (desktop) canvases: compose at a higher internal
-# resolution and downscale once, so the raster art (cards, figure frames) keeps
-# its detail instead of looking soft. Small mobile canvases are already sharp and
-# skip this to avoid the extra memory/CPU.
-DIAGRAM_SUPERSAMPLE = 1 if getattr(settings, 'TOUCH_TARGET_MIN', 0) > 0 else 2
-
-
-@contextlib.contextmanager
-def _supersampled_metrics(factor):
-    """Temporarily scale every size source a diagram reads — the screen
-    dimensions AND the fonts — by ``factor`` so the whole composition (art and
-    text) grows uniformly. Restored on exit.
-
-    Fonts matter because diagram labels are sized off fixed ``FS_*`` constants,
-    not the live screen height; scaling the canvas alone would leave the text
-    behind and it would shrink when the result is downscaled.
-    """
-    sw, sh = settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT
-    base_get_font = settings.get_font
-    settings.SCREEN_WIDTH = int(sw * factor)
-    settings.SCREEN_HEIGHT = int(sh * factor)
-    settings.get_font = lambda size, bold=False: base_get_font(
-        max(1, int(round(size * factor))), bold=bool(bold))
-    try:
-        yield
-    finally:
-        settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT = sw, sh
-        settings.get_font = base_get_font
-
-
-def render_supersampled(factory):
-    """Compose ``factory()`` at ``DIAGRAM_SUPERSAMPLE`` resolution and downscale
-    it once to its natural size for crisper raster art on big canvases.
-
-    ``factory`` is a parameterless callable (the diagram functions read the
-    screen size internally). On mobile this is a direct, unscaled call.
-    """
-    if DIAGRAM_SUPERSAMPLE <= 1:
-        return factory()
-    with _supersampled_metrics(DIAGRAM_SUPERSAMPLE):
-        hi = factory()
-    if not isinstance(hi, pygame.Surface):
-        return hi
-    factor = DIAGRAM_SUPERSAMPLE
-    w = max(1, int(round(hi.get_width() / factor)))
-    h = max(1, int(round(hi.get_height() / factor)))
-    return pygame.transform.smoothscale(hi, (w, h))
 
 # Suit-advantage cycle (each suit beats the next): ♥ → ♣ → ♦ → ♠ → ♥.
 _BEATS_ORDER = ('Hearts', 'Clubs', 'Diamonds', 'Spades')
@@ -1145,48 +1096,37 @@ def kingdom_journey_diagram(target_h=None):
     return surf
 
 
-def duel_start_image(target_h=None):
-    """Duel intro page 1: generated banner of two kings playing chess."""
-    _SH = settings.SCREEN_HEIGHT
-    target_h = int(target_h or 0.22 * _SH)
-    key = ('duel_start_image', target_h)
+def _tutorial_banner(name):
+    """Return a supplied tutorial banner at its native resolution (cached).
+
+    These illustrations carry their own frame and are sized by the tutorial
+    window in a single scale pass, so we hand back the full-resolution source
+    here rather than pre-scaling (which would soften them via a double scale).
+    The ``target_h`` argument the callers pass is accepted but ignored.
+    """
+    key = ('banner', name)
     if key in _CACHE:
         return _CACHE[key]
-    img = _load(_asset('img', 'tutorial', 'duel_start.png'))
-    surf = _scaled(img, target_h) if img else pygame.Surface((1, 1), pygame.SRCALPHA)
-    _CACHE[key] = surf
-    return surf
+    img = _load(_asset('img', 'tutorial', name))
+    if img is None:
+        img = pygame.Surface((1, 1), pygame.SRCALPHA)
+    _CACHE[key] = img
+    return img
+
+
+def duel_start_image(target_h=None):
+    """Duel intro page 1: banner of two kings playing chess (own frame)."""
+    return _tutorial_banner('duel_start.png')
 
 
 def conquer_start_image(target_h=None):
-    """Welcome intro: supplied banner for the conquer tutorial start."""
-    _SH = settings.SCREEN_HEIGHT
-    target_h = int(target_h or 0.22 * _SH)
-    key = ('conquer_start_image', target_h)
-    if key in _CACHE:
-        return _CACHE[key]
-    img = _load(_asset('img', 'tutorial', 'conquer_start.png'))
-    surf = _scaled(img, target_h) if img else pygame.Surface((1, 1), pygame.SRCALPHA)
-    _CACHE[key] = surf
-    return surf
+    """Welcome intro: banner for the conquer tutorial start (own frame)."""
+    return _tutorial_banner('conquer_start.png')
 
 
 def duel_shared_card_pool_image(target_h=None):
-    """Duel intro page 3: supplied bitmap of one shared card deck."""
-    _SH = settings.SCREEN_HEIGHT
-    target_h = int(target_h or 0.22 * _SH)
-    key = ('duel_shared_card_pool_image', target_h)
-    if key in _CACHE:
-        return _CACHE[key]
-    img = _load(_asset('img', 'tutorial', 'duel_shared_card_pool.png'))
-    if img is None:
-        surf = pygame.Surface((1, 1), pygame.SRCALPHA)
-    elif img.get_height() > target_h:
-        surf = _scaled(img, target_h)
-    else:
-        surf = img
-    _CACHE[key] = surf
-    return surf
+    """Duel intro page 3: banner of one shared card deck (own frame)."""
+    return _tutorial_banner('duel_shared_card_pool.png')
 
 
 def _score_chip(text, box, accent=(224, 182, 82)):

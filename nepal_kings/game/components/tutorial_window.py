@@ -161,10 +161,6 @@ class TutorialWindowDialogue:
         self._drag_last_y = 0
         self._drag_moved = False
 
-        # Cache the fitted page image per page so the (supersampled) diagram is
-        # composed and scaled once, not every frame.
-        self._scaled_image_cache = {}
-
     # ── helpers ──────────────────────────────────────────────────────
     @staticmethod
     def _wrap(text, font, max_w):
@@ -174,10 +170,7 @@ class TutorialWindowDialogue:
         img = page.get('image')
         if callable(img):
             try:
-                # Diagram factories compose from screen-relative metrics, so
-                # render them supersampled for crisper art on large canvases.
-                from game.components import tutorial_diagrams
-                img = tutorial_diagrams.render_supersampled(img)
+                img = img()
             except Exception:
                 img = None
         return img if isinstance(img, pygame.Surface) else None
@@ -220,31 +213,47 @@ class TutorialWindowDialogue:
         return None
 
     def _scaled_image(self, page):
-        """Page image scaled to a generous, layout-aware box (or None).
-
-        Cached per page (keyed by ``page_index``); ``_page_rows`` only ever asks
-        for the current page, so this avoids recomposing/rescaling each frame.
-        """
-        cache_key = self.page_index
-        if cache_key in self._scaled_image_cache:
-            return self._scaled_image_cache[cache_key]
+        """Page image scaled to a generous, layout-aware box (or None)."""
         img = self._page_image(page)
         if img is None:
-            self._scaled_image_cache[cache_key] = None
             return None
         _SW = settings.SCREEN_WIDTH
         _SH = settings.SCREEN_HEIGHT
-        max_w = self.rect.w - int(0.14 * _SW)
         # 'image_top' treats the image as a hero, so allow it to be larger.
         hero = page.get('layout', 'image_top') in ('image_top', 'image_only')
+
+        if not page.get('image_frame', True):
+            # Pre-framed illustrations (img/tutorial banners) carry their own
+            # border, so they skip the window's frame and get a larger box. They
+            # are scaled in a single pass straight from the source — up to fill
+            # the box, or down if oversized — for a bigger, crisper result.
+            max_w = self.rect.w - int(0.06 * _SW)
+            max_h = int((0.34 if hero else 0.26) * _SH)
+            ratio = min(max_w / img.get_width(), max_h / img.get_height())
+            return pygame.transform.smoothscale(
+                img, (max(1, int(img.get_width() * ratio)),
+                      max(1, int(img.get_height() * ratio))))
+
+        max_w = self.rect.w - int(0.14 * _SW)
         max_h = int((0.30 if hero else 0.22) * _SH)
         if img.get_width() > max_w or img.get_height() > max_h:
             ratio = min(max_w / img.get_width(), max_h / img.get_height())
             img = pygame.transform.smoothscale(
                 img, (max(1, int(img.get_width() * ratio)),
                       max(1, int(img.get_height() * ratio))))
-        self._scaled_image_cache[cache_key] = img
         return img
+
+    def _content_region(self):
+        """Return ``(top_y, height)`` of the area between the header and the
+        page-dots/buttons — the room available to the page content. Mirrors the
+        geometry used in :meth:`draw`."""
+        _SH = settings.SCREEN_HEIGHT
+        top = self.rect.y + settings.DIALOGUE_BOX_TEXT_MARGIN_Y
+        if self.title:
+            top += self.kicker_font.get_height() + int(0.010 * _SH)
+        header_bottom = top + int(0.018 * _SH)
+        dots_top = self._btn_y - int(0.03 * _SH)
+        return header_bottom, max(1, dots_top - header_bottom)
 
     def _page_rows(self, page):
         """Ordered (surface, kind, gap_after) blocks for the current page.
@@ -324,7 +333,34 @@ class TutorialWindowDialogue:
         else:  # image_top
             rows += image_block()
             rows += text_block(text_surfs)
+
+        # Pre-framed banners are sized to fill the box, but the page text varies
+        # in length; if the whole page would overflow (and scroll), shrink the
+        # banner — rescaled from its native source so it stays single-pass crisp
+        # — until the page fits.
+        if img is not None and not page.get('image_frame', True):
+            rows = self._fit_frameless_banner(page, img, rows)
         return rows
+
+    def _fit_frameless_banner(self, page, scaled_img, rows):
+        _, avail_h = self._content_region()
+        content_h = (sum(s.get_height() for s, _, _ in rows)
+                     + sum(g for _, _, g in rows[:-1]))
+        overflow = content_h - avail_h
+        if overflow <= 0:
+            return rows
+        native = self._page_image(page)
+        if native is None:
+            return rows
+        target_h = max(int(0.16 * settings.SCREEN_HEIGHT),
+                       scaled_img.get_height() - overflow)
+        if target_h >= scaled_img.get_height():
+            return rows
+        ratio = target_h / native.get_height()
+        fitted = pygame.transform.smoothscale(
+            native, (max(1, int(native.get_width() * ratio)), max(1, target_h)))
+        return [(fitted if surf is scaled_img else surf, kind, gap)
+                for surf, kind, gap in rows]
 
     def draw(self):
         _SW = settings.SCREEN_WIDTH
