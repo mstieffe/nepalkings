@@ -102,6 +102,31 @@ def test_window_ignores_clicks_within_200ms():
     assert win.update([_click(win._btn_next.rect)]) is None
 
 
+def test_tiny_overflow_is_not_scrolled_but_large_overflow_is():
+    _display()
+    from config import settings
+    from game.components.tutorial_window import TutorialWindowDialogue
+
+    surf = pygame.Surface((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+    win = TutorialWindowDialogue(surf, [{'title': 'T', 'lines': ['x']}],
+                                 title='Welcome')
+    _, avail_h = win._content_region()
+
+    def _rows(height):
+        return lambda page: [
+            (pygame.Surface((10, height), pygame.SRCALPHA), 'text', 0)]
+
+    # A sliver of overflow must not produce a (near-empty) scrollbar.
+    win._page_rows = _rows(avail_h + 6)
+    win.draw()
+    assert win._max_scroll == 0
+
+    # A genuine overflow still scrolls.
+    win._page_rows = _rows(avail_h + 240)
+    win.draw()
+    assert win._max_scroll > 0
+
+
 def test_diagrams_return_surfaces_and_cache():
     _display()
     from game.components import tutorial_diagrams

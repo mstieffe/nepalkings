@@ -2179,14 +2179,17 @@ class FieldScreen(SubScreen):
                 if clicked_icon:
                     logger.debug(f"[DEFENDER_CLICK] Clicked: {clicked_icon.figure.name} (id={clicked_icon.figure.id}), defender_selectable={getattr(clicked_icon, 'defender_selectable', 'N/A')}, is_visible={clicked_icon.is_visible}")
                     # Show error for non-selectable figures (works for both visible and hidden)
-                    if hasattr(clicked_icon, 'defender_selectable') and not clicked_icon.defender_selectable:
+                    clicked_selectable = self._is_opponent_defender_selectable(
+                        clicked_icon.figure, clicked_icon)
+                    clicked_icon.defender_selectable = clicked_selectable
+                    if not clicked_selectable:
                         reason = "This figure cannot be selected as a defender."
                         title = "Cannot Select"
                         images = []
                         target_fig = clicked_icon.figure
                         if target_fig.player_id == self.game.player_id:
                             reason = "You must select one of your opponent's figures."
-                        elif village_only and hasattr(target_fig, 'family') and target_fig.family.field != 'village':
+                        elif village_only and self._figure_field(target_fig) != 'village':
                             active_mod = 'Peasant War' if has_peasant_war else 'Civil War'
                             reason = f"{active_mod} is active — only village figures can be selected."
                             title = active_mod
@@ -2225,7 +2228,7 @@ class FieldScreen(SubScreen):
                         return
                     
                     # Village-only restriction (Peasant War / Civil War)
-                    if village_only and hasattr(target_figure, 'family') and target_figure.family.field != 'village':
+                    if village_only and self._figure_field(target_figure) != 'village':
                         active_mod = 'Peasant War' if has_peasant_war else 'Civil War'
                         mod_icons = self._get_modifier_icon_images(active_mod)
                         self.make_dialogue_box(
@@ -2268,8 +2271,7 @@ class FieldScreen(SubScreen):
                             and not (hasattr(fig, 'cannot_defend') and fig.cannot_defend)
                             and not (hasattr(fig, 'cannot_be_targeted') and fig.cannot_be_targeted)
                             and not (hasattr(fig, 'checkmate') and fig.checkmate)
-                            and (not village_only or (
-                                hasattr(fig, 'family') and fig.family.field == 'village'))
+                            and (not village_only or self._figure_field(fig) == 'village')
                             for fig in self.figures
                         )
                         if has_non_checkmate:
@@ -2296,7 +2298,7 @@ class FieldScreen(SubScreen):
                     if village_only:
                         opponent_figures = [
                             fig for fig in opponent_figures
-                            if hasattr(fig, 'family') and fig.family.field == 'village'
+                            if self._figure_field(fig) == 'village'
                         ]
                     
                     # Check if advancing figure has cannot_be_blocked — if so, skip must_be_attacked
@@ -2447,6 +2449,16 @@ class FieldScreen(SubScreen):
                         actions=[],
                         icon="error",
                         title="Cannot Defend",
+                        auto_close_delay=2000,
+                    )
+                    continue
+
+                if getattr(target_figure, 'cannot_be_targeted', False):
+                    self.make_dialogue_box(
+                        message=f"{target_figure.name} cannot be targeted.",
+                        actions=[],
+                        icon="error",
+                        title="Cannot Be Targeted",
                         auto_close_delay=2000,
                     )
                     continue
@@ -3383,6 +3395,8 @@ class FieldScreen(SubScreen):
                             else:
                                 all_regular.append((icon, icon_x, icon_y))
 
+            self._sync_conquer_selection_icon_states()
+
             # Draw in global z-order layers: regular -> selected -> hovered
             # Reverse regular so bottom icons are drawn first and top icons
             # paint over them, keeping each figure's lower info box visible.
@@ -3449,8 +3463,20 @@ class FieldScreen(SubScreen):
         return getattr(figure, 'color', None) or getattr(family, 'color', None)
 
     def _active_modifier_types(self):
-        modifiers = self.game.battle_modifier if self.game and isinstance(self.game.battle_modifier, list) else []
-        return [m.get('type') for m in modifiers if isinstance(m, dict)]
+        modifiers = getattr(self.game, 'battle_modifier', None) if self.game else None
+        if isinstance(modifiers, dict):
+            modifiers = [modifiers]
+        elif not isinstance(modifiers, (list, tuple)):
+            modifiers = []
+        types = []
+        for modifier in modifiers:
+            if isinstance(modifier, dict):
+                modifier_type = modifier.get('type')
+            else:
+                modifier_type = modifier
+            if modifier_type:
+                types.append(modifier_type)
+        return types
 
     def _is_civil_war_second_attacker_selectable(self, figure, icon=None):
         game = self.game
@@ -3498,12 +3524,144 @@ class FieldScreen(SubScreen):
             return False
         return True
 
+    @staticmethod
+    def _figure_id_key(figure):
+        fig_id = getattr(figure, 'id', None)
+        return None if fig_id is None else str(fig_id)
+
+    def _opponent_defender_selection_context(self):
+        game = self.game
+        empty = {
+            'eligible_id_keys': set(),
+            'must_be_attacked_id_keys': set(),
+            'eligible_figures': [],
+            'must_be_attacked_figures': [],
+            'advancing_figure': None,
+            'advancing_cannot_be_blocked': False,
+            'has_peasant_war': False,
+            'has_blitzkrieg': False,
+            'has_civil_war': False,
+        }
+        if not game:
+            return empty
+
+        modifier_types = self._active_modifier_types()
+        has_peasant_war = 'Peasant War' in modifier_types
+        has_blitzkrieg = 'Blitzkrieg' in modifier_types
+        has_civil_war = 'Civil War' in modifier_types
+        village_only = has_peasant_war or has_civil_war
+
+        figures = getattr(self, 'figures', []) or []
+        advancing_figure = None
+        advancing_id = getattr(game, 'advancing_figure_id', None)
+        if advancing_id is not None:
+            advancing_key = str(advancing_id)
+            for fig in figures:
+                if self._figure_id_key(fig) == advancing_key:
+                    advancing_figure = fig
+                    break
+
+        advancing_cannot_be_blocked = bool(
+            advancing_figure
+            and getattr(advancing_figure, 'cannot_be_blocked', False)
+        )
+        skip_must_be_attacked = advancing_cannot_be_blocked or has_blitzkrieg
+
+        eligible = []
+        checkmate_fallback = []
+        own_player_id = getattr(game, 'player_id', None)
+        for fig in figures:
+            if self._is_conquer_visual_ghost_figure(fig):
+                continue
+            if getattr(fig, 'player_id', None) == own_player_id:
+                continue
+            if getattr(fig, 'cannot_defend', False):
+                continue
+            if getattr(fig, 'cannot_be_targeted', False):
+                continue
+            if village_only and self._figure_field(fig) != 'village':
+                continue
+            if (has_civil_war
+                    and getattr(game, 'civil_war_defender_second', False)):
+                if self._figure_id_key(fig) == str(getattr(game, 'defending_figure_id', None)):
+                    continue
+                required_color = getattr(game, 'civil_war_required_color', None)
+                if required_color and self._figure_color(fig) != required_color:
+                    continue
+            if getattr(fig, 'checkmate', False):
+                checkmate_fallback.append(fig)
+                continue
+            eligible.append(fig)
+
+        if not eligible and checkmate_fallback:
+            eligible = checkmate_fallback
+
+        must_be_attacked = []
+        if not skip_must_be_attacked:
+            must_be_attacked = [
+                fig for fig in eligible
+                if getattr(fig, 'must_be_attacked', False)
+            ]
+
+        return {
+            'eligible_id_keys': {
+                self._figure_id_key(fig) for fig in eligible
+                if self._figure_id_key(fig) is not None
+            },
+            'must_be_attacked_id_keys': {
+                self._figure_id_key(fig) for fig in must_be_attacked
+                if self._figure_id_key(fig) is not None
+            },
+            'eligible_figures': eligible,
+            'must_be_attacked_figures': must_be_attacked,
+            'advancing_figure': advancing_figure,
+            'advancing_cannot_be_blocked': advancing_cannot_be_blocked,
+            'has_peasant_war': has_peasant_war,
+            'has_blitzkrieg': has_blitzkrieg,
+            'has_civil_war': has_civil_war,
+        }
+
+    def _is_opponent_defender_selectable(self, figure, icon=None, context=None):
+        game = self.game
+        if not game or figure is None:
+            return False
+        if self._is_conquer_visual_ghost_figure(figure):
+            return False
+        if getattr(figure, 'player_id', None) == getattr(game, 'player_id', None):
+            return False
+        context = context or self._opponent_defender_selection_context()
+        fig_key = self._figure_id_key(figure)
+        if fig_key is None or fig_key not in context['eligible_id_keys']:
+            return False
+        must_keys = context['must_be_attacked_id_keys']
+        if must_keys and fig_key not in must_keys:
+            return False
+        return True
+
+    def _sync_conquer_selection_icon_states(self):
+        active = self._is_conquer_selection_active()
+        defender_context = (
+            self._opponent_defender_selection_context()
+            if active and getattr(self, 'defender_selection_mode', False) else None
+        )
+        for icon in getattr(self, 'figure_icons', []) or []:
+            if not active:
+                icon.conquer_selection_selectable = True
+                continue
+            if getattr(self, 'defender_selection_mode', False):
+                icon.conquer_selection_selectable = self._is_opponent_defender_selectable(
+                    getattr(icon, 'figure', None), icon, context=defender_context)
+            else:
+                icon.conquer_selection_selectable = (
+                    self._icon_is_selectable_for_current_mode(icon)
+                )
+
     def _icon_is_selectable_for_current_mode(self, icon):
         """Return True when ``icon`` is a valid click target right now.
 
         Rules per active conquer selection mode:
-          * Opponent-defender mode → trust ``icon.defender_selectable``
-            (already computed by ``_update_defender_selectable``).
+          * Opponent-defender mode → compute the same live legality used by
+            ``_update_defender_selectable``.
           * Own-defender mode → only own figures whose family field is village
             when Peasant War / Civil War is active, otherwise all own figures
             that don't have ``cannot_defend`` / ``cannot_be_targeted``.
@@ -3524,7 +3682,7 @@ class FieldScreen(SubScreen):
                         or 'Civil War' in modifier_types)
 
         if self.defender_selection_mode:
-            return bool(getattr(icon, 'defender_selectable', True)) and not is_own
+            return self._is_opponent_defender_selectable(figure, icon)
 
         if self.conquer_own_defender_mode:
             return self._is_conquer_own_defender_selectable(figure, icon)
@@ -3542,6 +3700,8 @@ class FieldScreen(SubScreen):
                 return False
             if getattr(figure, 'cannot_attack', False):
                 return False
+            if icon is not None and getattr(icon, 'has_deficit', False):
+                return False
             if village_only and self._figure_field(figure) != 'village':
                 return False
             return True
@@ -3552,6 +3712,11 @@ class FieldScreen(SubScreen):
                             if isinstance(scope_target, dict) else None)
             if getattr(figure, 'checkmate', False):
                 return False
+            valid_ids = scope_target.get('valid_target_ids', [])
+            if valid_ids:
+                valid_keys = {str(fig_id) for fig_id in valid_ids}
+                if self._figure_id_key(figure) not in valid_keys:
+                    return False
             if target_scope == 'own':
                 return is_own
             if target_scope == 'opponent':
@@ -3813,73 +3978,15 @@ class FieldScreen(SubScreen):
 
     def _update_defender_selectable(self):
         """Mark figure icons as selectable/non-selectable for defender selection mode."""
-        # Get advancing figure to check cannot_be_blocked
-        advancing_figure = None
-        if self.game.advancing_figure_id:
-            for fig in self.figures:
-                if fig.id == self.game.advancing_figure_id:
-                    advancing_figure = fig
-                    break
-        
-        advancing_cannot_be_blocked = (
-            advancing_figure and 
-            hasattr(advancing_figure, 'cannot_be_blocked') and 
-            advancing_figure.cannot_be_blocked
-        )
-        
-        # Check active battle modifiers
-        modifiers = self.game.battle_modifier if isinstance(self.game.battle_modifier, list) else []
-        modifier_types = [m.get('type') for m in modifiers]
-        has_peasant_war = 'Peasant War' in modifier_types
-        has_blitzkrieg = 'Blitzkrieg' in modifier_types
-        has_civil_war = 'Civil War' in modifier_types
-        village_only = has_peasant_war or has_civil_war
-        
-        # Blitzkrieg acts like cannot_be_blocked for must_be_attacked purposes
-        skip_must_be_attacked = advancing_cannot_be_blocked or has_blitzkrieg
-        
-        # Determine which opponent figures are eligible
-        opponent_figures_eligible = []
-        checkmate_fallback = []
-        for fig in self.figures:
-            if fig.player_id == self.game.player_id:
-                continue
-            if hasattr(fig, 'cannot_defend') and fig.cannot_defend:
-                continue
-            if hasattr(fig, 'cannot_be_targeted') and fig.cannot_be_targeted:
-                continue
-            if hasattr(fig, 'checkmate') and fig.checkmate:
-                checkmate_fallback.append(fig)
-                continue
-            # Village-only restriction (Peasant War / Civil War)
-            if village_only and hasattr(fig, 'family') and fig.family.field != 'village':
-                continue
-            # Civil War second pick: must match color of first defender
-            if has_civil_war and hasattr(self.game, 'civil_war_defender_second') and self.game.civil_war_defender_second:
-                required_color = getattr(self.game, 'civil_war_required_color', None)
-                if required_color and hasattr(fig, 'family') and fig.family.color != required_color:
-                    continue
-                # Exclude the figure already selected as first defender
-                if fig.id == self.game.defending_figure_id:
-                    continue
-            opponent_figures_eligible.append(fig)
-        
-        # Fallback: if no non-checkmate targets, allow checkmate figures
-        if not opponent_figures_eligible and checkmate_fallback:
-            opponent_figures_eligible = checkmate_fallback
-        
-        # must_be_attacked filtering — only consider village figures if village_only
-        must_be_attacked_figures = []
-        if not skip_must_be_attacked:
-            must_be_attacked_figures = [
-                fig for fig in opponent_figures_eligible
-                if hasattr(fig, 'must_be_attacked') and fig.must_be_attacked
-            ]
-        
-        # Build set of must_be_attacked figure IDs for reliable comparison
-        must_be_attacked_ids = {fig.id for fig in must_be_attacked_figures}
-        eligible_ids = {fig.id for fig in opponent_figures_eligible}
-        
+        context = self._opponent_defender_selection_context()
+        advancing_figure = context['advancing_figure']
+        advancing_cannot_be_blocked = context['advancing_cannot_be_blocked']
+        has_peasant_war = context['has_peasant_war']
+        has_blitzkrieg = context['has_blitzkrieg']
+        has_civil_war = context['has_civil_war']
+        opponent_figures_eligible = context['eligible_figures']
+        must_be_attacked_figures = context['must_be_attacked_figures']
+
         logger.debug(f"[DEFENDER_SELECT] Advancing figure: {advancing_figure.name if advancing_figure else 'None'}, cannot_be_blocked: {advancing_cannot_be_blocked}")
         logger.debug(f"[DEFENDER_SELECT] Battle modifiers: peasant_war={has_peasant_war}, blitzkrieg={has_blitzkrieg}, civil_war={has_civil_war}")
         logger.debug(f"[DEFENDER_SELECT] Eligible opponent figures: {[(f.name, f.id, getattr(f, 'must_be_attacked', False)) for f in opponent_figures_eligible]}")
@@ -3894,19 +4001,14 @@ class FieldScreen(SubScreen):
             if fig.player_id == self.game.player_id:
                 icon.defender_selectable = False
                 continue
-            
-            # Opponent figure must be in the eligible set (handles cannot_defend, cannot_be_targeted, village_only)
-            if fig.id not in eligible_ids:
+
+            icon.defender_selectable = self._is_opponent_defender_selectable(
+                fig, icon, context=context)
+            if not icon.defender_selectable:
                 icon.defender_selectable = False
+                logger.debug(f"[DEFENDER_SELECT] {fig.name} (id={fig.id}) NOT selectable")
                 continue
             
-            # If must_be_attacked applies, only those figures are selectable
-            if must_be_attacked_ids and fig.id not in must_be_attacked_ids:
-                icon.defender_selectable = False
-                logger.debug(f"[DEFENDER_SELECT] {fig.name} (id={fig.id}) NOT selectable (must_be_attacked constraint)")
-                continue
-            
-            icon.defender_selectable = True
             logger.debug(f"[DEFENDER_SELECT] {fig.name} (id={fig.id}) IS selectable")
 
     def _update_conquer_own_defender_selectable(self):
@@ -3925,6 +4027,7 @@ class FieldScreen(SubScreen):
         """
         if not getattr(self, 'defender_selection_mode', False):
             return []
+        context = self._opponent_defender_selection_context()
         ids = []
         for icon in self.figure_icons:
             fig = getattr(icon, 'figure', None)
@@ -3932,7 +4035,7 @@ class FieldScreen(SubScreen):
                 continue
             if self._is_conquer_visual_ghost_figure(fig):
                 continue
-            if not getattr(icon, 'defender_selectable', False):
+            if not self._is_opponent_defender_selectable(fig, icon, context=context):
                 continue
             if getattr(fig, 'player_id', None) == self.game.player_id:
                 continue
@@ -3963,3 +4066,4 @@ class FieldScreen(SubScreen):
         for icon in self.figure_icons:
             icon.defender_selectable = True
             icon.in_defender_selection_mode = False
+            icon.conquer_selection_selectable = True

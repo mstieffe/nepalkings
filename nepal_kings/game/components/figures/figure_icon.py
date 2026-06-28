@@ -680,6 +680,7 @@ class FieldFigureIcon(FigureIcon):
         # Defender selection greyed-out state (set by field_screen during defender selection)
         self.defender_selectable = True
         self.in_defender_selection_mode = False
+        self.conquer_selection_selectable = True
 
         # Conquer mode: when True the figure is not part of the active battle
         # and should be rendered greyed out (set by ConquerGameScreen each
@@ -822,7 +823,13 @@ class FieldFigureIcon(FigureIcon):
             is_resting = (hasattr(self, 'game') and self.game and
                           hasattr(self, 'figure') and self.figure and
                           self.figure.id in (getattr(self.game, 'resting_figure_ids', None) or []))
-            greyed_out = (hasattr(self, 'defender_selectable') and not self.defender_selectable) or is_resting or self.has_deficit or bool(getattr(self, 'conquer_battle_dimmed', False))
+            greyed_out = (
+                (hasattr(self, 'defender_selectable') and not self.defender_selectable)
+                or not getattr(self, 'conquer_selection_selectable', True)
+                or is_resting
+                or self.has_deficit
+                or bool(getattr(self, 'conquer_battle_dimmed', False))
+            )
             
             # Choose icon/frame images based on greyed-out state
             icon_normal = self.icon_gray_img if greyed_out else self.icon_img
@@ -865,6 +872,7 @@ class FieldFigureIcon(FigureIcon):
             # Check if greyed out for defender selection
             greyed_out_hidden = (
                 (hasattr(self, 'defender_selectable') and not self.defender_selectable)
+                or not getattr(self, 'conquer_selection_selectable', True)
                 or bool(getattr(self, 'conquer_battle_dimmed', False))
             )
             is_big_state = self.hovered and not is_mouse_pressed

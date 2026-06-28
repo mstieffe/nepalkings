@@ -397,6 +397,13 @@ class TutorialWindowDialogue:
         avail_h = max(1, avail_h)
         self._content_rect = pygame.Rect(self.rect.x, avail_top, self.rect.w, avail_h)
         self._max_scroll = max(0, content_h - avail_h)
+        # Ignore a sub-line sliver of overflow so a page that essentially fits
+        # (e.g. the single-page welcome window) never shows a near-empty
+        # scrollbar — a few pixels of difference can come from font-height
+        # rounding that varies by platform/backend. The overflow falls into the
+        # gap above the buttons, so nothing visible is clipped.
+        if self._max_scroll <= max(2, int(0.014 * _SH)):
+            self._max_scroll = 0
         self._scroll = max(0, min(self._scroll, self._max_scroll))
 
         if self._max_scroll > 0:

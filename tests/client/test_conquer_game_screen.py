@@ -3167,6 +3167,126 @@ class TestConquerGameShell:
 
         assert [icon.defender_selectable for icon in icons] == [True, True, False, False]
 
+    def test_conquer_selection_greys_non_village_forced_advance_under_peasant_war(self):
+        from game.screens.field_screen import FieldScreen
+
+        def figure(fig_id, *, player_id=1, field='village'):
+            return SimpleNamespace(
+                id=fig_id,
+                player_id=player_id,
+                name=f'Figure {fig_id}',
+                family=SimpleNamespace(color='offensive', field=field),
+            )
+
+        village = figure(40)
+        military = figure(41, field='military')
+        opponent = figure(42, player_id=2)
+        deficit = figure(43)
+        icons = [
+            SimpleNamespace(figure=village, has_deficit=False),
+            SimpleNamespace(figure=military, has_deficit=False),
+            SimpleNamespace(figure=opponent, has_deficit=False),
+            SimpleNamespace(figure=deficit, has_deficit=True),
+        ]
+        field = FieldScreen.__new__(FieldScreen)
+        field.game = SimpleNamespace(
+            player_id=1,
+            battle_modifier=[{'type': 'Peasant War'}],
+            pending_forced_advance=True,
+            forced_advance_dialogue_shown=True,
+            advancing_figure_id=None,
+            resting_figure_ids=[],
+        )
+        field.state = SimpleNamespace(pending_conquer_prelude_target=None)
+        field.figure_icons = icons
+        field.figures = [village, military, opponent, deficit]
+        field.defender_selection_mode = False
+        field.conquer_own_defender_mode = False
+        field._is_conquer_selection_active = lambda: True
+
+        FieldScreen._sync_conquer_selection_icon_states(field)
+
+        assert [icon.conquer_selection_selectable for icon in icons] == [
+            True, False, False, False,
+        ]
+
+    def test_opponent_defender_selectability_ignores_stale_cache_under_peasant_war(self):
+        from game.screens.field_screen import FieldScreen
+
+        village = SimpleNamespace(
+            id=50,
+            player_id=2,
+            name='Village Defender',
+            family=SimpleNamespace(color='offensive', field='village'),
+        )
+        military = SimpleNamespace(
+            id=51,
+            player_id=2,
+            name='Military Defender',
+            family=SimpleNamespace(color='offensive', field='military'),
+        )
+        icons = [
+            SimpleNamespace(figure=village, defender_selectable=True),
+            SimpleNamespace(figure=military, defender_selectable=True),
+        ]
+        field = FieldScreen.__new__(FieldScreen)
+        field.game = SimpleNamespace(
+            player_id=1,
+            battle_modifier=[{'type': 'Peasant War'}],
+            advancing_figure_id=99,
+            civil_war_defender_second=False,
+            civil_war_required_color=None,
+        )
+        field.figures = [village, military]
+        field.figure_icons = icons
+        field.defender_selection_mode = True
+        field.conquer_own_defender_mode = False
+        field._is_conquer_selection_active = lambda: True
+
+        FieldScreen._sync_conquer_selection_icon_states(field)
+
+        assert FieldScreen._icon_is_selectable_for_current_mode(field, icons[0]) is True
+        assert FieldScreen._icon_is_selectable_for_current_mode(field, icons[1]) is False
+        assert FieldScreen.selectable_defender_figure_ids(field) == [50]
+        assert [icon.conquer_selection_selectable for icon in icons] == [True, False]
+
+    def test_conquer_prelude_selection_visuals_honor_valid_target_ids(self):
+        from game.screens.field_screen import FieldScreen
+
+        valid = SimpleNamespace(
+            id=60,
+            player_id=1,
+            name='Valid',
+            family=SimpleNamespace(color='offensive', field='village'),
+        )
+        invalid = SimpleNamespace(
+            id=61,
+            player_id=1,
+            name='Invalid',
+            family=SimpleNamespace(color='offensive', field='village'),
+        )
+        icons = [
+            SimpleNamespace(figure=valid),
+            SimpleNamespace(figure=invalid),
+        ]
+        field = FieldScreen.__new__(FieldScreen)
+        field.game = SimpleNamespace(player_id=1, battle_modifier=[])
+        field.state = SimpleNamespace(
+            pending_conquer_prelude_target={
+                'target_scope': 'own',
+                'valid_target_ids': ['60'],
+            }
+        )
+        field.figure_icons = icons
+        field.figures = [valid, invalid]
+        field.defender_selection_mode = False
+        field.conquer_own_defender_mode = False
+        field._is_conquer_selection_active = lambda: True
+
+        FieldScreen._sync_conquer_selection_icon_states(field)
+
+        assert [icon.conquer_selection_selectable for icon in icons] == [True, False]
+
     def test_battle_result_attack_failed_is_shown_once(self):
         from game.screens.battle_screen import BattleScreen
 
