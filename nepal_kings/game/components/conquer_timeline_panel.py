@@ -218,20 +218,12 @@ class ConquerTimelinePanel:
         # Only completed or active steps are rendered.  Pending future
         # steps are hidden until they become reachable.
         visible_indices = [i for i, s in enumerate(steps) if s.completed or s.active]
-        n_visible = len(visible_indices)
 
         avail_w = settings.SCREEN_WIDTH - 2 * pad_x
         info_w = max(_INFO_MIN_W, int(avail_w * 0.35)) if info_visible else 0
         timeline_w = avail_w - info_w - (_BUBBLE_GAP if info_visible else 0)
-        bubble_room = (
-            timeline_w - _BUBBLE_GAP * (max(1, n_visible) - 1)
-        ) // max(1, n_visible)
-        compact_min_w = 68 if n_visible >= 8 else _BUBBLE_MIN_W
-        bubble_w = max(54, min(_BUBBLE_MAX_W, bubble_room))
-        if bubble_w < compact_min_w:
-            needed = compact_min_w * n_visible + _BUBBLE_GAP * max(0, n_visible - 1)
-            if needed <= timeline_w:
-                bubble_w = compact_min_w
+        visible_indices, bubble_w = self._fit_timeline_bubbles(
+            visible_indices, timeline_w)
 
         line_y = body_top + body_h // 2
 
@@ -303,8 +295,7 @@ class ConquerTimelinePanel:
         info_visible = info_step is not None
 
         visible_indices = [i for i, s in enumerate(steps) if s.completed or s.active]
-        n_visible = len(visible_indices)
-        if n_visible == 0:
+        if len(visible_indices) == 0:
             return
 
         content_width = max(0, rect.width - max(0, int(right_reserve)))
@@ -316,15 +307,8 @@ class ConquerTimelinePanel:
             info_w = 0
             info_visible = False
         timeline_w = avail_w - info_w - (_BUBBLE_GAP if info_visible else 0)
-        bubble_room = (
-            timeline_w - _BUBBLE_GAP * (max(1, n_visible) - 1)
-        ) // max(1, n_visible)
-        compact_min_w = 68 if n_visible >= 8 else _BUBBLE_MIN_W
-        bubble_w = max(54, min(_BUBBLE_MAX_W, bubble_room))
-        if bubble_w < compact_min_w:
-            needed = compact_min_w * n_visible + _BUBBLE_GAP * max(0, n_visible - 1)
-            if needed <= timeline_w:
-                bubble_w = compact_min_w
+        visible_indices, bubble_w = self._fit_timeline_bubbles(
+            visible_indices, timeline_w)
 
         line_y = body_top + body_h // 2
 
@@ -708,6 +692,40 @@ class ConquerTimelinePanel:
             if step.active:
                 return idx
         return None
+
+    @staticmethod
+    def _fit_timeline_bubbles(visible_indices, timeline_w):
+        """Pick the bubble width and the indices to draw so the bubble row
+        always fits inside ``timeline_w``.
+
+        The previous logic floored the bubble width at 54px even when the row
+        did not fit, so on crowded mobile timelines the last bubbles overflowed
+        into (and were covered by) the info box on the right. Here the width is
+        clamped to the room actually available, and when even a hard minimum
+        will not fit, the oldest bubbles are dropped (keeping the most recent,
+        which include the active step shown next to the info box).
+        """
+        indices = list(visible_indices)
+        n = len(indices)
+        if n <= 0 or timeline_w <= 0:
+            return indices, 0
+        hard_min = 46
+        # Drop oldest bubbles that cannot fit even at the hard-minimum width.
+        max_fit = max(1, (timeline_w + _BUBBLE_GAP) // (hard_min + _BUBBLE_GAP))
+        if n > max_fit:
+            indices = indices[-max_fit:]
+            n = len(indices)
+        bubble_room = (timeline_w - _BUBBLE_GAP * (n - 1)) // n
+        compact_min_w = 68 if n >= 8 else _BUBBLE_MIN_W
+        bubble_w = max(hard_min, min(_BUBBLE_MAX_W, bubble_room))
+        if bubble_w < compact_min_w:
+            needed = compact_min_w * n + _BUBBLE_GAP * (n - 1)
+            if needed <= timeline_w:
+                bubble_w = compact_min_w
+        # Never exceed the room available, so the row can't bleed into the
+        # info box on its right.
+        bubble_w = min(bubble_w, max(hard_min, bubble_room))
+        return indices, bubble_w
 
     # ----------------------------------------------------- bubble rendering
 

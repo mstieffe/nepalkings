@@ -612,7 +612,10 @@ def test_duel_never_blocks_tutorial_completion_in_journey():
     assert screen._current_journey_coach_step() is None
 
 
-def test_guide_prompt_does_not_loop_after_tutorial_complete():
+def test_menu_coach_quiet_after_tutorial_complete():
+    # The guide icon is no longer coach-pointed: once the journey is done the
+    # menu shows no coaching card at all (the guide prompt interrupted the flow
+    # without adding value and was removed).
     screen = _journey_ready_menu_screen(completed_steps=[
         'finish_first_conquer_battle',
         'open_first_main_booster',
@@ -622,29 +625,23 @@ def test_guide_prompt_does_not_loop_after_tutorial_complete():
     screen.state.user_dict['onboarding']['menu_hints_seen'] = [
         'duel', 'kingdom', 'collection', 'rankings',
     ]
-
-    step = screen._current_area_coach_step()
-    assert step['id'] == 'guide'
-
-    screen.state.user_dict['onboarding']['menu_hints_seen'].append('guide')
     assert screen._current_area_coach_step() is None
 
 
-def test_guide_prompt_can_return_to_unfinished_final_land_card():
+def test_menu_coach_does_not_point_at_guide_before_final_land_card():
+    # Even while the final "Your First Land" card is unfinished, the menu does
+    # not surface a guide coach card; only the actionable journey steps appear.
     screen = _journey_ready_menu_screen(completed_steps=[
         'open_first_main_booster',
         'finish_first_conquer_battle',
     ])
-    # return_to_kingdom_loop already seen so the journey coach yields to the
-    # guide walkthrough, which should re-show while the final land card is
-    # unfinished.
+    # return_to_kingdom_loop already seen, so the journey coach is quiet and the
+    # (removed) guide walkthrough must not take its place.
     screen.state.user_dict['onboarding']['menu_hints_seen'] = [
         'duel', 'kingdom', 'collection', 'rankings',
-        'return_to_kingdom_loop', 'guide',
+        'return_to_kingdom_loop',
     ]
-
-    step = screen._current_area_coach_step()
-    assert step['id'] == 'guide'
+    assert screen._current_area_coach_step() is None
 
 
 def test_kingdom_coach_progresses_from_map_to_conquer_button():

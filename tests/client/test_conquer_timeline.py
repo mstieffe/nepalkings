@@ -1826,3 +1826,45 @@ class TestBattleShopSnapBack:
         cls._enforce_battle_shop_during_moves(screen)
 
         assert screen.state.subscreen == 'battle_shop'
+
+
+def test_fit_timeline_bubbles_never_overflows_info_box():
+    """Crowded mobile timelines must keep the bubble row inside the timeline
+    width so it never bleeds into (and gets covered by) the info box.
+
+    Regression: the bubble width used to be floored at 54px even when the row
+    did not fit, so the last bubble overlapped the info box on the right.
+    """
+    from game.components.conquer_timeline_panel import (
+        ConquerTimelinePanel, _BUBBLE_GAP)
+
+    # 8 visible steps with the narrow timeline left after a 320px info box on a
+    # ~854px mobile canvas — the scenario that produced the overlap.
+    indices = list(range(8))
+    timeline_w = 490
+
+    kept, bubble_w = ConquerTimelinePanel._fit_timeline_bubbles(
+        indices, timeline_w)
+
+    assert kept, 'at least one bubble must remain'
+    span = len(kept) * bubble_w + _BUBBLE_GAP * (len(kept) - 1)
+    assert span <= timeline_w, (span, timeline_w)
+    # The most recent steps (incl. the active one beside the info box) are kept.
+    assert kept[-1] == indices[-1]
+    assert kept == indices[-len(kept):]
+
+
+def test_fit_timeline_bubbles_keeps_all_when_they_fit():
+    from game.components.conquer_timeline_panel import (
+        ConquerTimelinePanel, _BUBBLE_GAP, _BUBBLE_MAX_W)
+
+    indices = list(range(4))
+    timeline_w = 1200  # plenty of room on desktop
+
+    kept, bubble_w = ConquerTimelinePanel._fit_timeline_bubbles(
+        indices, timeline_w)
+
+    assert kept == indices  # nothing dropped
+    assert bubble_w <= _BUBBLE_MAX_W
+    span = len(kept) * bubble_w + _BUBBLE_GAP * (len(kept) - 1)
+    assert span <= timeline_w

@@ -570,33 +570,15 @@ class GameMenuScreen(MenuScreenMixin, Screen):
         onboarding = self._onboarding()
         if onboarding.get('welcome_pending'):
             return None
-        seen = self._menu_coach_seen()
 
         # Lead with the actionable journey the welcome promised: open a pack,
-        # conquer a land, then let the first-land card close the tour.
-        journey = self._current_journey_coach_step()
-        if journey is not None:
-            return journey
-
-        # Once the journey is underway, point at the guide for reward tracking.
-        guide_walkthrough_pending = (
-            not self._first_session_tutorial_complete()
-            and 'guide_first_duel_reward' not in seen
-        )
-        if 'guide' not in seen or guide_walkthrough_pending:
-            return {
-                'id': 'guide',
-                'rect': self._icon_guide.rect,
-                'title': 'Guide',
-                'body': 'Open the guide any time to track your checklist and reward goals.',
-                'max_lines': 4,
-            }
-        return None
+        # conquer a land, then let the first-land card close the tour. The guide
+        # icon is intentionally not coach-pointed: that card interrupted the flow
+        # without adding value, so the menu shows no further coaching here.
+        return self._current_journey_coach_step()
 
     def _after_menu_coach_next(self, step_id):
-        if step_id == 'guide':
-            self._open_onboarding_guide()
-        elif step_id == 'guide_first_duel_reward':
+        if step_id == 'guide_first_duel_reward':
             self._onboarding_guide_open = False
 
     # ── Welcome present reveal ─────────────────────────────────────
