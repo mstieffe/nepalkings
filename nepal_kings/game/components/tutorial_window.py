@@ -56,9 +56,16 @@ def _wrap_text(text, font, max_w):
 
 
 def _draw_vscrollbar(window, panel_rect, top, avail_h, content_h, scroll,
-                     max_scroll, accent):
-    """A slim vertical scrollbar on the right edge of a panel's content area."""
+                     max_scroll, accent, obj=None):
+    """A slim vertical scrollbar on the right edge of a panel's content area.
+
+    When ``obj`` is given, the thumb/track geometry is stashed on it so the
+    event handler can drag the thumb directly (a real scrollbar where the thumb
+    follows the cursor), instead of grab-scrolling the content the opposite way.
+    """
     if content_h <= 0 or max_scroll <= 0:
+        if obj is not None:
+            obj._scroll_track_rect = None
         return
     w = max(4, int(0.009 * settings.SCREEN_WIDTH))
     x = panel_rect.right - w - int(0.012 * settings.SCREEN_WIDTH)
@@ -70,36 +77,78 @@ def _draw_vscrollbar(window, panel_rect, top, avail_h, content_h, scroll,
     pygame.draw.rect(bar, (255, 255, 255, 26), bar.get_rect(), border_radius=w // 2)
     pygame.draw.rect(bar, (*accent, 200), (0, thumb_y, w, thumb_h), border_radius=w // 2)
     window.blit(bar, (x, top))
+    if obj is not None:
+        hit_pad = w  # widen the grab target for easier (and touch) dragging
+        obj._scroll_track_rect = pygame.Rect(
+            x - hit_pad, top, w + 2 * hit_pad, avail_h)
+        obj._scroll_track_top = top
+        obj._scroll_thumb_h = thumb_h
+        obj._scroll_thumb_top = top + thumb_y
+        obj._scroll_max_off = max_off
+
+
+def _set_scroll_from_thumb(obj, y):
+    """Map a pointer Y on the scrollbar track to a scroll offset so the thumb
+    follows the cursor (drag the bar down → scroll down)."""
+    top = getattr(obj, '_scroll_track_top', None)
+    max_off = getattr(obj, '_scroll_max_off', 0)
+    if top is None or max_off <= 0:
+        return
+    grab = getattr(obj, '_scroll_grab_offset', 0)
+    frac = max(0.0, min(1.0, (y - top - grab) / max_off))
+    obj._scroll = frac * obj._max_scroll
 
 
 def _apply_wheel_drag_scroll(events, content_rect, obj):
     """Update ``obj``'s scroll fields (_scroll/_max_scroll/_dragging/
     _drag_last_y/_drag_moved) from wheel + drag events, clamped to
-    [0, _max_scroll]. Shared by the scrollable dialogues below."""
+    [0, _max_scroll]. Shared by the scrollable dialogues below.
+
+    Dragging the scrollbar moves the thumb under the cursor; dragging elsewhere
+    in the content grab-scrolls (touch-style)."""
     if obj._max_scroll <= 0:
         obj._scroll = 0.0
         obj._dragging = False
+        obj._scrollbar_dragging = False
         return
     step = max(24, int(0.045 * settings.SCREEN_HEIGHT))
+    track = getattr(obj, '_scroll_track_rect', None)
     for event in events:
         et = getattr(event, 'type', None)
         if et == pygame.MOUSEWHEEL:
             obj._scroll -= getattr(event, 'y', 0) * step
         elif et == pygame.MOUSEBUTTONDOWN and getattr(event, 'button', 0) == 1:
             pos = getattr(event, 'pos', pygame.mouse.get_pos())
-            if content_rect.collidepoint(pos):
+            if track is not None and track.collidepoint(pos):
+                # Scrollbar drag: the thumb tracks the cursor. If the press
+                # lands on the thumb, keep its grab offset; otherwise centre the
+                # thumb under the cursor (page jump).
+                obj._scrollbar_dragging = True
+                obj._drag_moved = True
+                thumb_top = getattr(obj, '_scroll_thumb_top', pos[1])
+                thumb_h = getattr(obj, '_scroll_thumb_h', 0)
+                if thumb_top <= pos[1] <= thumb_top + thumb_h:
+                    obj._scroll_grab_offset = pos[1] - thumb_top
+                else:
+                    obj._scroll_grab_offset = thumb_h / 2
+                _set_scroll_from_thumb(obj, pos[1])
+            elif content_rect.collidepoint(pos):
                 obj._dragging = True
                 obj._drag_last_y = pos[1]
                 obj._drag_moved = False
-        elif et == pygame.MOUSEMOTION and obj._dragging:
+        elif et == pygame.MOUSEMOTION:
             pos = getattr(event, 'pos', pygame.mouse.get_pos())
-            dy = pos[1] - obj._drag_last_y
-            if abs(dy) > 2:
-                obj._drag_moved = True
-            obj._scroll -= dy
-            obj._drag_last_y = pos[1]
+            if getattr(obj, '_scrollbar_dragging', False):
+                _set_scroll_from_thumb(obj, pos[1])
+            elif obj._dragging:
+                dy = pos[1] - obj._drag_last_y
+                if abs(dy) > 2:
+                    obj._drag_moved = True
+                obj._scroll -= dy
+                obj._drag_last_y = pos[1]
         elif et == pygame.MOUSEBUTTONUP and getattr(event, 'button', 0) == 1:
             obj._dragging = False
+            obj._scrollbar_dragging = False
     obj._scroll = max(0, min(obj._scroll, obj._max_scroll))
 
 
@@ -160,6 +209,8 @@ class TutorialWindowDialogue:
         self._dragging = False
         self._drag_last_y = 0
         self._drag_moved = False
+        self._scrollbar_dragging = False
+        self._scroll_track_rect = None
 
     # ── helpers ──────────────────────────────────────────────────────
     @staticmethod
@@ -448,7 +499,7 @@ class TutorialWindowDialogue:
 
     def _draw_scrollbar(self, avail_top, avail_h, content_h):
         _draw_vscrollbar(self.window, self.rect, avail_top, avail_h, content_h,
-                         self._scroll, self._max_scroll, self._accent)
+                         self._scroll, self._max_scroll, self._accent, obj=self)
 
     def get_tooltip(self, pos):
         return ''
@@ -522,6 +573,8 @@ class StarterSuitRevealDialogue:
         self._dragging = False
         self._drag_last_y = 0
         self._drag_moved = False
+        self._scrollbar_dragging = False
+        self._scroll_track_rect = None
 
     def _draw_centered_lines(self, lines, font, color, y, *, gap=None):
         max_w = self.rect.w - int(0.08 * settings.SCREEN_WIDTH)
@@ -639,7 +692,7 @@ class StarterSuitRevealDialogue:
                     self.window.set_clip(None)
                     _draw_vscrollbar(self.window, self.rect, content_top, content_h,
                                      bh, self._scroll, self._max_scroll,
-                                     settings.TITLE_TEXT_COLOR)
+                                     settings.TITLE_TEXT_COLOR, obj=self)
                 else:
                     self.window.blit(
                         breakdown, (bx, content_top + max(0, (content_h - bh) // 2)))

@@ -7566,9 +7566,10 @@ class ConquerGameScreen(GameScreen):
         COUNT — never the cards.
         """
         def _available(t):
-            return (isinstance(t, dict)
-                    and t.get('played_round') is None
-                    and t.get('status') != 'played')
+            if not isinstance(t, dict) or t.get('played_round') is not None:
+                return False
+            status = t.get('status', 'available')
+            return status == 'available' or bool(t.get('_render_ghost'))
 
         return sum(1 for t in self._current_conquer_opponent_tactics()
                    if _available(t))

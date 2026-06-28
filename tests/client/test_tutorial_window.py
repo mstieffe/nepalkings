@@ -102,6 +102,62 @@ def test_window_ignores_clicks_within_200ms():
     assert win.update([_click(win._btn_next.rect)]) is None
 
 
+def _scrollable_window():
+    from config import settings
+    from game.components.tutorial_window import TutorialWindowDialogue
+    if not pygame.display.get_init():
+        pygame.display.init()
+    surf = pygame.display.set_mode((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+    if not pygame.font.get_init():
+        pygame.font.init()
+    pages = [{'title': 'Scroll Test', 'layout': 'text_only',
+              'lines': [f'line {i}' for i in range(60)]}]
+    win = TutorialWindowDialogue(surf, pages, title='T')
+    win._created_at = pygame.time.get_ticks() - 1000
+    win.draw()
+    return win
+
+
+def _evt(kind, **kw):
+    return pygame.event.Event(kind, **kw)
+
+
+def test_scrollbar_thumb_drag_follows_cursor():
+    win = _scrollable_window()
+    assert win._max_scroll > 0
+    track = win._scroll_track_rect
+    assert track is not None
+
+    # Grab the thumb and drag DOWN → scroll increases (view goes down).
+    win._scroll = 0.0
+    win.draw()
+    y0 = win._scroll_thumb_top + 2
+    win.update([_evt(pygame.MOUSEBUTTONDOWN, button=1, pos=(track.centerx, y0)),
+                _evt(pygame.MOUSEMOTION, pos=(track.centerx, y0 + 90))])
+    assert win._scroll > 0
+    down_scroll = win._scroll
+    win.update([_evt(pygame.MOUSEBUTTONUP, button=1, pos=(track.centerx, y0 + 90))])
+
+    # Grab the thumb and drag UP → scroll decreases.
+    win.draw()
+    y1 = win._scroll_thumb_top + 2
+    win.update([_evt(pygame.MOUSEBUTTONDOWN, button=1, pos=(track.centerx, y1)),
+                _evt(pygame.MOUSEMOTION, pos=(track.centerx, y1 - 150))])
+    assert win._scroll < down_scroll
+    win.update([_evt(pygame.MOUSEBUTTONUP, button=1, pos=(track.centerx, y1 - 150))])
+
+
+def test_content_grab_scroll_still_works():
+    win = _scrollable_window()
+    win._scroll = 0.0
+    win.draw()
+    cx, cy = win.rect.centerx, win.rect.centery
+    # Touch-style: drag content UP → scroll increases.
+    win.update([_evt(pygame.MOUSEBUTTONDOWN, button=1, pos=(cx, cy)),
+                _evt(pygame.MOUSEMOTION, pos=(cx, cy - 60))])
+    assert win._scroll > 0
+
+
 def test_tiny_overflow_is_not_scrolled_but_large_overflow_is():
     _display()
     from config import settings

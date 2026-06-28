@@ -1188,6 +1188,7 @@ def test_opponent_hidden_hand_count_counts_available_only():
             {'player_id': 20, 'status': 'available', 'played_round': None},  # opp hand
             {'player_id': 20, 'status': 'available', 'played_round': None},  # opp hand
             {'player_id': 20, 'status': 'played', 'played_round': 0},        # opp played
+            {'player_id': 20, 'status': 'discarded', 'played_round': None},  # opp spent
         ],
     ))
     assert ConquerGameScreen._opponent_hidden_hand_count(screen) == 2
