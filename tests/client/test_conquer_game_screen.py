@@ -371,6 +371,42 @@ def test_battle_intro_window_suppressed_when_skipped_or_done():
         assert screen._battle_intro_dialogue is None
 
 
+def test_on_enter_primes_conquer_game_start_summary_immediately():
+    ConquerGameScreen = _conquer_screen_class()
+    screen = ConquerGameScreen.__new__(ConquerGameScreen)
+    started = []
+    polls = []
+    game = SimpleNamespace(
+        game_id=77,
+        player_id=11,
+        mode='conquer',
+        conquer_move_model='tactics_hand',
+        state='open',
+        game_over=False,
+        pending_game_over=None,
+        game_over_shown=False,
+        _conquer_game_entered=False,
+        start_game_start_notification_if_needed=lambda: started.append('start'),
+    )
+    screen.state = SimpleNamespace(
+        screen='conquer_game',
+        subscreen='battle',
+        game=game,
+    )
+    screen.subscreens = {'field': SimpleNamespace()}
+    screen._ensure_conquer_screen_game = lambda: True
+    screen._normalize_conquer_subscreen = lambda: None
+    screen._reset_game_screen_state = lambda: None
+    screen._is_tactics_hand_game = lambda: True
+    screen._request_battle_state_poll = lambda force=False: polls.append(force)
+
+    ConquerGameScreen.on_enter(screen)
+
+    assert started == ['start']
+    assert polls == [True]
+    assert screen.state.subscreen == 'field'
+
+
 def test_conquer_battle_coach_hidden_after_first_conquer_completion():
     ConquerGameScreen, screen = _battle_coach_screen(
         completed_steps=['finish_first_conquer_battle'])

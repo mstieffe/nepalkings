@@ -269,6 +269,20 @@ class TestGameBattleStateTransitions:
         assert game._game_start_pending is True
         assert game.pending_opponent_turn_summary is summary
 
+    def test_game_start_notification_helper_starts_once(self):
+        from game.core.game import Game
+
+        game = Game(_mk_game_dict(), _mk_user_dict(), lightweight=True)
+        calls = []
+        game._start_turn_async = lambda: calls.append('start')
+
+        assert game.start_game_start_notification_if_needed() is True
+        assert game.start_game_start_notification_if_needed() is False
+
+        assert calls == ['start']
+        assert game.game_start_notification_checked is True
+        assert game._game_start_pending is True
+
     def test_suppress_turn_summary_only_when_turn_is_ours(self):
         """After fold, suppress_next_turn_summary should be True only for the
         player whose turn it is (fold winner/invader).  The defender's first

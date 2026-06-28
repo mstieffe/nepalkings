@@ -832,10 +832,7 @@ class Game:
 
         # Check for game start notification on first update (regardless of turn number)
         if not self.game_start_notification_checked:
-            logger.info(f"[GAME_START] First update — player_id={self.player_id}, turn={self.turn}, invader={self.invader}")
-            self._start_turn_async()
-            self.game_start_notification_checked = True
-            self._game_start_pending = True
+            self.start_game_start_notification_if_needed()
         
         # Suppress all turn-change detection while game_start is in flight /
         # unprocessed.  Without this guard, a fast AI opponent causes a race:
@@ -1070,6 +1067,19 @@ class Game:
             t.start()
         except RuntimeError:
             self._handle_start_turn()  # fallback: run synchronously
+
+    def start_game_start_notification_if_needed(self):
+        """Kick off the one-shot game-start summary request immediately."""
+        if self.game_start_notification_checked:
+            return False
+        logger.info(
+            f"[GAME_START] First update — player_id={self.player_id}, "
+            f"turn={self.turn}, invader={self.invader}"
+        )
+        self.game_start_notification_checked = True
+        self._game_start_pending = True
+        self._start_turn_async()
+        return True
 
     def _start_async_start_turn_web(self):
         """Web-only: fire start_turn POST asynchronously, drain on main thread."""

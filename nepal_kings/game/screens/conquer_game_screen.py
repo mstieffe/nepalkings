@@ -315,6 +315,14 @@ class ConquerGameScreen(GameScreen):
         if self.state.game and getattr(self.state.game, '_conquer_game_entered', False) is False:
             self.state.subscreen = 'field'
             self.state.game._conquer_game_entered = True
+        if self.state.game:
+            starter = getattr(
+                self.state.game, 'start_game_start_notification_if_needed', None)
+            if callable(starter):
+                try:
+                    starter()
+                except Exception:
+                    pass
         # Cold-load priming: request a tactics snapshot up front so the
         # round ledger / timeline catch up without a blocking render fetch.
         if self.state.game and self._is_tactics_hand_game():
