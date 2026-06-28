@@ -961,6 +961,22 @@ class Game:
         self.fold_outcome = game_dict.get('fold_outcome')
         self.fold_winner_id = game_dict.get('fold_winner_id')
 
+        battle_active = (
+            self.battle_confirmed
+            or bool(self.battle_decisions)
+            or bool(self.fold_outcome)
+        )
+        is_now_our_turn = (self.turn_player_id == self.player_id)
+        if (not battle_active and
+            self.advancing_figure_id and
+            self.advancing_player_id == self.player_id and
+            not self.defending_figure_id and
+            is_now_our_turn and
+            not self.pending_defender_selection and
+            not self.defender_selection_dialogue_shown and
+            not self.civil_war_awaiting_second):
+            self.pending_defender_selection = True
+
         # Fix: If battle is confirmed, forcibly set guards to prevent double notification
         if self.battle_confirmed:
             self.pending_battle_ready = False

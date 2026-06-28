@@ -7863,6 +7863,8 @@ class ConquerGameScreen(GameScreen):
             with perf_section(f'conquer.update.subscreen.{self.state.subscreen}'):
                 subscreen.update(self.state.game)
         with perf_section('conquer.update.bookkeeping'):
+            if getattr(self.state.game, 'pending_defender_selection', False):
+                self.check_defender_selection_needed()
             self._sync_conquer_action_modes()
             self._sync_pending_confirmation_state()
             self._enforce_battle_shop_during_moves()

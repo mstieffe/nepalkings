@@ -234,6 +234,28 @@ class TestGameBattleStateTransitions:
 
         assert game.auto_proceed_to_battle is True
 
+    def test_update_from_dict_enters_defender_pick_after_conquer_counter_spell(self):
+        from game.core.game import Game
+
+        initial = _mk_game_dict()
+        initial['mode'] = 'conquer'
+        game = Game(initial, _mk_user_dict(), lightweight=True)
+        game.pending_defender_selection = False
+        game.defender_selection_dialogue_shown = False
+
+        post_counter = _mk_game_dict()
+        post_counter['mode'] = 'conquer'
+        post_counter['advancing_figure_id'] = 501
+        post_counter['advancing_player_id'] = 113
+        post_counter['defending_figure_id'] = None
+        post_counter['turn_player_id'] = 113
+        post_counter['battle_confirmed'] = False
+        post_counter['battle_decisions'] = None
+
+        game.update_from_dict(post_counter)
+
+        assert game.pending_defender_selection is True
+
     def test_conquer_game_start_pending_clears_without_summary(self):
         from game.core.game import Game
 
