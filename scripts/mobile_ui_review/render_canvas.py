@@ -60,6 +60,8 @@ KINGDOM_CONFIG_ALIASES = {
 
 BOOSTER_REVEAL_ALIASES = {
     "collection_booster_reveal_special": "special",
+    "collection_booster_reveal_hidden": "hidden",
+    "collection_booster_reveal_bulk": "bulk",
 }
 
 MAIN_RANKS = {"7", "8", "9", "10", "J", "Q", "K", "A"}
@@ -1095,6 +1097,14 @@ def populate_collection_booster_reveal(screen, variant: str):
         {"suit": "Clubs", "rank": "J", "value": 1, "tier": 2},
         {"suit": "Spades", "rank": "K", "value": 4, "tier": 3},
     ]
+    if variant == "bulk":
+        suits = ["Hearts", "Diamonds", "Clubs", "Spades"]
+        ranks = ["7", "8", "9", "10", "J", "Q", "K", "A"]
+        cards = [
+            {"suit": suits[i % 4], "rank": ranks[i % 8],
+             "value": 7, "tier": (i % 3) + 1}
+            for i in range(12)
+        ]
     overlay = BoosterRevealOverlay(screen.window, cards, pack_type="main")
     if variant == "special":
         now = pygame.time.get_ticks()

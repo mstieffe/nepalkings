@@ -2158,6 +2158,25 @@ class HexMap:
         self._mm_x = mm_x
         self._mm_y = mm_y
 
+    def land_screen_rect(self, land_id):
+        """Return the on-screen bounding Rect of a land's hex, or None.
+
+        Returns None when the land is unknown or its centre currently sits
+        outside the map viewport, so callers (e.g. tutorial coaching) can fall
+        back to a viewport-wide anchor when the land is panned off-screen.
+        """
+        for tile in self.tiles:
+            if tile.land_id != land_id:
+                continue
+            cx, cy = self.world_to_screen(tile.cx, tile.cy)
+            if not self.viewport_rect.collidepoint(cx, cy):
+                return None
+            half_w = self._size * self.zoom
+            half_h = (math.sqrt(3) / 2) * self._size * self.zoom
+            return pygame.Rect(int(cx - half_w), int(cy - half_h),
+                               int(half_w * 2), int(half_h * 2))
+        return None
+
     def focus_land(self, land_id):
         """Select and centre the map on a land id. Returns the tile if found."""
         for tile in self.tiles:

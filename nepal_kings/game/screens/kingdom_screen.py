@@ -821,6 +821,22 @@ class KingdomScreen(MenuScreenMixin, Screen):
         facts = (self._onboarding() or {}).get('facts') or {}
         return int(facts.get('conquer_battles') or 0) >= 1
 
+    def _recommended_land_anchor_rect(self):
+        """Screen rect of the recommended tutorial land, or None.
+
+        Used to anchor the conquer-tutorial coach card on the specific hex
+        (so the card sits beside the land instead of covering it). Falls back
+        to None when the land is unknown or panned off-screen, letting callers
+        use the whole map viewport instead.
+        """
+        land_id = getattr(self, '_recommended_tutorial_land_id', None)
+        if not land_id or not self._hex_map:
+            return None
+        getter = getattr(self._hex_map, 'land_screen_rect', None)
+        if not callable(getter):
+            return None
+        return getter(land_id)
+
     def _current_kingdom_coach_step(self):
         if not self._menu_coach_allowed_common() or not self._kingdom_coach_ready():
             return None
@@ -845,10 +861,14 @@ class KingdomScreen(MenuScreenMixin, Screen):
         if not self._hex_map or self._loading or self._error:
             return None
         if not first_conquer_complete and 'kingdom_pick_land' not in seen:
-            has_recommended = bool(getattr(self, '_recommended_tutorial_land_id', None))
+            land_rect = self._recommended_land_anchor_rect()
+            has_recommended = land_rect is not None
             return {
                 'id': 'kingdom_pick_land',
-                'rect': self._map_viewport_rect,
+                # Anchor on the marked hex so the card sits beside it, but let
+                # taps anywhere on the map pass through (pan + land selection).
+                'rect': land_rect or self._map_viewport_rect,
+                'click_through_rects': [self._map_viewport_rect],
                 'title': 'Pick The Marked Land' if has_recommended else 'Pick A Land',
                 'body': (
                     'Tap the gold-marked tier-1 land. It is tuned for your starter attack and the tactic tools you are about to learn.'
@@ -864,9 +884,11 @@ class KingdomScreen(MenuScreenMixin, Screen):
         # still available, so the player can attack the marked land again. This
         # nudge is never marked, so it re-shows every visit until they win.
         if not first_conquer_complete and self._first_conquest_attempted():
+            land_rect = self._recommended_land_anchor_rect()
             return {
                 'id': 'kingdom_conquer_retry',
-                'rect': self._map_viewport_rect,
+                'rect': land_rect or self._map_viewport_rect,
+                'click_through_rects': [self._map_viewport_rect],
                 'title': 'Try Again',
                 'body': 'No cards were lost — your starter attack is ready. Tap the gold-marked land to conquer it again.',
                 'action': 'click',

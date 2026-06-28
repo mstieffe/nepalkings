@@ -1432,6 +1432,19 @@ class MenuScreenMixin:
             return [pygame.Rect(rect) for rect in rects]
         return [pygame.Rect(step['rect'])]
 
+    def _menu_coach_passthrough_rects(self, step):
+        """Rects where an ``action='click'`` tap is let through to the screen.
+
+        Defaults to the visual target rects, but a step may set
+        ``click_through_rects`` to allow taps over a wider area than the
+        highlighted target (e.g. tapping anywhere on the map while the coach
+        card only marks one land), so the underlying view stays interactive.
+        """
+        rects = step.get('click_through_rects') if step else None
+        if rects:
+            return [pygame.Rect(rect) for rect in rects]
+        return self._menu_coach_target_rects(step)
+
     def _menu_coach_target_bounds(self, step):
         rects = self._menu_coach_target_rects(step)
         bounds = rects[0].copy()
@@ -1527,7 +1540,7 @@ class MenuScreenMixin:
             return False
         action = step.get('action', 'next')
         block_types = self._menu_coach_blocking_event_types()
-        target_rects = self._menu_coach_target_rects(step)
+        passthrough_rects = self._menu_coach_passthrough_rects(step)
         for event in events:
             if event.type == pygame.QUIT:
                 continue
@@ -1542,7 +1555,7 @@ class MenuScreenMixin:
                         return True
                 if action != 'click':
                     return True
-                if any(rect.collidepoint(pos) for rect in target_rects):
+                if any(rect.collidepoint(pos) for rect in passthrough_rects):
                     return False
                 return True
             if event.type == pygame.MOUSEBUTTONUP and getattr(event, 'button', 0) == 1:
@@ -1570,7 +1583,7 @@ class MenuScreenMixin:
                         self._pause_onboarding_tutorial()
                     return True
                 if action == 'click':
-                    if any(rect.collidepoint(pos) for rect in target_rects):
+                    if any(rect.collidepoint(pos) for rect in passthrough_rects):
                         if step.get('mark_on_click', True):
                             self._mark_menu_coach_seen(step.get('id'))
                         return False
