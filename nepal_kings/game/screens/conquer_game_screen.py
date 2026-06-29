@@ -1014,6 +1014,15 @@ class ConquerGameScreen(GameScreen):
         field = self.subscreens.get('field') if hasattr(self, 'subscreens') else None
         if game is None or field is None:
             return False
+        if kind in ('defender', 'own_defender') and not getattr(game, 'advancing_figure_id', None):
+            self._clear_stale_conquer_defender_flags_if_no_advance()
+            if getattr(field, 'defender_selection_mode', False):
+                field.defender_selection_mode = False
+            if getattr(field, 'conquer_own_defender_mode', False):
+                field.conquer_own_defender_mode = False
+            if hasattr(field, '_reset_defender_selectable'):
+                field._reset_defender_selectable()
+            return False
         try:
             if kind == 'defender':
                 from utils.game_service import select_defender
@@ -3233,6 +3242,7 @@ class ConquerGameScreen(GameScreen):
         game = self.state.game
         if not game:
             return None, None
+        advancing_id = getattr(game, 'advancing_figure_id', None)
 
         if (getattr(game, 'pending_conquer_prelude_target', False)
                 or getattr(self.state, 'pending_conquer_prelude_target', None)):
@@ -3242,13 +3252,15 @@ class ConquerGameScreen(GameScreen):
             return 'field', ('field', 'forced_advance', getattr(game, 'current_round', None))
 
         field_screen = self.subscreens.get('field')
-        if (getattr(game, 'pending_defender_selection', False)
+        if (advancing_id
+                and getattr(game, 'pending_defender_selection', False)
                 and getattr(game, 'defender_selection_dialogue_shown', False)):
-            return 'field', ('field', 'select_defender', getattr(game, 'advancing_figure_id', None))
+            return 'field', ('field', 'select_defender', advancing_id)
 
-        if (field_screen and getattr(field_screen, 'conquer_own_defender_mode', False)
+        if advancing_id and (
+                (field_screen and getattr(field_screen, 'conquer_own_defender_mode', False))
                 or getattr(game, 'pending_conquer_own_defender_selection', False)):
-            return 'field', ('field', 'own_defender', getattr(game, 'advancing_figure_id', None))
+            return 'field', ('field', 'own_defender', advancing_id)
 
         if (getattr(game, 'battle_confirmed', False)
                 and getattr(game, 'battle_turn_player_id', None) is not None):
@@ -3330,17 +3342,19 @@ class ConquerGameScreen(GameScreen):
         game = self.state.game
         if not game:
             return {'field': 0, 'battle': 0}
+        advancing_id = getattr(game, 'advancing_figure_id', None)
 
         field = 0
         if (getattr(game, 'pending_conquer_prelude_target', False)
                 or getattr(self.state, 'pending_conquer_prelude_target', None)
                 or (getattr(game, 'pending_forced_advance', False)
-                    and not getattr(game, 'advancing_figure_id', None))
-                or (getattr(game, 'pending_defender_selection', False)
+                    and not advancing_id)
+                or (advancing_id
+                    and getattr(game, 'pending_defender_selection', False)
                     and getattr(game, 'defender_selection_dialogue_shown', False))
-                or getattr(game, 'pending_conquer_own_defender_selection', False)
-                or getattr(game, 'civil_war_awaiting_second', False)
-                or getattr(game, 'civil_war_defender_second', False)):
+                or (advancing_id and getattr(game, 'pending_conquer_own_defender_selection', False))
+                or (advancing_id and getattr(game, 'civil_war_awaiting_second', False))
+                or (advancing_id and getattr(game, 'civil_war_defender_second', False))):
             field = 1
 
         battle = 0
@@ -3629,6 +3643,13 @@ class ConquerGameScreen(GameScreen):
             field = self.subscreens.get('field')
             pending = self._conquer_pending_confirmation or {}
             kind = pending.get('kind')
+            game = self.state.game
+            if (kind in ('opponent_defender', 'own_defender')
+                    and game is not None
+                    and not getattr(game, 'advancing_figure_id', None)):
+                self._clear_stale_conquer_defender_flags_if_no_advance()
+                self.clear_conquer_figure_confirmation()
+                return True
             handled = False
             if field:
                 if kind == 'advance' and hasattr(field, 'confirm_pending_advance'):
@@ -3726,6 +3747,17 @@ class ConquerGameScreen(GameScreen):
                 field.conquer_own_defender_mode = False
                 if hasattr(field, '_reset_defender_selectable'):
                     field._reset_defender_selectable()
+            self._auto_single_option_pending = None
+            return
+
+        if not getattr(game, 'advancing_figure_id', None):
+            self._clear_stale_conquer_defender_flags_if_no_advance()
+            if getattr(field, 'defender_selection_mode', False):
+                field.defender_selection_mode = False
+                field._reset_defender_selectable()
+            if getattr(field, 'conquer_own_defender_mode', False):
+                field.conquer_own_defender_mode = False
+                field._reset_defender_selectable()
             self._auto_single_option_pending = None
             return
 
@@ -7908,6 +7940,7 @@ class ConquerGameScreen(GameScreen):
                         and self.state.game.pending_forced_advance):
                     self._handle_forced_advance_dialogue_response()
                 elif (response == 'got it!' and self.state.game
+                      and self.state.game.advancing_figure_id
                       and self.state.game.pending_defender_selection):
                     self.state.subscreen = 'field'
                     field_screen = self.subscreens.get('field')
@@ -7916,6 +7949,7 @@ class ConquerGameScreen(GameScreen):
                         field_screen._update_defender_selectable()
                     self.state.game.defender_selection_dialogue_shown = True
                 elif (response == 'ok' and self.state.game
+                      and getattr(self.state.game, 'advancing_figure_id', None)
                       and getattr(self.state.game, 'pending_conquer_own_defender_selection', False)
                       and not getattr(self.state.game, 'defending_figure_id', None)):
                     self.state.subscreen = 'field'

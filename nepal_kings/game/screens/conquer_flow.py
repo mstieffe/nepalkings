@@ -247,8 +247,13 @@ def derive_conquer_objective(game: Any, state: Any = None,
             tone='action',
         )
 
+    advancing_id = _get(game, 'advancing_figure_id')
+    defending_id = _get(game, 'defending_figure_id')
+    player_id = _get(game, 'player_id')
+    advancing_player_id = _get(game, 'advancing_player_id')
+
     if (_get(game, 'pending_forced_advance', False)
-            and not _get(game, 'advancing_figure_id')):
+            and not advancing_id):
         return ConquerObjective(
             phase='advance',
             headline='Choose your battle figure',
@@ -258,7 +263,7 @@ def derive_conquer_objective(game: Any, state: Any = None,
             tone='action',
         )
 
-    if _get(game, 'civil_war_awaiting_second', False):
+    if _get(game, 'civil_war_awaiting_second', False) and advancing_id:
         return ConquerObjective(
             phase='advance',
             headline='Civil War: optional second attacker',
@@ -268,7 +273,7 @@ def derive_conquer_objective(game: Any, state: Any = None,
             tone='action',
         )
 
-    if _get(game, 'civil_war_defender_second', False):
+    if _get(game, 'civil_war_defender_second', False) and advancing_id:
         own_mode = bool(_get(field_screen, 'conquer_own_defender_mode', False))
         return ConquerObjective(
             phase='defender',
@@ -282,6 +287,7 @@ def derive_conquer_objective(game: Any, state: Any = None,
         )
 
     if (_get(game, 'pending_defender_selection', False)
+            and advancing_id
             and _get(game, 'turn', False)):
         restriction = ''
         if _has_modifier(game, 'Peasant War'):
@@ -297,7 +303,7 @@ def derive_conquer_objective(game: Any, state: Any = None,
             tone='action',
         )
 
-    if _get(game, 'pending_conquer_own_defender_selection', False):
+    if _get(game, 'pending_conquer_own_defender_selection', False) and advancing_id:
         return ConquerObjective(
             phase='defender',
             headline='Invader Swap: choose your defender',
@@ -306,11 +312,6 @@ def derive_conquer_objective(game: Any, state: Any = None,
             primary_action='select_own_defender',
             tone='action',
         )
-
-    advancing_id = _get(game, 'advancing_figure_id')
-    defending_id = _get(game, 'defending_figure_id')
-    player_id = _get(game, 'player_id')
-    advancing_player_id = _get(game, 'advancing_player_id')
 
     if advancing_id and advancing_player_id == player_id and not _get(game, 'turn', False) and not defending_id:
         return ConquerObjective(
@@ -1222,14 +1223,25 @@ def derive_conquer_timeline(game: Any, state: Any = None,
         bool(_get(field_screen, '_pending_advance_figure'))
         if field_screen is not None else False
     )
-    attacker_second_active = bool(_get(game, 'civil_war_awaiting_second', False))
+    pending_defender_select_turn = bool(
+        advancing_id
+        and _get(game, 'pending_defender_selection', False)
+        and _get(game, 'turn', False)
+    )
+    pending_own_defender_select = bool(
+        advancing_id
+        and _get(game, 'pending_conquer_own_defender_selection', False)
+    )
+    attacker_second_active = bool(
+        advancing_id and _get(game, 'civil_war_awaiting_second', False)
+    )
     attacker_select_active = bool(
         _get(game, 'pending_forced_advance', False) and not advancing_id
     ) or bool(
         _get(game, 'turn', False)
         and not advancing_id
-        and not _get(game, 'pending_defender_selection', False)
-        and not _get(game, 'pending_conquer_own_defender_selection', False)
+        and not pending_defender_select_turn
+        and not pending_own_defender_select
         and not _get(game, 'battle_moves_phase', False)
     ) or attacker_second_active or attacker_pending_advance_local
     attacker_done = bool(advancing_id) and not attacker_second_active
@@ -1339,10 +1351,12 @@ def derive_conquer_timeline(game: Any, state: Any = None,
         steps.append(counter_step)
 
     # 5) Defender --------------------------------------------------------
-    defender_second_active = bool(_get(game, 'civil_war_defender_second', False))
+    defender_second_active = bool(
+        advancing_id and _get(game, 'civil_war_defender_second', False)
+    )
     defender_select_active = bool(
-        (_get(game, 'pending_defender_selection', False) and _get(game, 'turn', False))
-        or _get(game, 'pending_conquer_own_defender_selection', False)
+        pending_defender_select_turn
+        or pending_own_defender_select
         or defender_second_active
     )
     defender_pending_local = (
@@ -1379,7 +1393,7 @@ def derive_conquer_timeline(game: Any, state: Any = None,
     )
     defender_response_active = defender_response_for_you or defender_response_waiting
     invader_swap = bool(
-        _get(game, 'pending_conquer_own_defender_selection', False)
+        pending_own_defender_select
         or (defender_second_active and own_is_attacker is False)
     )
     defender_owner = ''
@@ -1387,7 +1401,7 @@ def derive_conquer_timeline(game: Any, state: Any = None,
         defender_owner = 'you'
     elif defender_done:
         defender_owner = opp_name if own_is_attacker else 'you'
-    elif _get(game, 'pending_defender_selection', False) and _get(game, 'turn', False):
+    elif pending_defender_select_turn:
         defender_owner = opp_name
     elif defender_response_for_you:
         defender_owner = 'you'

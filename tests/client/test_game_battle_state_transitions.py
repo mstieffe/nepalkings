@@ -256,6 +256,49 @@ class TestGameBattleStateTransitions:
 
         assert game.pending_defender_selection is True
 
+    def test_update_from_dict_clears_stale_conquer_defender_flags_without_advance(self):
+        from game.core.game import Game
+
+        initial = _mk_game_dict()
+        initial['mode'] = 'conquer'
+        initial['advancing_figure_id'] = 501
+        initial['advancing_player_id'] = 113
+        game = Game(initial, _mk_user_dict(), lightweight=True)
+        game.pending_defender_selection = True
+        game.defender_selection_dialogue_shown = True
+        game.pending_waiting_for_defender_pick = True
+        game.waiting_for_defender_pick_shown = True
+        game.pending_conquer_own_defender_selection = True
+        game.conquer_own_defender_selection_shown = True
+        game.civil_war_awaiting_second = True
+        game.civil_war_defender_second = True
+        game.civil_war_required_color = 'offensive'
+        game.pending_battle_ready = True
+        game.battle_ready_shown = True
+
+        post_spell = _mk_game_dict()
+        post_spell['mode'] = 'conquer'
+        post_spell['advancing_figure_id'] = None
+        post_spell['advancing_player_id'] = None
+        post_spell['defending_figure_id'] = None
+        post_spell['turn_player_id'] = 113
+        post_spell['battle_confirmed'] = False
+        post_spell['battle_decisions'] = None
+
+        game.update_from_dict(post_spell)
+
+        assert game.pending_defender_selection is False
+        assert game.defender_selection_dialogue_shown is False
+        assert game.pending_waiting_for_defender_pick is False
+        assert game.waiting_for_defender_pick_shown is False
+        assert game.pending_conquer_own_defender_selection is False
+        assert game.conquer_own_defender_selection_shown is False
+        assert game.civil_war_awaiting_second is False
+        assert game.civil_war_defender_second is False
+        assert game.civil_war_required_color is None
+        assert game.pending_battle_ready is False
+        assert game.battle_ready_shown is False
+
     def test_conquer_game_start_pending_clears_without_summary(self):
         from game.core.game import Game
 

@@ -379,6 +379,33 @@ class Game:
                 logger.info(f"[ACTION_LOCK] Timeout after {elapsed}ms — force-unlocking")
                 self.unlock_actions()
 
+    def _clear_conquer_advance_dependent_flags(self):
+        """Clear local latches that are only valid while an advance exists."""
+        if getattr(self, 'mode', None) != 'conquer':
+            return
+        self.pending_defender_selection = False
+        self.defender_selection_dialogue_shown = False
+        self.pending_waiting_for_defender_pick = False
+        self.waiting_for_defender_pick_shown = False
+        self.pending_battle_ready = False
+        self.battle_ready_shown = False
+        self.pending_advance_notification = False
+        self.pending_own_advance_notification = False
+        self.own_advance_figure_name = None
+        self.pending_conquer_own_defender_selection = False
+        self.conquer_own_defender_selection_shown = False
+        self.civil_war_awaiting_second = False
+        self.civil_war_defender_second = False
+        self.civil_war_required_color = None
+
+    def _clear_conquer_battle_cycle_flags(self):
+        """Clear client-side conquer prompts when the server resets a battle."""
+        if getattr(self, 'mode', None) != 'conquer':
+            return
+        self.pending_forced_advance = False
+        self.forced_advance_dialogue_shown = False
+        self._clear_conquer_advance_dependent_flags()
+
     def _apply_game_dict(self, game_dict):
         """Apply a game dict to this instance (main-thread only)."""
         self._game_data_version += 1
@@ -522,6 +549,8 @@ class Game:
         # Reset advance-notification tracking when advance is fully cleared
         if not self.advancing_figure_id:
             self._last_advance_notified_id = None
+            if self.mode == 'conquer':
+                self._clear_conquer_advance_dependent_flags()
             # Server cleared battle state (new round) — allow battle_ready
             # detection again.  Until this moment, battle_ready_shown stays
             # True to block stale in-flight polls from re-triggering the
@@ -533,19 +562,7 @@ class Game:
                 # cleared by the server).  Wipe any client-side latches and
                 # heuristic flags that survived the previous cycle, otherwise
                 # the next conquest would inherit ghost dialogues / modes.
-                if self.mode == 'conquer':
-                    self.pending_forced_advance = False
-                    self.forced_advance_dialogue_shown = False
-                    self.pending_defender_selection = False
-                    self.defender_selection_dialogue_shown = False
-                    self.pending_waiting_for_defender_pick = False
-                    self.waiting_for_defender_pick_shown = False
-                    self.pending_conquer_own_defender_selection = False
-                    self.conquer_own_defender_selection_shown = False
-                    self.civil_war_awaiting_second = False
-                    self.civil_war_defender_second = False
-                    self.civil_war_required_color = None
-                    self.pending_advance_notification = False
+                self._clear_conquer_battle_cycle_flags()
         elif not previous_advancing:
             # A brand-new advance appeared (None → set).  Reset battle_ready
             # tracking so the fight/fold dialogue can fire for this new battle.
@@ -942,6 +959,7 @@ class Game:
         self.waiting_for_counter_player_id = game_dict.get('waiting_for_counter_player_id')
         
         # Update advance/battle state
+        previous_advancing = self.advancing_figure_id
         self.advancing_figure_id = game_dict.get('advancing_figure_id')
         self.advancing_figure_id_2 = game_dict.get('advancing_figure_id_2')
         self.advancing_player_id = game_dict.get('advancing_player_id')
@@ -951,6 +969,13 @@ class Game:
         # Clear forced advance once an advance is underway
         if self.pending_forced_advance and self.advancing_figure_id:
             self.pending_forced_advance = False
+
+        if self.mode == 'conquer' and not self.advancing_figure_id:
+            self._clear_conquer_advance_dependent_flags()
+            if previous_advancing:
+                self.battle_ready_shown = False
+                self.pending_battle_ready = False
+                self._clear_conquer_battle_cycle_flags()
         
         # Update battle decision/fold state
         self.battle_decisions = game_dict.get('battle_decisions')

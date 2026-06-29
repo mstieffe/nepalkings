@@ -2531,9 +2531,39 @@ class GameScreen(Screen):
         
         self.state.game.pending_advance_notification = False
 
+    def _clear_stale_conquer_defender_flags_if_no_advance(self):
+        game = self.state.game if self.state else None
+        if (not game
+                or getattr(game, 'mode', 'duel') != 'conquer'
+                or getattr(game, 'advancing_figure_id', None)):
+            return False
+        clear_flags = getattr(game, '_clear_conquer_advance_dependent_flags', None)
+        if callable(clear_flags):
+            clear_flags()
+        else:
+            game.pending_defender_selection = False
+            game.defender_selection_dialogue_shown = False
+            game.pending_waiting_for_defender_pick = False
+            game.waiting_for_defender_pick_shown = False
+            game.pending_battle_ready = False
+            game.battle_ready_shown = False
+            game.pending_advance_notification = False
+            game.pending_own_advance_notification = False
+            game.own_advance_figure_name = None
+            if hasattr(game, 'pending_conquer_own_defender_selection'):
+                game.pending_conquer_own_defender_selection = False
+                game.conquer_own_defender_selection_shown = False
+            game.civil_war_awaiting_second = False
+            game.civil_war_defender_second = False
+            game.civil_war_required_color = None
+        return True
+
     def check_defender_selection_needed(self):
         """Check if the advancing player's turn returned and they need to select a defender."""
         if not self.state.game or not self.state.game.pending_defender_selection:
+            return
+
+        if self._clear_stale_conquer_defender_flags_if_no_advance():
             return
         
         # Only proceed when it's actually the player's turn (turn returned from opponent)
@@ -2620,6 +2650,8 @@ class GameScreen(Screen):
         conquerer to select one of their own figures as their defender."""
         if not self.state.game or not self.state.game.pending_conquer_own_defender_selection:
             return
+        if self._clear_stale_conquer_defender_flags_if_no_advance():
+            return
         if self.state.game.conquer_own_defender_selection_shown:
             return
 
@@ -2653,6 +2685,8 @@ class GameScreen(Screen):
         """Check if defender (Player B) should be notified that opponent is picking their battle figure.
         Instead of a click-through dialogue, we just activate the persistent 'BATTLE INCOMING' prompt."""
         if not self.state.game or not self.state.game.pending_waiting_for_defender_pick:
+            return
+        if self._clear_stale_conquer_defender_flags_if_no_advance():
             return
         
         # Don't re-activate if already shown
@@ -5720,7 +5754,8 @@ class GameScreen(Screen):
         # Draw defender selection prompt for advancing player
         field_screen = self.subscreens.get('field')
         defender_selecting = field_screen and getattr(field_screen, 'defender_selection_mode', False)
-        if (self.state.game and self.state.game.pending_defender_selection and
+        if (self.state.game and self.state.game.advancing_figure_id and
+            self.state.game.pending_defender_selection and
             self.state.game.defender_selection_dialogue_shown and
             self.state.game.turn and
             not self.dialogue_box and not defender_selecting):
@@ -5774,6 +5809,7 @@ class GameScreen(Screen):
         field_screen = self.subscreens.get('field')
         block_subscreen_change = (
             self.state.game and
+            self.state.game.advancing_figure_id and
             self.state.game.pending_defender_selection and
             self.state.game.defender_selection_dialogue_shown and
             field_screen and field_screen.defender_selection_mode
@@ -5847,6 +5883,7 @@ class GameScreen(Screen):
                     self._handle_forced_advance_dialogue_response()
                 # Handle defender selection 'got it!' response — switch to field screen
                 elif (response == 'got it!' and self.state.game and
+                      self.state.game.advancing_figure_id and
                       self.state.game.pending_defender_selection):
                     self.state.subscreen = 'field'
                     field_screen = self.subscreens.get('field')
@@ -5856,6 +5893,7 @@ class GameScreen(Screen):
                     self.state.game.defender_selection_dialogue_shown = True
                 # Handle Invader Swap own-defender selection 'ok' response
                 elif (response == 'ok' and self.state.game and
+                      getattr(self.state.game, 'advancing_figure_id', None) and
                       getattr(self.state.game, 'pending_conquer_own_defender_selection', False)
                       and not getattr(self.state.game, 'defending_figure_id', None)):
                     self.state.subscreen = 'field'
@@ -5961,7 +5999,8 @@ class GameScreen(Screen):
         
         # During defender selection, only allow field screen access
         field_screen = self.subscreens.get('field')
-        if (self.state.game and self.state.game.pending_defender_selection and
+        if (self.state.game and self.state.game.advancing_figure_id and
+            self.state.game.pending_defender_selection and
             self.state.game.defender_selection_dialogue_shown and
             field_screen and field_screen.defender_selection_mode):
             if self.state.subscreen != 'field':

@@ -114,6 +114,33 @@ def test_attacker_step_active_when_advancing_figure_pending():
     assert not by_kind['defender'].active
 
 
+def test_stale_defender_flags_without_attacker_do_not_block_attacker_step():
+    from game.screens.conquer_flow import (
+        derive_conquer_objective,
+        derive_conquer_timeline,
+    )
+
+    game = _make_game(
+        turn=True,
+        advancing_figure_id=None,
+        advancing_player_id=None,
+        defending_figure_id=None,
+        pending_defender_selection=True,
+        pending_conquer_own_defender_selection=True,
+        civil_war_awaiting_second=True,
+        civil_war_defender_second=True,
+    )
+
+    objective = derive_conquer_objective(game, _make_state(game), None, None)
+    steps = derive_conquer_timeline(game, _make_state(game), None, None)
+
+    by_kind = {s.kind: s for s in steps}
+    assert objective.phase == 'advance'
+    assert by_kind['attacker'].active
+    assert by_kind['attacker'].primary_action == 'select_advance'
+    assert not by_kind['defender'].active
+
+
 def test_no_prelude_steps_show_empty_frames_when_attacker_can_act():
     from game.screens.conquer_flow import derive_conquer_timeline
 

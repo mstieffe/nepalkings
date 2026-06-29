@@ -2260,6 +2260,52 @@ def test_active_battle_sync_clears_stale_defender_modes():
     assert len(reset_calls) == 2
 
 
+def test_no_attacker_sync_clears_stale_defender_modes_and_flags():
+    ConquerGameScreen = _conquer_screen_class()
+    screen = ConquerGameScreen.__new__(ConquerGameScreen)
+    game = SimpleNamespace(
+        mode='conquer',
+        battle_turn_player_id=None,
+        battle_round=0,
+        last_battle_result=None,
+        advancing_figure_id=None,
+        pending_defender_selection=True,
+        defender_selection_dialogue_shown=True,
+        pending_waiting_for_defender_pick=True,
+        waiting_for_defender_pick_shown=True,
+        pending_conquer_own_defender_selection=True,
+        conquer_own_defender_selection_shown=True,
+        civil_war_awaiting_second=True,
+        civil_war_defender_second=True,
+        civil_war_required_color='offensive',
+    )
+    reset_calls = []
+    field = SimpleNamespace(
+        defender_selection_mode=True,
+        conquer_own_defender_mode=True,
+        _reset_defender_selectable=lambda: reset_calls.append(True),
+    )
+    screen.state = SimpleNamespace(game=game)
+    screen.subscreens = {'field': field}
+    screen._auto_single_option_pending = (('defender', 22), 0)
+
+    ConquerGameScreen._sync_conquer_action_modes(screen)
+
+    assert field.defender_selection_mode is False
+    assert field.conquer_own_defender_mode is False
+    assert game.pending_defender_selection is False
+    assert game.defender_selection_dialogue_shown is False
+    assert game.pending_waiting_for_defender_pick is False
+    assert game.waiting_for_defender_pick_shown is False
+    assert game.pending_conquer_own_defender_selection is False
+    assert game.conquer_own_defender_selection_shown is False
+    assert game.civil_war_awaiting_second is False
+    assert game.civil_war_defender_second is False
+    assert game.civil_war_required_color is None
+    assert screen._auto_single_option_pending is None
+    assert len(reset_calls) == 2
+
+
 def test_lane_context_support_ids_normalize_live_payload_ids():
     ConquerGameScreen = _conquer_screen_class()
     game = SimpleNamespace(
@@ -3046,6 +3092,7 @@ class TestConquerGameShell:
             mode='conquer',
             player_id=1,
             invader=True,
+            advancing_figure_id=10,
             advancing_player_id=2,
             pending_defender_selection=False,
             defender_selection_dialogue_shown=False,
