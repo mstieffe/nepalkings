@@ -44,6 +44,8 @@ CONQUER_GAME_ALIASES = {
     "conquer_game_battle": "battle",
     "conquer_game_battle_dagger": "battle_dagger",
     "conquer_game_battle_collapsed": "battle_collapsed",
+    "conquer_game_battle_intro_1": "battle_intro_1",
+    "conquer_game_battle_intro_2": "battle_intro_2",
 }
 
 KINGDOM_SCREEN_ALIASES = {
@@ -749,7 +751,13 @@ def populate_duel_game(client, screen, subscreen: str) -> None:
 
 def populate_conquer_game(client, subscreen: str):
     requested_subscreen = subscreen
-    subscreen = "battle" if requested_subscreen in {"battle_collapsed", "battle_dagger"} else subscreen
+    battle_variants = {
+        "battle_collapsed",
+        "battle_dagger",
+        "battle_intro_1",
+        "battle_intro_2",
+    }
+    subscreen = "battle" if requested_subscreen in battle_variants else subscreen
     client._init_perf_conquer_fixture(progress_noop)
     client.state.screen = "conquer_game"
     client.state.subscreen = subscreen
@@ -835,6 +843,16 @@ def populate_conquer_game(client, subscreen: str):
                     if move.get("family_name") == "Dagger" and not move.get("card_id_b"):
                         rail._selected_id = move.get("id")
                         break
+        if requested_subscreen in {"battle_intro_1", "battle_intro_2"}:
+            onboarding = client.state.user_dict.setdefault("onboarding", {})
+            onboarding.setdefault("menu_hints_seen", [])
+            onboarding.setdefault("completed_steps", [])
+            screen._battle_intro_dialogue = None
+            screen._maybe_show_battle_intro_window()
+            if screen._battle_intro_dialogue is not None:
+                screen._battle_intro_dialogue.page_index = (
+                    1 if requested_subscreen == "battle_intro_2" else 0
+                )
     return screen
 
 

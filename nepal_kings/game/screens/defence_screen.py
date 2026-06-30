@@ -13,7 +13,12 @@ from game.screens._menu_base import (
 from game.screens.build_figure_screen import BuildFigureScreen
 from game.screens.battle_shop_screen import BattleShopScreen
 from game.screens.prelude_spell_screen import PreludeSpellScreen
-from game.screens.conquer_loot_summary import build_loot_risk_description
+from game.screens.loot_risk_tutorial import (
+    draw_loot_risk_tutorial,
+    handle_loot_risk_tutorial_events,
+    loot_risk_tutorial_seen,
+    open_loot_risk_tutorial,
+)
 from game.core.card_source import CollectionCardSource
 from game.core.figure_buffs import apply_buffs_allies_to_icon_map
 from game.core.kingdom_game_proxy import KingdomGameProxy
@@ -250,7 +255,8 @@ class DefenceScreen(MenuScreenMixin, Screen):
         self._pending_counter_clear = False
         self._counter_spell_choices = []
         self._counter_spell_choice_idx = 0
-        self._pending_save_confirm = False
+        self._loot_risk_tutorial_dialogue = None
+        self._loot_risk_tutorial_action = None
         self._pending_leave_confirm = False
         self._pending_nav = None
         self._draft_dirty = False
@@ -354,7 +360,8 @@ class DefenceScreen(MenuScreenMixin, Screen):
         self._selecting_spell_target = None
         self._active_info_key = None
         self._active_info_popup_rect = None
-        self._pending_save_confirm = False
+        self._loot_risk_tutorial_dialogue = None
+        self._loot_risk_tutorial_action = None
         self._pending_leave_confirm = False
         self._pending_nav = None
         self._draft_dirty = False
@@ -538,7 +545,10 @@ class DefenceScreen(MenuScreenMixin, Screen):
             )
         else:
             header_h = self._label_font.get_height() + self._res_font.get_height() + int(0.015 * _SH)
-        ag_btn_h = max(22, int(0.050 * _SH)) if mobile_ui else int(0.035 * _SH)
+        ag_btn_h = (
+            max(settings.TOUCH_COMPACT_MIN, int(0.050 * _SH))
+            if mobile_ui else int(0.035 * _SH)
+        )
         battle_controls_gap = int(0.018 * _SH)
         fsz = self._mod_frame_size
 
@@ -1411,7 +1421,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
                                         specs_y + (specs_surf.get_height() - suit_icon.get_height()) // 2))
 
         loot_effects = [e for e in (land.get('kingdom_skill_effects') or []) if 'loot chance' in e]
-        if loot_effects:
+        if loot_effects and settings.TOUCH_TARGET_MIN <= 0:
             tiny_font = getattr(self, '_tiny_font', self._res_font)
             effect_text = self._fit_text(loot_effects[0], tiny_font, int(_BOX_W * 0.72))
             effect_surf = tiny_font.render(effect_text, True, settings.KINGDOM_CONFIG_HIGHLIGHT)
@@ -1851,6 +1861,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
 
         self._draw_menu_coach(self._current_defence_coach_step())
         self._draw_menu_overlay()
+        draw_loot_risk_tutorial(self)
 
     def _field_slot_background(self, field_name, rect):
         slot_path = settings.SLOT_ICON_IMG_PATH_DICT.get(field_name)
@@ -1924,6 +1935,8 @@ class DefenceScreen(MenuScreenMixin, Screen):
             bottom_margin = 0.34 * settings.FIGURE_ICON_HEIGHT + caption_h
 
             title_space = 24
+            if settings.TOUCH_TARGET_MIN > 0:
+                title_space = max(title_space, int(0.068 * _SH))
             first_center = rect.top + title_space + top_margin
             last_center = rect.top + rect.height - bottom_margin
 
@@ -2460,72 +2473,8 @@ class DefenceScreen(MenuScreenMixin, Screen):
             self.window, self._res_rect, self._calc_resources(),
             self._resource_icons, self._res_font)
 
-    def _build_confirm_data(self):
-        """Build confirmation data: message text, grouped cards, and after-message."""
-        from game.components.cards.card_img import CardImg
-
-        at_risk_cards = []
-        at_risk_card_specs = []
-
-        def add_card(target, suit, rank):
-            if suit and rank:
-                ci = CardImg(self.window, suit, rank)
-                target.append(ci.front_img)
-                at_risk_card_specs.append({'suit': suit, 'rank': rank})
-
-        # Every committed card is locked and at loot risk; conquer no longer
-        # consumes non-looted cards when a land falls.
-        for fig in self._config.get('figures', []):
-            for cd in fig.get('card_details', []):
-                add_card(at_risk_cards, cd.get('suit', ''), cd.get('rank', ''))
-
-        for mv in self._config.get('battle_moves', []):
-            if mv.get('card_id'):
-                add_card(at_risk_cards, mv.get('suit', ''), mv.get('rank', ''))
-
-        for cd in self._config.get('modifier_card_details') or []:
-            add_card(at_risk_cards, cd.get('suit', ''), cd.get('rank', ''))
-        for cd in self._config.get('spell_card_details') or []:
-            add_card(at_risk_cards, cd.get('suit', ''), cd.get('rank', ''))
-
-        prelude_details = self._config.get('prelude_spell_card_details') or []
-        if prelude_details:
-            for cd in prelude_details:
-                add_card(at_risk_cards, cd.get('suit', ''), cd.get('rank', ''))
-
-        counter_details = self._config.get('counter_spell_card_details') or []
-        if counter_details:
-            for cd in counter_details:
-                add_card(at_risk_cards, cd.get('suit', ''), cd.get('rank', ''))
-
-        image_groups = []
-        if at_risk_cards:
-            image_groups.append({
-                'key': 'loot_risk',
-                'title': 'Committed cards',
-                'description': build_loot_risk_description(
-                    self._land or {}, at_risk_card_specs, mode='defence'),
-                'icon': 'lock',
-                'badge_icon': 'lock',
-                'items': at_risk_cards,
-            })
-
-        msg = 'Review the cards committed to this defence.'
-        if not image_groups:
-            msg = 'No cards are used in this configuration.'
-
-        after_msg_parts = []
-        if at_risk_cards:
-            after_msg_parts.append(
-                'Saving the defence does not consume cards by itself. Only cards selected as loot after the land falls are lost.'
-            )
-        after_msg = ' '.join(after_msg_parts) if after_msg_parts else None
-
-        return msg, image_groups, after_msg
-
     def _on_save_click(self):
         """Handle click on Save Defence / Confirm Defence button."""
-        confirm_title = 'Confirm Defence' if self._victory_review_mode else 'Save Defence'
         cannot_title = 'Cannot Confirm Defence' if self._victory_review_mode else 'Cannot Save Defence'
         if not self._is_defence_ready():
             problems = self._get_defence_problems()
@@ -2542,16 +2491,27 @@ class DefenceScreen(MenuScreenMixin, Screen):
                 validation.get('problems') or [validation.get('message', 'Configuration is incomplete')],
             )
             return
-        msg, image_groups, after_msg = self._build_confirm_data()
-        self._pending_save_confirm = True
-        self.dialogue_box = DialogueBox(
-            self.window,
-            msg,
-            actions=['Confirm', 'Cancel'],
-            title=confirm_title,
-            image_groups=image_groups,
-            message_after_images=after_msg,
-        )
+        self._save_defence_with_loot_tutorial()
+
+    def _save_defence_with_loot_tutorial(self):
+        if loot_risk_tutorial_seen(self):
+            self._save_ready_defence()
+            return
+        open_loot_risk_tutorial(self, {'kind': 'save_defence'})
+
+    def _save_ready_defence(self):
+        self._pending_nav = self._pending_nav or 'kingdom'
+        if self._server_save_draft():
+            if self._victory_review_mode:
+                self._server_acknowledge_victory_review()
+                self._victory_review_mode = False
+                self._victory_review_game_id = None
+                self._pending_victory_ack = True
+            self._complete_pending_navigation()
+
+    def _resume_loot_risk_tutorial_action(self, action):
+        if isinstance(action, dict) and action.get('kind') == 'save_defence':
+            self._save_ready_defence()
 
     def _on_skip_click(self):
         """Victory Review: leave without finalising the defence.
@@ -2765,6 +2725,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
         c = tuple(min(v + 30, 255) for v in color) if hovered else color
         pygame.draw.rect(self.window, c, rect, border_radius=4)
         pygame.draw.rect(self.window, (200, 180, 140), rect, 1, border_radius=4)
+        text = self._fit_text(text, self._btn_font, rect.w - 10)
         txt = self._btn_font.render(text, True, (255, 255, 255))
         self.window.blit(txt, txt.get_rect(center=rect.center))
 
@@ -2774,7 +2735,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
             return
         txt = self._label_font.render(title, True, (200, 185, 150))
         self.window.blit(txt, title_pos)
-        if description:
+        if description and settings.TOUCH_TARGET_MIN <= 0:
             desc_surf = self._res_font.render(description, True, (160, 145, 120))
             self.window.blit(desc_surf, (title_pos[0], title_pos[1] + txt.get_height() + 2))
         # Draw icon with hover highlight
@@ -3210,21 +3171,8 @@ class DefenceScreen(MenuScreenMixin, Screen):
     def handle_events(self, events):
         super().handle_events(events)
 
-        # Handle save / prelude / counter spell confirmation dialogue responses
+        # Handle prelude / counter spell confirmation dialogue responses
         response = self.state.action.get('status')
-        if response and self._pending_save_confirm:
-            self._pending_save_confirm = False
-            self.reset_action()
-            if response == 'confirm':
-                self._pending_nav = self._pending_nav or 'kingdom'
-                if self._server_save_draft():
-                    if self._victory_review_mode:
-                        self._server_acknowledge_victory_review()
-                        self._victory_review_mode = False
-                        self._victory_review_game_id = None
-                        self._pending_victory_ack = True
-                    self._complete_pending_navigation()
-            return
         if response and self._pending_clear_all_confirm:
             self._pending_clear_all_confirm = False
             self.reset_action()
@@ -3275,7 +3223,6 @@ class DefenceScreen(MenuScreenMixin, Screen):
             self._pending_prelude_clear = False
             self._pending_counter_spell = None
             self._pending_counter_clear = False
-            self._pending_save_confirm = False
             self._pending_leave_confirm = False
             self._pending_nav = None
             self._selecting_spell_target = None
@@ -3283,6 +3230,12 @@ class DefenceScreen(MenuScreenMixin, Screen):
             return
 
         if self.dialogue_box:
+            return
+
+        loot_tutorial_action = handle_loot_risk_tutorial_events(self, events)
+        if loot_tutorial_action is not None:
+            if isinstance(loot_tutorial_action, dict):
+                self._resume_loot_risk_tutorial_action(loot_tutorial_action)
             return
 
         # Tutorial coach captures input while a card is showing.

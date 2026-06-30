@@ -348,6 +348,9 @@ def test_battle_intro_window_shows_once_then_suppressed():
 
     ConquerGameScreen._maybe_show_battle_intro_window(screen)
     assert screen._battle_intro_dialogue is not None
+    pages = screen._battle_intro_dialogue.pages
+    assert [page['title'] for page in pages] == ['Battle Phases', 'Tactics Choices']
+    assert any(line.startswith('Gamble: discard one') for line in pages[1]['lines'])
     # While the window is up, the anchored coach is suppressed and the intro
     # is considered paused.
     assert ConquerGameScreen._conquer_battle_coach_allowed(screen) is False
@@ -501,14 +504,14 @@ def test_conquer_battle_tactics_step_follows_timeline():
     assert step['action'] == 'next'
 
 
-def test_conquer_battle_finish_follows_tactics():
+def test_conquer_battle_coach_ends_after_tactics_pointer():
     ConquerGameScreen, screen = _battle_coach_screen(menu_seen=[
         'conquer_battle_tactics',
     ])
 
     step = ConquerGameScreen._current_conquer_battle_coach_step(screen)
 
-    assert step['id'] == 'conquer_battle_finish'
+    assert step is None
 
 
 def test_conquer_battle_tactics_step_independent_of_timeline_kind():
@@ -3942,6 +3945,51 @@ game.game_start_notification_checked = False
 screen._conquer_timeline_hover_open = False
 screen._conquer_timeline_last_layout_mode = None
 assert_no_next_button('pre-battle inline')
+pygame.quit()
+''')
+
+    def test_mobile_tactics_rail_actions_are_readable_and_separated(self):
+        _run_mobile_geometry_check(r'''
+import pygame
+pygame.mouse.set_cursor = lambda *args, **kwargs: None
+from nepal_kings import Client
+from config import settings
+from game.components.conquer_tactics_rail import ACTION_GAMBLE, ACTION_PLAY
+
+client = Client()
+client._init_perf_conquer_fixture(lambda *_args, **_kwargs: None)
+screen = client.screens['conquer_game']
+rail = screen._tactics_rail
+hand = rail._hand_moves()
+assert hand, 'fixture must expose at least one tactic'
+rail._selected_id = hand[0]['id']
+
+screen.render()
+
+action_tray = rail._dyn_action_tray_rect
+hand_list = rail._dyn_hand_list_rect
+assert action_tray is not None
+assert hand_list is not None
+assert hand_list.bottom <= action_tray.top
+
+for key in (ACTION_PLAY, ACTION_GAMBLE):
+    rect = rail._action_button_rects.get(key)
+    assert rect is not None, key
+    assert action_tray.contains(rect), (key, tuple(action_tray), tuple(rect))
+    assert rect.h >= settings.TOUCH_COMPACT_MIN, (key, rect.h, settings.TOUCH_COMPACT_MIN)
+
+assert not rail._action_button_rects[ACTION_PLAY].colliderect(
+    rail._action_button_rects[ACTION_GAMBLE])
+
+game = screen.state.game
+assert rail._gamble_status_for_strip(game)[0] == 'Gamble ready'
+game.battle_gamble_counts = {
+    str(game.player_id): {
+        'count': 1,
+        'rounds': [int(game.battle_round or 0)],
+    },
+}
+assert rail._gamble_status_for_strip(game)[0] == 'Gamble used'
 pygame.quit()
 ''')
 

@@ -1950,21 +1950,25 @@ class ConquerGameScreen(GameScreen):
             self.window,
             [
                 {
-                    'title': 'How a Battle Flows',
+                    'title': 'Battle Phases',
                     'layout': 'image_top',
-                    'image': lambda: tutorial_diagrams.starter_tactics_diagram(),
-                    'image_caption': 'Your three tactics: Call King, Call Villager, Block.',
+                    'image': lambda: tutorial_diagrams.battle_flow_diagram(),
                     'lines': [
-                        'A conquer battle has three beats:',
-                        '1. Prelude spell fires.',
-                        '2. Battle figures clash and set the score.',
-                        '3. Three tactic rounds let you swing it.',
-                        '',
-                        'Tactics:',
-                        '- Call Villager, Military, or King to add that figure power.',
-                        '- Dagger adds number-card value; two same-colour Daggers can combine.',
-                        '- Block cancels the round.',
-                        '- Gamble once per round: sacrifice one tactic to draw two new ones.',
+                        '1. Prelude spells resolve first.',
+                        '2. Battle figures set the base score.',
+                        '3. Three tactics rounds swing the total.',
+                        'Finish Battle resolves land and loot.',
+                    ],
+                },
+                {
+                    'title': 'Tactics Choices',
+                    'layout': 'image_top',
+                    'image': lambda: tutorial_diagrams.tactics_actions_diagram(),
+                    'lines': [
+                        'Play: commit a tactic value.',
+                        'Gamble: discard one, draw two.',
+                        'Combine: merge same-colour Daggers.',
+                        'Block cancels the round.',
                     ],
                 },
             ],
@@ -2095,12 +2099,10 @@ class ConquerGameScreen(GameScreen):
 
     @staticmethod
     def _conquer_battle_intro_step_ids():
-        # The concepts (timeline, figure power, play/gamble/combine) are taught
-        # up front by the 'How Battles Work' window; only two action pointers
-        # remain to guide the player's first Play and Finish.
+        # The concepts are taught up front by the 'How Battles Work' window; keep
+        # only a tiny action pointer so the tutorial does not keep interrupting.
         return (
             'conquer_battle_tactics',
-            'conquer_battle_finish',
         )
 
     def _conquer_battle_intro_fallback_rects(self):
@@ -2152,11 +2154,11 @@ class ConquerGameScreen(GameScreen):
                     'id': step_id,
                     'rect': rects[0],
                     'rects': rects,
-                    'title': 'Play A Tactic',
-                    'body': 'Your goal is to win the round totals. Play commits a tactic value. Gamble trades one tactic for two new ones. Combine joins same-colour Daggers into one bigger tactic.',
+                    'title': 'Choose A Tactic',
+                    'body': 'Use this rail for each round. Pick a tactic, then use the button that matches the move you want now.',
                     'action': 'next',
                     'button_label': 'Got it',
-                    'max_lines': 6,
+                    'max_lines': 4,
                 }
             if step_id == 'conquer_battle_block_call':
                 rects = (self._conquer_battle_tactics_target_rects()

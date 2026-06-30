@@ -1086,8 +1086,14 @@ class ConquerTacticsRail:
         norm_action_specs = self._normalized_action_specs()
         action_h = self._preferred_action_tray_height(action_tray_rect.width)
         if action_h > action_tray_rect.height:
-            min_visible_cells = 1 if self._action_tray_uses_column_layout(
-                action_tray_rect.width, norm_action_specs) else 3
+            if self._action_tray_uses_column_layout(
+                    action_tray_rect.width, norm_action_specs):
+                min_visible_cells = 1
+            elif self._action_tray_uses_stacked_layout(
+                    action_tray_rect.width, norm_action_specs):
+                min_visible_cells = 2
+            else:
+                min_visible_cells = 3
             min_list_h = min_visible_cells * rail.cell_height
             hand_slack = max(0, hand_list_rect.height - min_list_h)
             grow = min(action_h - action_tray_rect.height, hand_slack)
@@ -1203,10 +1209,22 @@ class ConquerTacticsRail:
             if str(round_value).lstrip('-').isdigit()
         }
         if round_used:
-            return ('Already gambled', 'used')
+            return (
+                ('Gamble used', 'used')
+                if settings.TOUCH_TARGET_MIN > 0 else
+                ('Already gambled', 'used')
+            )
         if used >= self.GAMBLE_PER_BATTLE_LIMIT:
-            return (f'Gamble limit reached ({used}/{self.GAMBLE_PER_BATTLE_LIMIT})', 'limit')
-        return ('Gamble ready this round', 'ready')
+            return (
+                (f'Limit {used}/{self.GAMBLE_PER_BATTLE_LIMIT}', 'limit')
+                if settings.TOUCH_TARGET_MIN > 0 else
+                (f'Gamble limit reached ({used}/{self.GAMBLE_PER_BATTLE_LIMIT})', 'limit')
+            )
+        return (
+            ('Gamble ready', 'ready')
+            if settings.TOUCH_TARGET_MIN > 0 else
+            ('Gamble ready this round', 'ready')
+        )
 
     def _top_strip_subtitle(self, game) -> str:
         hint = self._opponent_intent_hint(game)
@@ -1778,7 +1796,12 @@ class ConquerTacticsRail:
         suit_a = sel.get('suit', '?')
         suit_b = sel.get('suit_b')
         rank = sel.get('rank', '?')
-        line = f"{suit_a}{('+' + suit_b) if suit_b else ''} • {rank} • Power {self._power(sel)}"
+        if settings.TOUCH_TARGET_MIN > 0:
+            suit_a_label = str(suit_a or '?')[:1]
+            suit_b_label = f"+{str(suit_b)[:1]}" if suit_b else ''
+            line = f"{suit_a_label}{suit_b_label} {rank}  P{self._power(sel)}"
+        else:
+            line = f"{suit_a}{('+' + suit_b) if suit_b else ''} • {rank} • Power {self._power(sel)}"
         bs = body_font.render(
             self._fit_text(line, body_font, rect.width - 16), True, _TEXT_SECONDARY)
         self.window.blit(bs, (rect.left + 8, rect.top + 6 + ts.get_height() + 2))
@@ -1848,7 +1871,7 @@ class ConquerTacticsRail:
             row_h = max(28, min(target_h, int(width * 0.24)))
             return row_h * len(specs) + 5 * (len(specs) - 1) + 4
         if self._action_tray_uses_stacked_layout(width, specs):
-            return target_h * 2 + 8
+            return target_h * 2 + 9
         return target_h + 4
 
     @staticmethod

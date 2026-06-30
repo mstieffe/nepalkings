@@ -427,15 +427,13 @@ class TestDefenceDraftFlow:
         mock_discard.assert_called_once()
         assert state.screen == 'game_menu'
 
-    def test_save_confirm_saves_draft_and_navigates(self):
+    def test_save_ready_defence_saves_draft_and_navigates(self):
         from game.screens.defence_screen import DefenceScreen
         state = _make_state()
         screen = DefenceScreen(state)
-        state.action = {'status': 'confirm'}
-        screen._pending_save_confirm = True
 
         with patch.object(screen, '_server_save_draft', return_value=True) as mock_save:
-            screen.handle_events([])
+            screen._save_ready_defence()
 
         mock_save.assert_called_once()
         assert state.screen == 'kingdom'
@@ -499,55 +497,49 @@ class TestVictoryReviewSkip:
         assert state.screen == 'defence'
 
 
-class TestDefenceConfirmData:
+class TestDefenceLootRiskTutorial:
 
-    def test_save_confirmation_lists_all_committed_cards_as_loot_risk(self):
+    def test_save_defence_shows_one_time_loot_tutorial_before_save(self):
         from game.screens.defence_screen import DefenceScreen
         import pygame
         state = _make_state()
+        state.user_dict = {'onboarding': {'menu_hints_seen': []}}
         screen = DefenceScreen(state)
-        screen._land = {
-            'tier': 2,
-            'kingdom_bonuses': {'loot_chance': 0.15},
-        }
-        screen._config = _make_config(
-            figures=[{
-                'id': 1,
-                'name': 'Guard',
-                'card_details': [{'suit': 'Hearts', 'rank': '7'}],
-            }],
-            battle_moves=[{
-                'id': 2,
-                'card_id': 20,
-                'round_index': 0,
-                'suit': 'Spades',
-                'rank': 'Q',
-            }],
-            prelude_spell_name='Health Boost',
-            prelude_spell_card_details=[{'suit': 'Clubs', 'rank': '3'}],
-            counter_spell_name='Poison',
-            counter_spell_card_details=[{'suit': 'Diamonds', 'rank': '8'}],
-        )
+        screen._is_defence_ready = lambda: True
+        screen._server_validate_draft = lambda: {'success': True}
+        seen = []
+        screen._mark_menu_coach_seen = seen.append
 
-        class _FakeCardImg:
-            def __init__(self, window, suit, rank):
-                self.front_img = pygame.Surface((70, 100), pygame.SRCALPHA)
+        with patch.object(screen, '_server_save_draft', return_value=True) as mock_save:
+            screen._on_save_click()
+            assert screen._loot_risk_tutorial_dialogue is not None
+            mock_save.assert_not_called()
 
-        with patch('game.components.cards.card_img.CardImg', _FakeCardImg):
-            msg, image_groups, after_msg = screen._build_confirm_data()
+            win = screen._loot_risk_tutorial_dialogue
+            win._created_at = pygame.time.get_ticks() - 1000
+            event = pygame.event.Event(
+                pygame.MOUSEBUTTONUP, button=1, pos=win._btn_next.rect.center)
+            screen.handle_events([event])
 
-        assert 'committed to this defence' in msg
-        assert [group['key'] for group in image_groups] == ['loot_risk']
-        group = image_groups[0]
-        assert group['icon'] == 'lock'
-        assert group['badge_icon'] == 'lock'
-        assert len(group['items']) == 4
-        assert 'Locked now:' in group['description']
-        assert 'Loot risk:' in group['description']
-        assert 'attacker loots 3 of these 4 cards' in group['description']
-        assert 'Tier 2 quota' in group['description']
-        assert 'does not increase losses from these defence cards' in group['description']
-        assert 'does not consume cards by itself' in after_msg
+        assert seen == ['loot_risk_intro']
+        mock_save.assert_called_once()
+        assert state.screen == 'kingdom'
+        assert screen._loot_risk_tutorial_dialogue is None
+
+    def test_save_defence_skips_loot_tutorial_once_seen(self):
+        from game.screens.defence_screen import DefenceScreen
+        state = _make_state()
+        state.user_dict = {'onboarding': {'menu_hints_seen': ['loot_risk_intro']}}
+        screen = DefenceScreen(state)
+        screen._is_defence_ready = lambda: True
+        screen._server_validate_draft = lambda: {'success': True}
+
+        with patch.object(screen, '_server_save_draft', return_value=True) as mock_save:
+            screen._on_save_click()
+
+        assert screen._loot_risk_tutorial_dialogue is None
+        mock_save.assert_called_once()
+        assert state.screen == 'kingdom'
 
 
 class TestPreludeSpellIcons:
@@ -919,12 +911,26 @@ controls = [
 for rect in controls:
     assert not rect.colliderect(screen._move_slots_rect), (
         tuple(rect), tuple(screen._move_slots_rect))
+    assert rect.h >= settings.TOUCH_COMPACT_MIN
 info = screen._info_button_rects['battle_plan']
 assert not screen._btn_auto_gamble_inc.colliderect(info)
 caption_x = screen._counter_spell_rect.right + int(0.012 * settings.SCREEN_WIDTH)
 caption_right = screen._counter_panel_rect.right - int(0.010 * settings.SCREEN_WIDTH)
 caption_w = max(0, caption_right - caption_x)
 assert screen._res_font.size('No counter')[0] <= caption_w
+
+records = []
+screen._draw_section_panel = (
+    lambda rect, title, *, description=None, icon_rect=None, title_pos=None:
+        records.append((title, description))
+)
+screen._draw_info_buttons = lambda: None
+screen._draw_right_panels()
+assert records == [
+    ('Battle Plan', None),
+    ('Prelude Spell', None),
+    ('Defender Response', None),
+]
 pygame.quit()
 ''')
 

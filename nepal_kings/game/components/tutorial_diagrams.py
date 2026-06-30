@@ -1141,6 +1141,131 @@ def _score_chip(text, box, accent=(224, 182, 82)):
     return surf
 
 
+def _fit_surface_to_box(surf, max_w, max_h):
+    if surf is None:
+        return None
+    if surf.get_width() <= 0 or surf.get_height() <= 0:
+        return surf
+    ratio = min(max_w / surf.get_width(), max_h / surf.get_height(), 1.0)
+    if ratio >= 1.0:
+        return surf
+    return pygame.transform.smoothscale(
+        surf,
+        (max(1, int(surf.get_width() * ratio)),
+         max(1, int(surf.get_height() * ratio))),
+    )
+
+
+def _wrap_label_lines(text, font, max_w, max_lines=2):
+    words = str(text or '').split()
+    lines = []
+    current = ''
+    for word in words:
+        candidate = word if not current else f'{current} {word}'
+        if font.size(candidate)[0] <= max_w:
+            current = candidate
+            continue
+        if current:
+            lines.append(current)
+        current = word
+        if len(lines) >= max_lines:
+            break
+    if current and len(lines) < max_lines:
+        lines.append(current)
+    return lines
+
+
+def _mini_arrow_surface(width, height, color=(230, 200, 120)):
+    surf = pygame.Surface((max(1, width), max(1, height)), pygame.SRCALPHA)
+    cy = height // 2
+    _draw_arrow(
+        surf,
+        (max(2, int(width * 0.10)), cy),
+        (max(3, width - int(width * 0.12)), cy),
+        color=color,
+        width=max(2, int(height * 0.10)),
+        head=max(5, int(height * 0.28)),
+    )
+    return surf
+
+
+def _plus_surface(size):
+    surf = pygame.Surface((size, size), pygame.SRCALPHA)
+    font = settings.get_font(max(12, int(size * 0.56)), bold=True)
+    txt = font.render('+', True, (235, 222, 190))
+    surf.blit(txt, txt.get_rect(center=surf.get_rect().center))
+    return surf
+
+
+def _row_surface(parts, gap=4):
+    parts = [p for p in parts if p is not None]
+    if not parts:
+        return pygame.Surface((1, 1), pygame.SRCALPHA)
+    w = sum(p.get_width() for p in parts) + gap * max(0, len(parts) - 1)
+    h = max(p.get_height() for p in parts)
+    surf = pygame.Surface((w, h), pygame.SRCALPHA)
+    x = 0
+    for part in parts:
+        surf.blit(part, (x, (h - part.get_height()) // 2))
+        x += part.get_width() + gap
+    return surf
+
+
+def _numbered_tactic_chip(icon_file, number, box, accent=(224, 182, 82)):
+    chip = _battle_move_chip(icon_file, box, accent=accent)
+    badge_r = max(9, int(box * 0.17))
+    pygame.draw.circle(chip, (32, 26, 18, 235),
+                       (chip.get_width() - badge_r - 4, badge_r + 4), badge_r)
+    pygame.draw.circle(chip, (244, 214, 128),
+                       (chip.get_width() - badge_r - 4, badge_r + 4), badge_r, 2)
+    font = settings.get_font(max(11, int(box * 0.22)), bold=True)
+    txt = font.render(str(number), True, (255, 244, 210))
+    chip.blit(txt, txt.get_rect(
+        center=(chip.get_width() - badge_r - 4, badge_r + 4)))
+    return chip
+
+
+def _battle_figure_pair(box):
+    icon_h = int(box * 0.98)
+    you = field_figure_icon('Gorkha Warriors', 'army1.png', label='', target_h=icon_h)
+    foe = field_figure_icon('Small Yack Farm', 'yack_farm1.png', label='', target_h=icon_h)
+    you = _fit_surface_to_box(you, int(box * 0.72), icon_h)
+    foe = _fit_surface_to_box(foe, int(box * 0.72), icon_h)
+    font = settings.get_font(max(11, int(box * 0.20)), bold=True)
+    vs = font.render('vs', True, (235, 222, 190))
+    return _row_surface([you, vs, foe], gap=max(3, int(box * 0.04)))
+
+
+def _phase_card(title, subtitle, art, card_w, card_h, accent=(224, 182, 82)):
+    surf = pygame.Surface((card_w, card_h), pygame.SRCALPHA)
+    rect = surf.get_rect()
+    pygame.draw.rect(surf, (27, 22, 16, 238), rect, border_radius=7)
+    pygame.draw.rect(surf, accent, rect, 2, border_radius=7)
+
+    title_font = settings.get_font(max(13, getattr(settings, 'FS_TINY', 16)), bold=True)
+    sub_font = settings.get_font(max(10, int(getattr(settings, 'FS_TINY', 16) * 0.78)))
+    pad = max(7, int(card_h * 0.055))
+    title_surf = title_font.render(title, True, (255, 240, 202))
+    surf.blit(title_surf, title_surf.get_rect(midtop=(card_w // 2, pad)))
+
+    art_top = pad + title_font.get_height() + max(4, int(card_h * 0.04))
+    art_max_h = int(card_h * 0.48)
+    art = _fit_surface_to_box(art, card_w - pad * 2, art_max_h)
+    if art is not None:
+        surf.blit(art, art.get_rect(midtop=(card_w // 2, art_top)))
+
+    line_y = art_top + art_max_h + max(2, int(card_h * 0.025))
+    for line in _wrap_label_lines(subtitle, sub_font, card_w - pad * 2, max_lines=2):
+        line_surf = sub_font.render(line, True, (214, 204, 174))
+        surf.blit(line_surf, line_surf.get_rect(midtop=(card_w // 2, line_y)))
+        line_y += sub_font.get_height() + 1
+    return surf
+
+
+def _tactics_action_card(title, subtitle, art, card_w, card_h, accent=(224, 182, 82)):
+    return _phase_card(title, subtitle, art, card_w, card_h, accent)
+
+
 def duel_loop_diagram(target_h=None):
     """Duel intro: the long match loop from a shared deck to battle points."""
     _SH = settings.SCREEN_HEIGHT
@@ -1273,23 +1398,59 @@ def shared_card_pool_diagram(target_h=None):
 
 
 def battle_flow_diagram(target_h=None):
-    """Battle window 1: the three beats of a battle, shown as labelled icons —
-    the prelude spell (Health Boost), then figures, then three tactic rounds."""
+    """Battle intro: prelude, figure clash, then the three tactic rounds."""
     _SH = settings.SCREEN_HEIGHT
-    chip = int(target_h or 0.12 * _SH)
-    key = ('battleflow', chip)
+    diagram_h = int(target_h or 0.19 * _SH)
+    key = ('battleflow', diagram_h)
     if key in _CACHE:
         return _CACHE[key]
-    spell = _spell_chip('Health Boost', chip)
-    figure = field_figure_icon('Gorkha Warriors', 'army1.png', label='', target_h=chip)
-    tactic = _battle_move_chip('castle.png', chip, accent=(224, 182, 82))
+    card_w = max(104, int(diagram_h * 0.78))
+    card_h = diagram_h
+    art_box = int(diagram_h * 0.45)
     cells = [
-        _label_below(spell, 'Prelude', bold=True),
-        _label_below(figure, 'Figures', bold=True),
-        _label_below(tactic, 'Tactics ×3', bold=True),
+        _phase_card(
+            'Prelude',
+            'spells resolve first',
+            _spell_chip('Health Boost', art_box),
+            card_w,
+            card_h,
+            accent=(174, 126, 216),
+        ),
+        _phase_card(
+            'Figures',
+            'attacker vs defender',
+            _battle_figure_pair(int(art_box * 1.22)),
+            card_w,
+            card_h,
+            accent=(224, 182, 82),
+        ),
+        _phase_card(
+            'Round 1',
+            'first tactic',
+            _numbered_tactic_chip('castle.png', 1, art_box),
+            card_w,
+            card_h,
+            accent=(224, 182, 82),
+        ),
+        _phase_card(
+            'Round 2',
+            'second tactic',
+            _numbered_tactic_chip('dagger.png', 2, art_box, accent=(210, 170, 120)),
+            card_w,
+            card_h,
+            accent=(210, 170, 120),
+        ),
+        _phase_card(
+            'Round 3',
+            'final tactic',
+            _numbered_tactic_chip('block.png', 3, art_box, accent=(130, 178, 224)),
+            card_w,
+            card_h,
+            accent=(130, 178, 224),
+        ),
     ]
-    arrow_w = int(0.04 * settings.SCREEN_WIDTH)
-    cy = chip // 2
+    arrow_w = max(24, int(0.025 * settings.SCREEN_WIDTH))
+    cy = card_h // 2
     total_w = sum(c.get_width() for c in cells) + arrow_w * (len(cells) - 1)
     h = max(c.get_height() for c in cells)
     surf = pygame.Surface((total_w, h), pygame.SRCALPHA)
@@ -1300,6 +1461,189 @@ def battle_flow_diagram(target_h=None):
         if i < len(cells) - 1:
             _draw_arrow(surf, (x + 3, cy), (x + arrow_w - 3, cy))
             x += arrow_w
+    _CACHE[key] = surf
+    return surf
+
+
+def tactics_actions_diagram(target_h=None):
+    """Battle intro: the three player-facing tactic actions in the rail."""
+    _SH = settings.SCREEN_HEIGHT
+    diagram_h = int(target_h or 0.20 * _SH)
+    key = ('tactics_actions', diagram_h)
+    if key in _CACHE:
+        return _CACHE[key]
+
+    card_w = max(142, int(diagram_h * 1.02))
+    card_h = diagram_h
+    art_box = int(diagram_h * 0.37)
+    small = max(26, int(art_box * 0.64))
+    arrow = _mini_arrow_surface(max(18, int(art_box * 0.42)), small)
+    dice = _chip(
+        _load(_asset('img', 'dialogue_box', 'icons', 'dices.png')),
+        small,
+        accent=(238, 218, 170),
+    )
+    score = _score_chip('+', small, accent=(180, 220, 160))
+
+    play_art = _row_surface([
+        _battle_move_chip('castle.png', art_box),
+        _mini_arrow_surface(max(20, int(art_box * 0.50)), art_box),
+        score,
+    ], gap=max(3, int(art_box * 0.06)))
+    gamble_art = _row_surface([
+        _battle_move_chip('village.png', small),
+        arrow,
+        dice,
+        arrow,
+        _row_surface([
+            _battle_move_chip('dagger.png', small),
+            _battle_move_chip('block.png', small, accent=(130, 178, 224)),
+        ], gap=2),
+    ], gap=max(2, int(art_box * 0.045)))
+    combine_art = _row_surface([
+        _battle_move_chip('dagger.png', small),
+        _plus_surface(max(18, int(small * 0.72))),
+        _battle_move_chip('dagger.png', small),
+        arrow,
+        _battle_move_chip('double_dagger.png', art_box, accent=(210, 170, 120)),
+    ], gap=max(2, int(art_box * 0.045)))
+
+    cells = [
+        _tactics_action_card(
+            'Play',
+            'commit a tactic value',
+            play_art,
+            card_w,
+            card_h,
+            accent=(180, 220, 160),
+        ),
+        _tactics_action_card(
+            'Gamble',
+            'discard one, draw two',
+            gamble_art,
+            card_w,
+            card_h,
+            accent=(238, 218, 170),
+        ),
+        _tactics_action_card(
+            'Combine',
+            'merge same-colour Daggers',
+            combine_art,
+            card_w,
+            card_h,
+            accent=(170, 200, 240),
+        ),
+    ]
+    gap = max(10, int(0.018 * settings.SCREEN_WIDTH))
+    total_w = sum(c.get_width() for c in cells) + gap * (len(cells) - 1)
+    surf = pygame.Surface((total_w, card_h), pygame.SRCALPHA)
+    x = 0
+    for cell in cells:
+        surf.blit(cell, (x, 0))
+        x += cell.get_width() + gap
+    _CACHE[key] = surf
+    return surf
+
+
+def loot_risk_diagram(target_h=None):
+    """Loot tutorial: committed cards lock first; only looted cards are lost."""
+    _SH = settings.SCREEN_HEIGHT
+    diagram_h = int(target_h or 0.22 * _SH)
+    key = ('loot_risk', diagram_h)
+    if key in _CACHE:
+        return _CACHE[key]
+
+    card_h = int(diagram_h * 0.46)
+    chip = int(diagram_h * 0.36)
+    label_gap = max(3, int(0.006 * _SH))
+    column_gap = max(22, int(0.032 * settings.SCREEN_WIDTH))
+    branch_gap = max(10, int(0.018 * _SH))
+
+    committed = _label_below(
+        _card_fan([('K', 'Hearts'), ('Q', 'Spades'), ('8', 'Diamonds')],
+                  card_h),
+        'Committed cards',
+        bold=True,
+    )
+    locked = _label_below(
+        _chip(_load(_asset('img', 'dialogue_box', 'icons', 'lock.png')),
+              chip, accent=(224, 182, 82)),
+        'Locked active',
+        bold=True,
+    )
+
+    lost_card = _card_surface('Spades', 'Q', int(card_h * 0.76))
+    loot_icon = _chip(
+        _load(_asset('img', 'dialogue_box', 'icons', 'loot.png')),
+        int(card_h * 0.62),
+        accent=(218, 124, 104),
+    )
+    looted = _label_below(
+        _row_surface([lost_card, loot_icon], gap=max(4, int(card_h * 0.08))),
+        'Looted cards lost',
+        color=(244, 176, 148),
+        bold=True,
+    )
+
+    returned_cards = _card_fan([('7', 'Hearts'), ('3', 'Clubs')],
+                               int(card_h * 0.62))
+    success_icon = _chip(
+        _load(_asset('img', 'dialogue_box', 'icons', 'success.png')),
+        int(card_h * 0.52),
+        accent=(156, 214, 138),
+    )
+    returned = _label_below(
+        _row_surface([returned_cards, success_icon], gap=max(4, int(card_h * 0.08))),
+        'Unlooted cards return',
+        color=(190, 232, 170),
+        bold=True,
+    )
+
+    outcome_w = max(looted.get_width(), returned.get_width())
+    outcome_h = looted.get_height() + branch_gap + returned.get_height()
+    outcomes = pygame.Surface((outcome_w, outcome_h), pygame.SRCALPHA)
+    outcomes.blit(looted, looted.get_rect(midtop=(outcome_w // 2, 0)))
+    outcomes.blit(returned, returned.get_rect(
+        midtop=(outcome_w // 2, looted.get_height() + branch_gap)))
+
+    arrow_w = max(30, int(0.04 * settings.SCREEN_WIDTH))
+    total_w = (committed.get_width() + column_gap + arrow_w + column_gap
+               + locked.get_width() + column_gap + arrow_w + column_gap
+               + outcomes.get_width())
+    total_h = max(committed.get_height(), locked.get_height(), outcomes.get_height())
+    surf = pygame.Surface((total_w, total_h), pygame.SRCALPHA)
+
+    y_committed = (total_h - committed.get_height()) // 2
+    x = 0
+    surf.blit(committed, (x, y_committed))
+    x += committed.get_width() + column_gap
+
+    arrow_1_start = (x, total_h // 2)
+    arrow_1_end = (x + arrow_w, total_h // 2)
+    _draw_arrow(surf, arrow_1_start, arrow_1_end)
+    x += arrow_w + column_gap
+
+    y_locked = (total_h - locked.get_height()) // 2
+    surf.blit(locked, (x, y_locked))
+    lock_right = x + locked.get_width()
+    x += locked.get_width() + column_gap
+
+    branch_x0 = lock_right + max(3, column_gap // 5)
+    branch_x1 = x + arrow_w
+    top_center = (branch_x1, (total_h - outcome_h) // 2 + looted.get_height() // 2)
+    bottom_center = (
+        branch_x1,
+        (total_h - outcome_h) // 2 + looted.get_height() + branch_gap
+        + returned.get_height() // 2,
+    )
+    _draw_arrow(surf, (branch_x0, total_h // 2), top_center,
+                color=(218, 124, 104), width=3, head=10)
+    _draw_arrow(surf, (branch_x0, total_h // 2), bottom_center,
+                color=(156, 214, 138), width=3, head=10)
+    x += arrow_w + column_gap
+
+    surf.blit(outcomes, (x, (total_h - outcomes.get_height()) // 2))
+
     _CACHE[key] = surf
     return surf
 

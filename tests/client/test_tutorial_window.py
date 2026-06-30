@@ -338,7 +338,8 @@ def test_kingdom_and_offdef_diagrams_build():
                td.conquer_start_image, td.duel_start_image,
                td.duel_shared_card_pool_image, td.duel_loop_diagram,
                td.duel_build_battle_diagram, td.shared_card_pool_diagram,
-               td.battle_matchup_diagram, td.starter_tactics_diagram):
+               td.battle_matchup_diagram, td.starter_tactics_diagram,
+               td.tactics_actions_diagram, td.loot_risk_diagram):
         surf = fn()
         assert isinstance(surf, pygame.Surface)
         assert fn() is surf  # cached
