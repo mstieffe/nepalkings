@@ -24,7 +24,7 @@ logger = logging.getLogger('nk.screens.new_game')
 _SW, _SH = settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT
 
 DEFAULT_STAKE = 45
-DEFAULT_GAME_LIMIT = 21          # points to win (Quick 7 / Standard 21 / Epic 35)
+DEFAULT_GAME_LIMIT = 21          # points to win; presets are shortcuts
 GAME_LIMIT_PRESETS = [('Quick', 7), ('Standard', 21), ('Epic', 35)]
 MAX_GAME_LIMIT = int(getattr(settings, 'MAX_GAME_LIMIT', 100) or 100)
 DUEL_REWARD_GOLD_AMOUNT = int(getattr(settings, 'DUEL_REWARD_GOLD_AMOUNT', 80) or 0)
@@ -951,6 +951,21 @@ class NewGameScreen(MenuScreenMixin, Screen):
                 self._mark_menu_coach_seen('beginner_duel')
                 self._mark_menu_coach_seen('send_first_duel_challenge')
             self._selected_opponent = None
+            # AI opponents accept instantly and the response carries the
+            # created game — jump straight in instead of polling the menu.
+            game_dict = response.get('game')
+            if game_dict:
+                challenge_id = response.get('challenge_id')
+                if challenge_id is not None:
+                    # The accepted challenge only exists to notify the
+                    # challenger; we're entering the game now, so clear it.
+                    self.state._notified_accepted_challenges.add(challenge_id)
+                    try:
+                        remove_challenge(challenge_id)
+                    except Exception:
+                        pass
+                self.state.game = Game(game_dict, self.state.user_dict)
+                self.state.screen = gameplay_screen_for(self.state.game)
 
     # ── Actions ───────────────────────────────────────────────────
 
@@ -959,7 +974,10 @@ class NewGameScreen(MenuScreenMixin, Screen):
             self.state.user_dict['username'], opponent_name,
             stake=stake, game_limit=game_limit)
         if response.get('success'):
-            self.state.set_msg(f"Challenge sent to {opponent_name}")
+            if response.get('game'):
+                self.state.set_msg(f"{opponent_name} accepted — the duel begins!")
+            else:
+                self.state.set_msg(f"Challenge sent to {opponent_name}")
         else:
             self.state.set_msg(response.get('message', 'Failed to create challenge'))
         return response

@@ -189,18 +189,26 @@ def _pick_resolution():
     btn_h = 44
     svr_btn_h = 58          # taller to fit label + URL
     gap   = 12
+    adv_row_h = 26          # collapsed "Advanced settings" toggle row
     res_start_y = 72
-    # Trace exact same layout as the render loop:
-    # res section label + separator = 32px
-    res_btn_start = res_start_y + 32
-    res_btns_bottom = res_btn_start + len(choices) * (btn_h + gap)
-    svr_y = res_btns_bottom + 16
-    svr_btn_start_y = svr_y + 32
-    svr_btns_bottom = svr_btn_start_y + len(_SERVER_PRESETS) * (svr_btn_h + gap)
-    start_y = svr_btns_bottom + 16
-    # Start button (44) + gap (16) + hint text (~18) + bottom margin (14)
-    ph = start_y + 44 + 16 + 18 + 14
-    win = pygame.display.set_mode((pw, ph))
+
+    # The server presets are a developer concern, so they stay collapsed
+    # behind an "Advanced settings" toggle for regular players.
+    advanced_open = False
+
+    def _window_height(open_advanced):
+        # Trace exact same layout as the render loop:
+        # res section label + separator = 32px
+        res_btn_start = res_start_y + 32
+        res_btns_bottom = res_btn_start + len(choices) * (btn_h + gap)
+        y = res_btns_bottom + 10 + adv_row_h
+        if open_advanced:
+            y += 16 + 32 + len(_SERVER_PRESETS) * (svr_btn_h + gap)
+        start_y = y + 16
+        # Start button (44) + gap (16) + hint text (~18) + bottom margin (14)
+        return start_y + 44 + 16 + 18 + 14
+
+    win = pygame.display.set_mode((pw, _window_height(advanced_open)))
     pygame.display.set_caption('Nepal Kings — Settings')
 
     # Fonts
@@ -227,7 +235,14 @@ def _pick_resolution():
             server_idx = i
             break
     if server_idx is None:
-        server_idx = 0  # default to local
+        # Default to the live server so players never land on localhost.
+        server_idx = next(i for i, (url, _) in enumerate(_SERVER_PRESETS)
+                          if url == _DEFAULT_SERVER_URL)
+    # A non-default saved server means a dev is switching back and forth —
+    # keep the section visible for them.
+    if saved_url.rstrip('/') != _DEFAULT_SERVER_URL.rstrip('/'):
+        advanced_open = True
+        win = pygame.display.set_mode((pw, _window_height(advanced_open)))
 
     clock = pygame.time.Clock()
     running = True
@@ -268,35 +283,55 @@ def _pick_resolution():
                 win.blit(dot, (r.right - dot.get_width() - 14,
                                r.y + (r.h - dot.get_height()) // 2))
 
-        # ── Server section ──
-        svr_y = res_btn_start + len(choices) * (btn_h + gap) + 16
-        sec_lbl2 = section_font.render('Server', True, _TEXT_CLR)
-        win.blit(sec_lbl2, (40, svr_y))
-        pygame.draw.line(win, _BTN_BDR, (40, svr_y + 24), (pw - 40, svr_y + 24))
-        svr_btn_start = svr_y + 32
+        # ── Advanced settings toggle (server presets live behind it) ──
+        adv_y = res_btn_start + len(choices) * (btn_h + gap) + 10
+        adv_lbl = hint_font.render('Advanced settings', True, _HINT_CLR)
+        tri_sz = 8
+        adv_rect = pygame.Rect(40, adv_y, tri_sz + 10 + adv_lbl.get_width() + 8, adv_row_h)
+        adv_clr = _TEXT_CLR if (advanced_open or adv_rect.collidepoint(mx, my)) else _HINT_CLR
+        adv_lbl = hint_font.render('Advanced settings', True, adv_clr)
+        tri_cy = adv_rect.y + adv_rect.h // 2
+        if advanced_open:
+            tri = [(40, tri_cy - 2), (40 + tri_sz, tri_cy - 2),
+                   (40 + tri_sz // 2, tri_cy + tri_sz // 2 + 2)]
+        else:
+            tri = [(41, tri_cy - tri_sz // 2), (41, tri_cy + tri_sz // 2),
+                   (41 + tri_sz // 2 + 2, tri_cy)]
+        pygame.draw.polygon(win, adv_clr, tri)
+        win.blit(adv_lbl, (40 + tri_sz + 10,
+                           adv_rect.y + (adv_rect.h - adv_lbl.get_height()) // 2))
 
         svr_rects = []
-        for i, (url, label) in enumerate(_SERVER_PRESETS):
-            r = pygame.Rect(40, svr_btn_start + i * (svr_btn_h + gap), pw - 80, svr_btn_h)
-            svr_rects.append(r)
-            is_hover = r.collidepoint(mx, my)
-            is_sel   = (i == server_idx)
-            bg  = _BTN_BG_SEL if is_sel else (_BTN_BG_HOV if is_hover else _BTN_BG)
-            bdr = _BTN_BDR_SEL if is_sel else (_BTN_BDR_HOV if is_hover else _BTN_BDR)
-            pygame.draw.rect(win, bg, r, border_radius=8)
-            pygame.draw.rect(win, bdr, r, 2, border_radius=8)
-            txt = btn_font.render(label, True, _TEXT_CLR)
-            win.blit(txt, (r.x + 18, r.y + 6))
-            # Show URL underneath the label
-            url_txt = hint_font.render(url, True, _HINT_CLR)
-            win.blit(url_txt, (r.x + 18, r.y + 6 + txt.get_height() + 2))
-            if is_sel:
-                dot = btn_font.render('●', True, _TITLE_CLR)
-                win.blit(dot, (r.right - dot.get_width() - 14,
-                               r.y + (r.h - dot.get_height()) // 2))
+        after_adv_y = adv_rect.bottom
+        if advanced_open:
+            svr_y = after_adv_y + 16
+            sec_lbl2 = section_font.render('Server', True, _TEXT_CLR)
+            win.blit(sec_lbl2, (40, svr_y))
+            pygame.draw.line(win, _BTN_BDR, (40, svr_y + 24), (pw - 40, svr_y + 24))
+            svr_btn_start = svr_y + 32
+
+            for i, (url, label) in enumerate(_SERVER_PRESETS):
+                r = pygame.Rect(40, svr_btn_start + i * (svr_btn_h + gap), pw - 80, svr_btn_h)
+                svr_rects.append(r)
+                is_hover = r.collidepoint(mx, my)
+                is_sel   = (i == server_idx)
+                bg  = _BTN_BG_SEL if is_sel else (_BTN_BG_HOV if is_hover else _BTN_BG)
+                bdr = _BTN_BDR_SEL if is_sel else (_BTN_BDR_HOV if is_hover else _BTN_BDR)
+                pygame.draw.rect(win, bg, r, border_radius=8)
+                pygame.draw.rect(win, bdr, r, 2, border_radius=8)
+                txt = btn_font.render(label, True, _TEXT_CLR)
+                win.blit(txt, (r.x + 18, r.y + 6))
+                # Show URL underneath the label
+                url_txt = hint_font.render(url, True, _HINT_CLR)
+                win.blit(url_txt, (r.x + 18, r.y + 6 + txt.get_height() + 2))
+                if is_sel:
+                    dot = btn_font.render('●', True, _TITLE_CLR)
+                    win.blit(dot, (r.right - dot.get_width() - 14,
+                                   r.y + (r.h - dot.get_height()) // 2))
+            after_adv_y = svr_btn_start + len(_SERVER_PRESETS) * (svr_btn_h + gap)
 
         # ── "Start Game" button ──
-        start_y_btn = svr_btn_start + len(_SERVER_PRESETS) * (svr_btn_h + gap) + 16
+        start_y_btn = after_adv_y + 16
         start_rect = pygame.Rect(pw // 2 - 80, start_y_btn, 160, 44)
         start_hover = start_rect.collidepoint(mx, my)
         sbg = _BTN_BG_HOV if start_hover else _BTN_BG
@@ -334,7 +369,10 @@ def _pick_resolution():
                     if r.collidepoint(ev.pos):
                         server_idx = i
                         break
-                if start_rect.collidepoint(ev.pos):
+                if adv_rect.collidepoint(ev.pos):
+                    advanced_open = not advanced_open
+                    win = pygame.display.set_mode((pw, _window_height(advanced_open)))
+                elif start_rect.collidepoint(ev.pos):
                     running = False
 
     chosen_w, chosen_h = choices[selected_idx][0], choices[selected_idx][1]

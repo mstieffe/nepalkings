@@ -391,8 +391,12 @@ class TestPreludeSpellToggle:
             button=1,
             pos=screen._prelude_x_rect.center,
         )
-        screen.handle_events([event])
-        assert screen._pending_prelude_clear is True
+        # Removals are free draft edits — the spell clears immediately,
+        # without a confirmation dialog.
+        with patch.object(screen, '_server_clear_prelude_spell') as mock_clear:
+            screen.handle_events([event])
+            mock_clear.assert_called_once()
+        assert screen.dialogue_box is None
 
 
 class TestConquerLootRiskTutorial:
@@ -873,3 +877,165 @@ class TestConquerRemoveClickPriority:
 
             mock_return.assert_called_once_with(20)
             mock_detail.assert_not_called()
+
+
+class TestNativeStartBattleAsync:
+    """The native 'To Battle!' flow must not block the main thread."""
+
+    def test_native_start_battle_is_async(self, monkeypatch):
+        from game.screens import conquer_screen as module
+
+        state = _make_state()
+        state.user_dict = {'maps': 2}
+        screen = module.ConquerScreen(state)
+        screen._land_id = 1942
+        screen._cooldown_remaining = 0
+        screen._cooldown_synced_at_ms = 1000
+
+        def _unexpected_sync_post(*_args, **_kwargs):
+            raise AssertionError('native start battle must not block the main thread')
+
+        monkeypatch.setattr(module.requests, 'post', _unexpected_sync_post)
+
+        started = {}
+
+        class _FakePoller:
+            def __init__(self, func, *args, **kwargs):
+                started['func'] = func
+                self.busy = False
+
+            def poll(self, args=()):
+                started['args'] = args
+
+            def has_result(self):
+                return False
+
+        monkeypatch.setattr(module, 'BackgroundPoller', _FakePoller)
+
+        screen._start_battle(use_map=True)
+
+        assert started['func'] == screen._start_battle_task
+        assert started['args'] == (1942, True)
+        assert screen._loading is True
+        assert screen._loading_message == 'Starting conquer battle...'
+
+    def test_native_drain_transitions_on_game_id(self, monkeypatch):
+        from game.screens import conquer_screen as module
+
+        state = _make_state()
+        state.user_dict = {'maps': 2}
+        screen = module.ConquerScreen(state)
+        screen._land_id = 1942
+        screen._loading = True
+
+        class _DonePoller:
+            busy = False
+
+            def has_result(self):
+                return True
+
+            @property
+            def result(self):
+                return {
+                    'data': {'game_id': 84, 'map_consumed': True, 'maps': 1},
+                    'game_dict': {'id': 84},
+                }
+
+        screen._start_battle_poller = _DonePoller()
+
+        fake_game = MagicMock()
+        monkeypatch.setattr(module, 'Game', lambda *a, **k: fake_game)
+        monkeypatch.setattr(module, 'gameplay_screen_for', lambda game: 'conquer_game')
+
+        screen._drain_start_battle_native()
+
+        assert screen._loading is False
+        assert state.game_id == 84
+        assert state.user_dict['maps'] == 1
+        assert state.game is fake_game
+        assert state.screen == 'conquer_game'
+        assert screen._start_battle_poller is None
+
+    def test_native_drain_error_surfaces_error(self):
+        from game.screens.conquer_screen import ConquerScreen
+
+        state = _make_state()
+        screen = ConquerScreen(state)
+        screen._loading = True
+
+        class _ErrPoller:
+            busy = False
+
+            def has_result(self):
+                return True
+
+            @property
+            def result(self):
+                return {'error': 'Connection error'}
+
+        screen._start_battle_poller = _ErrPoller()
+        screen._drain_start_battle_native()
+
+        assert screen._loading is False
+        assert screen._error == 'Connection error'
+
+
+class TestConquerConfigPolish:
+
+    def test_error_retry_click_reloads_config(self):
+        from game.screens import conquer_screen as module
+        import pygame
+        state = _make_state()
+        state.action = {}
+        screen = module.ConquerScreen(state)
+        screen._land_id = 42
+        screen._error = 'Connection error'
+        sw = module.settings.SCREEN_WIDTH
+        sh = module.settings.SCREEN_HEIGHT
+        screen._btn_retry = pygame.Rect(sw // 2 - 40, sh // 2, 80, 40)
+
+        event = pygame.event.Event(
+            pygame.MOUSEBUTTONUP, button=1, pos=screen._btn_retry.center)
+        with patch.object(screen, '_start_config_load') as mock_load:
+            screen.handle_events([event])
+        assert screen._error is None
+        mock_load.assert_called_once()
+
+    def test_empty_move_slot_click_opens_battle_shop(self):
+        from game.screens.conquer_screen import ConquerScreen
+        import pygame
+        state = _make_state()
+        state.action = {}
+        screen = ConquerScreen(state)
+        screen._land_id = 42
+        screen._config = {
+            'figures': [],
+            'battle_moves': [],
+            'prelude_spell_name': None,
+        }
+        screen._build_layout()
+        screen._draw_battle_move_slots()
+        assert set(screen._empty_move_slot_rects) == {0, 1, 2}
+
+        event = pygame.event.Event(
+            pygame.MOUSEBUTTONUP, button=1,
+            pos=screen._empty_move_slot_rects[0].center)
+        with patch.object(screen, '_open_battle_shop') as mock_open:
+            screen.handle_events([event])
+            mock_open.assert_called_once()
+
+    def test_close_subscreen_uses_async_loader(self):
+        from game.screens.conquer_screen import ConquerScreen
+        state = _make_state()
+        screen = ConquerScreen(state)
+        screen._land_id = 42
+        screen._active_subscreen = 'battle_shop'
+        screen._subscreen_obj = MagicMock()
+
+        with patch.object(screen, '_start_config_load') as async_load, \
+                patch.object(screen, '_load_config') as sync_load:
+            screen._close_subscreen()
+
+        async_load.assert_called_once()
+        sync_load.assert_not_called()
+        assert screen._active_subscreen is None

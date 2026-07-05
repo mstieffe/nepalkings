@@ -9,7 +9,8 @@ from game.screens.sub_screen import SubScreen
 class GuideBookScreen(SubScreen):
     """Screen for displaying the game guide with a sidebar menu and scrollable content."""
 
-    def __init__(self, window, state, x: int = 0, y: int = 0, title=None):
+    def __init__(self, window, state, x: int = 0, y: int = 0, title=None,
+                 initial_section=None):
         super().__init__(window, state.game, x, y, title)
         self.state = state
         self.game = state.game
@@ -17,6 +18,11 @@ class GuideBookScreen(SubScreen):
         # ── sections ────────────────────────────────────────────────────
         self.sections = self._build_sections()
         self.current_section = 0
+        if initial_section:
+            for i, section in enumerate(self.sections):
+                if section['title'] == initial_section:
+                    self.current_section = i
+                    break
         self.scroll_offset = 0          # pixel offset (not line index)
 
         # ── fonts ───────────────────────────────────────────────────────
@@ -160,24 +166,47 @@ class GuideBookScreen(SubScreen):
         _bm = 'img/battle/icons/'
         _st = 'img/status_icons/'
         _gb = 'img/game_button/symbol/'
+        _kg = 'img/kingdom/skill_icons/'
+        _dlg = 'img/dialogue_box/icons/'
 
-        return [
+        sections = [
 
             # ── 0  Overview ─────────────────────────────────────────
             {
                 'title': 'Overview',
+                'group': 'Basics',
+                'mode': 'both',
                 'content': [
-                    'Welcome to Nepal Kings - a strategic two-player card-and-'
-                    'board game set in the kingdoms of the Himalayas.',
+                    'Welcome to Nepal Kings - a strategy card game set in '
+                    'the kingdoms of the Himalayas.',
                     '',
-                    'Each player commands a kingdom with a Castle, Villages '
-                    'that produce resources, and Military units that wage war. '
-                    'Every round you draw cards, construct figures on your '
-                    'board, cast spells, and send your warriors into battle.',
+                    {'heading': 'Two Ways to Play'},
+                    'There are two ways to play. They share cards, figures, '
+                    'suit rules, and battle math, but they answer different '
+                    'questions:',
                     '',
-                    {'heading': 'Objective'},
-                    'Be the first player to reach the point target or '
-                    'destroy your opponent\'s Maharaja (Checkmate).',
+                    {'table': {
+                        'headers': ['', 'Conquest', 'Duels'],
+                        'rows': [
+                            ['Opponent', 'AI- or human-defended lands',
+                             'Another ruler or the AI'],
+                            ['Length', 'One land battle', 'A chosen point target'],
+                            ['Your cards', 'Committed from your Collection',
+                             'Hands drawn from one shared deck'],
+                            ['You win by', 'Beating the land\'s defence',
+                             'Point target or Checkmate'],
+                        ],
+                        'col_widths': [0.20, 0.40, 0.40],
+                    }},
+                    '',
+                    {'bullet': 'Conquest: the map game. Assemble an attack '
+                     'force from your Collection, challenge a land defence, '
+                     'and claim the land if you win. See the Conquest '
+                     'chapters.'},
+                    {'bullet': 'Duels: the full head-to-head match. Both '
+                     'players draw from a shared deck, build figures over '
+                     'several rounds, cast spells, and battle for points. '
+                     'See the Duels chapters.'},
                     '',
                     {'heading': 'The Two Sides'},
                     {'table': {
@@ -192,14 +221,8 @@ class GuideBookScreen(SubScreen):
                         'col_widths': [0.20, 0.40, 0.40],
                     }},
                     '',
-                    {'heading': 'Win Conditions'},
-                    {'bullet': 'Score: reach the point target (default 45). '
-                     'Points are earned by winning battles and forcing folds.'},
-                    {'bullet': 'Checkmate: destroy your opponent\'s Maharaja. '
-                     'This ends the game immediately regardless of score.'},
-                    '',
-                    {'heading': 'Board Layout'},
-                    'Each player\'s board has three fields:',
+                    {'heading': 'Your Forces'},
+                    'In both modes your figures live in three fields:',
                     '',
                     {'icon_bullet': _sl + 'castle_small.png',
                      'text': 'Castle: home of the Maharaja and Kings. '
@@ -210,16 +233,35 @@ class GuideBookScreen(SubScreen):
                     {'icon_bullet': _sl + 'military_small.png',
                      'text': 'Military: soldiers and fortifications '
                      'that fight in battle.'},
+                    '',
+                    {'heading': 'Win Conditions'},
+                    {'bullet': 'Conquest: win the conquer battle to take '
+                     'the land into your kingdom.'},
+                    {'bullet': 'Duels - Score: reach the point target chosen '
+                     'when the game is created. Quick (7), Standard (21), '
+                     'and Epic (35) are presets, but the target can also be '
+                     'typed in. Points are earned by winning battles and '
+                     'forcing folds.'},
+                    {'bullet': 'Duels - Checkmate: destroy your opponent\'s '
+                     'Maharaja. This ends the game immediately regardless '
+                     'of score.'},
                 ],
             },
 
             # ── 1  Game Flow ────────────────────────────────────────
             {
                 'title': 'Game Flow',
+                'group': 'Duels',
+                'mode': 'duel',
                 'content': [
-                    'A game of Nepal Kings consists of many rounds. Each '
-                    'round both players take turns building their kingdoms, '
-                    'then resolve a battle.',
+                    {'note': 'This chapter describes duels: full matches '
+                     'against another ruler or the AI. Conquer battles are '
+                     'single-land fights with prepared forces - see Conquer '
+                     'Battles.'},
+                    '',
+                    'A duel consists of many rounds. Each round both '
+                    'players take turns building their kingdoms, then '
+                    'resolve a battle.',
                     '',
                     {'heading': 'Rounds & Turns'},
                     {'icon_text': _st + 'turn_active.png',
@@ -275,10 +317,13 @@ class GuideBookScreen(SubScreen):
             # ── 2  Cards & Hands ────────────────────────────────────
             {
                 'title': 'Cards & Hands',
+                'group': 'Basics',
+                'mode': 'both',
                 'content': [
-                    'The shared deck contains 104 cards: 64 main cards and '
-                    '40 side cards. At game start each player is dealt 12 '
-                    'main cards and 8 side cards.',
+                    'The card pool contains 104 cards: 64 main cards and '
+                    '40 side cards. In duel mode both players draw from the '
+                    'same shared deck; each player is dealt 12 main cards '
+                    'and 8 side cards.',
                     '',
                     {'heading': 'The Four Suits'},
                     {'table': {
@@ -360,6 +405,9 @@ class GuideBookScreen(SubScreen):
                     }},
                     '',
                     {'heading': 'Your Two Hands'},
+                    {'note': 'Hands and card changing exist in duels only. '
+                     'In conquest your cards live in your Collection and '
+                     'are committed to attacks and defences instead.'},
                     {'bullet': 'Main Hand (up to 12 cards): your primary '
                      'set of cards. Auto-refilled to 5 if it drops below '
                      'that threshold.'},
@@ -376,7 +424,13 @@ class GuideBookScreen(SubScreen):
             # ── 3  Building Figures ─────────────────────────────────
             {
                 'title': 'Building',
+                'group': 'Duels',
+                'mode': 'duel',
                 'content': [
+                    {'note': 'Building with turns as described here happens '
+                     'in duels. In conquest you assemble figures beforehand '
+                     'in the attack setup - see Conquering a Land.'},
+                    '',
                     {'icon_text': _gb + 'hammer_active.png',
                      'text': 'Figures are built in the Build Screen. Open '
                      'it by clicking the hammer button on the main game '
@@ -422,6 +476,8 @@ class GuideBookScreen(SubScreen):
             # ── 4  Castle Figures ───────────────────────────────────
             {
                 'title': 'Castle',
+                'group': 'Basics',
+                'mode': 'both',
                 'content': [
                     {'icon_text': _sl + 'castle_small.png',
                      'text': 'Castle figures are the rulers of your kingdom. '
@@ -475,6 +531,8 @@ class GuideBookScreen(SubScreen):
             # ── 5  Village Figures ──────────────────────────────────
             {
                 'title': 'Village',
+                'group': 'Basics',
+                'mode': 'both',
                 'content': [
                     {'icon_text': _sl + 'village_small.png',
                      'text': 'Village figures produce the resources your '
@@ -556,6 +614,8 @@ class GuideBookScreen(SubScreen):
             # ── 6  Military Figures ─────────────────────────────────
             {
                 'title': 'Military',
+                'group': 'Basics',
+                'mode': 'both',
                 'content': [
                     {'icon_text': _sl + 'military_small.png',
                      'text': 'Military figures are your primary fighting '
@@ -656,11 +716,17 @@ class GuideBookScreen(SubScreen):
             # ── 7  Skills ──────────────────────────────────────────
             {
                 'title': 'Skills',
+                'group': 'Basics',
+                'mode': 'both',
                 'content': [
                     'Some figures have innate skills that modify how they '
                     'behave in battle or interact with game mechanics. '
                     'Each skill is listed below with the figures that '
                     'have it in parentheses.',
+                    '',
+                    {'note': 'Skills apply in both modes. Skills about '
+                     'advancing and counter-advancing only matter in duels; '
+                     'in conquer battles figures fight directly.'},
                     '',
                     {'separator': True},
                     '',
@@ -742,11 +808,17 @@ class GuideBookScreen(SubScreen):
             # ── 8  Resources & Economy ──────────────────────────────
             {
                 'title': 'Resources',
+                'group': 'Basics',
+                'mode': 'both',
                 'content': [
                     {'icon_text': _r + 'rice_meat.png',
-                     'text': 'Your kingdom produces and consumes resources '
-                     'every round. If a figure\'s requirements aren\'t '
-                     'met, it suffers a resource deficit.'},
+                     'text': 'Your figures produce and consume resources. '
+                     'If a figure\'s requirements aren\'t met, it suffers '
+                     'a resource deficit.'},
+                    '',
+                    {'note': 'The same economy runs in both modes: in duels '
+                     'it is checked every round; in conquest it is checked '
+                     'while you assemble an attack or defence force.'},
                     '',
                     {'heading': 'Resource Types'},
                     {'table': {
@@ -803,7 +875,14 @@ class GuideBookScreen(SubScreen):
             # ── 9  Spells ──────────────────────────────────────────
             {
                 'title': 'Spells',
+                'group': 'Duels',
+                'mode': 'duel',
                 'content': [
+                    {'note': 'Spell casting mid-game happens in duels. In '
+                     'conquest only Prelude spells apply: chosen in the '
+                     'attack setup, they trigger once before the battle '
+                     'starts - see Conquering a Land.'},
+                    '',
                     {'icon_text': _gb + 'book_active.png',
                      'text': 'Cast spells by paying specific card '
                      'combinations from your hand. Casting a spell costs '
@@ -906,7 +985,13 @@ class GuideBookScreen(SubScreen):
             # ── 10  Battle ─────────────────────────────────────────
             {
                 'title': 'Battle',
+                'group': 'Duels',
+                'mode': 'duel',
                 'content': [
+                    {'note': 'This is the duel battle flow. Conquer battles '
+                     'skip advancing and the Battle Shop entirely - see '
+                     'Conquer Battles.'},
+                    '',
                     {'icon_text': _gb + 'battle_active.png',
                      'text': 'Battles determine who scores points and who '
                      'loses figures. They follow a structured flow from '
@@ -1034,20 +1119,216 @@ class GuideBookScreen(SubScreen):
                 ],
             },
 
+            # ── 11  Your Kingdom (Conquest) ─────────────────────────
+            {
+                'title': 'Your Kingdom',
+                'group': 'Conquest',
+                'mode': 'conquest',
+                'content': [
+                    'The Kingdom screen shows a map of lands. Lands you '
+                    'conquer join your kingdom, produce riches over time, '
+                    'and can be attacked by other rulers.',
+                    '',
+                    {'heading': 'Lands & Tiers'},
+                    'Every land has a tier from 1 to 6. Higher tiers field '
+                    'stronger defences and produce more:',
+                    '',
+                    {'table': {
+                        'headers': ['Tier', 'Name'],
+                        'rows': [
+                            ['1', 'Border Watch'],
+                            ['2', 'Mountain Warden'],
+                            ['3', 'Suit Bastion'],
+                            ['4', 'Apex Citadel'],
+                            ['5', 'Imperial Bulwark'],
+                            ['6', 'Eternal Citadel'],
+                        ],
+                        'col_widths': [0.20, 0.80],
+                    }},
+                    '',
+                    {'heading': 'Production'},
+                    {'icon_bullet': _kg + 'gold.png',
+                     'text': 'Gold: every land produces gold over time. '
+                     'Collect it on the Kingdom screen - the vault only '
+                     'holds so much uncollected gold, so visit regularly.'},
+                    {'icon_bullet': _kg + 'main_booster_production.png',
+                     'text': 'Boosters & maps: kingdom skills unlock slow '
+                     'production of booster packs and maps.'},
+                    '',
+                    {'heading': 'Levels & Skills'},
+                    'Kingdoms earn experience and level up (to level 50). '
+                    'Each level grants 3 skill points to spend on skills:',
+                    '',
+                    {'icon_bullet': _kg + 'gold_vault.png',
+                     'text': 'Economy: Gold Production, Gold Vault, Main / '
+                     'Side Booster Production, Map Production, and Atlas '
+                     '(storage capacity).'},
+                    {'icon_bullet': _kg + 'shield.png',
+                     'text': 'Defence: Shield Cost Reduction and Core '
+                     'Protection - when your kingdom shrinks to its last '
+                     'lands, they are shielded automatically.'},
+                    {'icon_bullet': _kg + 'loot_chance.png',
+                     'text': 'Loot Chance: a successful defence can loot '
+                     'cards from the attacker.'},
+                    '',
+                    {'heading': 'Cooldown & Maps'},
+                    {'icon_bullet': _dlg + 'map.png',
+                     'text': 'After a conquest there is a cooldown before '
+                     'your next attack (15 minutes). Spending a Map skips '
+                     'it immediately.'},
+                    '',
+                    {'heading': 'Shields'},
+                    'Buy shields with gold (priced per hour and per land) '
+                    'to protect your lands from other rulers while you are '
+                    'away.',
+                ],
+            },
+
+            # ── 12  Conquering a Land (Conquest) ────────────────────
+            {
+                'title': 'Conquering a Land',
+                'group': 'Conquest',
+                'mode': 'conquest',
+                'content': [
+                    'Tap a land on the map to see its tier, defence, and '
+                    'production, then open the Conquer setup to prepare '
+                    'your attack.',
+                    '',
+                    {'heading': 'Assemble Your Attack'},
+                    {'bullet': 'Figures: build your attack force from cards '
+                     'in your Collection. The recipes are the same as in '
+                     'duels (see the Basics chapters), and the resource '
+                     'economy must hold up.'},
+                    {'bullet': 'Tactics: choose exactly three battle-move '
+                     'cards - one is played in each battle round. You need '
+                     'all three before you can start.'},
+                    {'bullet': 'Prelude spells (optional): effects that '
+                     'trigger once before the battle starts, such as '
+                     'drawing extra tactics.'},
+                    '',
+                    {'note': 'Cards committed to an attack or defence are '
+                     'locked - they cannot be sold or used elsewhere until '
+                     'you release them.'},
+                    '',
+                    {'heading': 'Stakes'},
+                    {'table': {
+                        'headers': ['Outcome', 'What Happens'],
+                        'rows': [
+                            ['Win', 'The land joins your kingdom and you '
+                             'loot cards from its defence.'],
+                            ['Lose', 'The defence may loot some of your '
+                             'committed cards.'],
+                            ['Draw', 'Ownership unchanged; no cards are '
+                             'looted.'],
+                        ],
+                        'col_widths': [0.16, 0.84],
+                    }},
+                    '',
+                    {'heading': 'After Victory'},
+                    'Your winning attack force becomes the land\'s new '
+                    'defence. You can rework it any time in the defence '
+                    'setup - keep your best lands well defended, because '
+                    'other rulers can attack them.',
+                ],
+            },
+
+            # ── 13  Conquer Battles (Conquest) ──────────────────────
+            {
+                'title': 'Conquer Battles',
+                'group': 'Conquest',
+                'mode': 'conquest',
+                'content': [
+                    'A conquer battle is not a full duel. It is a short, '
+                    'focused land fight: your prepared attack force against '
+                    'the land\'s saved defence, whether that defence belongs '
+                    'to the AI or another ruler. There is no building, '
+                    'advancing, or card drawing mid-battle.',
+                    '',
+                    {'heading': 'Three Rounds'},
+                    'The battle lasts three rounds. In each round you play '
+                    'one of your tactic cards against the defence, and the '
+                    'total power difference decides the battle.',
+                    '',
+                    {'heading': 'Your Actions Each Round'},
+                    {'bullet': 'Play: play one of your prepared tactics.'},
+                    {'bullet': 'Combine: merge two Daggers into a Double '
+                     'Dagger for a stronger strike.'},
+                    {'bullet': 'Dismantle: split a combined tactic back '
+                     'into its parts.'},
+                    {'bullet': 'Gamble: sacrifice one tactic to draw two '
+                     'random replacements. Once per round, up to three '
+                     'times per battle.'},
+                    {'bullet': 'Skip: pass the round without playing.'},
+                    '',
+                    {'note': 'Each round has a 60-second timer. When it '
+                     'runs out, a random tactic is played for you - so '
+                     'don\'t wander off mid-battle.'},
+                    '',
+                    {'heading': 'Defending Your Lands'},
+                    'Your lands defend themselves automatically using '
+                    'their defence setup. Check the Alerts panel on the '
+                    'Kingdom screen for attack reports, and refresh your '
+                    'defences as you loot better cards.',
+                ],
+            },
+
         ]
+
+        # Order chapters so each sidebar group is consecutive:
+        # shared reference first, then the conquest journey, then duels.
+        order = [
+            'Overview', 'Cards & Hands', 'Castle', 'Village', 'Military',
+            'Skills', 'Resources',
+            'Your Kingdom', 'Conquering a Land', 'Conquer Battles',
+            'Game Flow', 'Building', 'Spells', 'Battle',
+        ]
+        by_title = {section['title']: section for section in sections}
+        return [by_title[title] for title in order]
 
     # ════════════════════════════════════════════════════════════════════
     #  Rendering helpers
     # ════════════════════════════════════════════════════════════════════
 
     def _build_menu_rects(self):
-        """Pre-calculate rectangles for each sidebar menu item."""
+        """Pre-calculate rectangles for sidebar items and group headers.
+
+        Sections carry an optional ``group`` label; consecutive sections
+        sharing a group get one header row above them. Item height shrinks
+        automatically so every row fits inside the sidebar.
+        """
         self.menu_rects = []
+        self._sidebar_group_rows = []
+        pad = self.menu_item_pad
+
+        rows = []              # ('header', label) | ('item', section_index)
+        last_group = None
+        for i, section in enumerate(self.sections):
+            group = section.get('group')
+            if group and group != last_group:
+                rows.append(('header', group))
+                last_group = group
+            rows.append(('item', i))
+
+        n_items = len(self.sections)
+        n_headers = sum(1 for kind, _ in rows if kind == 'header')
+        header_ratio = 0.72
+        avail = (self.sidebar_h - settings.GUIDE_MENU_TOP_PAD
+                 - pad * max(0, len(rows) - 1) - int(0.008 * settings.SCREEN_HEIGHT))
+        fit_h = int(avail / max(1.0, n_items + header_ratio * n_headers))
+        item_h = max(19, min(settings.GUIDE_MENU_ITEM_H, fit_h))
+        header_h = max(16, int(item_h * header_ratio))
+        self.menu_item_h = item_h
+
         y = self.sidebar_y + settings.GUIDE_MENU_TOP_PAD
-        for _ in self.sections:
-            rect = pygame.Rect(self.sidebar_x, y, self.sidebar_w, self.menu_item_h)
-            self.menu_rects.append(rect)
-            y += self.menu_item_h + self.menu_item_pad
+        for kind, value in rows:
+            if kind == 'header':
+                rect = pygame.Rect(self.sidebar_x, y, self.sidebar_w, header_h)
+                self._sidebar_group_rows.append((value, rect))
+                y += header_h + pad
+            else:
+                rect = pygame.Rect(self.sidebar_x, y, self.sidebar_w, item_h)
+                self.menu_rects.append(rect)
+                y += item_h + pad
 
     def _render_section(self):
         """Pre-render the current section's content onto an off-screen surface.
@@ -1111,6 +1392,19 @@ class GuideBookScreen(SubScreen):
                 ly = y
                 for line_surf in block['lines']:
                     surf.blit(line_surf, (text_x, ly))
+                    ly += line_surf.get_height() + line_spacing
+            elif block['type'] == 'note':
+                box = pygame.Rect(text_x, y, usable_width, block['box_h'])
+                bg = pygame.Surface((box.w, box.h), pygame.SRCALPHA)
+                bg.fill((250, 210, 120, 24))
+                surf.blit(bg, box.topleft)
+                pygame.draw.rect(surf, (150, 126, 74), box, 1, border_radius=4)
+                pygame.draw.rect(surf, settings.GUIDE_HEADING_CLR,
+                                 pygame.Rect(box.x, box.y, 3, box.h))
+                lx = text_x + block['pad_x'] + 6
+                ly = y + block['pad_y']
+                for line_surf in block['lines']:
+                    surf.blit(line_surf, (lx, ly))
                     ly += line_surf.get_height() + line_spacing
             elif block['type'] == 'icon_text':
                 icon_sz = block.get('icon_size', settings.GUIDE_ICON_SIZE)
@@ -1274,6 +1568,25 @@ class GuideBookScreen(SubScreen):
                         'lines': line_surfs,
                         'height': h,
                     })
+                elif 'note' in item:
+                    # Amber callout box: mode cross-references and caveats.
+                    pad_x = max(8, int(0.008 * settings.SCREEN_WIDTH))
+                    pad_y = max(5, int(0.006 * settings.SCREEN_HEIGHT))
+                    text_w = usable_width - pad_x * 2 - 6
+                    wrapped = self._wrap_text(item['note'], self.small_body_font, text_w)
+                    line_surfs = [self.small_body_font.render(l, True, (238, 216, 158))
+                                  for l in wrapped]
+                    text_h = sum(s.get_height() + line_spacing for s in line_surfs)
+                    text_h = max(0, text_h - line_spacing)
+                    box_h = text_h + pad_y * 2
+                    blocks.append({
+                        'type': 'note',
+                        'lines': line_surfs,
+                        'box_h': box_h,
+                        'pad_x': pad_x,
+                        'pad_y': pad_y,
+                        'height': box_h + paragraph_spacing,
+                    })
                 elif 'separator' in item:
                     blocks.append({
                         'type': 'separator',
@@ -1395,9 +1708,56 @@ class GuideBookScreen(SubScreen):
         """Switch to a different guide-book section."""
         if index == self.current_section:
             return
+        from utils import sound
+        sound.play('ui_click')
         self.current_section = index
         self.scroll_offset = 0
         self._render_section()
+
+    # ════════════════════════════════════════════════════════════════════
+    #  Embedding (menu Guide overlay)
+    # ════════════════════════════════════════════════════════════════════
+
+    def embed_into(self, area):
+        """Re-position sidebar/content/scrollbar to fit inside *area*.
+
+        Used by the menu Guide overlay's Rulebook tab, where the book is
+        drawn inside the overlay panel instead of the in-game sub-screen.
+        Draw with ``draw_embedded()`` afterwards (skips the sub-screen
+        background) while ``handle_events()`` keeps working as usual.
+        """
+        gap = max(10, int(0.010 * settings.SCREEN_WIDTH))
+        scroll_gap = max(4, int(0.004 * settings.SCREEN_WIDTH))
+        self.scrollbar_w = max(4, int(0.006 * settings.SCREEN_WIDTH))
+
+        self.sidebar_x = area.x
+        self.sidebar_y = area.y
+        self.sidebar_w = min(settings.GUIDE_SIDEBAR_W, int(area.w * 0.26))
+        self.sidebar_h = area.h
+        # _build_menu_rects() fits item heights to the new sidebar height.
+
+        self.content_x = self.sidebar_x + self.sidebar_w + gap
+        self.content_y = area.y
+        self.content_w = area.right - self.content_x - scroll_gap - self.scrollbar_w
+        self.content_h = area.h
+
+        self.scrollbar_x = self.content_x + self.content_w + scroll_gap
+        self.scrollbar_y = self.content_y
+        self.scrollbar_h = self.content_h
+        self.scrollbar_rect = pygame.Rect(
+            self.scrollbar_x, self.scrollbar_y, self.scrollbar_w, self.scrollbar_h)
+        self.handle_rect = pygame.Rect(
+            self.scrollbar_x, self.scrollbar_y, self.scrollbar_w, 40)
+
+        self.scroll_offset = 0
+        self._render_section()
+        self._build_menu_rects()
+
+    def draw_embedded(self):
+        """Draw sidebar + content + scrollbar only (no sub-screen chrome)."""
+        self._draw_sidebar()
+        self._draw_content()
+        self._draw_scrollbar()
 
     # ════════════════════════════════════════════════════════════════════
     #  Scrollbar helpers
@@ -1514,6 +1874,20 @@ class GuideBookScreen(SubScreen):
         pygame.draw.rect(self.window, settings.GUIDE_BORDER_CLR,
                          (self.sidebar_x, self.sidebar_y, self.sidebar_w, self.sidebar_h), 2)
 
+        # Group headers: small-caps label with a thin rule filling the row.
+        text_x = settings.GUIDE_MENU_TEXT_X
+        for label, rect in getattr(self, '_sidebar_group_rows', []):
+            surf = self.small_body_font.render(label.upper(), True,
+                                               settings.GUIDE_BULLET_CLR)
+            ly = rect.centery - surf.get_height() // 2 + 2
+            self.window.blit(surf, (rect.x + text_x, ly))
+            rule_x = rect.x + text_x + surf.get_width() + 8
+            rule_end = rect.right - text_x
+            if rule_end > rule_x:
+                pygame.draw.line(self.window, settings.GUIDE_SEPARATOR_CLR,
+                                 (rule_x, rect.centery + 2),
+                                 (rule_end, rect.centery + 2), 1)
+
         mouse_pos = pygame.mouse.get_pos()
         for i, rect in enumerate(self.menu_rects):
             is_active = (i == self.current_section)
@@ -1557,6 +1931,7 @@ class GuideBookScreen(SubScreen):
         title_x = self.content_x + (self.content_w - title_surf.get_width()) // 2
         title_y = self.content_y + settings.GUIDE_TITLE_TOP_PAD
         self.window.blit(title_surf, (title_x, title_y))
+        self._draw_mode_chip(section, title_y, title_surf.get_height())
 
         # Clipping region for scrollable body (below the title)
         body_top = title_y + title_surf.get_height() + settings.GUIDE_TITLE_BOTTOM_PAD
@@ -1571,6 +1946,33 @@ class GuideBookScreen(SubScreen):
                          (self.content_x, body_top - self.scroll_offset))
 
         self.window.set_clip(old_clip)
+
+    # Mode chip styling: (label, border colour, text colour)
+    _MODE_CHIPS = {
+        'both':     ('CONQUEST & DUELS', (150, 126, 74),  (210, 196, 158)),
+        'conquest': ('CONQUEST',         (128, 168, 96),  (186, 218, 156)),
+        'duel':     ('DUELS',            (196, 152, 82),  (240, 206, 138)),
+    }
+
+    def _draw_mode_chip(self, section, title_y, title_h):
+        """Small tag in the content header telling which mode a chapter covers."""
+        chip = self._MODE_CHIPS.get(section.get('mode'))
+        if not chip:
+            return
+        label, border_clr, text_clr = chip
+        txt = self.small_body_font.render(label, True, text_clr)
+        pad_x = max(6, int(0.005 * settings.SCREEN_WIDTH))
+        chip_h = txt.get_height() + 6
+        chip_w = txt.get_width() + pad_x * 2
+        rect = pygame.Rect(
+            self.content_x + self.content_w - chip_w - int(0.012 * settings.SCREEN_WIDTH),
+            title_y + (title_h - chip_h) // 2,
+            chip_w, chip_h)
+        bg = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
+        pygame.draw.rect(bg, (0, 0, 0, 70), bg.get_rect(), border_radius=chip_h // 2)
+        self.window.blit(bg, rect.topleft)
+        pygame.draw.rect(self.window, border_clr, rect, 1, border_radius=chip_h // 2)
+        self.window.blit(txt, txt.get_rect(center=rect.center))
 
     def _draw_scrollbar(self):
         """Draw the scrollbar track and handle."""

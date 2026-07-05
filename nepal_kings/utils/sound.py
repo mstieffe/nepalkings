@@ -53,6 +53,8 @@ EVENTS = {
     'conquer_win':    ('conquer_win.wav', 1.0),
     'your_turn':      ('your_turn.wav', 0.9),
     'error':          ('error.wav', 0.8),
+    'reveal_hold':    ('reveal_hold.wav', 0.8),
+    'tally_tick':     ('tally_tick.wav', 0.6),
 }
 
 _enabled = True
@@ -183,4 +185,13 @@ def play_for_dialogue(title):
         return play('ui_back')
     if 'battle' in t and ('begin' in t or 'start' in t or t == 'to battle!'):
         return play('battle_start')
+    # Invalid-action feedback (the duel action screens title these dialogs
+    # consistently: "Action Blocked", "Not Your Turn", "... Failed", ...).
+    if ('failed' in t or 'error' in t or 'invalid' in t or 'blocked' in t
+            or 'cannot' in t or 'wrong' in t or 'not your turn' in t
+            or 'must advance' in t or 'already selected' in t
+            or 'no valid target' in t or 'target required' in t
+            or 'resource deficit' in t or 'ceasefire active' in t
+            or 'resting' in t or 'immune' in t):
+        return play('error')
     return False

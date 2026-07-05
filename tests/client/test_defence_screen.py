@@ -578,8 +578,12 @@ class TestPreludeSpellIcons:
 
         event = pygame.event.Event(
             pygame.MOUSEBUTTONUP, button=1, pos=screen._prelude_x_rect.center)
-        screen.handle_events([event])
-        assert screen._pending_prelude_clear is True
+        # Removals are free draft edits — the spell clears immediately,
+        # without a confirmation dialog.
+        with patch.object(screen, '_server_clear_prelude_spell') as mock_clear:
+            screen.handle_events([event])
+            mock_clear.assert_called_once()
+        assert screen.dialogue_box is None
 
 
 class TestAutoGambleToggle:
@@ -973,11 +977,30 @@ pygame.quit()
         screen._build_layout()
 
         assert set(screen._info_button_rects) == {
-            'battle_plan', 'prelude_spell', 'defender_response'
+            'battle_plan', 'prelude_spell', 'defender_response', 'auto_gamble'
         }
         assert screen._battle_plan_rect.contains(screen._info_button_rects['battle_plan'])
         assert screen._prelude_panel_rect.contains(screen._info_button_rects['prelude_spell'])
         assert screen._counter_panel_rect.contains(screen._info_button_rects['defender_response'])
+        # The auto-gamble (i) sits in the Battle Plan panel next to the stepper.
+        assert screen._battle_plan_rect.contains(screen._info_button_rects['auto_gamble'])
+
+    def test_auto_gamble_info_button_opens_popup(self):
+        from game.screens.defence_screen import DefenceScreen
+        import pygame
+        state = _make_state()
+        screen = DefenceScreen(state)
+        screen._land_id = 7
+        screen._config = _make_config()
+        screen._build_layout()
+
+        event = pygame.event.Event(
+            pygame.MOUSEBUTTONUP,
+            button=1,
+            pos=screen._info_button_rects['auto_gamble'].center,
+        )
+        screen.handle_events([event])
+        assert screen._active_info_key == 'auto_gamble'
 
     def test_info_button_click_opens_section_info(self):
         from game.screens.defence_screen import DefenceScreen
@@ -1331,5 +1354,116 @@ class TestCounterSpellIcons:
 
         event = pygame.event.Event(
             pygame.MOUSEBUTTONUP, button=1, pos=screen._counter_x_rect.center)
-        screen.handle_events([event])
-        assert screen._pending_counter_clear is True
+        # Removals are free draft edits — the spell clears immediately,
+        # without a confirmation dialog.
+        with patch.object(screen, '_server_clear_counter_spell') as mock_clear:
+            screen.handle_events([event])
+            mock_clear.assert_called_once()
+        assert screen.dialogue_box is None
+
+
+class TestDefenceConfigPolish:
+
+    class _FakePoller:
+        def __init__(self, result):
+            self._result = result
+            self.busy = False
+
+        def has_result(self):
+            return True
+
+        @property
+        def result(self):
+            return self._result
+
+    def _drain_with_config(self, screen, cfg):
+        screen._config_poller = self._FakePoller({
+            'config_data': {'config': cfg, 'land': {'tier': 1}},
+            'collection_data': {'cards': []},
+        })
+        screen._config_poller_land_id = screen._land_id
+        with patch.object(screen, '_rebuild_figure_objects'):
+            screen._drain_config_poller()
+
+    def test_load_does_not_force_spell_target_selection(self):
+        """A fresh load with a target-less Health Boost must not hijack the
+        player into the dim target-pick overlay (passive caption suffices)."""
+        from game.screens.defence_screen import DefenceScreen
+        state = _make_state()
+        screen = DefenceScreen(state)
+        screen._land_id = 7
+        cfg = _make_config(
+            prelude_spell_name='Health Boost',
+            figures=[{'id': 1, 'field': 'castle'}],
+        )
+        self._drain_with_config(screen, cfg)
+        assert screen._selecting_spell_target is None
+
+    def test_reload_after_subscreen_prompts_spell_target(self):
+        """Right after the player picked a spell in the subscreen, the reload
+        does prompt for the missing Health Boost target."""
+        from game.screens.defence_screen import DefenceScreen
+        state = _make_state()
+        screen = DefenceScreen(state)
+        screen._land_id = 7
+        screen._prompt_spell_target_on_next_load = True
+        cfg = _make_config(
+            prelude_spell_name='Health Boost',
+            figures=[{'id': 1, 'field': 'castle'}],
+        )
+        self._drain_with_config(screen, cfg)
+        assert screen._selecting_spell_target == 'prelude'
+        assert screen._prompt_spell_target_on_next_load is False
+
+    def test_close_subscreen_uses_async_loader_and_flags_prompt(self):
+        from game.screens.defence_screen import DefenceScreen
+        state = _make_state()
+        screen = DefenceScreen(state)
+        screen._land_id = 7
+        screen._active_subscreen = 'prelude_spell'
+        screen._subscreen_obj = MagicMock()
+
+        with patch.object(screen, '_start_config_load') as async_load, \
+                patch.object(screen, '_load_config') as sync_load:
+            screen._close_subscreen()
+
+        async_load.assert_called_once()
+        sync_load.assert_not_called()
+        assert screen._active_subscreen is None
+        assert screen._prompt_spell_target_on_next_load is True
+
+    def test_empty_move_slot_click_opens_battle_shop(self):
+        from game.screens.defence_screen import DefenceScreen
+        import pygame
+        state = _make_state()
+        screen = DefenceScreen(state)
+        screen._land_id = 7
+        screen._config = _make_config()
+        screen._build_layout()
+        screen._draw_battle_move_slots()
+        assert set(screen._empty_move_slot_rects) == {0, 1, 2}
+
+        event = pygame.event.Event(
+            pygame.MOUSEBUTTONUP, button=1,
+            pos=screen._empty_move_slot_rects[0].center)
+        with patch.object(screen, '_open_battle_shop') as mock_open:
+            screen.handle_events([event])
+            mock_open.assert_called_once()
+
+    def test_error_retry_click_reloads_config(self):
+        from game.screens import defence_screen as module
+        import pygame
+        state = _make_state()
+        screen = module.DefenceScreen(state)
+        screen._land_id = 7
+        screen._error = 'Connection error'
+        sw = module.settings.SCREEN_WIDTH
+        sh = module.settings.SCREEN_HEIGHT
+        screen._btn_retry = pygame.Rect(sw // 2 - 40, sh // 2, 80, 40)
+
+        event = pygame.event.Event(
+            pygame.MOUSEBUTTONUP, button=1, pos=screen._btn_retry.center)
+        with patch.object(screen, '_start_config_load') as mock_load:
+            screen.handle_events([event])
+        assert screen._error is None
+        mock_load.assert_called_once()

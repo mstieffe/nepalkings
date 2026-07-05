@@ -23,6 +23,10 @@ from game.components.battle_moves.battle_move_manager import BattleMoveManager
 from game.components.conquer_round_ledger import ConquerRoundLedger
 from game.components.conquer_effects import ConquerEffectsLayer
 from game.components.conquer_layout import compute_conquer_layout
+from game.components.conquer_reveal_sequencer import (
+    ConquerRevealSequencer,
+    draw_face_down_card,
+)
 from game.components.conquer_tactics_rail import (
     ACTION_COMBINE,
     ACTION_DISMANTLE,
@@ -224,7 +228,6 @@ class ConquerGameScreen(GameScreen):
         self._conquer_timeline_expanded_rect = None
         self._conquer_timeline_toggle_rect = None
         self._conquer_collapsed_header_rect = None
-        self._conquer_timeline_last_layout_mode = None
         # Tracks when the "Finish Battle" header button first became available
         # so we can auto-trigger after a short timeout if the user does not
         # click it.  Reset whenever the button is unavailable again.
@@ -266,6 +269,14 @@ class ConquerGameScreen(GameScreen):
         self._tactics_rail = ConquerTacticsRail(self)
         self._round_ledger = ConquerRoundLedger(self)
         self._tactic_flight_animation = None
+        # Staged round-reveal choreography (display-only; see
+        # ``game/components/conquer_reveal_sequencer.py``).
+        self._conquer_reveal_sequencer = ConquerRevealSequencer(self)
+        # Rolling battle feed: short narration entries emitted at reveal
+        # beats (flip / impact) and gamble results. Each entry is
+        # ``{'text', 'color', 'added_ms'}``; entries fade out after
+        # ``CONQUER_FEED_TTL_MS``.
+        self._conquer_battle_feed = []
 
         # Visual-effects layer (spell projectiles, impact glows, particle
         # bursts, floating numbers, round banners).  See
@@ -288,6 +299,11 @@ class ConquerGameScreen(GameScreen):
         self._recent_spell_timeline_names = []
         self._last_announced_battle_round = 0
         self._round_transition_until_ms = 0
+        # Round-reveal UX state: the last tally-tick sound timestamp
+        # (rate limit) and whether the final round was announced as
+        # contested (drives the ledger's stakes border).
+        self._conquer_tally_tick_last_ms = 0
+        self._final_round_contested = False
 
         if getattr(self.state, 'subscreen', None) not in self.subscreens:
             self.state.subscreen = 'field'
@@ -538,26 +554,20 @@ class ConquerGameScreen(GameScreen):
         return pygame.Rect(x, y, w, bottom - y)
 
     def _sync_conquer_timeline_hover_state(self):
-        # The timeline overlay is now an explicit toggle (chevron button)
-        # rather than hover-driven. We only need to keep the overlay rect
-        # in sync with the current header layout.
+        # The timeline overlay is an explicit toggle (chevron button); it
+        # never opens on its own — auto-opening at battle start compressed
+        # the battle layout until the player found the chevron. We only
+        # keep the overlay rect in sync with the current header layout.
         if not self._should_use_collapsed_conquer_header():
             self._close_conquer_timeline_overlay()
-            self._conquer_timeline_last_layout_mode = self._conquer_layout_mode()
             return
-        mode = self._conquer_layout_mode()
-        if mode == 'pre_battle':
+        if self._conquer_layout_mode() == 'pre_battle':
             self._close_conquer_timeline_overlay()
-            self._conquer_timeline_last_layout_mode = mode
             return
-        previous_mode = getattr(self, '_conquer_timeline_last_layout_mode', None)
-        if mode == 'battle' and previous_mode != 'battle':
-            self._conquer_timeline_hover_open = True
         if getattr(self, '_conquer_timeline_hover_open', False):
             self._conquer_timeline_expanded_rect = self._conquer_timeline_overlay_rect()
         else:
             self._conquer_timeline_expanded_rect = None
-        self._conquer_timeline_last_layout_mode = mode
 
     def _conquer_header_layout(self):
         mode = self._conquer_layout_mode()
@@ -697,6 +707,7 @@ class ConquerGameScreen(GameScreen):
         game = self.state.game
         if not game:
             return base_steps
+        base_steps = self._apply_single_option_step_info(base_steps)
         battle_started = (
             getattr(game, 'battle_turn_player_id', None) is not None
             or getattr(game, 'battle_round', 0) in (1, 2, 3)
@@ -865,6 +876,15 @@ class ConquerGameScreen(GameScreen):
             return False
         if len(player_slots) < 3 or len(opponent_slots) < 3:
             return False
+        # Hold the Finish button until the final round's reveal choreography
+        # lands — resolving mid-reveal would step on the impact beat.
+        sequencer = getattr(self, '_conquer_reveal_sequencer', None)
+        if sequencer is not None:
+            try:
+                if sequencer.has_pending():
+                    return False
+            except Exception:
+                pass
         return (all(p is not None for p in player_slots)
                 and all(o is not None for o in opponent_slots))
 
@@ -999,6 +1019,44 @@ class ConquerGameScreen(GameScreen):
         if now - pending[1] < AUTO_ADVANCE_MS:
             return
         self._fire_pending_single_option()
+
+    def conquer_single_option_hold_ratio(self):
+        """Remaining-time ratio [0, 1] of the pending single-option auto-pick.
+
+        ``None`` when no auto-pick hold is running.  The timeline panel uses
+        this to draw a countdown ring + Next button on the active interactive
+        step so the auto-selection never fires without visible warning.
+        """
+        pending = getattr(self, '_auto_single_option_pending', None)
+        if pending is None:
+            return None
+        elapsed = pygame.time.get_ticks() - pending[1]
+        return max(0.0, min(1.0, 1.0 - elapsed / float(AUTO_ADVANCE_MS)))
+
+    def _apply_single_option_step_info(self, steps):
+        """Align the active selection step's info text with the auto-pick.
+
+        While a single-option hold is running the panel adds a countdown +
+        Next button; the step body derived from game state still says
+        "select on the field", so rewrite it to announce the auto-selection.
+        """
+        if self.conquer_single_option_hold_ratio() is None:
+            return steps
+        kind, _payload = self._detect_single_option_context()
+        step_kind = {
+            'defender': 'defender',
+            'own_defender': 'defender',
+            'prelude_target': 'prelude_own',
+        }.get(kind)
+        if step_kind is None:
+            return steps
+        for step in steps:
+            if step.kind == step_kind and step.active and step.interactive:
+                step.info_body = (
+                    'Only one legal choice — it will be selected '
+                    'automatically. Press Next to continue now.'
+                )
+        return steps
 
     def _fire_pending_single_option(self):
         """Resolve the currently pending single-option step (if any)."""
@@ -1382,6 +1440,14 @@ class ConquerGameScreen(GameScreen):
         the player cannot fire a second action (e.g. another play, or a
         skip) that would race the animation.
         """
+        return bool(self.conquer_action_block_reason())
+
+    def conquer_action_block_reason(self) -> str:
+        """Human-readable reason rail actions are blocked, or ''.
+
+        Covers the played-tactic flight animation, the round-transition
+        pause, and the staged round-reveal sequence.
+        """
         animation = getattr(self, '_tactic_flight_animation', None)
         if animation:
             try:
@@ -1389,19 +1455,26 @@ class ConquerGameScreen(GameScreen):
                 duration = max(1, int(animation.get('duration') or self.TACTIC_FLIGHT_MS))
                 elapsed = now - int(animation.get('started_at') or now)
                 if elapsed <= duration:
-                    return True
+                    return 'Tactic in flight…'
             except Exception:
-                return True
+                return 'Tactic in flight…'
+        sequencer = getattr(self, '_conquer_reveal_sequencer', None)
+        if sequencer is not None:
+            try:
+                if sequencer.is_active():
+                    return 'Revealing round…'
+            except Exception:
+                pass
         # Brief round-transition pause (Tier 3.1): also block actions while
         # the "Round N" banner is animating in so the player gets a beat
         # to register the new round before being able to act.
         try:
             until = int(getattr(self, '_round_transition_until_ms', 0) or 0)
             if until and pygame.time.get_ticks() < until:
-                return True
+                return 'Tactic in flight…'
         except Exception:
             pass
-        return False
+        return ''
 
     def _start_tactic_flight_animation(self, move):
         if not (self._is_tactics_hand_game() and move):
@@ -1478,6 +1551,251 @@ class ConquerGameScreen(GameScreen):
         self.window.blit(panel, pill.topleft)
         pygame.draw.rect(self.window, (120, 205, 220), pill, 2, border_radius=pill.height // 2)
         self.window.blit(label_surf, label_surf.get_rect(center=pill.center))
+
+    # --------------------------------------------------------- round reveal
+    @staticmethod
+    def _conquer_round_banner_label(battle_round: int) -> str:
+        """Banner label for a zero-indexed ``battle_round`` (0..2)."""
+        display = min(int(battle_round) + 1, 3)
+        return 'Final Round' if display == 3 else f'Round {display}'
+
+    def _is_conquer_final_round_contested(self) -> bool:
+        """True when round 3 begins with the battle still inside one big
+        tactic swing — close enough that the last round can flip it."""
+        ledger = getattr(self, '_round_ledger', None)
+        total = getattr(ledger, 'current_total_diff', None)
+        if not callable(total):
+            return False
+        try:
+            return abs(int(total())) <= 12
+        except Exception:
+            return False
+
+    def conquer_round_reveal_stage(self, round_idx):
+        """Stage info for the ledger's reveal choreography, or ``None``."""
+        sequencer = getattr(self, '_conquer_reveal_sequencer', None)
+        if sequencer is None:
+            return None
+        try:
+            return sequencer.stage_for_round(round_idx)
+        except Exception:
+            return None
+
+    def _conquer_round_card_rect(self, round_idx):
+        if round_idx not in (0, 1, 2):
+            return None
+        try:
+            layout = compute_conquer_layout(
+                settings.SCREEN_WIDTH,
+                settings.SCREEN_HEIGHT,
+                mode=self._conquer_effective_layout_mode(),
+            )
+            return pygame.Rect(*layout.round_ledger.round_card_rects[round_idx])
+        except Exception:
+            return None
+
+    def _on_conquer_round_reveal_event(self, round_idx, event, payload):
+        """Reveal-sequencer beat hook: sound, effects, and feed entries."""
+        from utils import sound
+        try:
+            player_slots, opponent_slots = self._conquer_lane_played_tactics_raw()
+        except Exception:
+            player_slots, opponent_slots = [None] * 3, [None] * 3
+        you = player_slots[round_idx] if round_idx in (0, 1, 2) else None
+        opp = opponent_slots[round_idx] if round_idx in (0, 1, 2) else None
+        opponent_name = (getattr(self.state.game, 'opponent_name', None)
+                         or 'Opponent') if self.state.game else 'Opponent'
+        card_rect = self._conquer_round_card_rect(round_idx)
+        effects = getattr(self, '_conquer_effects', None)
+
+        if event == 'start':
+            # HOLD tension beat: a soft riser + anticipation pulse on the
+            # round card. Skip-beats and opp-seen entries (short/zero HOLD)
+            # stay silent so the cue never doubles up with the flip sound.
+            if int(payload.get('hold_ms') or 0) >= 200:
+                if effects is not None and card_rect is not None:
+                    try:
+                        effects.spawn_rect_pulse(card_rect, (196, 162, 92),
+                                                 duration_ms=300, scale=0.55)
+                    except Exception:
+                        pass
+                try:
+                    sound.play('reveal_hold')
+                except Exception:
+                    pass
+            return
+
+        if event == 'flip':
+            if isinstance(opp, dict):
+                if opp.get('_skipped') or opp.get('family_name') == 'Skip':
+                    self.push_conquer_feed(
+                        f'{opponent_name} skips round {round_idx + 1}.',
+                        (196, 186, 160))
+                else:
+                    name = self._conquer_lane_move_name(opp)
+                    power = self._conquer_lane_move_power(opp)
+                    detail = f' ({power})' if power else ''
+                    self.push_conquer_feed(
+                        f'{opponent_name} reveals {name}{detail}!',
+                        (226, 168, 152))
+            try:
+                sound.play('card_place')
+            except Exception:
+                pass
+            return
+
+        if event == 'impact':
+            diff = 0
+            try:
+                ledger = getattr(self, '_round_ledger', None)
+                if ledger is not None:
+                    diff = ledger._round_diff(you, opp)
+            except Exception:
+                diff = 0
+            if diff > 0:
+                color, text = (130, 220, 190), f'+{diff}'
+                feed = f'Round {round_idx + 1} falls to you (+{diff}).'
+                snd = 'coin'
+            elif diff < 0:
+                color, text = (226, 145, 130), f'\u2212{abs(diff)}'
+                feed = f'Round {round_idx + 1} goes to {opponent_name} ({diff}).'
+                snd = 'figure_place'
+            else:
+                color, text = (232, 220, 180), '\u00b10'
+                feed = f'Round {round_idx + 1} is dead even.'
+                snd = 'card_slide'
+            self.push_conquer_feed(feed, color)
+            if effects is not None and card_rect is not None:
+                # Impact intensity escalates toward the final round; a
+                # fast-forwarded (skipped) reveal never jolts the screen.
+                try:
+                    effects.spawn_rect_pulse(card_rect, color,
+                                             duration_ms=520,
+                                             scale=0.8 + 0.15 * round_idx)
+                    effects.spawn_floating_text_at_rect(
+                        card_rect, text, color,
+                        duration_ms=820 + 80 * round_idx)
+                    if not payload.get('fast_forwarded'):
+                        if abs(diff) >= 10:
+                            effects.spawn_shake(amplitude=6, duration_ms=240)
+                        if round_idx == 2 and diff != 0:
+                            effects.spawn_shake(amplitude=4, duration_ms=200)
+                except Exception:
+                    pass
+            try:
+                sound.play(snd)
+            except Exception:
+                pass
+            return
+
+        if event == 'done':
+            # Final-round resolve beat: once the last reveal lands and the
+            # battle is complete, pulse the BATTLE TOTAL circle so the eye
+            # travels to the resolution readout before Finish appears.
+            game = self.state.game
+            if game is None or getattr(game, 'last_battle_result', None):
+                return
+            sequencer = getattr(self, '_conquer_reveal_sequencer', None)
+            if sequencer is not None and sequencer.has_pending():
+                return
+            try:
+                player_slots, opponent_slots = self._conquer_lane_played_tactics_raw()
+                all_done = (all(s is not None for s in player_slots)
+                            and all(s is not None for s in opponent_slots))
+            except Exception:
+                all_done = False
+            if not all_done:
+                return
+            ledger = getattr(self, '_round_ledger', None)
+            circle = getattr(ledger, '_total_circle_rect', None) if ledger else None
+            if effects is not None and circle is not None:
+                try:
+                    effects.spawn_rect_pulse(pygame.Rect(circle), (238, 206, 130),
+                                             duration_ms=760, scale=1.15)
+                except Exception:
+                    pass
+            self.push_conquer_feed('All rounds resolved \u2014 finish the battle!',
+                                   (238, 206, 130))
+
+    def _on_conquer_tally_tick(self, shown, diff):
+        """Ledger hook: soft tick as the round-diff count-up increments.
+
+        Rate-limited so a fast count-up (big diff over the same tally
+        window) coalesces into an even tick train instead of a burr.
+        """
+        now = pygame.time.get_ticks()
+        if now - int(getattr(self, '_conquer_tally_tick_last_ms', 0) or 0) < 45:
+            return
+        self._conquer_tally_tick_last_ms = now
+        from utils import sound
+        try:
+            sound.play('tally_tick')
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------ battle feed
+    CONQUER_FEED_TTL_MS = 6500
+    CONQUER_FEED_MAX = 4
+
+    def push_conquer_feed(self, text, color=(238, 218, 170)):
+        """Append a short narration entry to the rolling battle feed."""
+        feed = getattr(self, '_conquer_battle_feed', None)
+        if feed is None:
+            feed = []
+            self._conquer_battle_feed = feed
+        feed.append({
+            'text': str(text or ''),
+            'color': tuple(color),
+            'added_ms': pygame.time.get_ticks(),
+        })
+        del feed[:-self.CONQUER_FEED_MAX]
+
+    def _draw_conquer_battle_feed(self):
+        """Rolling reveal-narration feed, bottom-left above the ledger.
+
+        Entries fade over their last second. Non-interactive; capped to
+        ``CONQUER_FEED_MAX`` compact lines so it never crowds the field.
+        """
+        feed = getattr(self, '_conquer_battle_feed', None)
+        if not feed:
+            return
+        now = pygame.time.get_ticks()
+        live = [entry for entry in feed
+                if now - int(entry.get('added_ms') or now) < self.CONQUER_FEED_TTL_MS]
+        if len(live) != len(feed):
+            self._conquer_battle_feed = live
+        if not live:
+            return
+        try:
+            ledger_rect = self._round_ledger.rect()
+        except Exception:
+            ledger_rect = pygame.Rect(0, settings.SCREEN_HEIGHT - 80,
+                                      settings.SCREEN_WIDTH, 80)
+        font = settings.get_font(max(10, int(settings.FS_TINY * 0.9)), bold=True)
+        line_h = font.get_height() + 6
+        x = ledger_rect.left + 4
+        y = ledger_rect.top - 10 - line_h
+        max_w = max(120, int(settings.SCREEN_WIDTH * 0.34))
+        for entry in reversed(live):
+            age = now - int(entry.get('added_ms') or now)
+            remaining = self.CONQUER_FEED_TTL_MS - age
+            alpha = 255 if remaining > 1000 else max(0, int(255 * remaining / 1000))
+            if alpha <= 0:
+                continue
+            text = self._fit_text(entry.get('text', ''), font, max_w - 16)
+            surf = font.render(text, True, entry.get('color', (238, 218, 170)))
+            pill = pygame.Rect(x, y, surf.get_width() + 14, line_h)
+            bg = pygame.Surface(pill.size, pygame.SRCALPHA)
+            pygame.draw.rect(bg, (20, 16, 12, min(210, alpha)),
+                             bg.get_rect(), border_radius=6)
+            pygame.draw.rect(bg, (*entry.get('color', (238, 218, 170)),
+                                  min(140, alpha)),
+                             bg.get_rect(), 1, border_radius=6)
+            surf.set_alpha(alpha)
+            self.window.blit(bg, pill.topleft)
+            self.window.blit(surf, (pill.left + 7,
+                                    pill.centery - surf.get_height() // 2))
+            y -= line_h + 3
 
     # ------------------------------------------------------------------ effects
     def _lookup_conquer_figure_rect(self, figure_id):
@@ -1703,17 +2021,46 @@ class ConquerGameScreen(GameScreen):
             self._spell_step_phase_map = dict(current_phase)
 
         # --- Round transition banner (Tier 3.3) ---
+        # ``battle_round`` is zero-indexed on the server (0..2), so the
+        # banner label is round + 1; the last round gets its own callout.
+        # The banner is deferred while a round-reveal sequence is pending
+        # so "Round N" never announces on top of the previous round's
+        # reveal choreography.
         battle_round = int(getattr(game, 'battle_round', 0) or 0)
         confirmed = bool(getattr(game, 'battle_confirmed', False))
-        if confirmed and battle_round in (1, 2, 3) and battle_round != self._last_announced_battle_round:
+        sequencer = getattr(self, '_conquer_reveal_sequencer', None)
+        reveal_busy = bool(sequencer is not None and sequencer.has_pending())
+        if (confirmed and battle_round in (1, 2, 3) and not reveal_busy
+                and battle_round != self._last_announced_battle_round):
             if self._last_announced_battle_round != 0:
                 # Only banner subsequent rounds, not the initial seed.
-                effects.spawn_banner(f'Round {battle_round}', (255, 211, 116),
-                                     duration_ms=900)
+                label = self._conquer_round_banner_label(battle_round)
+                color = ((255, 170, 96) if label == 'Final Round'
+                         else (255, 211, 116))
+                duration_ms = 900
+                if label == 'Final Round':
+                    # Stakes callout when the battle is still genuinely
+                    # undecided — the total sits inside one Double-Dagger
+                    # swing. The ledger pulses round 3's border in step.
+                    self._final_round_contested = (
+                        self._is_conquer_final_round_contested())
+                    if self._final_round_contested:
+                        label = 'Final Round — all hangs on this'
+                        duration_ms = 1200
+                        self.push_conquer_feed(
+                            'Everything rides on the final round!',
+                            (255, 170, 96))
+                        try:
+                            from utils import sound
+                            sound.play('battle_start', volume=0.5)
+                        except Exception:
+                            pass
+                effects.spawn_banner(label, color, duration_ms=duration_ms)
                 self._round_transition_until_ms = pygame.time.get_ticks() + 500
             self._last_announced_battle_round = battle_round
         elif not confirmed:
             self._last_announced_battle_round = 0
+            self._final_round_contested = False
 
     def _play_conquer_spell_cast_sound(self, step_key):
         """Play the spell-cast sparkle once per spell step that fires live
@@ -3170,7 +3517,28 @@ class ConquerGameScreen(GameScreen):
                 else:
                     set_banner(f"Played {label}", color=(180, 220, 160), ttl_ms=4500)
             elif action == ACTION_GAMBLE:
-                set_banner(f"Gambling {label}…", color=(238, 218, 170), ttl_ms=5500)
+                drawn = result.get('new_tactics') if isinstance(result, dict) else None
+                if drawn:
+                    names = []
+                    for tactic in drawn[:2]:
+                        if not isinstance(tactic, dict):
+                            continue
+                        t_name = tactic.get('family_name') or 'Tactic'
+                        t_rank = tactic.get('rank') or ''
+                        names.append(f'{t_name} {t_rank}'.strip())
+                    if names:
+                        drew = ' + '.join(names)
+                        set_banner(f'Drew {drew}', color=(250, 226, 130),
+                                   ttl_ms=6000)
+                        self.push_conquer_feed(
+                            f'Gambled {label} → drew {drew}.',
+                            (250, 226, 130))
+                    else:
+                        set_banner(f'Gambling {label}…',
+                                   color=(238, 218, 170), ttl_ms=5500)
+                else:
+                    set_banner(f'Gambling {label}…', color=(238, 218, 170),
+                               ttl_ms=5500)
             elif action == ACTION_COMBINE:
                 set_banner(f"Combined {label}", color=(170, 200, 240), ttl_ms=4500)
             elif action == ACTION_DISMANTLE:
@@ -3188,6 +3556,10 @@ class ConquerGameScreen(GameScreen):
         super()._reset_game_screen_state()
         self.reset_conquer_panel_state()
         self._tactic_flight_animation = None
+        sequencer = getattr(self, '_conquer_reveal_sequencer', None)
+        if sequencer is not None:
+            sequencer.reset()
+        self._conquer_battle_feed = []
         self._battle_state_poller = None
         self._battle_state_poller_key = None
         self._battle_state_pending_key = None
@@ -4752,6 +5124,9 @@ class ConquerGameScreen(GameScreen):
             for pid, rounds in skipped.items()
         )) if isinstance(skipped, dict) else ()
 
+        sequencer = getattr(self, '_conquer_reveal_sequencer', None)
+        reveal_version = sequencer.display_version() if sequencer is not None else 0
+
         return (
             getattr(game, 'game_id', None),
             getattr(game, 'player_id', None),
@@ -4768,6 +5143,7 @@ class ConquerGameScreen(GameScreen):
             getattr(game, 'land_suit_bonus_suit', None),
             getattr(game, 'land_suit_bonus_value', None),
             skipped_rows,
+            reveal_version,
             tuple(figure_rows),
             tactic_rows(self._current_conquer_tactics()),
             tactic_rows(self._current_conquer_opponent_tactics()),
@@ -4784,11 +5160,14 @@ class ConquerGameScreen(GameScreen):
             displayed_step = self._displayed_conquer_step()
         except Exception:
             displayed_step = None
+        sequencer = getattr(self, '_conquer_reveal_sequencer', None)
+        reveal_version = sequencer.display_version() if sequencer is not None else 0
         return (
             getattr(game, 'game_id', None),
             getattr(game, 'player_id', None),
             getattr(game, '_game_data_version', 0),
             getattr(game, '_figures_data_version', 0),
+            reveal_version,
             id(figures),
             len(figures or []),
             id(tactics),
@@ -4937,6 +5316,23 @@ class ConquerGameScreen(GameScreen):
         return str(name)
 
     def _conquer_lane_played_tactics(self):
+        """Gated view of the per-round played tactics.
+
+        Freshly-completed rounds stay hidden (opponent slot ``None``)
+        until the reveal sequencer plays its FLIP beat. All display
+        consumers — ledger, duel lane, timeline — read this method;
+        the sequencer itself reads the raw variant below.
+        """
+        player_slots, opponent_slots = self._conquer_lane_played_tactics_raw()
+        sequencer = getattr(self, '_conquer_reveal_sequencer', None)
+        if sequencer is None:
+            return player_slots, opponent_slots
+        try:
+            return sequencer.gate_slots(player_slots, opponent_slots)
+        except Exception:
+            return player_slots, opponent_slots
+
+    def _conquer_lane_played_tactics_raw(self):
         game = self.state.game
         player_slots = [None, None, None]
         opponent_slots = [None, None, None]
@@ -7542,9 +7938,11 @@ class ConquerGameScreen(GameScreen):
             return None
         if getattr(self, '_tactic_flight_animation', None):
             return None
+        sequencer = getattr(self, '_conquer_reveal_sequencer', None)
+        if sequencer is not None and sequencer.is_active():
+            return None
         try:
-            layout = self._conquer_layout()
-            layout_key = tuple(layout.duel_lane_rect)
+            layout_key = self._conquer_effective_layout_mode()
         except Exception:
             layout_key = None
         try:
@@ -7632,20 +8030,7 @@ class ConquerGameScreen(GameScreen):
     @staticmethod
     def _draw_face_down_card(window, rect):
         """A small stylised face-down tactic card (no identity revealed)."""
-        radius = max(3, rect.width // 6)
-        surf = pygame.Surface(rect.size, pygame.SRCALPHA)
-        br = surf.get_rect()
-        # Slate card-back with warm gold trim and a centred diamond emblem so it
-        # reads as a real (hidden) card rather than an empty frame.
-        pygame.draw.rect(surf, (34, 38, 58), br, border_radius=radius)
-        pygame.draw.rect(surf, (58, 64, 92), br.inflate(-3, -3), border_radius=radius)
-        pygame.draw.rect(surf, (196, 162, 92), br, 2, border_radius=radius)
-        cx, cy = br.center
-        d = max(3, int(min(rect.width, rect.height) * 0.22))
-        diamond = [(cx, cy - d), (cx + d, cy), (cx, cy + d), (cx - d, cy)]
-        pygame.draw.polygon(surf, (150, 124, 76), diamond)
-        pygame.draw.polygon(surf, (214, 184, 112), diamond, 1)
-        window.blit(surf, rect.topleft)
+        draw_face_down_card(window, rect)
 
     def _draw_conquer_opponent_hand_strip(self):
         """Draw the opponent's hidden hand as a fanned column of face-down
@@ -7714,6 +8099,10 @@ class ConquerGameScreen(GameScreen):
         with perf_section('conquer.prep'):
             self._normalize_conquer_subscreen()
             if self._is_tactics_hand_game():
+                sequencer = getattr(self, '_conquer_reveal_sequencer', None)
+                if sequencer is not None:
+                    with perf_section('conquer.reveal_pump'):
+                        sequencer.pump()
                 self._update_conquer_support_hover_state()
                 self._update_conquer_battle_dim_flags()
                 self._apply_conquer_support_hover_visibility()
@@ -7788,6 +8177,7 @@ class ConquerGameScreen(GameScreen):
                 self._tactics_rail.draw()
                 self._round_ledger.draw()
                 self._draw_tactic_flight_animation()
+                self._draw_conquer_battle_feed()
             else:
                 self._draw_conquer_battle_moves_panel()
 
@@ -7829,6 +8219,32 @@ class ConquerGameScreen(GameScreen):
             self._draw_conquer_battle_coach()
             if getattr(self, '_battle_intro_dialogue', None) is not None:
                 self._battle_intro_dialogue.draw()
+
+        # Camera shake, applied post-composition so the whole scene moves
+        # as one. scroll() shifts the frame in place; the vacated edge
+        # strips are refilled so they don't smear stale pixels.
+        with perf_section('conquer.shake'):
+            try:
+                dx, dy = self._conquer_effects.screen_shake_offset()
+                if dx or dy:
+                    dx = max(-8, min(8, int(dx)))
+                    dy = max(-8, min(8, int(dy)))
+                    self.window.scroll(dx, dy)
+                    w, h = self.window.get_size()
+                    if dx > 0:
+                        self.window.fill(settings.BACKGROUND_COLOR,
+                                         pygame.Rect(0, 0, dx, h))
+                    elif dx < 0:
+                        self.window.fill(settings.BACKGROUND_COLOR,
+                                         pygame.Rect(w + dx, 0, -dx, h))
+                    if dy > 0:
+                        self.window.fill(settings.BACKGROUND_COLOR,
+                                         pygame.Rect(0, 0, w, dy))
+                    elif dy < 0:
+                        self.window.fill(settings.BACKGROUND_COLOR,
+                                         pygame.Rect(0, h + dy, w, -dy))
+            except Exception:
+                pass
 
     # ----------------------------------------------------------------- update
 
@@ -7988,6 +8404,15 @@ class ConquerGameScreen(GameScreen):
         # Runs *before* subscreen event handling so the rail can intercept
         # clicks that would otherwise hit the field/battle subscreen.
         if self._is_tactics_hand_game():
+            # While a round-reveal sequence plays, any click fast-forwards
+            # it to the resolved state instead of acting on the UI below.
+            sequencer = getattr(self, '_conquer_reveal_sequencer', None)
+            if sequencer is not None and sequencer.is_active():
+                for event in events:
+                    if event.type == MOUSEBUTTONDOWN and event.button == 1:
+                        sequencer.fast_forward()
+                        return
+                return
             for event in events:
                 if (event.type == MOUSEBUTTONDOWN and event.button == 1
                         and self._handle_conquer_lane_figure_click(event.pos)):

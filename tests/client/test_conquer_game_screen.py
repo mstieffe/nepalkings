@@ -3779,13 +3779,22 @@ class TestTacticsHandRouting:
         assert screen._conquer_timeline_expanded_rect == (
             ConquerGameScreen._conquer_timeline_overlay_rect(screen))
 
-    def test_battle_start_keeps_timeline_expanded_until_user_collapses(self):
+    def test_battle_start_keeps_timeline_collapsed_until_user_expands(self):
+        # The overlay must never open on its own: auto-opening at battle
+        # start compressed the battle layout until the player found the
+        # chevron. Only the explicit toggle opens (and closes) it.
         ConquerGameScreen, screen = self._make_screen()
         ConquerGameScreen._sync_conquer_timeline_hover_state(screen)
         assert ConquerGameScreen._is_conquer_timeline_overlay_open(screen) is False
 
         screen.state.game.battle_turn_player_id = 42
         screen.state.game.battle_round = 1
+        ConquerGameScreen._sync_conquer_timeline_hover_state(screen)
+
+        assert ConquerGameScreen._is_conquer_timeline_overlay_open(screen) is False
+        assert screen._conquer_timeline_expanded_rect is None
+
+        ConquerGameScreen._toggle_conquer_timeline_overlay(screen)
         ConquerGameScreen._sync_conquer_timeline_hover_state(screen)
 
         assert ConquerGameScreen._is_conquer_timeline_overlay_open(screen) is True
@@ -3943,7 +3952,6 @@ game.in_battle_phase = False
 game._game_start_pending = True
 game.game_start_notification_checked = False
 screen._conquer_timeline_hover_open = False
-screen._conquer_timeline_last_layout_mode = None
 assert_no_next_button('pre-battle inline')
 pygame.quit()
 ''')

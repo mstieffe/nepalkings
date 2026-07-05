@@ -945,8 +945,18 @@ class TestGameScreenDialogueFlow:
         GameScreen.check_battle_ready(game_screen)
 
         assert submitted_decisions == []
-        assert game_screen.state.game.pending_battle_ready is False
+        # pending_battle_ready must stay latched: once the automated invader's
+        # decision lands in battle_decisions, polls can no longer re-set it,
+        # so clearing it here would stall the game before the battle starts.
+        assert game_screen.state.game.pending_battle_ready is True
         assert game_screen.state.game.battle_ready_shown is False
+
+        # Next tick: invader decision arrives — the latched flag lets the
+        # defender submit its own decision.
+        game_screen.state.game.battle_decisions = {'20': 'battle'}
+        GameScreen.check_battle_ready(game_screen)
+        assert submitted_decisions == ['battle']
+        assert game_screen.state.game.pending_battle_ready is False
 
     def test_conquer_defender_submits_after_invader_battle_decision(self):
         GameScreen = _game_screen_class()

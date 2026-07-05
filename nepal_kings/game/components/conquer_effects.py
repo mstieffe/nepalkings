@@ -371,6 +371,26 @@ class ConquerEffectsLayer:
         })
         return token
 
+    def spawn_floating_text_at_rect(self, target_rect: Optional[pygame.Rect],
+                                    text: str,
+                                    color: Tuple[int, int, int] = (240, 230, 200),
+                                    *, delay_ms: int = 0,
+                                    duration_ms: Optional[int] = None) -> int:
+        """Floating text anchored to a fixed UI rectangle (not a figure)."""
+        token = self._new_token()
+        target_rect = self._resolve_static_rect(target_rect)
+        if target_rect is None:
+            return token
+        self._floats.append({
+            'text': str(text),
+            'color': color,
+            'target_id': None,
+            'target_rect': pygame.Rect(target_rect),
+            'started_at': self._ms() + max(0, int(delay_ms)),
+            'duration': int(duration_ms or self.FLOATING_TEXT_MS),
+        })
+        return token
+
     def spawn_banner(self, text: str, color: Tuple[int, int, int],
                      *, duration_ms: Optional[int] = None,
                      anchor_rect: Optional[pygame.Rect] = None) -> int:
@@ -396,11 +416,9 @@ class ConquerEffectsLayer:
     def screen_shake_offset(self) -> Tuple[int, int]:
         """Return current frame's (dx, dy) shake offset.
 
-        Callers that want the effect should translate their root draws by
-        this offset.  For simplicity the conquer screen does not currently
-        apply this globally — instead the shake is rendered as a visual
-        ripple by drawing a darker scrim during the shake window.  Kept
-        public so future refactors can lift it to a real camera shake.
+        The conquer screen applies this post-composition at the end of
+        ``render()`` (a whole-frame scroll), so every active shake moves
+        the full scene as one camera jolt.
         """
         now = self._ms()
         dx = dy = 0

@@ -284,6 +284,8 @@ class PreludeSpellScreen(SubScreen):
             return
 
         if data.get('success'):
+            from utils import sound
+            sound.play('booster_reveal')
             # Sync config back to proxy
             if data.get('config'):
                 self.game.set_config(data['config'])

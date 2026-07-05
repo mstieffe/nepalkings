@@ -257,6 +257,18 @@ def build_all():
         gain(noise(0.05, decay=40, lowpass=0.3), 0.2),
     ), peak=0.40))
 
+    # Low felt-drum riser for the round-reveal HOLD tension beat.
+    write_wav('reveal_hold.wav', finalize(mix(
+        tone(0.30, 110, 185, decay=5, partials=((1.0, 1.0), (2.0, 0.25))),
+        gain(noise(0.30, decay=6, lowpass=0.10), 0.35),
+    ), peak=0.40))
+
+    # Tiny wooden tick for the round-diff tally count-up.
+    write_wav('tally_tick.wav', finalize(mix(
+        tone(0.030, 1150, 1000, decay=80, partials=WOOD),
+        gain(noise(0.02, decay=90, lowpass=0.5), 0.35),
+    ), peak=0.32))
+
 
 if __name__ == '__main__':
     build_all()

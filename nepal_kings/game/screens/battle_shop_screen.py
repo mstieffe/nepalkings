@@ -692,6 +692,8 @@ class BattleShopScreen(SubScreen):
             )
 
         if result.get('success'):
+            from utils import sound
+            sound.play('card_place')
             if result.get('game'):
                 self.game.update_from_dict(result['game'])
             self._load_bought_moves()
@@ -990,6 +992,8 @@ class BattleShopScreen(SubScreen):
             )
 
         if result.get('success'):
+            from utils import sound
+            sound.play('card_slide')
             if result.get('game'):
                 self.game.update_from_dict(result['game'])
             self._load_bought_moves()

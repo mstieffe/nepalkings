@@ -93,7 +93,9 @@ class GameScreen(Screen):
         self.subscreens['log'] = LogScreen(self.window, self.state, x=settings.SUB_SCREEN_X, y=settings.SUB_SCREEN_Y, title='Log-Book')
 
         _report(0.60, 'Loading guide book …')
-        self.subscreens['tutorial'] = GuideBookScreen(self.window, self.state, x=settings.SUB_SCREEN_X, y=settings.SUB_SCREEN_Y, title='Guide Book')
+        self.subscreens['tutorial'] = GuideBookScreen(
+            self.window, self.state, x=settings.SUB_SCREEN_X, y=settings.SUB_SCREEN_Y,
+            title='Guide Book', initial_section='Game Flow')
 
         _report(0.70, 'Loading battle arena …')
         self.subscreens['battle'] = BattleScreen(self.window, self.state, x=settings.SUB_SCREEN_X, y=settings.SUB_SCREEN_Y, title='Battle Arena')
@@ -266,7 +268,7 @@ class GameScreen(Screen):
             settings.STATE_BUTTON_SYMBOL_WIDTH, 
             settings.STATE_BUTTON_GLOW_WIDTH, 
             state=self.state, 
-            hover_text_active='your are the defender!',
+            hover_text_active='you are the defender!',
             hover_text_passive='you are the invader!',
             track_invader = True
         )
@@ -2772,7 +2774,9 @@ class GameScreen(Screen):
                     # mode. The server still enforces invader-first battle
                     # decisions, so wait for the automated invader instead of
                     # submitting a defender decision that would be rejected.
-                    self.state.game.pending_battle_ready = False
+                    # Keep pending_battle_ready latched: once battle_decisions
+                    # carries the invader's entry, polls can no longer re-set
+                    # it, so clearing it here would stall the game forever.
                     self.state.game.battle_ready_shown = False
                     logger.info(
                         "[BATTLE_READY] Conquer defender waiting for invader "

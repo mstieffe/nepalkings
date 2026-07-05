@@ -690,8 +690,20 @@ class Game:
                         f"advancing={self.advancing_figure_id}"
                     )
         
-        # Battle is ready when both sides have their figures set
-        battle_ready = (not battle_active and
+        # Battle is ready when both sides have their figures set.
+        # NOTE: an opponent-only entry in battle_decisions must NOT block
+        # this — the invader decides first, so when only their decision is
+        # recorded we (the defender) still owe ours.  Blocking here stalled
+        # conquer games where the automated invader's decision was recorded
+        # server-side before the client ever saw the completed selection.
+        decisions_now = game_dict.get('battle_decisions') or {}
+        own_decision_recorded = str(self.player_id) in decisions_now
+        battle_ready_blocked = (
+            server_battle_confirmed
+            or own_decision_recorded
+            or bool(game_dict.get('fold_outcome'))
+        )
+        battle_ready = (not battle_ready_blocked and
                        self.advancing_figure_id and self.defending_figure_id and
                        not self.pending_battle_ready and not self.battle_ready_shown)
         
@@ -717,7 +729,7 @@ class Game:
                 self._last_battle_ready_block_signature = None
             else:
                 blocked_reasons = []
-                if battle_active:
+                if battle_ready_blocked:
                     blocked_reasons.append('battle_active')
                 if self.pending_battle_ready:
                     blocked_reasons.append('pending_battle_ready')

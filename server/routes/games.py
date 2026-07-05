@@ -51,6 +51,36 @@ CONQUER_ROUND_TIMEOUT_SEC = 60
 _conquer_round_deadlines = {}  # {game_id: (round_idx, deadline_unix_ts)}
 _conquer_timeout_last_check = {}  # {game_id: last_check_unix_ts}
 
+# Conquer AI watchdog: polls revive the automated defender when its worker
+# thread died mid-flow (crash, server restart, unexpected dead end).  The
+# after_request trigger only fires on POSTs, so a stalled AI whose turn it is
+# would otherwise never be re-triggered — the human can only poll.
+CONQUER_AI_WATCHDOG_INTERVAL_SEC = 5.0
+_conquer_ai_watchdog_last = {}  # {game_id: last_trigger_unix_ts}
+
+
+def _conquer_ai_watchdog_check(game):
+    """Re-trigger the automated conquer defender if it has a pending action.
+
+    Throttled per game; ``trigger_ai_if_needed`` itself is idempotent (no-op
+    when no action is pending or a worker thread is already active).
+    """
+    if not game or game.mode != 'conquer' or not settings.AI_ENABLED:
+        return
+    if game.state == 'finished':
+        _conquer_ai_watchdog_last.pop(game.id, None)
+        return
+    now = _time.time()
+    last = _conquer_ai_watchdog_last.get(game.id, 0.0)
+    if now - last < CONQUER_AI_WATCHDOG_INTERVAL_SEC:
+        return
+    _conquer_ai_watchdog_last[game.id] = now
+    try:
+        from ai.ai_worker import trigger_ai_if_needed
+        trigger_ai_if_needed(game.id, app=current_app._get_current_object())
+    except Exception:
+        logger.exception('Conquer AI watchdog trigger failed')
+
 
 def _ensure_conquer_round_deadline(game):
     """Ensure an active 60s deadline exists for the current battle round.
@@ -2132,6 +2162,10 @@ def get_game():
         _check_conquer_round_timeout(game)
         deadline = _conquer_round_deadline_for(game)
 
+        # Revive a stalled automated conquer defender (throttled no-op when
+        # nothing is pending).
+        _conquer_ai_watchdog_check(game)
+
         serialized = serialize_game_for_viewer(game, g.user_id)
         if deadline is not None:
             serialized['conquer_round_deadline_ts'] = deadline
@@ -3077,9 +3111,15 @@ def advance_figure():
                         Figure.field == 'village',
                         Figure.color == figure.color
                     ).all()
+                    # Match what a second advance_figure call would actually
+                    # accept: resting figures are rejected by the endpoint, so
+                    # they must not count as eligible seconds (otherwise the
+                    # turn stays parked on a pick that can never be made).
+                    resting_ids = set(game.resting_figure_ids or [])
                     eligible_seconds = [
                         f for f in eligible_seconds
-                        if _figure_can_counter_advance(f, player_id, game.id)
+                        if f.id not in resting_ids
+                        and _figure_can_counter_advance(f, player_id, game.id)
                     ]
                     if eligible_seconds:
                         civil_war_need_second = True

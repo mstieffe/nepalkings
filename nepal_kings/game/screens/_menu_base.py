@@ -268,6 +268,9 @@ class MenuScreenMixin:
         self._suppress_next_gold_gain_floater = False
         self._next_gold_gain_floater_pos = None
         self._onboarding_guide_open = False
+        self._onboarding_guide_tab = 'journey'
+        self._onboarding_guide_tab_rects = {}
+        self._guide_rulebook = None
         self._onboarding_guide_buttons = []
         self._onboarding_guide_font = settings.get_font(max(16, int(0.020 * _SH)))
         self._onboarding_guide_small_font = settings.get_font(max(14, int(0.017 * _SH)))
@@ -641,6 +644,7 @@ class MenuScreenMixin:
             return
         self._menu_chrome_username = username
         self._onboarding_guide_open = False
+        self._onboarding_guide_tab = 'journey'
         self._onboarding_guide_buttons = []
         self._onboarding_guide_item_rects = {}
         self._onboarding_guide_section_header_rects = {}
@@ -974,15 +978,11 @@ class MenuScreenMixin:
         )
         self._draw_onboarding_guide_close_x()
 
-        pending = self._onboarding_guide_badge_count()
-        if pending:
-            ready = self._onboarding_guide_small_font.render(
-                f'{pending} new item' + ('' if pending == 1 else 's'),
-                True,
-                (245, 220, 120),
-            )
-            right_limit = self._onboarding_guide_close_rect.left - 12
-            self.window.blit(ready, (right_limit - ready.get_width(), rect.y + 24))
+        content_top = self._draw_onboarding_guide_tabs(rect)
+
+        if self._onboarding_guide_tab == 'rulebook':
+            self._draw_onboarding_guide_rulebook()
+            return
 
         intro = 'Finish the conquer tutorial, then try the optional duel tutorial. Claim rewards as milestones unlock.'
         intro_surf = self._onboarding_guide_small_font.render(
@@ -990,7 +990,7 @@ class MenuScreenMixin:
             True,
             settings.DIALOGUE_BOX_MSG_TEXT_CLR,
         )
-        intro_y = rect.y + 18 + title.get_height() + 10
+        intro_y = content_top
         self.window.blit(intro_surf, (rect.x + 22, intro_y))
 
         area_top = intro_y + intro_surf.get_height() + int(0.026 * _SH)
@@ -1073,6 +1073,89 @@ class MenuScreenMixin:
         self.window.blit(surf, r.topleft)
         txt = self._onboarding_guide_section_font.render('X', True, txt_clr)
         self.window.blit(txt, txt.get_rect(center=r.center))
+
+    # ── Guide tabs (Journey / Rulebook) ────────────────────────────
+
+    _GUIDE_TABS = (('journey', 'Journey'), ('rulebook', 'Rulebook'))
+
+    def _onboarding_guide_tab_metrics(self, rect):
+        """Shared geometry for the tab bar: (tabs_y, tab_h, content_top)."""
+        title_h = self._onboarding_guide_title_font.get_height()
+        tab_h = max(34, int(0.044 * _SH))
+        tabs_y = rect.y + 16 + title_h + 12
+        content_top = tabs_y + tab_h + max(10, int(0.016 * _SH))
+        return tabs_y, tab_h, content_top
+
+    def _draw_onboarding_guide_tabs(self, rect):
+        """Draw the segmented Journey/Rulebook control; returns content top y."""
+        self._onboarding_guide_tab_rects = {}
+        tabs_y, tab_h, content_top = self._onboarding_guide_tab_metrics(rect)
+
+        seg_w = max(
+            int(0.105 * _SW),
+            max(self._onboarding_guide_font.size(label)[0]
+                for _, label in self._GUIDE_TABS) + 52,
+        )
+        total = pygame.Rect(rect.x + 22, tabs_y, seg_w * len(self._GUIDE_TABS), tab_h)
+
+        container = pygame.Surface((total.w, total.h), pygame.SRCALPHA)
+        pygame.draw.rect(container, (26, 23, 19, 205), container.get_rect(), border_radius=7)
+        self.window.blit(container, total.topleft)
+
+        mouse_pos = pygame.mouse.get_pos()
+        badge_count = self._onboarding_guide_badge_count()
+        active_tab = getattr(self, '_onboarding_guide_tab', 'journey')
+        for i, (key, label) in enumerate(self._GUIDE_TABS):
+            seg = pygame.Rect(total.x + i * seg_w, total.y, seg_w, tab_h)
+            self._onboarding_guide_tab_rects[key] = seg
+            active = key == active_tab
+            hovered = seg.collidepoint(mouse_pos) and not active
+            if active:
+                fill = pygame.Rect(seg.x + 3, seg.y + 3, seg.w - 6, seg.h - 6)
+                seg_bg = pygame.Surface((fill.w, fill.h), pygame.SRCALPHA)
+                pygame.draw.rect(seg_bg, (92, 70, 32, 240), seg_bg.get_rect(), border_radius=6)
+                self.window.blit(seg_bg, fill.topleft)
+                pygame.draw.rect(self.window, (235, 204, 105), fill, 1, border_radius=6)
+                txt_clr = (248, 232, 180)
+            elif hovered:
+                fill = pygame.Rect(seg.x + 3, seg.y + 3, seg.w - 6, seg.h - 6)
+                seg_bg = pygame.Surface((fill.w, fill.h), pygame.SRCALPHA)
+                pygame.draw.rect(seg_bg, (44, 38, 30, 225), seg_bg.get_rect(), border_radius=6)
+                self.window.blit(seg_bg, fill.topleft)
+                txt_clr = (228, 216, 184)
+            else:
+                txt_clr = (176, 166, 142)
+            txt = self._onboarding_guide_font.render(label, True, txt_clr)
+            self.window.blit(txt, txt.get_rect(center=seg.center))
+            if key == 'journey' and badge_count > 0:
+                r = max(8, int(0.011 * _SH))
+                cx, cy = seg.right - r - 5, seg.y + r + 4
+                pygame.draw.circle(self.window, (210, 40, 40), (cx, cy), r)
+                pygame.draw.circle(self.window, (255, 255, 255), (cx, cy), r, 1)
+                count_txt = self._onboarding_guide_badge_font.render(
+                    str(min(badge_count, 9)), True, (255, 255, 255))
+                self.window.blit(count_txt, count_txt.get_rect(center=(cx, cy)))
+        pygame.draw.rect(self.window, (112, 96, 66), total, 1, border_radius=7)
+        return content_top
+
+    def _onboarding_guide_rulebook_area(self):
+        rect = self._onboarding_guide_rect()
+        _, _, content_top = self._onboarding_guide_tab_metrics(rect)
+        return pygame.Rect(rect.x + 22, content_top,
+                           rect.w - 44, rect.bottom - content_top - 20)
+
+    def _ensure_guide_rulebook(self):
+        gb = getattr(self, '_guide_rulebook', None)
+        if gb is None:
+            from game.screens.guide_book_screen import GuideBookScreen
+            gb = GuideBookScreen(self.window, self.state,
+                                 x=settings.SUB_SCREEN_X, y=settings.SUB_SCREEN_Y)
+            gb.embed_into(self._onboarding_guide_rulebook_area())
+            self._guide_rulebook = gb
+        return gb
+
+    def _draw_onboarding_guide_rulebook(self):
+        self._ensure_guide_rulebook().draw_embedded()
 
     def _draw_onboarding_area_overview(self, rect):
         header = self._onboarding_guide_section_font.render(
@@ -1242,9 +1325,20 @@ class MenuScreenMixin:
         pygame.draw.rect(self.window, (38, 34, 28, 160), track, border_radius=3)
         pygame.draw.rect(self.window, (142, 120, 72), thumb, border_radius=3)
 
+    def _onboarding_guide_tab_hit(self, pos):
+        for key, tab in (getattr(self, '_onboarding_guide_tab_rects', None) or {}).items():
+            if tab.collidepoint(pos):
+                return key
+        return None
+
     def _handle_onboarding_guide_events(self, events):
+        rulebook_active = getattr(self, '_onboarding_guide_tab', 'journey') == 'rulebook'
+        rulebook = getattr(self, '_guide_rulebook', None) if rulebook_active else None
         for event in events:
             if event.type == pygame.MOUSEWHEEL:
+                if rulebook:
+                    rulebook.handle_events([event])
+                    return True
                 pos = getattr(event, 'pos', pygame.mouse.get_pos())
                 area = getattr(self, '_onboarding_guide_scroll_area', None)
                 track = getattr(self, '_onboarding_guide_scrollbar_rect', None)
@@ -1258,16 +1352,33 @@ class MenuScreenMixin:
                 return True
             if event.type == pygame.MOUSEBUTTONDOWN and getattr(event, 'button', 0) == 1:
                 pos = getattr(event, 'pos', pygame.mouse.get_pos())
-                self._begin_onboarding_guide_touch_scroll(pos)
+                if rulebook:
+                    if not self._onboarding_guide_tab_hit(pos):
+                        rulebook.handle_events([event])
+                else:
+                    self._begin_onboarding_guide_touch_scroll(pos)
                 return True
             if event.type == pygame.MOUSEMOTION:
-                if getattr(self, '_onboarding_guide_touch_scrolling', False):
+                if rulebook:
+                    rulebook.handle_events([event])
+                elif getattr(self, '_onboarding_guide_touch_scrolling', False):
                     self._update_onboarding_guide_touch_scroll(getattr(event, 'pos', pygame.mouse.get_pos()))
                 return True
             if event.type != pygame.MOUSEBUTTONUP or getattr(event, 'button', 0) != 1:
                 continue
             pos = getattr(event, 'pos', pygame.mouse.get_pos())
-            if self._end_onboarding_guide_touch_scroll():
+            if rulebook:
+                rulebook.handle_events([event])
+            tab_key = self._onboarding_guide_tab_hit(pos)
+            if tab_key:
+                if tab_key != getattr(self, '_onboarding_guide_tab', 'journey'):
+                    from utils import sound
+                    sound.play('ui_click')
+                    self._onboarding_guide_tab = tab_key
+                    if tab_key == 'rulebook':
+                        self._ensure_guide_rulebook()
+                return True
+            if not rulebook and self._end_onboarding_guide_touch_scroll():
                 return True
             if self._onboarding_guide_close_rect.collidepoint(pos):
                 self._onboarding_guide_open = False
@@ -1276,6 +1387,8 @@ class MenuScreenMixin:
             if not self._onboarding_guide_rect().collidepoint(pos):
                 self._onboarding_guide_open = False
                 self._reset_onboarding_guide_scroll()
+                return True
+            if rulebook:
                 return True
             for rect, action in list(self._onboarding_guide_buttons):
                 if not rect.collidepoint(pos):
@@ -1602,6 +1715,8 @@ class MenuScreenMixin:
 
     def _current_onboarding_guide_coach_step(self):
         if not getattr(self, '_onboarding_guide_open', False):
+            return None
+        if getattr(self, '_onboarding_guide_tab', 'journey') != 'journey':
             return None
         onboarding = self._onboarding()
         if not onboarding:

@@ -1,5 +1,6 @@
 # Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
 # See LICENSE file in the project root for full license information.
+import re as _re
 import sys as _sys
 import pygame
 from pygame.locals import *
@@ -14,8 +15,16 @@ _IS_WEB = (_sys.platform == 'emscripten')
 
 _SW, _SH = settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT
 
-MAX_USERNAME_LENGTH = 15
-MAX_PASSWORD_LENGTH = 15
+# Mirror the server's rules (auth.py): username 3-30 [a-zA-Z0-9_-],
+# password at least 8 characters.
+MAX_USERNAME_LENGTH = 30
+MAX_PASSWORD_LENGTH = 64
+MIN_USERNAME_LENGTH = 3
+MIN_PASSWORD_LENGTH = 8
+_USERNAME_RE = _re.compile(r'^[a-zA-Z0-9_-]+$')
+
+USERNAME_HINT = '3-30 chars: letters, numbers, _ -'
+PASSWORD_HINT = 'min. 8 characters'
 
 # ── Dark-theme input-field styling ─────────────────────────────────
 _FIELD_W          = int(0.26 * _SW)
@@ -30,6 +39,9 @@ _FIELD_BDR_ACTIVE  = (220, 200, 140)
 _FIELD_TEXT_CLR    = (230, 225, 210)
 _FIELD_LABEL_CLR  = (220, 200, 140)
 _FIELD_CURSOR_CLR = (220, 200, 140)
+_HINT_MUTED_CLR   = (150, 142, 122)
+_HINT_OK_CLR      = (150, 190, 140)
+_HINT_BAD_CLR     = (222, 138, 112)
 _FIELD_PAD_X      = int(0.010 * _SW)
 _LABEL_GAP        = int(0.006 * _SH)
 
@@ -210,12 +222,26 @@ class LoginScreen(Screen):
 
     # ── Custom input-field draw (dark theme) ────────────────────────
 
-    def _draw_field(self, field, label_y):
-        """Draw an input field with dark-theme styling."""
+    def _draw_field(self, field, label_y, hint=None, hint_state=None):
+        """Draw an input field with dark-theme styling.
+
+        *hint* is a short requirement note drawn right-aligned on the label
+        row; *hint_state* colours it (None = muted, True = ok, False = bad).
+        """
         # Label
         label_surf = self._label_font.render(field.name.capitalize(), True, _FIELD_LABEL_CLR)
         lx = field.rect.x
         self.window.blit(label_surf, (lx, label_y))
+
+        # Requirement hint (right-aligned on the label row)
+        if hint:
+            if hint_state is None:
+                hint_clr = _HINT_MUTED_CLR
+            else:
+                hint_clr = _HINT_OK_CLR if hint_state else _HINT_BAD_CLR
+            hint_surf = self._legal_font.render(hint, True, hint_clr)
+            hy = label_y + (label_surf.get_height() - hint_surf.get_height()) // 2
+            self.window.blit(hint_surf, (field.rect.right - hint_surf.get_width(), hy))
 
         # Background
         if field.active:
@@ -233,21 +259,28 @@ class LoginScreen(Screen):
         pygame.draw.rect(self.window, bdr, field.rect,
                          _FIELD_BORDER_W, border_radius=_FIELD_CORNER_R)
 
-        # Content text
+        # Content text — clipped to the field; when the text is wider than
+        # the field, keep its end (and the cursor) in view.
         visible = '*' * len(field.content) if field.pwd else field.content
         text_surf = self._field_font.render(visible, True, _FIELD_TEXT_CLR)
         ty = field.rect.y + (field.rect.h - text_surf.get_height()) // 2
-        self.window.blit(text_surf, (field.rect.x + _FIELD_PAD_X, ty))
+        max_text_w = field.rect.w - 2 * _FIELD_PAD_X
+        text_offset = min(0, max_text_w - text_surf.get_width())
+        tx = field.rect.x + _FIELD_PAD_X + text_offset
+        prev_clip = self.window.get_clip()
+        self.window.set_clip(pygame.Rect(field.rect.x + _FIELD_PAD_X, field.rect.y,
+                                         max_text_w, field.rect.h))
+        self.window.blit(text_surf, (tx, ty))
 
         # Cursor
         if field.active and pygame.time.get_ticks() % 1000 < 500:
-            cursor_x = (field.rect.x + _FIELD_PAD_X
-                        + self._field_font.size(visible[:field.cursor_pos])[0])
+            cursor_x = tx + self._field_font.size(visible[:field.cursor_pos])[0]
             cursor_y = field.rect.y + int(0.15 * field.rect.h)
             cursor_h = int(0.70 * field.rect.h)
             pygame.draw.line(self.window, _FIELD_CURSOR_CLR,
                              (cursor_x, cursor_y),
                              (cursor_x, cursor_y + cursor_h), 2)
+        self.window.set_clip(prev_clip)
 
     _LEGAL_LINK_CLR = (120, 180, 250)
 
@@ -462,9 +495,12 @@ class LoginScreen(Screen):
         ty = self._box_rect.y + settings.GAME_MENU_BOX_PAD_TOP
         self.window.blit(self._title_surf, (tx, ty))
 
-        # Input fields
-        self._draw_field(self.field_username, self._username_label_y)
-        self._draw_field(self.field_pwd, self._pwd_label_y)
+        # Input fields (hints show the server rules before submitting)
+        username_ok, pwd_ok = self._field_validity()
+        self._draw_field(self.field_username, self._username_label_y,
+                         hint=USERNAME_HINT, hint_state=username_ok)
+        self._draw_field(self.field_pwd, self._pwd_label_y,
+                         hint=PASSWORD_HINT, hint_state=pwd_ok)
         self._draw_legal_confirmation()
 
         # Buttons
@@ -484,6 +520,28 @@ class LoginScreen(Screen):
         super().render()
 
     # ── Auth handlers ───────────────────────────────────────────────
+
+    def _field_validity(self):
+        """Return (username_ok, pwd_ok); None while a field is still empty."""
+        username = self.field_username.content
+        pwd = self.field_pwd.content
+        username_ok = None
+        if username:
+            username_ok = (MIN_USERNAME_LENGTH <= len(username) <= MAX_USERNAME_LENGTH
+                           and bool(_USERNAME_RE.match(username)))
+        pwd_ok = len(pwd) >= MIN_PASSWORD_LENGTH if pwd else None
+        return username_ok, pwd_ok
+
+    def _register_validation_error(self):
+        """Client-side mirror of the server rules; returns a message or None."""
+        username = self.field_username.content
+        if len(username) < MIN_USERNAME_LENGTH or len(username) > MAX_USERNAME_LENGTH:
+            return f'Username must be {MIN_USERNAME_LENGTH}-{MAX_USERNAME_LENGTH} characters.'
+        if not _USERNAME_RE.match(username):
+            return 'Username may only use letters, numbers, _ and -.'
+        if len(self.field_pwd.content) < MIN_PASSWORD_LENGTH:
+            return f'Password must be at least {MIN_PASSWORD_LENGTH} characters.'
+        return None
 
     def handle_login(self):
         if self.loading:
@@ -507,6 +565,10 @@ class LoginScreen(Screen):
             return
         if not self._legal_confirmed:
             self.state.set_msg('Confirm age, Terms, and Privacy before registering.')
+            return
+        validation_error = self._register_validation_error()
+        if validation_error:
+            self.state.set_msg(validation_error)
             return
         legal_data = {
             'age_confirmed': 'true',
@@ -580,7 +642,8 @@ class LoginScreen(Screen):
             self.state.badge_new_challenges = 0
             self.state.screen = 'game_menu'
         else:
-            self.field_username.empty()
+            # Keep the username so a typo or network hiccup only costs
+            # retyping the password.
             self.field_pwd.empty()
 
     def _apply_register_response(self, response_data):
@@ -600,9 +663,8 @@ class LoginScreen(Screen):
             self.state.badge_new_games = 0
             self.state.badge_new_challenges = 0
             self.state.screen = 'game_menu'
-        else:
-            self.field_username.empty()
-            self.field_pwd.empty()
+        # On failure keep both fields: the user only needs to adjust the
+        # rejected value (e.g. pick another username), not start over.
 
     # ── Events ──────────────────────────────────────────────────────
 
@@ -622,7 +684,12 @@ class LoginScreen(Screen):
                 self.field_pwd.active = not self.field_pwd.active
 
             if event.type == KEYDOWN and event.key == K_RETURN:
-                self.handle_login()
+                # The legal checkbox is only relevant for registration, so a
+                # ticked box signals the user is registering, not logging in.
+                if self._legal_confirmed:
+                    self.handle_register()
+                else:
+                    self.handle_login()
 
             elif event.type == MOUSEBUTTONUP:
                 if self._terms_link_rect.collidepoint(event.pos):

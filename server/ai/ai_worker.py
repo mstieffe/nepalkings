@@ -1183,6 +1183,32 @@ def _conquer_pick_counter_advance_figure(game, ai_player_id):
     return None
 
 
+def _conquer_civil_war_second_pick_pending(game, ai_player_id):
+    """True when the AI holds the turn only to pick/skip a second Civil War figure.
+
+    Covers both sides: the defender counter-advance second pick (first
+    defender chosen, second missing) and the post-Invader-Swap advancing
+    second pick (first attacker chosen, second missing).  In this state the
+    server keeps the turn with the AI until it either advances a second
+    figure or calls skip_civil_war_second — anything else stalls the game.
+    """
+    if not game or game.mode != 'conquer':
+        return False
+    modifiers = game.battle_modifier if isinstance(game.battle_modifier, list) else []
+    if not any(m.get('type') == 'Civil War' for m in modifiers):
+        return False
+    if game.turn_player_id != ai_player_id or not game.advancing_figure_id:
+        return False
+    if (game.advancing_player_id != ai_player_id
+            and game.defending_figure_id
+            and not game.defending_figure_id_2):
+        return True
+    if (game.advancing_player_id == ai_player_id
+            and not game.advancing_figure_id_2):
+        return True
+    return False
+
+
 def _conquer_ai_loop(app, game_id, ai_player_id):
     """Rule-based defender auto-play for conquer-mode games.
 
@@ -1230,6 +1256,7 @@ def _conquer_ai_loop(app, game_id, ai_player_id):
                     should_cast_counter = _conquer_should_cast_counter_spell(game, ai_player_id)
                     fig_id = None if should_cast_counter else _conquer_pick_counter_advance_figure(game, ai_player_id)
                     is_current_invader = bool(game and game.invader_player_id == ai_player_id)
+                    cw_second_pick_pending = _conquer_civil_war_second_pick_pending(game, ai_player_id)
 
                 if should_cast_counter:
                     resp = _ai_post(f'{base}/games/conquer_defender_counter_spell',
@@ -1272,8 +1299,24 @@ def _conquer_ai_loop(app, game_id, ai_player_id):
                         continue
 
                 if fig_id:
-                    _exec_advance_figure(base, game_id, ai_player_id,
-                                         {'figure_id': fig_id})
+                    advanced = _exec_advance_figure(base, game_id, ai_player_id,
+                                                    {'figure_id': fig_id})
+                    if not advanced and cw_second_pick_pending:
+                        # Second Civil War pick was rejected — skip it rather
+                        # than stalling the game with the turn stuck on the AI.
+                        logger.info(
+                            f"[CONQUER-AI] second Civil War pick rejected; "
+                            f"skipping second figure, game={game_id}"
+                        )
+                        _exec_skip_civil_war_second(base, game_id, ai_player_id)
+                elif cw_second_pick_pending:
+                    # No legal second Civil War figure — skip so the turn
+                    # returns to the opponent and the battle can proceed.
+                    logger.info(
+                        f"[CONQUER-AI] no second Civil War figure available; "
+                        f"skipping second pick, game={game_id}"
+                    )
+                    _exec_skip_civil_war_second(base, game_id, ai_player_id)
                 else:
                     if is_current_invader:
                         _exec_cannot_advance_loss(base, game_id, ai_player_id)
@@ -1287,17 +1330,30 @@ def _conquer_ai_loop(app, game_id, ai_player_id):
                 # field-priority selection (village → military → castle).
                 with app.app_context():
                     from models import Game, Player, Figure, db
-                    from routes.games import _conquer_invader_swap_active, _figure_can_be_selected_as_defender
+                    from routes.games import (
+                        _conquer_invader_swap_active,
+                        _defender_selection_ignores_must_be_attacked,
+                        _figure_can_be_selected_as_defender,
+                    )
+                    from game_service.figure_rule_helpers import modifiers_require_village
                     game = db.session.get(Game, game_id)
                     opp_player = Player.query.filter(
                         Player.game_id == game_id,
                         Player.id != ai_player_id
                     ).first()
                     fig_id = None
+                    no_legal_defender = False
                     if opp_player and game:
                         opp_figs = Figure.query.filter_by(
                             game_id=game_id, player_id=opp_player.id
                         ).all()
+                        modifiers = game.battle_modifier if isinstance(game.battle_modifier, list) else []
+                        village_only = modifiers_require_village(modifiers)
+                        valid_figs = [
+                            f for f in opp_figs
+                            if _figure_can_be_selected_as_defender(f)
+                            and (not village_only or f.field == 'village')
+                        ]
                         # Check if this is an Invader Swap + unblockable advance
                         swap_unblockable = (
                             _conquer_invader_swap_active(game)
@@ -1305,28 +1361,56 @@ def _conquer_ai_loop(app, game_id, ai_player_id):
                         )
                         adv_fig = db.session.get(Figure, game.advancing_figure_id) if game.advancing_figure_id else None
                         if swap_unblockable and adv_fig and getattr(adv_fig, 'cannot_be_blocked', False):
-                            # Field-priority selection: village → military → castle
-                            modifiers = game.battle_modifier if isinstance(game.battle_modifier, list) else []
-                            from game_service.figure_rule_helpers import modifiers_require_village
-                            village_only = modifiers_require_village(modifiers)
-                            valid_figs = [
-                                f for f in opp_figs
-                                if _figure_can_be_selected_as_defender(f)
-                                and (not village_only or f.field == 'village')
+                            # Server rejects checkmate defenders while a
+                            # non-checkmate alternative exists — mirror that.
+                            non_checkmate = [
+                                f for f in valid_figs
+                                if not getattr(f, 'checkmate', False)
                             ]
+                            swap_pool = non_checkmate or valid_figs
+                            # Field-priority selection: village → military → castle
                             rng = _make_ai_rng(game, iteration)
                             for field_priority in ('village', 'military', 'castle'):
-                                pool = [f for f in valid_figs if f.field == field_priority]
+                                pool = [f for f in swap_pool if f.field == field_priority]
                                 if pool:
                                     fig_id = rng.choice(pool).id
                                     break
-                            if not fig_id and valid_figs:
-                                fig_id = rng.choice(valid_figs).id
+                            if not fig_id and swap_pool:
+                                fig_id = rng.choice(swap_pool).id
                         else:
-                            fig_id = opp_figs[0].id if opp_figs else None
+                            # Mirror the server selection rules so the pick is
+                            # never rejected in a loop: must_be_attacked figures
+                            # take priority (unless bypassed), checkmate figures
+                            # are a last resort.
+                            candidates = list(valid_figs)
+                            if not _defender_selection_ignores_must_be_attacked(game):
+                                forced = [
+                                    f for f in candidates
+                                    if _figure_has_family_skill(f, 'must_be_attacked')
+                                    and not getattr(f, 'checkmate', False)
+                                ]
+                                if forced:
+                                    candidates = forced
+                            non_checkmate = [
+                                f for f in candidates
+                                if not getattr(f, 'checkmate', False)
+                            ]
+                            pick_pool = non_checkmate or candidates
+                            fig_id = pick_pool[0].id if pick_pool else None
+                        no_legal_defender = not fig_id
                 if fig_id:
                     _exec_select_defender(base, game_id, ai_player_id,
                                           {'figure_id': fig_id})
+                elif no_legal_defender:
+                    # Opponent has no selectable figure (e.g. no village
+                    # figures under Civil/Peasant War) — resolve as defender
+                    # auto-loss instead of stalling in this phase forever.
+                    logger.info(
+                        f"[CONQUER-AI] no legal defender to select; "
+                        f"triggering defender auto-loss, game={game_id}"
+                    )
+                    _exec_defender_no_figures_loss(base, game_id, ai_player_id)
+                    break
 
             elif phase == 'battle_decision':
                 _exec_battle_decision(base, game_id, ai_player_id,
@@ -2283,4 +2367,24 @@ def _exec_defender_no_figures_loss(base, game_id, ai_player_id):
         logger.info("Defender has no legal figures — auto-loss triggered")
         return True
     logger.warning(f"Defender no-figures loss failed: {result.get('message')}")
+    return False
+
+
+def _exec_skip_civil_war_second(base, game_id, ai_player_id, context='advance'):
+    """Skip the optional second Civil War figure via POST /games/skip_civil_war_second.
+
+    Used as a deadlock escape: when the server keeps the turn on the AI for
+    an optional second Civil War pick but no legal second figure can be
+    played, skipping hands the turn back instead of stalling the game.
+    """
+    resp = _ai_post(f'{base}/games/skip_civil_war_second', ai_player_id, json={
+        'game_id': game_id,
+        'player_id': ai_player_id,
+        'context': context,
+    }, timeout=15)
+    result = resp.json()
+    if result.get('success'):
+        logger.info("Skipped second Civil War figure")
+        return True
+    logger.warning(f"Skip Civil War second failed: {result.get('message')}")
     return False
