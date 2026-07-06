@@ -1012,7 +1012,7 @@ def _bulk_defence_incomplete_by_land(land_ids, user_id):
     from game_service.figure_rule_helpers import (
         config_strategy_modifiers,
         figure_can_counter_advance,
-        modifiers_require_village,
+        battle_required_field,
     )
 
     incomplete_by_land = {land_id: True for land_id in land_ids}
@@ -1070,14 +1070,14 @@ def _bulk_defence_incomplete_by_land(land_ids, user_id):
             if not battle_fig:
                 continue
             modifiers = config_strategy_modifiers(cfg)
-            require_village = modifiers_require_village(modifiers)
+            required_field = battle_required_field(modifiers)
             if not figure_can_counter_advance(
                     battle_fig,
-                    require_village=require_village,
+                    required_field=required_field,
                     deficit=deficit_map.get(battle_fig.id, False)):
                 continue
 
-            is_civil_war = any(
+            is_civil_war = required_field != 'castle' and any(
                 mod.get('type') == 'Civil War'
                 for mod in modifiers
                 if isinstance(mod, dict)
@@ -1088,7 +1088,7 @@ def _bulk_defence_incomplete_by_land(land_ids, user_id):
                     continue
                 if not figure_can_counter_advance(
                         battle_fig_2,
-                        require_village=require_village,
+                        required_field=required_field,
                         deficit=deficit_map.get(battle_fig_2.id, False)):
                     continue
                 if battle_fig.color != battle_fig_2.color:
@@ -1404,20 +1404,28 @@ _SPELL_CARD_COST = {
     'Civil War':        ('5', 2, None),
     'Blitzkrieg':       ('Q', 2, None),
     'Invader Swap':     ('A', 2, None),
+    'Royal Decree':     ('K', 2, None),
+    'Copy Figure':      ('10', 2, None),
+    'Landslide':        ('2', 2, None),
+    'Draw 4 MainCards': ('8', 2, None),
 }
 
 _CONQUER_PRELUDE_SPELLS = frozenset({
-    'Draw 2 MainCards', 'Fill up to 10', 'Dump Cards', 'Forced Deal',
+    'Draw 2 MainCards', 'Dump Cards', 'Forced Deal',
     'Poison', 'Health Boost', 'All Seeing Eye', 'Explosion',
     'Peasant War', 'Civil War', 'Blitzkrieg',
     'Invader Swap',
+    'Royal Decree', 'Copy Figure', 'Landslide', 'Draw 4 MainCards',
 })
 
-_TARGETED_PRELUDE_SPELLS = frozenset({'Poison', 'Health Boost', 'Explosion'})
+_TARGETED_PRELUDE_SPELLS = frozenset({'Poison', 'Health Boost', 'Explosion',
+                                      'Copy Figure'})
 
 _DEFENCE_PRELUDE_SPELLS = frozenset({
     'Dump Cards', 'Forced Deal', 'Poison', 'Health Boost',
     'Explosion', 'Peasant War', 'Civil War',
+    'Draw 2 MainCards', 'All Seeing Eye',
+    'Royal Decree', 'Copy Figure', 'Landslide', 'Draw 4 MainCards',
 })
 
 _DEFENCE_COUNTER_SPELLS = frozenset({
@@ -1426,7 +1434,10 @@ _DEFENCE_COUNTER_SPELLS = frozenset({
 
 # Spells that must also be recorded in game.battle_modifier for existing
 # game logic (advance restrictions, turn updates, ceasefire, etc.)
-_BATTLE_MODIFIER_SPELLS = frozenset({'Peasant War', 'Civil War', 'Blitzkrieg'})
+# Royal Decree is special-cased in _create_prelude_spell: it registers the
+# modifier AND executes the Dump-Cards fresh-hand effect.
+_BATTLE_MODIFIER_SPELLS = frozenset({'Peasant War', 'Civil War', 'Blitzkrieg',
+                                     'Royal Decree', 'Landslide'})
 
 # ── Prelude effect_data keys ────────────────────────────────────────
 # Centralised so future additions don't have to grep magic strings.
@@ -1482,6 +1493,10 @@ _SPELL_TYPE_MAP = {
     'Civil War':        'tactics',
     'Blitzkrieg':       'tactics',
     'Invader Swap':     'tactics',
+    'Royal Decree':     'tactics',
+    'Copy Figure':      'enchantment',
+    'Landslide':        'enchantment',
+    'Draw 4 MainCards': 'greed',
 }
 
 
@@ -1612,9 +1627,9 @@ def _validate_config_own_spell_target(cfg, target_fig_id):
 def _config_counter_advance_error(fig, cfg, deficit_map=None, planned_modifiers=None):
     """Return why a defence-config figure cannot be a battle figure."""
     from game_service.figure_rule_helpers import (
+        battle_required_field,
         config_strategy_modifiers,
         explain_counter_advance_block,
-        modifiers_require_village,
     )
 
     modifiers = (planned_modifiers if planned_modifiers is not None
@@ -1622,7 +1637,7 @@ def _config_counter_advance_error(fig, cfg, deficit_map=None, planned_modifiers=
     deficit = bool((deficit_map or {}).get(getattr(fig, 'id', None), False))
     return explain_counter_advance_block(
         fig,
-        require_village=modifiers_require_village(modifiers),
+        required_field=battle_required_field(modifiers),
         deficit=deficit,
     )
 
@@ -5029,16 +5044,19 @@ def _get_prelude_target_scope(spell_name):
         return 'opponent'
     if spell_name == 'Health Boost':
         return 'own'
+    if spell_name == 'Copy Figure':
+        # Opponent figures are shown as hidden icons only during targeting.
+        return 'opponent_hidden'
     return None
 
 
 def _list_valid_prelude_targets(game, caster_player_id, spell_name):
-    """Return valid prelude targets, excluding checkmate figures."""
+    """Return valid prelude targets (checkmate excluded except Copy Figure)."""
     scope = _get_prelude_target_scope(spell_name)
     if not scope:
         return []
 
-    if scope == 'opponent':
+    if scope in ('opponent', 'opponent_hidden'):
         candidate_player_ids = [p.id for p in game.players if p.id != caster_player_id]
     else:
         candidate_player_ids = [caster_player_id]
@@ -5050,6 +5068,14 @@ def _list_valid_prelude_targets(game, caster_player_id, spell_name):
         Figure.game_id == game.id,
         Figure.player_id.in_(candidate_player_ids),
     ).all()
+    if spell_name == 'Copy Figure':
+        # Checkmate figures ARE copyable (the copy itself is never
+        # checkmate); cannot_be_targeted figures and destroyed/replay
+        # ghosts are not.
+        return [
+            f for f in targets
+            if not _figure_has_family_skill(f, 'cannot_be_targeted')
+        ]
     live_targets = [f for f in targets if not getattr(f, 'checkmate', False)]
     replay_targets = conquer_destroyed_replay_targets_for_prelude(
         game,
@@ -5230,11 +5256,52 @@ def _create_prelude_spell(game, player, spell_name, spell_data, game_figures,
     )
     db.session.add(spell)
 
+    def _execute_and_persist():
+        """Run the spell effect and persist prelude metadata on the record."""
+        db.session.flush()
+        from routes.spells import _execute_spell
+        result = _execute_spell(spell, game, player)
+        if result.get('error'):
+            logger.warning(f'Prelude spell {spell_name} execution failed: {result}')
+            _update_prelude_effect_data(
+                spell,
+                status=PRELUDE_STATUS_FAILED,
+                **{PRELUDE_KEY_ORIGIN: True},
+            )
+            return
+        # Persist prelude metadata and actually-drawn cards on the spell so
+        # game-start notifications can report precise effects.
+        extras = {PRELUDE_KEY_ORIGIN: True}
+        drawn = result.get('drawn_cards', [])
+        if drawn:
+            extras['drawn_card_ids'] = [c['id'] for c in drawn]
+        for key in (
+            'target_figure_id', 'target_figure_name',
+            'target_figure_snapshot', 'destroyed_figure_snapshot',
+            'power_modifier', 'spell_icon',
+            'destroyed_figure_name', 'card_count', 'caster_dumped',
+            'opponent_dumped', 'caster_dumped_cards', 'opponent_dumped_cards',
+            'drawn_cards', 'opponent_drawn_cards', 'cards_given',
+            'cards_received', 'opponent_notification',
+            'conquer_invader_swap', 'old_invader_id', 'new_invader_id',
+            'invader_swapped',
+            'source_figure_id', 'copied_figure_id',
+            'source_figure_snapshot', 'copied_figure_snapshot',
+        ):
+            if key in result:
+                extras[key] = result[key]
+        _update_prelude_effect_data(spell, status=PRELUDE_STATUS_EXECUTED, **extras)
+
     if spell_name in _BATTLE_MODIFIER_SPELLS:
         if not isinstance(game.battle_modifier, list):
             game.battle_modifier = []
         game.battle_modifier.append({'type': spell_name, 'caster_id': player.id})
-        _update_prelude_effect_data(spell, status=PRELUDE_STATUS_EXECUTED)
+        if spell_name == 'Royal Decree':
+            # Royal Decree is a battle modifier AND a card effect: both
+            # players dump their hands and redraw (Dump Cards effect).
+            _execute_and_persist()
+        else:
+            _update_prelude_effect_data(spell, status=PRELUDE_STATUS_EXECUTED)
     else:
         # Target-required prelude spells can be auto-resolved (defender) or
         # deferred for explicit invader target selection.
@@ -5269,47 +5336,22 @@ def _create_prelude_spell(game, player, spell_name, spell_data, game_figures,
                     return
                 spell.target_figure_id = chosen_target.id
             elif target_resolution == 'defence_auto':
-                chosen_target = _pick_defence_prelude_target(
-                    valid_targets,
-                    planned_modifiers=target_modifiers,
-                )
+                if spell_name == 'Copy Figure':
+                    # Copy Figure defender auto-target is fixed by rule:
+                    # highest base power, then lowest figure ID.
+                    chosen_target = _pick_deterministic_prelude_target(valid_targets)
+                else:
+                    chosen_target = _pick_defence_prelude_target(
+                        valid_targets,
+                        planned_modifiers=target_modifiers,
+                    )
                 spell.target_figure_id = chosen_target.id if chosen_target else None
             elif target_resolution == 'auto':
                 chosen_target = _pick_deterministic_prelude_target(valid_targets)
                 spell.target_figure_id = chosen_target.id if chosen_target else None
 
         # Greed / enchantment prelude spells: execute immediately
-        db.session.flush()
-        from routes.spells import _execute_spell
-        result = _execute_spell(spell, game, player)
-        if result.get('error'):
-            logger.warning(f'Prelude spell {spell_name} execution failed: {result}')
-            _update_prelude_effect_data(
-                spell,
-                status=PRELUDE_STATUS_FAILED,
-                **{PRELUDE_KEY_ORIGIN: True},
-            )
-        else:
-            # Persist prelude metadata and actually-drawn cards on the spell so
-            # game-start notifications can report precise effects.
-            extras = {PRELUDE_KEY_ORIGIN: True}
-            drawn = result.get('drawn_cards', [])
-            if drawn:
-                extras['drawn_card_ids'] = [c['id'] for c in drawn]
-            for key in (
-                'target_figure_id', 'target_figure_name',
-                'target_figure_snapshot', 'destroyed_figure_snapshot',
-                'power_modifier', 'spell_icon',
-                'destroyed_figure_name', 'card_count', 'caster_dumped',
-                'opponent_dumped', 'caster_dumped_cards', 'opponent_dumped_cards',
-                'drawn_cards', 'opponent_drawn_cards', 'cards_given',
-                'cards_received', 'opponent_notification',
-                'conquer_invader_swap', 'old_invader_id', 'new_invader_id',
-                'invader_swapped',
-            ):
-                if key in result:
-                    extras[key] = result[key]
-            _update_prelude_effect_data(spell, status=PRELUDE_STATUS_EXECUTED, **extras)
+        _execute_and_persist()
 
 
 # ── POST /kingdom/conquer/start_battle ───────────────────────────────────────
@@ -5859,6 +5901,8 @@ def conquer_resolve_prelude_target():
         'opponent_dumped', 'caster_dumped_cards', 'opponent_dumped_cards',
         'drawn_cards', 'opponent_drawn_cards', 'cards_given',
         'cards_received', 'opponent_notification',
+        'source_figure_id', 'copied_figure_id',
+        'source_figure_snapshot', 'copied_figure_snapshot',
     ):
         if key in result:
             resolved_data[key] = result[key]

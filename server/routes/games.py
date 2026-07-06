@@ -289,9 +289,17 @@ _CONQUER_PRELUDE_SPELLS = frozenset({
     'Poison', 'Health Boost', 'All Seeing Eye', 'Explosion',
     'Peasant War', 'Civil War', 'Blitzkrieg',
     'Invader Swap',
+    'Royal Decree', 'Copy Figure', 'Landslide', 'Draw 4 MainCards',
 })
 
-_TARGETED_PRELUDE_SPELLS = frozenset({'Poison', 'Health Boost', 'Explosion'})
+_TARGETED_PRELUDE_SPELLS = frozenset({'Poison', 'Health Boost', 'Explosion',
+                                      'Copy Figure'})
+
+# Spells only obtainable through conquer/defence prelude configs — never
+# castable through the duel /spells/cast_spell route.
+CONQUER_ONLY_SPELLS = frozenset({
+    'Royal Decree', 'Copy Figure', 'Landslide', 'Draw 4 MainCards',
+})
 
 # LogEntry.type values that count as the current player having interacted
 # with the game.  Used to decide whether to show the conquer/duel intro and
@@ -335,6 +343,13 @@ def _figure_has_family_skill(figure, skill_name):
     return figure_has_family_skill(figure, skill_name)
 
 
+def _battle_required_field_for_game(game):
+    """Return 'castle' / 'village' / None for the game's active modifiers."""
+    modifiers = game.battle_modifier if game and isinstance(game.battle_modifier, list) else []
+    from game_service.figure_rule_helpers import battle_required_field
+    return battle_required_field(modifiers)
+
+
 def _figure_can_counter_advance(figure, player_id, game_id):
     if not figure:
         return False
@@ -343,9 +358,8 @@ def _figure_can_counter_advance(figure, player_id, game_id):
     if _figure_has_family_skill(figure, 'cannot_defend'):
         return False
     game = db.session.get(Game, game_id)
-    modifiers = game.battle_modifier if game and isinstance(game.battle_modifier, list) else []
-    from game_service.figure_rule_helpers import modifiers_require_village
-    if modifiers_require_village(modifiers) and figure.field != 'village':
+    required_field = _battle_required_field_for_game(game)
+    if required_field and figure.field != required_field:
         return False
     if _check_figure_resource_deficit(figure, player_id, game_id):
         return False
@@ -367,13 +381,11 @@ def _must_be_attacked_defenders(game, defender_player_id):
         game_id=game.id,
         player_id=defender_player_id,
     ).all()
-    modifiers = game.battle_modifier if isinstance(game.battle_modifier, list) else []
-    from game_service.figure_rule_helpers import modifiers_require_village
-    require_village = modifiers_require_village(modifiers)
+    required_field = _battle_required_field_for_game(game)
     return [
         fig for fig in figures
         if _figure_can_be_selected_as_defender(fig)
-        and (not require_village or fig.field == 'village')
+        and (not required_field or fig.field == required_field)
         and not getattr(fig, 'checkmate', False)
         and _figure_has_family_skill(fig, 'must_be_attacked')
     ]
@@ -867,6 +879,9 @@ def _get_conquer_prelude_target_scope(spell_name):
         return 'opponent'
     if spell_name == 'Health Boost':
         return 'own'
+    if spell_name == 'Copy Figure':
+        # Opponent figures are shown as hidden icons only during targeting.
+        return 'opponent_hidden'
     return None
 
 
@@ -875,7 +890,7 @@ def _list_valid_conquer_prelude_targets(game, caster_player_id, spell_name):
     if not scope:
         return []
 
-    if scope == 'opponent':
+    if scope in ('opponent', 'opponent_hidden'):
         candidate_player_ids = [p.id for p in game.players if p.id != caster_player_id]
     else:
         candidate_player_ids = [caster_player_id]
@@ -887,6 +902,14 @@ def _list_valid_conquer_prelude_targets(game, caster_player_id, spell_name):
         Figure.game_id == game.id,
         Figure.player_id.in_(candidate_player_ids),
     ).all()
+    if spell_name == 'Copy Figure':
+        # Copy Figure may clone checkmate figures (the copy itself is never
+        # checkmate) but not untargetable figures; ghost/replay figures are
+        # not copyable.
+        return [
+            f for f in targets
+            if not _figure_has_family_skill(f, 'cannot_be_targeted')
+        ]
     live_targets = [f for f in targets if not getattr(f, 'checkmate', False)]
     replay_targets = conquer_destroyed_replay_targets_for_prelude(
         game,
@@ -915,9 +938,7 @@ def _guard_must_advance(game, player_id, *, action_label='action'):
 
     # Check whether the invader has at least one figure that CAN advance.
     # If none can advance, they must use cannot_advance_loss.
-    modifiers = game.battle_modifier if isinstance(game.battle_modifier, list) else []
-    has_peasant_war = any(m.get('type') == 'Peasant War' for m in modifiers)
-    has_civil_war = any(m.get('type') == 'Civil War' for m in modifiers)
+    required_field = _battle_required_field_for_game(game)
 
     figures = Figure.query.filter_by(player_id=player_id, game_id=game.id).all()
     resting_ids = set(game.resting_figure_ids or [])
@@ -925,7 +946,7 @@ def _guard_must_advance(game, player_id, *, action_label='action'):
     for fig in figures:
         if fig.id in resting_ids:
             continue
-        if (has_peasant_war or has_civil_war) and fig.field != 'village':
+        if required_field and fig.field != required_field:
             continue
         if _figure_has_family_skill(fig, 'cannot_attack'):
             continue
@@ -962,16 +983,14 @@ def _has_advanceable_figure(game, player_id):
     """Return True if *player_id* has any figure that can legally advance."""
     if not game or not player_id:
         return False
-    modifiers = game.battle_modifier if isinstance(game.battle_modifier, list) else []
-    has_peasant_war = any(m.get('type') == 'Peasant War' for m in modifiers)
-    has_civil_war = any(m.get('type') == 'Civil War' for m in modifiers)
+    required_field = _battle_required_field_for_game(game)
     resting_ids = set(game.resting_figure_ids or [])
 
     figures = Figure.query.filter_by(player_id=player_id, game_id=game.id).all()
     for fig in figures:
         if fig.id in resting_ids:
             continue
-        if (has_peasant_war or has_civil_war) and fig.field != 'village':
+        if required_field and fig.field != required_field:
             continue
         if _figure_has_family_skill(fig, 'cannot_attack'):
             continue
@@ -985,9 +1004,7 @@ def _has_selectable_defender(game, defender_player_id):
     """Return True if defender has any figure the invader may select."""
     if not game or not defender_player_id:
         return False
-    modifiers = game.battle_modifier if isinstance(game.battle_modifier, list) else []
-    has_peasant_war = any(m.get('type') == 'Peasant War' for m in modifiers)
-    has_civil_war = any(m.get('type') == 'Civil War' for m in modifiers)
+    required_field = _battle_required_field_for_game(game)
 
     figures = Figure.query.filter_by(
         player_id=defender_player_id,
@@ -996,7 +1013,7 @@ def _has_selectable_defender(game, defender_player_id):
     for fig in figures:
         if not _figure_can_be_selected_as_defender(fig):
             continue
-        if (has_peasant_war or has_civil_war) and fig.field != 'village':
+        if required_field and fig.field != required_field:
             continue
         return True
     return False
@@ -1998,8 +2015,12 @@ def _get_opponent_turn_summary(game, current_player_id):
             'Health Boost': 'health_portion.png',
             'Explosion': 'bomb.png',
             'Draw 2 SideCards': 'draw_two_side.png',
+            'Draw 4 MainCards': 'draw_four_main.png',
             'Draw 2 MainCards': 'draw_two_main.png',
-            'Fill up to 10': 'fill10.png'
+            'Fill up to 10': 'fill10.png',
+            'Royal Decree': 'kings_war.png',
+            'Copy Figure': 'copy.png',
+            'Landslide': 'landslide.png',
         }
         
         for spell_type in spell_icon_map.keys():
@@ -3051,14 +3072,23 @@ def advance_figure():
 
         # Check battle modifiers
         modifiers = game.battle_modifier if isinstance(game.battle_modifier, list) else []
-        has_civil_war = any(m.get('type') == 'Civil War' for m in modifiers)
+        from game_service.figure_rule_helpers import battle_required_field
+        required_field = battle_required_field(modifiers)
         has_blitzkrieg = any(m.get('type') == 'Blitzkrieg' for m in modifiers)
         has_peasant_war = any(m.get('type') == 'Peasant War' for m in modifiers)
+        # Royal Decree (castle-only) has precedence over Civil War, which
+        # also suppresses the Civil War two-figure pick flow.
+        has_civil_war = (required_field != 'castle'
+                         and any(m.get('type') == 'Civil War' for m in modifiers))
 
-        # Peasant War / Civil War: only village figures can advance/counter-advance
-        if (has_peasant_war or has_civil_war) and figure.field != 'village':
-            modifier_name = 'Civil War' if has_civil_war else 'Peasant War'
-            return jsonify({'success': False, 'message': f'{modifier_name}: only village figures can advance'}), 400
+        # Royal Decree / Peasant War / Civil War restrict the legal battle field
+        if required_field and figure.field != required_field:
+            if required_field == 'castle':
+                message = 'Royal Decree: only castle figures can advance'
+            else:
+                modifier_name = 'Civil War' if has_civil_war else 'Peasant War'
+                message = f'{modifier_name}: only village figures can advance'
+            return jsonify({'success': False, 'message': message}), 400
 
         # Determine if this is a counter-advance (opponent already advanced)
         is_counter_advance = (game.advancing_figure_id is not None and 
@@ -3314,11 +3344,18 @@ def select_defender():
             return jsonify({'success': False, 'message': f'{figure.name} cannot be selected as a defender'}), 400
 
         modifiers = game.battle_modifier if isinstance(game.battle_modifier, list) else []
-        has_peasant_war = any(m.get('type') == 'Peasant War' for m in modifiers)
-        has_civil_war = any(m.get('type') == 'Civil War' for m in modifiers)
-        if (has_peasant_war or has_civil_war) and figure.field != 'village':
-            modifier_name = 'Civil War' if has_civil_war else 'Peasant War'
-            return jsonify({'success': False, 'message': f'{modifier_name}: only village figures can defend'}), 400
+        from game_service.figure_rule_helpers import battle_required_field
+        required_field = battle_required_field(modifiers)
+        # Royal Decree precedence also suppresses the Civil War two-pick flow.
+        has_civil_war = (required_field != 'castle'
+                         and any(m.get('type') == 'Civil War' for m in modifiers))
+        if required_field and figure.field != required_field:
+            if required_field == 'castle':
+                message = 'Royal Decree: only castle figures can defend'
+            else:
+                modifier_name = 'Civil War' if has_civil_war else 'Peasant War'
+                message = f'{modifier_name}: only village figures can defend'
+            return jsonify({'success': False, 'message': message}), 400
 
         mandatory_defenders = []
         if not _defender_selection_ignores_must_be_attacked(game):
@@ -3331,9 +3368,10 @@ def select_defender():
                 'message': f'Must attack {forced_names} before selecting another defender',
                 'reason': 'must_be_attacked',
             }), 400
-        
+
         # Check checkmate constraint (checkmate figures cannot be selected
-        # as defenders UNLESS the opponent has no other valid figures).
+        # as defenders UNLESS the opponent has no other valid figures in the
+        # legal battle pool).
         if getattr(figure, 'checkmate', False):
             opponent_id = figure.player_id
             other_figures = Figure.query.filter(
@@ -3344,7 +3382,7 @@ def select_defender():
             has_non_checkmate = any(
                 not getattr(f, 'checkmate', False)
                 and _figure_can_be_selected_as_defender(f)
-                and (not (has_peasant_war or has_civil_war) or f.field == 'village')
+                and (not required_field or f.field == required_field)
                 for f in other_figures
             )
             if has_non_checkmate:
@@ -3597,13 +3635,19 @@ def conquer_select_own_defender():
         if figure.id == game.advancing_figure_id or figure.id == game.advancing_figure_id_2:
             return jsonify({'success': False, 'message': 'This figure is already advancing'}), 400
 
-        # Check battle modifiers (Peasant War/Civil War: village only)
+        # Check battle modifiers (Royal Decree: castle only; Peasant/Civil War: village only)
         modifiers = game.battle_modifier if isinstance(game.battle_modifier, list) else []
-        has_peasant_war = any(m.get('type') == 'Peasant War' for m in modifiers)
-        has_civil_war = any(m.get('type') == 'Civil War' for m in modifiers)
-        if (has_peasant_war or has_civil_war) and figure.field != 'village':
-            modifier_name = 'Civil War' if has_civil_war else 'Peasant War'
-            return jsonify({'success': False, 'message': f'{modifier_name}: only village figures can defend'}), 400
+        from game_service.figure_rule_helpers import battle_required_field
+        required_field = battle_required_field(modifiers)
+        has_civil_war = (required_field != 'castle'
+                         and any(m.get('type') == 'Civil War' for m in modifiers))
+        if required_field and figure.field != required_field:
+            if required_field == 'castle':
+                message = 'Royal Decree: only castle figures can defend'
+            else:
+                modifier_name = 'Civil War' if has_civil_war else 'Peasant War'
+                message = f'{modifier_name}: only village figures can defend'
+            return jsonify({'success': False, 'message': message}), 400
 
         # cannot_defend blocks selection (but cannot_attack is allowed — fortresses)
         if _figure_has_family_skill(figure, 'cannot_defend'):
@@ -3624,7 +3668,7 @@ def conquer_select_own_defender():
                 not getattr(f, 'checkmate', False)
                 and not _figure_has_family_skill(f, 'cannot_defend')
                 and not _figure_has_family_skill(f, 'cannot_be_targeted')
-                and (not (has_peasant_war or has_civil_war) or f.field == 'village')
+                and (not required_field or f.field == required_field)
                 for f in other_own
             )
             if has_non_checkmate:
@@ -3639,7 +3683,7 @@ def conquer_select_own_defender():
                 if not _check_figure_resource_deficit(f, player_id, game.id)
                 and not _figure_has_family_skill(f, 'cannot_defend')
                 and not _figure_has_family_skill(f, 'cannot_be_targeted')
-                and (not (has_peasant_war or has_civil_war) or f.field == 'village')
+                and (not required_field or f.field == required_field)
             ]
             if non_deficit_valid:
                 return jsonify({'success': False, 'message': f'{figure.name} has a resource deficit'}), 400
@@ -4938,6 +4982,28 @@ def _compute_move_effective_value(move, all_figures, game,
     return bm_value
 
 
+def _landslide_active(game):
+    """True when a Landslide battle modifier is active for this game."""
+    modifiers = game.battle_modifier if game and isinstance(game.battle_modifier, list) else []
+    return any(
+        isinstance(m, dict) and m.get('type') == 'Landslide'
+        for m in modifiers
+    )
+
+
+def _effective_land_bonus_value(game, raw_value):
+    """Land suit bonus after battle modifiers.
+
+    Landslide inverts the land bonus for the whole battle: figures matching
+    the land suit get ``-value`` instead of ``+value`` (both sides).
+    Duplicate Landslide casts never invert back to positive.
+    """
+    value = int(raw_value or 0)
+    if _landslide_active(game):
+        return -abs(value)
+    return value
+
+
 def _compute_server_total_diff(game, return_breakdown=False):
     """Authoritative total_diff from DB.  Positive = invader wins.
 
@@ -4995,8 +5061,10 @@ def _compute_server_total_diff(game, return_breakdown=False):
     if game.mode == 'conquer' and game.land_id:
         land = db.session.get(Land, game.land_id)
         if land and land.suit_bonus_suit and land.suit_bonus_value:
-            land_suit_bonus_attacker = (land.suit_bonus_suit, land.suit_bonus_value)
-            land_suit_bonus_defender = (land.suit_bonus_suit, land.suit_bonus_value)
+            effective_land_bonus = _effective_land_bonus_value(
+                game, land.suit_bonus_value)
+            land_suit_bonus_attacker = (land.suit_bonus_suit, effective_land_bonus)
+            land_suit_bonus_defender = (land.suit_bonus_suit, effective_land_bonus)
 
     # ── figure power WITHOUT distance-attack (handled below) ──
     adv_power = _compute_figure_full_power(
@@ -5249,6 +5317,7 @@ def _clear_battle_state(game):
     game.battle_turn_player_id = None
     game.battle_skipped_rounds = None
     game.battle_gamble_counts = None
+    game.battle_gamble_previews = None
 
 
 def _collect_resting_figure_ids(game):
@@ -5727,6 +5796,148 @@ def play_conquer_tactic():
         return jsonify(response_body)
 
 
+_GAMBLE_TACTIC_SUITS = ('Hearts', 'Diamonds', 'Clubs', 'Spades')
+_GAMBLE_TACTIC_RANKS = ('7', '8', '9', '10', 'J', 'Q', 'K', 'A')
+_GAMBLE_TACTIC_VALUES = {'7': 7, '8': 8, '9': 9, '10': 10,
+                         'J': 1, 'Q': 2, 'K': 4, 'A': 3}
+_GAMBLE_TACTIC_FAMILIES = {'J': 'Call Villager', 'Q': 'Block',
+                           'K': 'Call King', 'A': 'Call Military'}
+
+
+def _roll_gamble_tactic_specs(count=2):
+    """Roll random replacement-tactic specs (shared by gamble + previews)."""
+    specs = []
+    for _ in range(count):
+        rank = random.choice(_GAMBLE_TACTIC_RANKS)
+        suit = random.choice(_GAMBLE_TACTIC_SUITS)
+        specs.append({
+            'rank': rank,
+            'suit': suit,
+            'value': _GAMBLE_TACTIC_VALUES.get(rank, 0),
+            'family_name': _GAMBLE_TACTIC_FAMILIES.get(rank, 'Dagger'),
+        })
+    return specs
+
+
+def _viewer_gamble_preview_entry(game, player_id):
+    """Return this player's pinned gamble preview entry, or None."""
+    previews = game.battle_gamble_previews or {}
+    entry = previews.get(str(player_id))
+    return entry if isinstance(entry, dict) else None
+
+
+def _pop_gamble_preview_entry(game, player_id):
+    """Remove and return this player's pinned preview (any tactic)."""
+    previews = dict(game.battle_gamble_previews or {})
+    entry = previews.pop(str(player_id), None)
+    game.battle_gamble_previews = previews or None
+    flag_modified(game, 'battle_gamble_previews')
+    return entry if isinstance(entry, dict) else None
+
+
+def _player_has_active_all_seeing_eye(game, player_id):
+    return ActiveSpell.query.filter(
+        ActiveSpell.game_id == game.id,
+        ActiveSpell.player_id == player_id,
+        ActiveSpell.is_active.is_(True),
+        ActiveSpell.spell_name.contains('All Seeing Eye'),
+    ).first() is not None
+
+
+def _ensure_round_gamble_preview(game, player_id, current_round):
+    """Return this player's pinned per-round preview, generating it once.
+
+    The forecast is deterministic PER ROUND, not per tactic: gambling any
+    tactic in the round yields exactly these two replacements, so the
+    player sees the same forecast regardless of which card they pick.
+    Returns ``(entry, created)``.
+    """
+    existing = _viewer_gamble_preview_entry(game, player_id)
+    if existing and int(existing.get('round', -1)) == current_round \
+            and len(existing.get('specs') or []) == 2:
+        return existing, False
+    entry = {
+        'round': current_round,
+        'specs': _roll_gamble_tactic_specs(2),
+    }
+    previews = dict(game.battle_gamble_previews or {})
+    previews[str(player_id)] = entry
+    game.battle_gamble_previews = previews
+    flag_modified(game, 'battle_gamble_previews')
+    return entry, True
+
+
+@games.route('/conquer_gamble_preview', methods=['POST'])
+@require_token
+def conquer_gamble_preview():
+    """Preview the two replacement tactics a gamble would yield this round.
+
+    Requires an active All Seeing Eye cast by the requesting player.  The
+    forecast is pinned PER ROUND (not per tactic): every available tactic
+    returns the same two cards, and gambling any of them consumes exactly
+    those replacements.
+    """
+    data = request.json or {}
+    game_id = data.get('game_id')
+    player_id = data.get('player_id')
+    tactic_id = data.get('tactic_id') or data.get('battle_move_id')
+
+    if not all([game_id, player_id]):
+        return jsonify({'success': False, 'message': 'Missing required fields'}), 400
+
+    err = verify_player_ownership(player_id)
+    if err:
+        return err
+
+    with _conquer_game_lock(game_id):
+        game = db.session.get(Game, game_id)
+        if not game:
+            return jsonify({'success': False, 'message': 'Game not found'}), 404
+        if not _is_tactics_hand_conquer(game):
+            return jsonify({'success': False, 'message': 'Game is not using conquer tactics'}), 400
+        if not game.battle_confirmed or game.battle_turn_player_id != player_id:
+            return jsonify({'success': False,
+                            'message': 'Preview is only available on your battle turn'}), 400
+        if not _player_has_active_all_seeing_eye(game, player_id):
+            return jsonify({'success': False,
+                            'message': 'All Seeing Eye is required to preview a gamble',
+                            'reason': 'no_all_seeing_eye'}), 403
+
+        # A specific tactic id is optional — the forecast is per round. When
+        # supplied it is only validated as still-gambleable.
+        if tactic_id is not None:
+            tactic = db.session.get(ConquerTactic, tactic_id)
+            if not tactic or tactic.game_id != game_id or tactic.player_id != player_id:
+                return jsonify({'success': False, 'message': 'Tactic not found'}), 404
+            if tactic.status != 'available' or tactic.played_round is not None:
+                return jsonify({'success': False,
+                                'message': 'Only available tactics can be previewed'}), 400
+
+        # Preview only makes sense while a gamble is still allowed.
+        gamble_counts = game.battle_gamble_counts or {}
+        state = gamble_counts.get(str(player_id), {'count': 0, 'rounds': []})
+        if isinstance(state, dict):
+            used_count = int(state.get('count', 0) or 0)
+            used_rounds = [int(r) for r in state.get('rounds', [])]
+        else:
+            used_count = int(state or 0)
+            used_rounds = []
+        current_round = int(game.battle_round or 0)
+        if current_round in used_rounds:
+            return jsonify({'success': False,
+                            'message': 'You already gambled this round'}), 400
+        if used_count >= 3:
+            return jsonify({'success': False,
+                            'message': 'You can only gamble 3 times per battle'}), 400
+
+        entry, created = _ensure_round_gamble_preview(game, player_id, current_round)
+        if created:
+            db.session.commit()
+
+        return jsonify({'success': True, 'preview': entry,
+                        'game': serialize_game_for_viewer(game, g.user_id)})
+
+
 @games.route('/gamble_conquer_tactic', methods=['POST'])
 @require_token
 def gamble_conquer_tactic():
@@ -5797,18 +6008,27 @@ def _gamble_conquer_tactic_impl(game_id, player_id, tactic_id, client_action_id)
         card.player_id = None
     tactic.status = 'discarded'
 
-    suits = ['Hearts', 'Diamonds', 'Clubs', 'Spades']
-    ranks = ['7', '8', '9', '10', 'J', 'Q', 'K', 'A']
-    values = {'7': 7, '8': 8, '9': 9, '10': 10, 'J': 1, 'Q': 2, 'K': 4, 'A': 3}
-    families = {'J': 'Call Villager', 'Q': 'Block', 'K': 'Call King', 'A': 'Call Military'}
+    # All Seeing Eye forecast is pinned PER ROUND: gambling ANY tactic in
+    # the round yields exactly the previewed two cards.  If a preview exists
+    # for the current round, consume it regardless of which tactic was
+    # sacrificed; otherwise roll fresh (and, with an active Eye, pin them so
+    # the outcome stays consistent with a subsequent preview view).
+    preview_entry = _pop_gamble_preview_entry(game, player_id)
+    pinned_specs = None
+    if (preview_entry
+            and int(preview_entry.get('round', -1)) == int(game.battle_round or 0)):
+        pinned_specs = list(preview_entry.get('specs') or [])[:2]
+    specs = pinned_specs if pinned_specs and len(pinned_specs) == 2 \
+        else _roll_gamble_tactic_specs(2)
+
     new_tactics = []
     next_order = (db.session.query(db.func.max(ConquerTactic.sort_order))
                   .filter_by(game_id=game_id, player_id=player_id).scalar() or 0) + 1
-    for offset in range(2):
-        rank = random.choice(ranks)
-        suit = random.choice(suits)
-        value = values.get(rank, 0)
-        family_name = families.get(rank, 'Dagger')
+    for offset, spec in enumerate(specs):
+        rank = spec.get('rank')
+        suit = spec.get('suit')
+        value = _GAMBLE_TACTIC_VALUES.get(rank, 0)
+        family_name = _GAMBLE_TACTIC_FAMILIES.get(rank, 'Dagger')
         mc = MainCard(
             rank=rank,
             suit=suit,
@@ -6221,6 +6441,10 @@ def get_battle_state():
         all_tactics = ConquerTactic.query.filter_by(game_id=game_id).order_by(
             ConquerTactic.sort_order.asc(), ConquerTactic.id.asc()).all()
 
+        # All Seeing Eye reveals the opponent's unplayed tactics too — the
+        # same rule serialize_game_for_viewer applies to the full snapshot.
+        reveal_spells = viewer_has_all_seeing_eye(game.serialize(), player_id)
+
         player_tactics = []
         opponent_tactics = []
         for tactic in all_tactics:
@@ -6228,7 +6452,8 @@ def get_battle_state():
             if tactic.player_id == player_id:
                 player_tactics.append(s)
             else:
-                if tactic.status == 'played' or tactic.played_round is not None:
+                if (reveal_spells or tactic.status == 'played'
+                        or tactic.played_round is not None):
                     opponent_tactics.append(s)
                 else:
                     opponent_tactics.append({
@@ -6240,8 +6465,6 @@ def get_battle_state():
                         'revealed_step_index': tactic.revealed_step_index,
                         'discarded_step_index': tactic.discarded_step_index,
                     })
-
-        reveal_spells = viewer_has_all_seeing_eye(game.serialize(), player_id)
         payload = {
             'success': True,
             'battle_confirmed': bool(game.battle_confirmed),

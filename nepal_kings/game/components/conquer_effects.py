@@ -75,12 +75,18 @@ SPELL_VISUAL_PRESETS: Dict[str, Tuple[Tuple[int, int, int], Tuple[int, int, int]
     'Explosion':    ((255, 168, 56),  (255, 240, 200), '!'),
     'Draw 2 MainCards': ((80, 185, 230), (220, 245, 255), '2'),
     'Draw 2 SideCards': ((80, 185, 230), (220, 245, 255), '2'),
+    'Draw 4 MainCards': ((80, 185, 230), (220, 245, 255), '4'),
     'Fill up to 10': ((80, 185, 230), (220, 245, 255), '10'),
     'Dump Cards': ((230, 140, 78), (255, 225, 170), 'R'),
     'Forced Deal': ((225, 188, 88), (255, 245, 190), 'S'),
     'Peasant War': ((214, 178, 92), (255, 230, 160), 'P'),
     'Civil War': ((214, 118, 108), (255, 215, 190), 'C'),
     'Blitzkrieg': ((255, 196, 86), (255, 245, 190), 'B'),
+    'Invader Swap': ((196, 160, 250), (240, 230, 255), 'I'),
+    'All Seeing Eye': ((130, 190, 255), (230, 244, 255), 'O'),
+    'Royal Decree': ((250, 208, 80), (255, 245, 200), 'K'),
+    'Copy Figure': ((120, 210, 220), (225, 250, 250), 'C'),
+    'Landslide': ((176, 128, 84), (230, 205, 170), 'L'),
 }
 
 
@@ -116,6 +122,7 @@ class ConquerEffectsLayer:
     SHAKE_AMPLITUDE = 4  # px
     FLOATING_TEXT_MS = 720
     BANNER_MS = 900
+    COPY_MS = 1500
 
     def __init__(self, window: pygame.Surface, rect_lookup: Callable[[Any], Optional[pygame.Rect]]):
         self.window = window
@@ -126,6 +133,7 @@ class ConquerEffectsLayer:
         self._shakes: List[Dict[str, Any]] = []
         self._floats: List[Dict[str, Any]] = []
         self._banners: List[Dict[str, Any]] = []
+        self._copies: List[Dict[str, Any]] = []
         self._next_token = 1
 
     # ------------------------------------------------------------------ util
@@ -177,6 +185,7 @@ class ConquerEffectsLayer:
         self._shakes.clear()
         self._floats.clear()
         self._banners.clear()
+        self._copies.clear()
 
     # ----------------------------------------------------------------- spawn
     def spawn_spell_cast(self, spell_name: str, source_rect: Optional[pygame.Rect],
@@ -412,6 +421,38 @@ class ConquerEffectsLayer:
             'amplitude': int(amplitude or self.SHAKE_AMPLITUDE),
         })
 
+    def spawn_copy_ghost(self, source_rect: Optional[pygame.Rect],
+                         target_rect: Optional[pygame.Rect],
+                         *,
+                         color: Tuple[int, int, int] = (120, 210, 235),
+                         secondary: Tuple[int, int, int] = (225, 250, 255),
+                         duration_ms: Optional[int] = None) -> int:
+        """Copy Figure: a cluster of ghost orbs spins around the source, then
+        spirals onto the copied figure and lands with an impact pulse.
+
+        One-shot (``duration_ms`` total) — recreates the lively spinning look
+        of the old animation without the per-frame re-fire that stalled it.
+        """
+        source_rect = self._resolve_static_rect(source_rect)
+        target_rect = self._resolve_static_rect(target_rect)
+        if source_rect is None:
+            w = self.window.get_width()
+            source_rect = pygame.Rect(w // 2 - 20, 24, 40, 40)
+        if target_rect is None:
+            target_rect = pygame.Rect(source_rect)
+        token = self._new_token()
+        self._copies.append({
+            'token': token,
+            'source': pygame.Rect(source_rect),
+            'target': pygame.Rect(target_rect),
+            'primary': color,
+            'secondary': secondary,
+            'started_at': self._ms(),
+            'duration': int(duration_ms or self.COPY_MS),
+            'landed': False,
+        })
+        return token
+
     # ---------------------------------------------------------------- queries
     def screen_shake_offset(self) -> Tuple[int, int]:
         """Return current frame's (dx, dy) shake offset.
@@ -440,6 +481,7 @@ class ConquerEffectsLayer:
     def draw(self) -> None:
         now = self._ms()
         self._draw_projectiles(now)
+        self._draw_copies(now)
         self._draw_impacts(now)
         self._draw_particles(now)
         self._draw_floating_texts(now)
@@ -528,6 +570,79 @@ class ConquerEffectsLayer:
         except Exception:
             pass
         self.window.blit(surf, (cx - size, cy - size))
+
+    # ---- copy ghosts (spinning duplication) -------------------------------
+    def _draw_copy_orb(self, cx: float, cy: float, r: int,
+                       color: Tuple[int, int, int],
+                       ring: Tuple[int, int, int], alpha: int) -> None:
+        if r <= 0 or alpha <= 0:
+            return
+        pad = r * 3
+        surf = pygame.Surface((pad * 2, pad * 2), pygame.SRCALPHA)
+        c = (pad, pad)
+        pygame.draw.circle(surf, (*ring, max(0, alpha // 3)), c, r * 2)   # halo
+        pygame.draw.circle(surf, (*color, alpha), c, r)                    # body
+        pygame.draw.circle(surf, (255, 255, 255, min(255, alpha + 40)),
+                           c, r, max(1, r // 3))                           # rim
+        self.window.blit(surf, (int(cx) - pad, int(cy) - pad),
+                         special_flags=pygame.BLEND_RGBA_ADD)
+
+    def _draw_copies(self, now: int) -> None:
+        finished: List[Dict[str, Any]] = []
+        for c in self._copies:
+            start = int(c['started_at'])
+            dur = max(1, int(c['duration']))
+            t = (now - start) / dur
+            if t < 0:
+                continue
+            if t >= 1.0:
+                # Landing impact pulse on the copied figure.
+                self._impacts.append({
+                    'token': c['token'],
+                    'spell': 'Copy Figure',
+                    'primary': c['primary'],
+                    'secondary': c['secondary'],
+                    'target_id': None,
+                    'target_rect': pygame.Rect(c['target']),
+                    'started_at': now,
+                    'duration': self.IMPACT_MS,
+                    'scale': 1.05,
+                })
+                finished.append(c)
+                continue
+
+            src = c['source']
+            tgt = c['target']
+            primary = c['primary']
+            secondary = c['secondary']
+            # The orbit centre travels source → target, arriving by ~88%.
+            travel = ease_in_out(min(1.0, t / 0.88))
+            cx = src.centerx + (tgt.centerx - src.centerx) * travel
+            cy = src.centery + (tgt.centery - src.centery) * travel
+            cy -= math.sin(travel * math.pi) * 34.0  # gentle arc
+            # Orbit radius blooms early then collapses onto the target.
+            base_r = max(18.0, max(src.width, src.height) * 0.62)
+            radius = base_r * (0.35 + 0.65 * math.sin(min(1.0, t / 0.9) * math.pi)) \
+                * (1.0 - 0.55 * travel) + 4.0
+            spin = t * math.tau * 3.2  # ~3 revolutions over the flight
+            orbs = 3
+            for i in range(orbs):
+                ang = spin + i * (math.tau / orbs)
+                ox = cx + math.cos(ang) * radius
+                oy = cy + math.sin(ang) * radius * 0.6  # squash → 3D orbit feel
+                orb_r = int(5 + 6 * travel)
+                depth = 0.5 + 0.5 * math.sin(ang)  # front orbs brighter
+                alpha = int((150 + 90 * depth) * min(1.0, (1.0 - t) * 3.0 + 0.4))
+                self._draw_copy_orb(ox, oy, orb_r, primary, secondary, alpha)
+            # Bright convergence core.
+            core_alpha = int(230 * min(1.0, (1.0 - t) * 3.0 + 0.35))
+            self._draw_copy_orb(cx, cy, int(4 + 5 * travel),
+                                secondary, primary, core_alpha)
+        for c in finished:
+            try:
+                self._copies.remove(c)
+            except ValueError:
+                pass
 
     # ---- impacts (radial pulses) ------------------------------------------
     def _draw_impacts(self, now: int) -> None:

@@ -499,8 +499,9 @@ def _conquer_figure_can_advance(figure, player_id, game_id, *, counter=False):
     if game and figure.id in set(game.resting_figure_ids or []):
         return False
     modifiers = game.battle_modifier if game and isinstance(game.battle_modifier, list) else []
-    from game_service.figure_rule_helpers import modifiers_require_village
-    if modifiers_require_village(modifiers) and figure.field != 'village':
+    from game_service.figure_rule_helpers import battle_required_field
+    required_field = battle_required_field(modifiers)
+    if required_field and figure.field != required_field:
         return False
     if _figure_has_family_skill(figure, 'cannot_attack'):
         return False
@@ -1037,7 +1038,10 @@ def _conquer_pick_counter_advance_figure(game, ai_player_id):
     from models import Figure, LandConfig, db
     from routes.games import _conquer_invader_swap_active
     modifiers = game.battle_modifier if isinstance(game.battle_modifier, list) else []
-    has_civil_war = any(m.get('type') == 'Civil War' for m in modifiers)
+    from game_service.figure_rule_helpers import battle_required_field
+    # Royal Decree (castle-only) suppresses the Civil War two-pick flow.
+    has_civil_war = (battle_required_field(modifiers) != 'castle'
+                     and any(m.get('type') == 'Civil War' for m in modifiers))
 
     # After Invader Swap: AI is the new invader advancing for the first time
     swap_active = _conquer_invader_swap_active(game)
@@ -1335,7 +1339,7 @@ def _conquer_ai_loop(app, game_id, ai_player_id):
                         _defender_selection_ignores_must_be_attacked,
                         _figure_can_be_selected_as_defender,
                     )
-                    from game_service.figure_rule_helpers import modifiers_require_village
+                    from game_service.figure_rule_helpers import battle_required_field
                     game = db.session.get(Game, game_id)
                     opp_player = Player.query.filter(
                         Player.game_id == game_id,
@@ -1348,11 +1352,11 @@ def _conquer_ai_loop(app, game_id, ai_player_id):
                             game_id=game_id, player_id=opp_player.id
                         ).all()
                         modifiers = game.battle_modifier if isinstance(game.battle_modifier, list) else []
-                        village_only = modifiers_require_village(modifiers)
+                        required_field = battle_required_field(modifiers)
                         valid_figs = [
                             f for f in opp_figs
                             if _figure_can_be_selected_as_defender(f)
-                            and (not village_only or f.field == 'village')
+                            and (not required_field or f.field == required_field)
                         ]
                         # Check if this is an Invader Swap + unblockable advance
                         swap_unblockable = (

@@ -22,10 +22,11 @@ class SpellFamily:
         glow_img: pygame.Surface,
         spells: Optional[List['Spell']] = None,
         mini_game_description: Optional[str] = None,
+        conquer_only: bool = False,
     ):
         """
         Initialize a SpellFamily.
-        
+
         :param name: Name of the spell family
         :param type: Type of spell ('greed', 'enchantment', or 'tactics')
         :param description: Description of what the spell does
@@ -37,6 +38,8 @@ class SpellFamily:
         :param glow_img: Glow effect image for active state
         :param spells: List of spell instances in this family
         :param mini_game_description: Optional alternative description for mini game mode
+        :param conquer_only: Family is only selectable as a conquer/defence
+            prelude spell — hidden from the duel spell book.
         """
         self.name = name
         self.type = type
@@ -49,11 +52,12 @@ class SpellFamily:
         self.frame_hidden_img = frame_hidden_img
         self.glow_img = glow_img
         self.spells = spells or []
+        self.conquer_only = conquer_only
     
-    def make_icon(self, window, game, x, y):
+    def make_icon(self, window, game, x, y, fixed_size=False):
         """Creates a spell icon for this family."""
         from game.components.spells.spell_icon import CastSpellIcon
-        return CastSpellIcon(window, game, self, x, y)
+        return CastSpellIcon(window, game, self, x, y, fixed_size=fixed_size)
     
     def get_spells_by_suit(self, suit: str) -> List['Spell']:
         """Returns all spells of this family for a specific suit."""

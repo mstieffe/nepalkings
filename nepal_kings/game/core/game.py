@@ -216,6 +216,9 @@ class Game:
         self.conquer_tactics = game_dict.get('conquer_tactics', []) or []
         # Per-player gamble usage (tactics_hand conquer): {pid: {count, rounds}}.
         self.battle_gamble_counts = game_dict.get('battle_gamble_counts') or {}
+        # All Seeing Eye gamble previews (owner-only, server-redacted):
+        # {str(player_id): {tactic_id, round, specs}}.
+        self.battle_gamble_previews = game_dict.get('battle_gamble_previews') or {}
 
         # Suppress next turn notification after battle/fold (result dialogue already shown)
         self.suppress_next_turn_summary = False
@@ -806,6 +809,7 @@ class Game:
         self.conquer_resolution_step = int(game_dict.get('conquer_resolution_step', 0) or 0)
         self.conquer_tactics = game_dict.get('conquer_tactics', []) or []
         self.battle_gamble_counts = game_dict.get('battle_gamble_counts') or {}
+        self.battle_gamble_previews = game_dict.get('battle_gamble_previews') or {}
         self._sync_battle_moves_phase_from_server()
 
         # Reset fold tracking when server clears fold state (new round started)
@@ -1050,8 +1054,9 @@ class Game:
         self.conquer_resolution_step = int(game_dict.get('conquer_resolution_step', 0) or 0)
         self.conquer_tactics = game_dict.get('conquer_tactics', []) or []
         self.battle_gamble_counts = game_dict.get('battle_gamble_counts') or {}
+        self.battle_gamble_previews = game_dict.get('battle_gamble_previews') or {}
         self._sync_battle_moves_phase_from_server()
-        
+
         # Check if we're waiting for this player to counter
         if self.pending_spell_id and self.waiting_for_counter_player_id:
             self.waiting_for_counter = (self.waiting_for_counter_player_id == self.player_id)
@@ -1514,6 +1519,7 @@ class Game:
                     cannot_be_targeted=cannot_be_targeted,
                     checkmate=checkmate,
                     override_base_power=override_base_power,
+                    is_clone=bool(figure_data.get('is_clone', False)),
                 )
                 if self.mode == 'conquer':
                     figure = filter_figure_for_display(
@@ -1669,6 +1675,30 @@ class Game:
             or self.battle_confirmed
             or self.waiting_for_battle_decision
         )
+
+    def landslide_active(self) -> bool:
+        """True when a Landslide battle modifier inverts the land bonus."""
+        modifiers = self.battle_modifier if isinstance(self.battle_modifier, list) else []
+        return any(
+            isinstance(m, dict) and m.get('type') == 'Landslide'
+            for m in modifiers
+        )
+
+    def effective_land_bonus(self):
+        """Return ``(suit, value)`` of the land bonus after battle modifiers.
+
+        Landslide inverts the bonus for the whole battle: figures matching
+        the land suit get ``-value`` instead of ``+value`` (both sides).
+        Returns ``(None, 0)`` when the game has no land bonus.
+        """
+        suit = getattr(self, 'land_suit_bonus_suit', None)
+        value = getattr(self, 'land_suit_bonus_value', None)
+        if not suit or not value:
+            return None, 0
+        value = int(value)
+        if self.landslide_active():
+            return suit, -abs(value)
+        return suit, value
 
     def has_opponent_cast_all_seeing_eye(self) -> bool:
         """

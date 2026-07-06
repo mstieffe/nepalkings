@@ -225,6 +225,38 @@ class ConquerTacticsRail:
         except (TypeError, ValueError):
             return False
 
+    _SPEC_SUIT_CHARS = {'Hearts': '♥', 'Diamonds': '♦',
+                        'Clubs': '♣', 'Spades': '♠'}
+
+    @classmethod
+    def _gamble_spec_label(cls, spec) -> str:
+        """Short 'K♥ Call King' label for a previewed replacement tactic."""
+        if not isinstance(spec, dict):
+            return '?'
+        suit_char = cls._SPEC_SUIT_CHARS.get(spec.get('suit'), '?')
+        name = spec.get('family_name') or 'Dagger'
+        return f"{spec.get('rank')}{suit_char} {name}"
+
+    def _gamble_preview_specs(self, move_id=None):
+        """Pinned All Seeing Eye forecast for the CURRENT round, or None.
+
+        The forecast is per round, not per tactic — ``move_id`` is ignored
+        (kept for call-site compatibility): gambling any tactic yields the
+        same two cards.
+        """
+        game = getattr(self._parent.state, 'game', None)
+        previews = getattr(game, 'battle_gamble_previews', None) or {}
+        entry = previews.get(str(getattr(game, 'player_id', None)))
+        if not isinstance(entry, dict):
+            return None
+        try:
+            if int(entry.get('round', -1)) != int(getattr(game, 'battle_round', 0) or 0):
+                return None
+        except (TypeError, ValueError):
+            return None
+        specs = entry.get('specs') or []
+        return specs if len(specs) == 2 else None
+
     def _gamble_block_reason(self) -> str:
         """Return human-readable reason gambling is blocked, '' if allowed.
 
@@ -1009,7 +1041,25 @@ class ConquerTacticsRail:
                 game = getattr(self._parent.state, 'game', None)
                 used, _rounds = self._gamble_counts_state(game)
                 name = sel.get('family_name') or 'tactic'
-                if used >= self.GAMBLE_PER_BATTLE_LIMIT - 1:
+                # All Seeing Eye: reveal exactly what the gamble would yield.
+                # The server pins the previewed specs, so gambling this
+                # tactic delivers precisely these two replacements.
+                specs = self._gamble_preview_specs(sel_id)
+                if specs is None and game is not None:
+                    ase_check = getattr(game, 'has_active_all_seeing_eye', None)
+                    if callable(ase_check) and ase_check():
+                        fetch = getattr(self._parent,
+                                        'request_conquer_gamble_preview', None)
+                        if callable(fetch):
+                            specs = fetch(sel_id)
+                if specs:
+                    # The overlay panel shows the actual cards; the banner
+                    # just narrates what is happening.
+                    self.set_result_banner(
+                        'The Eye reveals your gamble — click Gamble again '
+                        'to take these cards.',
+                        color=(130, 190, 255), ttl_ms=self.GAMBLE_CONFIRM_MS)
+                elif used >= self.GAMBLE_PER_BATTLE_LIMIT - 1:
                     self.set_result_banner(
                         f'LAST gamble — burn {name} for 2 random? Click again.',
                         color=(255, 170, 96), ttl_ms=self.GAMBLE_CONFIRM_MS)
@@ -1190,6 +1240,10 @@ class ConquerTacticsRail:
                              rail.cells_visible)
         self._draw_selected_detail(selected_detail_rect)
         self._draw_action_tray(action_tray_rect)
+        # The All Seeing Eye gamble preview takes over the whole hand +
+        # detail region so the two forecast cards have room to be legible.
+        self._draw_gamble_preview_overlay(
+            hand_list_rect.union(selected_detail_rect))
         self.window.set_clip(previous_clip)
 
         if cache_key is not None:
@@ -1202,6 +1256,109 @@ class ConquerTacticsRail:
         else:
             self._cached_render_surface = None
             self._cached_render_key = None
+
+    @staticmethod
+    def _draw_eye_glyph(window, cx, cy, w, color):
+        """Draw a small all-seeing-eye glyph (almond + iris + pupil)."""
+        h = max(3, int(w * 0.55))
+        rect = pygame.Rect(0, 0, w, h)
+        rect.center = (int(cx), int(cy))
+        pygame.draw.ellipse(window, color, rect, max(1, w // 14))
+        iris_r = max(2, int(h * 0.42))
+        pygame.draw.circle(window, color, (int(cx), int(cy)), iris_r,
+                           max(1, w // 18))
+        pygame.draw.circle(window, color, (int(cx), int(cy)),
+                           max(1, iris_r // 2))
+
+    def _draw_gamble_preview_overlay(self, rect: pygame.Rect) -> None:
+        """All Seeing Eye: a clean forecast panel showing the two pinned
+        replacement tactics as real card faces while the Gamble confirm is
+        armed.  Occupies the hand+detail region so the cards read clearly.
+        """
+        armed = self._gamble_armed
+        if not armed or rect is None or rect.height < 60 or rect.width < 60:
+            return
+        if pygame.time.get_ticks() >= int(armed.get('until_ms') or 0):
+            return
+        specs = list(self._gamble_preview_specs(armed.get('move_id')) or [])[:2]
+        if not specs:
+            return
+
+        accent = (130, 190, 255)
+        # ── Panel backing ───────────────────────────────────────────
+        panel = rect.inflate(-8, -8)
+        bg = pygame.Surface(panel.size, pygame.SRCALPHA)
+        bg.fill((12, 20, 32, 248))
+        self.window.blit(bg, panel.topleft)
+        pygame.draw.rect(self.window, accent, panel, 2, border_radius=10)
+        inner = panel.inflate(-16, -14)
+
+        title_font = settings.get_font(max(10, int(settings.FS_TINY * 0.95)), bold=True)
+        sub_font = settings.get_font(max(9, int(settings.FS_TINY * 0.8)))
+        label_font = settings.get_font(max(9, int(settings.FS_TINY * 0.78)), bold=True)
+
+        # ── Header: eye glyph + title + subtitle ────────────────────
+        y = inner.y
+        eye_w = max(12, int(inner.width * 0.16))
+        self._draw_eye_glyph(self.window, inner.centerx,
+                             y + eye_w * 0.30, eye_w, accent)
+        y += int(eye_w * 0.30) + max(4, eye_w // 3)
+        title = title_font.render('ALL-SEEING EYE', True, (196, 224, 255))
+        self.window.blit(title, (inner.centerx - title.get_width() // 2, y))
+        y += title.get_height() + 1
+        sub = sub_font.render('Your gamble will draw:', True, (150, 178, 210))
+        self.window.blit(sub, (inner.centerx - sub.get_width() // 2, y))
+        y += sub.get_height() + 6
+
+        # ── Footer call-to-action (reserve space first) ─────────────
+        cta_text = 'Click Gamble again ▸'
+        cta = label_font.render(cta_text, True, (14, 22, 34))
+        cta_pill = pygame.Rect(0, 0, cta.get_width() + 20, cta.get_height() + 8)
+        cta_pill.centerx = inner.centerx
+        cta_pill.bottom = inner.bottom
+
+        # ── Cards region (between header and CTA) ───────────────────
+        cards_top = y
+        cards_bottom = cta_pill.top - 8
+        avail_h = max(20, cards_bottom - cards_top)
+        label_h = label_font.get_height() + 3
+        gap = 10
+        # Fit two cards side by side within width and height.
+        card_h = min(avail_h - label_h, int((inner.width - gap) / 2 * 1.42))
+        card_h = max(24, card_h)
+        card_w = max(16, int(card_h / 1.42))
+        if card_w * 2 + gap > inner.width:
+            card_w = max(14, (inner.width - gap) // 2)
+            card_h = int(card_w * 1.42)
+        total_w = card_w * 2 + gap
+        x = inner.centerx - total_w // 2
+        card_y = cards_top + max(0, (avail_h - label_h - card_h) // 2)
+        for spec in specs:
+            card_rect = pygame.Rect(x, card_y, card_w, card_h)
+            surf = None
+            try:
+                from game.components.cards.card_img import CardImg
+                surf = CardImg(self.window, spec.get('suit'), spec.get('rank'),
+                               width=card_w, height=card_h).front_img
+            except Exception:
+                surf = None
+            if surf is not None:
+                self.window.blit(surf, card_rect.topleft)
+            else:
+                pygame.draw.rect(self.window, (44, 62, 84), card_rect,
+                                 border_radius=4)
+            pygame.draw.rect(self.window, accent, card_rect, 2, border_radius=4)
+            name = self._fit_text(str(spec.get('family_name') or 'Dagger'),
+                                  label_font, card_w + gap)
+            label = label_font.render(name, True, (206, 226, 250))
+            self.window.blit(label, (card_rect.centerx - label.get_width() // 2,
+                                     card_rect.bottom + 2))
+            x += card_w + gap
+
+        # ── Draw the CTA pill on top ────────────────────────────────
+        pygame.draw.rect(self.window, accent, cta_pill, border_radius=cta_pill.height // 2)
+        self.window.blit(cta, (cta_pill.centerx - cta.get_width() // 2,
+                               cta_pill.centery - cta.get_height() // 2))
 
     def _measure_top_strip_height(self, width: int) -> int:
         """Compute the pixel height required to render the top strip.

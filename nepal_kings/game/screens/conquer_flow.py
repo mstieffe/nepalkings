@@ -290,7 +290,9 @@ def derive_conquer_objective(game: Any, state: Any = None,
             and advancing_id
             and _get(game, 'turn', False)):
         restriction = ''
-        if _has_modifier(game, 'Peasant War'):
+        if _has_modifier(game, 'Royal Decree'):
+            restriction = ' Royal Decree: castle figures only.'
+        elif _has_modifier(game, 'Peasant War'):
             restriction = ' Peasant War: village figures only.'
         elif _has_modifier(game, 'Civil War'):
             restriction = ' Civil War: village figures only.'
@@ -1058,25 +1060,38 @@ def _format_number(value: Any) -> Optional[str]:
     return f'{number:.1f}'
 
 
+def _effective_land_bonus(game: Any) -> Tuple[Any, Any]:
+    """(suit, value) of the land bonus with Landslide inversion applied."""
+    getter = getattr(game, 'effective_land_bonus', None)
+    if callable(getter):
+        try:
+            return getter()
+        except Exception:
+            pass
+    return _get(game, 'land_suit_bonus_suit'), _get(game, 'land_suit_bonus_value')
+
+
 def _land_info_assets(game: Any, opponent_name: str) -> Tuple[dict, ...]:
     assets: List[dict] = []
     gold_rate = _format_number(_get(game, 'land_gold_rate'))
-    suit = _get(game, 'land_suit_bonus_suit')
-    bonus = _format_number(_get(game, 'land_suit_bonus_value'))
+    suit, raw_bonus = _effective_land_bonus(game)
+    bonus = _format_number(raw_bonus)
 
     if gold_rate is not None:
         assets.append(_resource_asset('Gold/hr', gold_rate, 'good'))
     if suit:
-        bonus_text = f'+{bonus}' if bonus else ''
-        assets.append(_resource_asset('Suit bonus', f'{bonus_text} {suit}'.strip(), 'good'))
+        inverted = isinstance(raw_bonus, (int, float)) and raw_bonus < 0
+        bonus_text = (f'+{bonus}' if bonus and not inverted else (bonus or ''))
+        assets.append(_resource_asset(
+            'Suit bonus', f'{bonus_text} {suit}'.strip(),
+            'bad' if inverted else 'good'))
     assets.append(_resource_asset('Defender', opponent_name, 'warning'))
     return tuple(assets)
 
 
 def _land_overview_text(game: Any) -> Tuple[str, str]:
     tier = _get(game, 'land_tier')
-    suit = _get(game, 'land_suit_bonus_suit')
-    bonus = _get(game, 'land_suit_bonus_value')
+    suit, bonus = _effective_land_bonus(game)
     gold_rate = _format_number(_get(game, 'land_gold_rate'))
     opponent = _opponent_name(game)
     title = f'Tier {tier} Land' if tier else 'Conquer Battle'
@@ -1084,8 +1099,11 @@ def _land_overview_text(game: Any) -> Tuple[str, str]:
     if gold_rate is not None:
         parts.append(f'It produces {gold_rate} gold/hour.')
     if suit:
-        b = f' (+{bonus})' if bonus else ''
-        parts.append(f'Suit bonus: {suit}{b}.')
+        if isinstance(bonus, (int, float)) and bonus < 0:
+            parts.append(f'Suit bonus: {suit} ({bonus}, inverted by Landslide).')
+        else:
+            b = f' (+{_format_number(bonus)})' if bonus else ''
+            parts.append(f'Suit bonus: {suit}{b}.')
     return title, ' '.join(parts)
 
 
@@ -1127,8 +1145,8 @@ def derive_conquer_timeline(game: Any, state: Any = None,
         icon_kind='land',
         icon_payload={
             'tier': _get(game, 'land_tier'),
-            'suit': _get(game, 'land_suit_bonus_suit'),
-            'bonus': _get(game, 'land_suit_bonus_value'),
+            'suit': _effective_land_bonus(game)[0],
+            'bonus': _effective_land_bonus(game)[1],
         },
         completed=True,
         info_headline=title,

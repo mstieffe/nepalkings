@@ -62,7 +62,23 @@ def test_add_column_if_missing_is_idempotent(app):
 
 def test_new_columns_exist_after_run(app):
     run_migrations()
+    challenge_cols = {c['name'] for c in sa_inspect(db.engine).get_columns('challenge')}
     user_cols = {c['name'] for c in sa_inspect(db.engine).get_columns('user')}
     game_cols = {c['name'] for c in sa_inspect(db.engine).get_columns('game')}
+    assert 'turn_time_limit' in challenge_cols
     assert 'notify_emails_enabled' in user_cols
     assert 'turn_email_log' in game_cols
+    assert 'turn_time_limit' in game_cols
+
+
+def test_duel_turn_time_limit_migration_adds_legacy_columns(app):
+    db.session.execute(text('ALTER TABLE challenge DROP COLUMN turn_time_limit'))
+    db.session.execute(text('ALTER TABLE game DROP COLUMN turn_time_limit'))
+    db.session.commit()
+
+    migration_runner._m_duel_turn_time_limit_columns()
+
+    challenge_cols = {c['name'] for c in sa_inspect(db.engine).get_columns('challenge')}
+    game_cols = {c['name'] for c in sa_inspect(db.engine).get_columns('game')}
+    assert 'turn_time_limit' in challenge_cols
+    assert 'turn_time_limit' in game_cols

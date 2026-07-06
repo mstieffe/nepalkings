@@ -85,6 +85,7 @@ class Figure:
         cannot_be_targeted: bool = False,  # Figure cannot be selected for battle (advance or defend)
         checkmate: bool = False,  # If this figure dies the owner loses the game
         override_base_power: Optional[int] = None,  # Fixed base power (overrides card sum)
+        is_clone: bool = False,  # Runtime Copy Figure clone (cosmetic clone aura)
         description: str = "",
         id: Optional[int] = None,
         player_id: Optional[int] = None,
@@ -118,6 +119,7 @@ class Figure:
         self.cannot_be_targeted = cannot_be_targeted
         self.checkmate = checkmate
         self.override_base_power = override_base_power
+        self.is_clone = is_clone
         
         # Active enchantment effects on this figure
         self.active_enchantments = []  # List of dicts: {'spell_name': str, 'spell_icon': str, 'power_modifier': int}

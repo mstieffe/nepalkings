@@ -931,6 +931,8 @@ class GameScreen(Screen):
             'Civil War': 'civil_war.png',
             'Peasant War': 'peasant_war.png',
             'Blitzkrieg': 'blitzkrieg.png',
+            'Royal Decree': 'kings_war.png',
+            'Landslide': 'landslide.png',
         }
         for modifier_name, filename in modifier_types.items():
             icon_path = os.path.join(icon_dir, filename)
@@ -2241,6 +2243,8 @@ class GameScreen(Screen):
                 'Civil War': 'Conquer restriction: only village figures can fight, and each side may use up to two same-color village figures.',
                 'Peasant War': 'Conquer restriction: only village figures can be selected for this battle.',
                 'Blitzkrieg': 'Conquer restriction: the defender cannot counter-advance; the invader selects the defender after advancing. Ceasefire is active until the last turn.',
+                'Royal Decree': 'Conquer restriction: only castle figures can advance or defend. Both players dumped their hands and drew fresh cards.',
+                'Landslide': 'Conquer twist: the land bonus is inverted — figures matching the land suit lose it instead of gaining it (both sides).',
             }
             if modifier_type in conquer_descriptions:
                 return conquer_descriptions[modifier_type]
@@ -2248,6 +2252,8 @@ class GameScreen(Screen):
             'Civil War': 'Each player may choose up to two villagers of the same color. Both players have 2 turns left. The invader starts next turn.',
             'Peasant War': 'Only villagers can be selected for the battle. Both players have 2 turns left. The invader starts next turn.',
             'Blitzkrieg': 'The advancing figure cannot be blocked. Both players have 2 turns left. The invader starts next turn. Ceasefire is active until the last turn.',
+            'Royal Decree': 'Only castle figures can advance or defend. Both players dump their hands and draw fresh cards.',
+            'Landslide': 'The land bonus is inverted for this battle — matching figures lose it instead of gaining it.',
         }
         return descriptions.get(modifier_type)
 

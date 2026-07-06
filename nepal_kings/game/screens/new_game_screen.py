@@ -786,6 +786,25 @@ class NewGameScreen(MenuScreenMixin, Screen):
                 self.game_limit_field.deactivate()
                 return
 
+        # Open challenges (only visible buttons)
+        for btn, ch in zip(self.open_challenge_buttons, self.open_challenges):
+            if (btn.rect.top >= self._list_top and btn.rect.bottom <= self._list_bottom
+                    and btn.collide()):
+                stake = ch.get('stake', 45)
+                game_limit = ch.get('game_limit') or stake
+                if ch in self.user['challenges_issued']:
+                    self.make_dialogue_box(
+                        f'You have challenged {btn.text} at {ch["date"]}\n\n'
+                        f'Stake: {stake} gold\nGame Limit: {game_limit} points',
+                        actions=['ok'], title="Challenge Pending")
+                else:
+                    self.set_action("accept_game_challenge", ch, "open")
+                    self.make_dialogue_box(
+                        f'Do you want to accept a game with {btn.text}?\n\n'
+                        f'Stake: {stake} gold\nGame Limit: {game_limit} points',
+                        actions=["accept", "reject"], title="Accept Challenge")
+                return
+
     def _first_duel_incomplete(self):
         onboarding = (getattr(self.state, 'user_dict', None) or {}).get('onboarding') or {}
         completed = set(onboarding.get('completed_steps') or [])
@@ -848,25 +867,6 @@ class NewGameScreen(MenuScreenMixin, Screen):
     def _set_game_limit_content(self, content):
         self.game_limit_field.content = str(content)[:self.game_limit_field.max_length]
         self.game_limit_field.cursor_pos = len(self.game_limit_field.content)
-
-        # Open challenges (only visible buttons)
-        for btn, ch in zip(self.open_challenge_buttons, self.open_challenges):
-            if (btn.rect.top >= self._list_top and btn.rect.bottom <= self._list_bottom
-                    and btn.collide()):
-                stake = ch.get('stake', 45)
-                game_limit = ch.get('game_limit') or stake
-                if ch in self.user['challenges_issued']:
-                    self.make_dialogue_box(
-                        f'You have challenged {btn.text} at {ch["date"]}\n\n'
-                        f'Stake: {stake} gold\nGame Limit: {game_limit} points',
-                        actions=['ok'], title="Challenge Pending")
-                else:
-                    self.set_action("accept_game_challenge", ch, "open")
-                    self.make_dialogue_box(
-                        f'Do you want to accept a game with {btn.text}?\n\n'
-                        f'Stake: {stake} gold\nGame Limit: {game_limit} points',
-                        actions=["accept", "reject"], title="Accept Challenge")
-                return
 
     # ── Accepted-challenge notification ─────────────────────────
 

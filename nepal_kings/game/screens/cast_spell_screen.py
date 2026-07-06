@@ -362,6 +362,10 @@ class CastSpellScreen(SubScreen):
         }
         
         for family in all_families:
+            # Conquer-only families (Royal Decree, Copy Figure, Landslide,
+            # Draw 4 MainCards) never appear in the duel spell book.
+            if getattr(family, 'conquer_only', False):
+                continue
             if family.type in families_by_effect:
                 families_by_effect[family.type].append(family)
         

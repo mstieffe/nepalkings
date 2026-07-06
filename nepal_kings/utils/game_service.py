@@ -54,9 +54,22 @@ def fetch_game(game_id):
     return response.json().get('game')
 
 
+def _response_message(response, fallback):
+    try:
+        payload = response.json()
+    except Exception:
+        return fallback
+    return payload.get('message') or payload.get('error') or fallback
+
+
 def create_game(challenge_id):
     try:
         response = requests.post(f'{settings.SERVER_URL}/games/create_game', data={'challenge_id': challenge_id}, timeout=10)
+        if response.status_code >= 400:
+            return {
+                'success': False,
+                'message': _response_message(response, 'Failed to create game'),
+            }
         response.raise_for_status()
         return response.json()
     except requests.RequestException as e:
@@ -283,6 +296,23 @@ def gamble_conquer_tactic(game_id, player_id, tactic_id):
         return response.json()
     except requests.RequestException as e:
         return {'success': False, 'message': f"Failed to gamble conquer tactic: {str(e)}"}
+
+
+def conquer_gamble_preview(game_id, player_id, tactic_id):
+    """Preview a gamble's replacement tactics (requires active All Seeing Eye)."""
+    try:
+        response = requests.post(
+            f'{settings.SERVER_URL}/games/conquer_gamble_preview',
+            json={
+                'game_id': game_id,
+                'player_id': player_id,
+                'tactic_id': tactic_id,
+            },
+            timeout=10,
+        )
+        return response.json()
+    except requests.RequestException as e:
+        return {'success': False, 'message': f"Failed to preview gamble: {str(e)}"}
 
 
 def combine_conquer_tactics(game_id, player_id, tactic_id_a, tactic_id_b):

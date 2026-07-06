@@ -48,7 +48,10 @@ class PreludeSpellScreen(SubScreen):
         self.game = state.game
         self.card_source = card_source
         self.mode = mode
-        self.allowed_spells = set(allowed_spells or [])
+        # Keep the caller's ordering — the icon grid lays out families in
+        # exactly this sequence (e.g. Draw 4 directly after Draw 2).
+        self.allowed_spell_order = list(allowed_spells or [])
+        self.allowed_spells = set(self.allowed_spell_order)
         self.server_endpoint = server_endpoint
         self.land_id = land_id
         self.extra_payload = dict(extra_payload or {})
@@ -95,13 +98,22 @@ class PreludeSpellScreen(SubScreen):
         )
 
     def init_spell_family_icons(self):
-        """Create clickable icons for each allowed spell family, grouped by type."""
-        self.spell_family_buttons = []
-        all_families = self.spell_manager.get_all_families()
+        """Create clickable icons for each allowed spell family, grouped by type.
 
+        Fixed-size icon cells (no hover/selected resize) laid out in one row
+        per spell type.  Row spacing compresses automatically so wide rows
+        (e.g. six tactics families) never overflow the details panel — this
+        keeps the picker overlap-free down to compact landscape resolutions.
+        """
+        self.spell_family_buttons = []
+
+        # Lay families out in the allowlist's order so related spells
+        # (e.g. Draw 2 / Draw 4) sit next to each other.
+        ordered_names = getattr(self, 'allowed_spell_order', None) or sorted(self.allowed_spells)
         families_by_effect = {'greed': [], 'enchantment': [], 'tactics': []}
-        for family in all_families:
-            if family.name in self.allowed_spells and family.type in families_by_effect:
+        for name in ordered_names:
+            family = self.spell_manager.get_family_by_name(name)
+            if family is not None and family.type in families_by_effect:
                 families_by_effect[family.type].append(family)
 
         effect_types_order = ['greed', 'enchantment', 'tactics']
@@ -109,6 +121,12 @@ class PreludeSpellScreen(SubScreen):
         self.type_label_font = settings.get_font(settings.SPELL_TYPE_LABEL_FONT_SIZE)
         self.type_labels = {}
         self.type_label_positions = {}
+
+        # Rightmost icon-centre that keeps the whole cell (icon + frame)
+        # inside the info box.
+        box_right = settings.CAST_SPELL_INFO_BOX_X + settings.CAST_SPELL_INFO_BOX_WIDTH
+        max_center_x = box_right - int(settings.SPELL_ICON_WIDTH * 0.9)
+        row_span = max(1, max_center_x - settings.CAST_SPELL_ICON_START_X)
 
         for row_index, effect_type in enumerate(effect_types_order):
             families_in_row = families_by_effect[effect_type]
@@ -123,10 +141,18 @@ class PreludeSpellScreen(SubScreen):
             label_rect.midleft = self._spos(settings.SPELL_TYPE_LABEL_X, row_y)
             self.type_label_positions[effect_type] = label_rect.topleft
 
+            # Compress spacing only when the default delta would overflow.
+            n_icons = len(families_in_row)
+            delta_x = settings.SPELL_ICON_DELTA_X
+            if n_icons > 1:
+                delta_x = min(delta_x, row_span // (n_icons - 1))
+
             for col_index, family in enumerate(families_in_row):
-                btn_x = settings.CAST_SPELL_ICON_START_X + col_index * settings.SPELL_ICON_DELTA_X
+                btn_x = settings.CAST_SPELL_ICON_START_X + col_index * delta_x
                 btn_y = settings.CAST_SPELL_ICON_START_Y + row_index * settings.SPELL_ICON_DELTA_Y
-                button = family.make_icon(self.window, self.game, self._sx(btn_x), self._sy(btn_y))
+                button = family.make_icon(self.window, self.game,
+                                          self._sx(btn_x), self._sy(btn_y),
+                                          fixed_size=True)
                 self.spell_family_buttons.append(button)
 
     # ── Card helpers ────────────────────────────────────────────────

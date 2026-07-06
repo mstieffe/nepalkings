@@ -219,6 +219,11 @@ class Game(db.Model):
     # Battle shop gamble tracking — {str(player_id): count}
     battle_gamble_counts = db.Column(db.JSON, nullable=True)
 
+    # All Seeing Eye gamble previews — {str(player_id): {tactic_id, round, specs}}.
+    # Pinned replacement-tactic previews; only ever shown to the owning player
+    # (serialize_game_for_viewer strips other entries).
+    battle_gamble_previews = db.Column(db.JSON, nullable=True)
+
     # Seed for the deterministic duel AI's softmax sampling / tie-breakers.
     # Set on game creation so the same (game_state, seed, iteration) tuple
     # always yields the same AI move — enables replay and reproducible tests.
@@ -289,6 +294,7 @@ class Game(db.Model):
             'last_battle_result': self.last_battle_result,
             'resting_figure_ids': self.resting_figure_ids or [],
             'battle_gamble_counts': self.battle_gamble_counts or {},
+            'battle_gamble_previews': self.battle_gamble_previews or {},
             'ai_seed': self.ai_seed,
             'conquer_move_model': self.conquer_move_model or 'battle_move',
             'conquer_resolution_step': int(getattr(self, 'conquer_resolution_step', 0) or 0),
@@ -480,6 +486,11 @@ class Figure(db.Model):
     # built from.  Used to resolve configured spell targets without relying
     # on insertion-order zips that break after Explosion etc.
     source_config_figure_id = db.Column(db.Integer, nullable=True)
+    # Runtime-only battle clone produced by the Copy Figure conquer spell.
+    # Purely cosmetic on the client (permanent clone aura); the figure
+    # otherwise behaves like any other runtime figure.
+    is_clone = db.Column(db.Boolean, default=False, nullable=False,
+                         server_default='0')
     cards = db.relationship('CardToFigure', backref='figure', lazy=True)
     date_created = db.Column(db.DateTime, default=_utcnow)
 
@@ -500,6 +511,7 @@ class Figure(db.Model):
             'checkmate': self.checkmate,
             'cannot_be_blocked': self.cannot_be_blocked,
             'rest_after_attack': self.rest_after_attack,
+            'is_clone': bool(self.is_clone),
             'cards': [card.serialize() for card in self.cards],
             'date_created': self.date_created.isoformat(),
         }

@@ -91,7 +91,13 @@ class ScoreboardScroll:
             is_conquer = getattr(self.game, 'mode', 'duel') == 'conquer'
             if is_conquer:
                 suit = getattr(self.game, 'land_suit_bonus_suit', None) or '?'
-                bonus = self._to_int(getattr(self.game, 'land_suit_bonus_value', None), 0)
+                # Landslide inverts the land bonus for the whole battle.
+                bonus_getter = getattr(self.game, 'effective_land_bonus', None)
+                if callable(bonus_getter):
+                    _eff_suit, eff_value = bonus_getter()
+                    bonus = self._to_int(eff_value, 0)
+                else:
+                    bonus = self._to_int(getattr(self.game, 'land_suit_bonus_value', None), 0)
                 gold_rate = self._to_int(getattr(self.game, 'land_gold_rate', None), 0)
                 scoreboard_dict = {
                     'opponent': self.game.opponent_name,

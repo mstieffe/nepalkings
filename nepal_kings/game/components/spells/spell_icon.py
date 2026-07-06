@@ -22,6 +22,7 @@ class SpellIcon:
         frame_hidden_img: pygame.Surface = None,
         glow_img: pygame.Surface = None,
         draw_name: bool = True,
+        fixed_size: bool = False,
     ) -> None:
         """
         Initialize the SpellIcon.
@@ -72,6 +73,9 @@ class SpellIcon:
         self.clicked = False
         self.hovered = False
         self.draw_name = draw_name
+        # Fixed-size cells: hover/selected feedback via glow only, the
+        # icon/frame footprint never changes (used by the prelude picker).
+        self.fixed_size = fixed_size
         
         # Load glow effects
         self.load_glow_effects()
@@ -171,6 +175,10 @@ class SpellIcon:
         icon_img_big = self.icon_img_big if self.is_active else self.icon_gray_img_big
         frame_img = self.frame_img if self.is_active else self.frame_closed_img
         frame_img_big = self.frame_img_big if self.is_active else self.frame_closed_img_big
+        if self.fixed_size:
+            # Hover/selected states keep the normal footprint.
+            icon_img_big = icon_img
+            frame_img_big = frame_img
         
         # Determine drawing state
         glow_img_background = None  # For layered glow effect
@@ -238,16 +246,18 @@ class SpellIcon:
 
 class CastSpellIcon(SpellIcon):
     """Spell icon for the cast spell screen."""
-    
-    def __init__(self, window, game, spell_family, x: int = 0, y: int = 0) -> None:
+
+    def __init__(self, window, game, spell_family, x: int = 0, y: int = 0,
+                 fixed_size: bool = False) -> None:
         """
         Initialize a CastSpellIcon.
-        
+
         :param window: The Pygame surface
         :param game: Reference to the game object
         :param spell_family: The SpellFamily object
         :param x: X-coordinate
         :param y: Y-coordinate
+        :param fixed_size: Keep the icon footprint constant across states
         """
         super().__init__(
             window,
@@ -261,6 +271,7 @@ class CastSpellIcon(SpellIcon):
             spell_family.frame_hidden_img,
             spell_family.glow_img,
             draw_name=True,
+            fixed_size=fixed_size,
         )
         
         self.family = spell_family

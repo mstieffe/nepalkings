@@ -1044,7 +1044,12 @@ class BattleScreen(SubScreen):
         base = figure.get_value()
         # buffs_allies bonus (treated as base power, not affected by blocks_bonus)
         buffs_bonus = getattr(figure_icon, 'buffs_allies_bonus', 0) if figure_icon else 0
-        bonus = figure_icon.battle_bonus_received if figure_icon else 0
+        # Live variant includes the land component (Landslide can invert it
+        # after the icon was built); fall back to the cached value.
+        if figure_icon and callable(getattr(figure_icon, '_current_battle_bonus_received', None)):
+            bonus = figure_icon._current_battle_bonus_received()
+        else:
+            bonus = figure_icon.battle_bonus_received if figure_icon else 0
         # blocks_bonus negates the support bonus (NOT wall defence)
         if figure_icon and getattr(figure_icon, 'battle_bonus_blocked', False):
             bonus = 0
@@ -1275,7 +1280,10 @@ class BattleScreen(SubScreen):
                     return "None"
                 base = fig.get_value()
                 buffs = getattr(icon, 'buffs_allies_bonus', 0) if icon else 0
-                bonus = icon.battle_bonus_received if icon else 0
+                if icon and callable(getattr(icon, '_current_battle_bonus_received', None)):
+                    bonus = icon._current_battle_bonus_received()
+                else:
+                    bonus = icon.battle_bonus_received if icon else 0
                 blocked = getattr(icon, 'battle_bonus_blocked', False) if icon else False
                 if blocked:
                     bonus = 0

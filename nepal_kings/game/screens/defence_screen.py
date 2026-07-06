@@ -94,8 +94,9 @@ def _display_family_without_duel_only_skills(family):
 
 
 _DEFENCE_PRELUDE_SPELLS = [
-    'Dump Cards', 'Forced Deal', 'Poison', 'Health Boost',
-    'Explosion', 'Peasant War', 'Civil War',
+    'Draw 2 MainCards', 'Draw 4 MainCards', 'Dump Cards', 'Forced Deal',
+    'Poison', 'Health Boost', 'All Seeing Eye', 'Explosion', 'Copy Figure',
+    'Peasant War', 'Civil War', 'Royal Decree', 'Landslide',
 ]
 
 _DEFENCE_COUNTER_SPELLS = [

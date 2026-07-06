@@ -97,10 +97,10 @@ def _display_family_without_duel_only_skills(family):
 
 
 _CONQUER_PRELUDE_SPELLS = [
-    'Draw 2 MainCards', 'Fill up to 10', 'Dump Cards', 'Forced Deal',
-    'Poison', 'Health Boost', 'All Seeing Eye', 'Explosion',
+    'Draw 2 MainCards', 'Draw 4 MainCards', 'Dump Cards', 'Forced Deal',
+    'Poison', 'Health Boost', 'All Seeing Eye', 'Explosion', 'Copy Figure',
     'Peasant War', 'Civil War', 'Blitzkrieg',
-    'Invader Swap',
+    'Invader Swap', 'Royal Decree', 'Landslide',
 ]
 
 _RIGHT_SECTION_INFO = {

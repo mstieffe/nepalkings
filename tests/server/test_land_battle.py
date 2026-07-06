@@ -782,7 +782,10 @@ class TestConquerStartBattle:
             # Keep this test focused on template move creation. Some preludes
             # (Dump Cards / Forced Deal) intentionally recycle hand cards and
             # purge their BattleMove rows, which would invalidate this assert.
-            move_mutating_preludes = {'Dump Cards', 'Forced Deal'}
+            move_mutating_preludes = {
+                'Dump Cards', 'Forced Deal', 'Royal Decree',
+                'Draw 2 MainCards', 'Draw 4 MainCards',
+            }
             template = None
             for seed in range(500):
                 land.ai_template_index = seed
@@ -822,7 +825,10 @@ class TestConquerStartBattle:
             land = _make_land(db, tier=3)
             from ai.defence.generator import get_ai_defence_template_for_land
 
-            move_mutating_preludes = {'Dump Cards', 'Forced Deal'}
+            move_mutating_preludes = {
+                'Dump Cards', 'Forced Deal', 'Royal Decree',
+                'Draw 2 MainCards', 'Draw 4 MainCards',
+            }
             template = None
             for seed in range(500):
                 land.ai_template_index = seed

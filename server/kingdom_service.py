@@ -2235,19 +2235,19 @@ def check_defence_incomplete(land_id, user_id):
         if not battle_fig:
             return True
         from game_service.figure_rule_helpers import (
+            battle_required_field,
             config_strategy_modifiers,
             figure_can_counter_advance,
-            modifiers_require_village,
         )
-        require_village = modifiers_require_village(config_strategy_modifiers(cfg))
+        required_field = battle_required_field(config_strategy_modifiers(cfg))
         if not figure_can_counter_advance(
             battle_fig,
-            require_village=require_village,
+            required_field=required_field,
             deficit=deficit_map.get(battle_fig.id, False),
         ):
             return True
 
-        is_civil_war = any(
+        is_civil_war = required_field != 'castle' and any(
             mod.get('type') == 'Civil War'
             for mod in config_strategy_modifiers(cfg)
             if isinstance(mod, dict)
@@ -2258,7 +2258,7 @@ def check_defence_incomplete(land_id, user_id):
                 return True
             if not figure_can_counter_advance(
                 battle_fig_2,
-                require_village=require_village,
+                required_field=required_field,
                 deficit=deficit_map.get(battle_fig_2.id, False),
             ):
                 return True
