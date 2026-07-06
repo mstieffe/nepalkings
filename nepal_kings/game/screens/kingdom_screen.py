@@ -780,8 +780,8 @@ class KingdomScreen(MenuScreenMixin, Screen):
                     'image_frame': False,
                     'image_caption': 'Conquer a neighbour to grow your kingdom.',
                     'lines': [
-                        'Your lands form a kingdom; rivals hold the rest.',
-                        'Conquer a neighbouring land to expand, one hex at a time.',
+                        'Every hex is a land. Yours form your kingdom; rivals hold the rest.',
+                        'Conquer neighbouring lands to grow, one hex at a time.',
                     ],
                 },
             ],
@@ -853,7 +853,7 @@ class KingdomScreen(MenuScreenMixin, Screen):
                 'id': 'kingdom_conquer_button',
                 'rect': conquer_button_rect,
                 'title': 'Open Conquer Setup',
-                'body': "Tap Conquer to review your first setup. We've assembled example recipes so you can see how an attack is built.",
+                'body': "Tap Conquer. We've pre-built your first attack so you can see how one fits together.",
                 'action': 'click',
                 'mark_on_click': True,
                 'max_lines': 4,
@@ -873,7 +873,7 @@ class KingdomScreen(MenuScreenMixin, Screen):
                 'click_through_rects': [self._map_viewport_rect],
                 'title': 'Pick The Marked Land' if has_recommended else 'Pick A Land',
                 'body': (
-                    'Tap the gold-marked tier-1 land. It is tuned for your starter attack and the tactic tools you are about to learn.'
+                    "Tap the gold-marked land. It's a perfect first target for your starter attack."
                     if has_recommended else
                     'Each hex is a land. Tap one you do not own to inspect it, then choose Conquer.'
                 ),
@@ -892,7 +892,7 @@ class KingdomScreen(MenuScreenMixin, Screen):
                 'rect': land_rect or self._map_viewport_rect,
                 'click_through_rects': [self._map_viewport_rect],
                 'title': 'Try Again',
-                'body': 'No cards were lost — your starter attack is ready. Tap the gold-marked land to conquer it again.',
+                'body': 'Nothing was lost, and your attack is still ready. Tap the gold-marked land and try again.',
                 'action': 'click',
                 'mark_on_click': False,
                 'max_lines': 4,
@@ -905,7 +905,7 @@ class KingdomScreen(MenuScreenMixin, Screen):
                 'id': 'kingdom_after_conquer_map',
                 'rect': self._map_viewport_rect,
                 'title': 'Your First Land!',
-                'body': 'You took your first land — it joins your kingdom, produces over time, and proves the conquer loop.',
+                'body': 'Congratulations! Your first land joins your kingdom and starts producing gold for you.',
                 'action': 'coach',
                 'finish_tutorial_button': True,
                 'max_lines': 5,

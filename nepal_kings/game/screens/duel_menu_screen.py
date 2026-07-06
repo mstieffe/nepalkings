@@ -226,14 +226,14 @@ class DuelMenuScreen(MenuScreenMixin, Screen):
         from game.components import tutorial_diagrams
         return [
             {
-                'title': 'Duels Are The Heart Of Nepal Kings',
+                'title': 'The Full Game, Head To Head',
                 'layout': 'image_top',
                 'image': lambda: tutorial_diagrams.duel_start_image(),
                 'image_frame': False,
                 'image_caption': 'Draw, build, battle, and climb toward the point goal.',
                 'lines': [
-                    'A duel is the long, chess-like version of Nepal Kings.',
-                    'Two players take turns planning, building, and threatening each other until a battle breaks out.',
+                    'A duel is Nepal Kings at full depth: two players, one board, turn by turn.',
+                    'You build your position, then clash in battles until someone reaches the point goal.',
                 ],
             },
             {
@@ -242,20 +242,8 @@ class DuelMenuScreen(MenuScreenMixin, Screen):
                 'image': lambda: tutorial_diagrams.duel_build_battle_diagram(),
                 'image_caption': 'Building phases create the board that decides the battle phase.',
                 'lines': [
-                    'The game switches between building phases and battle phases.',
-                    'During building, you turn cards into figures, spells, and support.',
-                    'During battle, the figures you prepared decide who scores points.',
-                ],
-            },
-            {
-                'title': 'One Shared Card Pool',
-                'layout': 'image_top',
-                'image': lambda: tutorial_diagrams.duel_shared_card_pool_image(),
-                'image_frame': False,
-                'image_caption': 'Every draw comes from one pool shared by both players.',
-                'lines': [
-                    'Both players draw from the same pool of cards, so every card you take is a card your opponent cannot draw.',
-                    'You play until someone reaches the agreed point goal through battles.',
+                    'Each round has a building phase to turn cards into figures and spells, then a battle phase where they fight for points.',
+                    "Both players draw from one shared pool, so every card you take is a card your opponent can't have.",
                 ],
             },
         ]
@@ -299,7 +287,7 @@ class DuelMenuScreen(MenuScreenMixin, Screen):
             'id': 'new_game',
             'rect': self.button_new.rect,
             'title': 'Create A Duel',
-            'body': 'Click New Game yourself. The next screen prepares a gentle AI challenge for your first run.',
+            'body': "Tap New Game. We'll set up a friendly AI opponent for your first duel.",
             'action': 'click',
             'mark_on_click': True,
         }

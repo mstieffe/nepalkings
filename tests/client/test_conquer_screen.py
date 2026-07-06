@@ -302,8 +302,8 @@ class TestConquerCoachCopy:
         assert step['id'] == 'conquer_config_to_battle'
         assert step['title'] == 'Your Attack Is Ready'
         assert 'guided tour ends here' not in step['body']
-        assert 'pre-built this attack' in step['body']
-        assert 'prelude draws cards' in step['body']
+        assert 'Here is your attack' in step['body']
+        assert 'prelude spell' in step['body']
         assert 'only looted cards' not in step['body']
         assert step['button_label'] == 'Got it'
 
@@ -405,7 +405,11 @@ class TestConquerLootRiskTutorial:
         from game.screens.conquer_screen import ConquerScreen
         import pygame
         state = _make_state()
-        state.user_dict = {'onboarding': {'menu_hints_seen': []}}
+        # Second conquest (first battle already finished): the loot lesson shows.
+        state.user_dict = {'onboarding': {
+            'menu_hints_seen': [],
+            'completed_steps': ['finish_first_conquer_battle'],
+        }}
         screen = ConquerScreen(state)
         screen._land_id = 42
         screen._config = {
@@ -431,6 +435,30 @@ class TestConquerLootRiskTutorial:
         assert seen == ['loot_risk_intro']
         mock_start.assert_called_once_with(use_map=False)
         assert screen._loot_risk_tutorial_dialogue is None
+
+    def test_first_tutorial_conquest_defers_loot_tutorial(self):
+        # First guided conquest (no land won yet): the battle is risk-free, so
+        # the loot lesson is deferred — Start Battle runs immediately.
+        from game.screens.conquer_screen import ConquerScreen
+        state = _make_state()
+        state.user_dict = {'onboarding': {
+            'menu_hints_seen': [],
+            'completed_steps': [],
+        }}
+        screen = ConquerScreen(state)
+        screen._land_id = 42
+        screen._config = {
+            'figures': [{'id': 1, 'has_deficit': False}],
+            'battle_moves': [{'id': 1}, {'id': 2}, {'id': 3}],
+        }
+        screen._cooldown_remaining = 0
+        screen._cooldown_synced_at_ms = 1000
+
+        with patch.object(screen, '_start_battle') as mock_start:
+            screen._on_battle_click()
+
+        assert screen._loot_risk_tutorial_dialogue is None
+        mock_start.assert_called_once_with(use_map=False)
 
     def test_start_battle_skips_loot_tutorial_once_seen(self):
         from game.screens.conquer_screen import ConquerScreen

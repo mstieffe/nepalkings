@@ -213,9 +213,8 @@ class TestGameScreenDialogueFlow:
             subscreen='battle_shop',
             user_dict={'onboarding': {
                 'duel_hints_seen': [
-                    'field', 'build', 'cast_spell', 'change_cards', 'battle_shop',
-                    'battle', 'scoreboard', 'turn_indicator', 'ceasefire_indicator',
-                    'role_indicator', 'resource_panel',
+                    'field', 'build', 'cast_spell', 'change_cards',
+                    'game_status', 'resource_panel',
                 ],
                 'completed_steps': [],
             }},
@@ -332,10 +331,8 @@ class TestGameScreenDialogueFlow:
             _sy=lambda value: value,
         )
         seen_before_battle = [
-            'field', 'build', 'cast_spell', 'change_cards', 'battle_shop',
-            'battle', 'scoreboard', 'turn_indicator', 'ceasefire_indicator',
-            'role_indicator', 'resource_panel', 'battle_shop_select_moves',
-            'battle_shop_ready',
+            'field', 'build', 'cast_spell', 'change_cards', 'game_status',
+            'resource_panel', 'battle_shop_select_moves', 'battle_shop_ready',
         ]
         game_screen.state = SimpleNamespace(
             game=game,
@@ -368,21 +365,16 @@ class TestGameScreenDialogueFlow:
         assert step['id'] == 'battle_move_panel'
         assert step['rects'] == [battle_panel]
 
+        # battle_move_actions has no detail box open, so its rects are empty and
+        # it is skipped; the merged scoring card follows the move panel.
         game_screen.state.user_dict['onboarding']['duel_hints_seen'].append('battle_move_panel')
         step = GameScreen._current_duel_coach_step(game_screen)
-        assert step['id'] == 'battle_figure_diff'
-        assert len(step['rects']) == 1
-        assert step['rects'][0].colliderect(figures_panel)
-
-        game_screen.state.user_dict['onboarding']['duel_hints_seen'].append('battle_figure_diff')
-        step = GameScreen._current_duel_coach_step(game_screen)
-        assert step['id'] == 'battle_rounds_panel'
-        assert step['rects'] == [rounds_panel]
-
-        game_screen.state.user_dict['onboarding']['duel_hints_seen'].append('battle_rounds_panel')
-        step = GameScreen._current_duel_coach_step(game_screen)
-        assert step['id'] == 'battle_total_diff'
-        assert len(step['rects']) == 1
+        assert step['id'] == 'battle_score'
+        assert step['separate_highlights'] is True
+        # Combines the figure-difference, rounds, and total rects.
+        assert len(step['rects']) == 3
+        assert any(rect.colliderect(figures_panel) for rect in step['rects'])
+        assert rounds_panel in step['rects']
 
     def test_duel_coach_next_button_consumes_press_release(self):
         import pygame
@@ -479,9 +471,7 @@ class TestGameScreenDialogueFlow:
             subscreen='field',
             user_dict={'onboarding': {
                 'duel_hints_seen': [
-                    'field', 'build', 'cast_spell', 'change_cards', 'battle_shop',
-                    'battle', 'scoreboard', 'turn_indicator', 'ceasefire_indicator',
-                    'role_indicator',
+                    'field', 'build', 'cast_spell', 'change_cards', 'game_status',
                 ],
                 'completed_steps': [],
             }},

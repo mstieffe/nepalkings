@@ -12,6 +12,7 @@ Provides:
 import os
 import pygame
 from config import settings
+from game.components.coach_card import draw_coach_highlight, draw_coach_spotlight
 from game.components.floating_text import FloatingText, FloatingTextLayer
 from game.core.input_state import get_pressed as _get_pressed
 from utils import onboarding_service
@@ -710,12 +711,12 @@ class MenuScreenMixin:
     # Ordered: conquer tutorial completes first, the duel tutorial later.
     _TUTORIAL_COMPLETIONS = (
         ('finish_tutorial', 'Conquer Tutorial Complete!', [
-            "You've learned the kingdom loop: prepare cards, conquer a land, and bring it into your kingdom.",
-            "There's also an optional Duel tutorial — start it any time from the Duel menu, or keep expanding your kingdom.",
+            "You know the conquer loop: open packs, build an attack, take the land.",
+            "Keep expanding your kingdom, or try the Duel tutorial from the Duel menu whenever you're ready.",
         ]),
         ('finish_first_duel', 'Duel Tutorial Complete!', [
-            "You've played a full duel: building figures, casting spells, and winning rounds.",
-            "Jump into Quick duels and kingdom conquests whenever you like.",
+            "You've played a full duel: building figures, casting spells, and winning battles.",
+            "Quick duels and kingdom conquests are all yours now. Have fun!",
         ]),
     )
 
@@ -1570,10 +1571,9 @@ class MenuScreenMixin:
         self._menu_coach_step = step
         if not step:
             return
-        targets = [rect.inflate(14, 14) for rect in self._menu_coach_target_rects(step)]
-        pulse = 2 + int((pygame.time.get_ticks() // 280) % 2)
-        for target_rect in targets:
-            pygame.draw.rect(self.window, (250, 218, 92), target_rect, pulse, border_radius=8)
+        target_rects = self._menu_coach_target_rects(step)
+        draw_coach_spotlight(self.window, target_rects)
+        draw_coach_highlight(self.window, target_rects, pygame.time.get_ticks())
         target = self._menu_coach_target_bounds(step).inflate(14, 14)
 
         card_w = min(420, max(320, int(0.36 * _SW)), _SW - 16)

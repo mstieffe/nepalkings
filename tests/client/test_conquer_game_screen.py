@@ -350,7 +350,7 @@ def test_battle_intro_window_shows_once_then_suppressed():
     assert screen._battle_intro_dialogue is not None
     pages = screen._battle_intro_dialogue.pages
     assert [page['title'] for page in pages] == ['Battle Phases', 'Tactics Choices']
-    assert any(line.startswith('Gamble: discard one') for line in pages[1]['lines'])
+    assert any('Gamble' in line and 'Combine' in line for line in pages[1]['lines'])
     # While the window is up, the anchored coach is suppressed and the intro
     # is considered paused.
     assert ConquerGameScreen._conquer_battle_coach_allowed(screen) is False

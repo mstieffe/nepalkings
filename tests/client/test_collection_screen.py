@@ -177,11 +177,11 @@ def test_collection_basics_window_splits_rarity_and_recipe_pages():
     first, second = dialogue.pages
     assert first['title'] == 'Key And Number Cards'
     assert first['image']() is td.card_rarity_code_diagram()
-    assert 'card rarity' in ' '.join(first['lines'])
+    assert 'rarity' in ' '.join(first['lines'])
     assert second['title'] == 'Cards Become Actions'
     assert second['image']() is td.card_recipe_examples()
     assert 'single card' in ' '.join(second['lines'])
-    assert 'card recipe' in ' '.join(second['lines'])
+    assert 'recipe' in ' '.join(second['lines'])
 
 
 class TestCollectionSettings:
@@ -571,17 +571,9 @@ class TestCollectionCoach:
 
     def test_coach_routes_open_pack_then_kingdom_then_loop(self):
         screen = self._screen()
-        step = screen._current_collection_coach_step()
-        assert step['id'] == 'collection_starter_cards'
-        assert step['action'] == 'next'
-        assert step['button_label'] == 'Got it'
-        # The full card->figure lesson lives in the collection-basics window;
-        # this card is a brief in-collection reinforcement.
-        assert 'combine into figures' in step['body']
-
-        # Collection-first journey: open a starter pack BEFORE the first
-        # conquest.
-        screen.state.user_dict['onboarding']['menu_hints_seen'].append('collection_starter_cards')
+        # Collection-first journey: the basics window teaches cards, then the
+        # coach points straight at opening a starter pack (the redundant
+        # 'collection_starter_cards' reinforcement card was removed).
         step = screen._current_collection_coach_step()
         assert step['id'] == 'collection_open_main_booster'
 

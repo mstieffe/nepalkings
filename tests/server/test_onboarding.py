@@ -49,7 +49,7 @@ def test_register_sets_welcome_present_pending(client):
     data = resp.get_json()
     assert resp.status_code == 200
     onboarding = data['user']['onboarding']
-    assert onboarding['coach_version'] == 'first_session_v4'
+    assert onboarding['coach_version'] == 'first_session_v5'
     assert onboarding['journey_phase'] == 'open_starter_pack'
     assert onboarding['next_action'] == {
         'screen': 'collection',
@@ -291,21 +291,12 @@ def test_menu_hint_marks_are_persisted(client, auth_headers_user1):
     assert marked.status_code == 200
     assert data['onboarding']['menu_hints_seen'] == ['duel', 'guide_first_duel_reward']
 
-    collection_intro = client.post('/onboarding/mark_tip', headers=auth_headers_user1,
-                                   json={'tip_key': 'menu:collection_starter_cards'})
-    assert collection_intro.status_code == 200
-    data = collection_intro.get_json()
-    assert data['onboarding']['menu_hints_seen'] == [
-        'duel', 'guide_first_duel_reward', 'collection_starter_cards'
-    ]
-
     post_duel = client.post('/onboarding/mark_tip', headers=auth_headers_user1,
                             json={'tip_key': 'menu:collection_open_main_booster'})
     assert post_duel.status_code == 200
     data = post_duel.get_json()
     assert data['onboarding']['menu_hints_seen'] == [
-        'duel', 'guide_first_duel_reward',
-        'collection_starter_cards', 'collection_open_main_booster'
+        'duel', 'guide_first_duel_reward', 'collection_open_main_booster'
     ]
 
     # Hints always come back sorted by MENU_HINT_IDS order, not mark order.
@@ -326,7 +317,6 @@ def test_menu_hint_marks_are_persisted(client, auth_headers_user1):
         'guide_first_duel_reward',
         'conquer_battle_timeline_intro',
         'kingdom_after_conquer_map',
-        'collection_starter_cards',
         'collection_open_main_booster',
         'kingdom_config_shields_style',
     ]

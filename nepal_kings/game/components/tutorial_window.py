@@ -661,7 +661,7 @@ class StarterSuitRevealDialogue:
 
         if settled:
             y = self._draw_centered_lines(
-                [f'{self.suit} — your starter suit!'], self.font,
+                [f'{self.suit} is your starter suit!'], self.font,
                 settings.TITLE_TEXT_COLOR, y)
             y += int(0.004 * _SH)
             # Make clear these are GAINED starter cards, not just shown.

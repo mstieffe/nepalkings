@@ -1463,9 +1463,8 @@ class CollectionScreen(MenuScreenMixin, Screen):
                     'title': 'Key And Number Cards',
                     'layout': 'text_image_text',
                     'lines': [
-                        'Key cards have jewels. Number cards have numbers.',
-                        'Grey, orange, and golden outlines show card rarity.',
-                        'Golden rare cards are the most valuable.',
+                        'Key cards carry jewels; number cards carry numbers.',
+                        'The outline shows rarity: grey is common, orange is rare, and gold is the most valuable.',
                     ],
                     'image': lambda: td.card_rarity_code_diagram(),
                 },
@@ -1473,15 +1472,11 @@ class CollectionScreen(MenuScreenMixin, Screen):
                     'title': 'Cards Become Actions',
                     'layout': 'text_image_text',
                     'lines': [
-                        'Figures, spells, and battle tactics can come from',
-                        'a single card or from a card recipe. But don\'t worry,',
-                        'you don\'t need to memorize all the recipes.',
+                        'Every figure, spell, and tactic is built from cards: some from a single card, some from a recipe.',
+                        "Don't worry about memorizing recipes: the game always shows you what you can build.",
                     ],
                     'image': lambda: td.card_recipe_examples(),
                     'image_caption': 'Some examples.',
-                    'lines_below': [
-                        'Open a booster pack to add more cards.',
-                    ],
                 },
             ],
             title='Your Collection',
@@ -1497,9 +1492,6 @@ class CollectionScreen(MenuScreenMixin, Screen):
         if win.update(events) == 'done':
             self._collection_basics_dialogue = None
             self._mark_menu_coach_seen('collection_basics_window')
-            # The window already taught collection basics — skip the small
-            # 'Your Collection' pointer that repeats the same lesson.
-            self._mark_menu_coach_seen('collection_starter_cards')
         return True
 
     def _maybe_show_starter_present(self):
@@ -1531,11 +1523,10 @@ class CollectionScreen(MenuScreenMixin, Screen):
                     'title': 'Your Starter Set',
                     'layout': 'image_top',
                     'image': lambda: td.suit_roulette_diagram(),
-                    'image_caption': 'One of the four suits — drawn at random.',
+                    'image_caption': 'One of the four suits, drawn at random.',
                     'lines': [
-                        'To get you going, we want to equip you with',
-                        'a random starter set of cards.',
-                        'Spin the roulette to reveal which suit you received.',
+                        'One more gift: a full starter set of cards, all in one suit.',
+                        'Spin to reveal which suit is yours.',
                     ],
                 },
             ],
@@ -1605,16 +1596,6 @@ class CollectionScreen(MenuScreenMixin, Screen):
             return None
         completed = self._onboarding_completed_steps()
         next_action = self._first_session_next_action()
-        if 'collection_starter_cards' not in self._menu_coach_seen():
-            return {
-                'id': 'collection_starter_cards',
-                'rect': self._panel_rect,
-                'title': 'Your Collection',
-                'body': 'These are the cards you combine into figures, spells and tactics. Open boosters to add more recipes.',
-                'action': 'next',
-                'button_label': 'Got it',
-                'max_lines': 4,
-            }
         if ((next_action or {}).get('screen') == 'kingdom'
                 and 'finish_first_conquer_battle' not in completed):
             home_icon = getattr(self, '_icon_home', None)
@@ -1623,7 +1604,7 @@ class CollectionScreen(MenuScreenMixin, Screen):
                 'id': 'post_boosters_kingdom',
                 'rect': target_rect,
                 'title': 'Go To Kingdom',
-                'body': 'Your starter attack is ready. Go to Kingdom and pick the recommended land for your first conquest.',
+                'body': 'Your starter set makes a ready-to-go attack. Head to your Kingdom to conquer your first land.',
                 'action': 'next',
                 'button_label': 'Go to Kingdom',
                 'navigate_screen': 'kingdom',
@@ -1635,7 +1616,7 @@ class CollectionScreen(MenuScreenMixin, Screen):
                 'id': 'collection_open_main_booster',
                 'rect': self._btn_open_main_rect,
                 'title': 'Open A Main Booster',
-                'body': 'Open a main booster. Main cards are ingredients for figure, spell, and tactic recipes.',
+                'body': 'Tap here to open your first main booster.',
                 'action': 'click',
                 'mark_on_click': True,
                 'max_lines': 4,

@@ -65,29 +65,15 @@ def render(width: int, height: int, ui_scale: str, mobile: bool) -> None:
         surf,
         [
             {'title': 'Your Path to the Crown', 'layout': 'image_top',
-             'image': lambda: td.kingdom_journey_diagram(),
-             'image_caption': 'Cards build figures, figures take lands, lands win the crown.',
-             'lines': ['Welcome, Mira! Your goal: become King of Nepal.',
-                       'Turn your cards into figures, conquer lands for gold,',
-                       'and grow your kingdom until the crown is yours.']},
-            {'title': 'Cards Become Recipes', 'layout': 'text_image_text',
-             'lines': ['It all starts with your cards — each one is a recipe.'],
-             'image': lambda: td.card_recipe_examples(),
-             'lines_below': ['Combine same-suit cards into figures; turn single',
-                             'cards into spells and battle tactics.',
-                             'You build them by hand from your own collection.']},
-            {'title': 'Skills Follow the Suit', 'layout': 'image_top',
-             'image': lambda: td.offensive_vs_defensive_diagram(),
-             'image_caption': 'Attack skills push forward; defence skills hold the line.',
-             'lines': [
-                 'Every figure carries skills, and its suit shapes them.',
-                 'Hearts & Diamonds bring offensive skills to conquer;',
-                 'Clubs & Spades bring defensive skills to hold your lands.']},
+             'image': lambda: td.conquer_start_image(int(0.26 * height)),
+             'image_frame': False,
+             'lines': ['Welcome, Mira!',
+                       'Your goal: become the greatest king of Nepal.',
+                       'Turn cards into figures, spells, and tactics, then '
+                       'conquer land after land until the crown is yours.']},
         ],
         title='Welcome to Nepal Kings')
     shot('welcome-1', welcome, page=0)
-    shot('welcome-2', welcome, page=1)
-    shot('welcome-3', welcome, page=2)
 
     gift = RewardsRevealDialogueBox(
         surf, 'Your Welcome Gift', 'welcome',
@@ -108,23 +94,29 @@ def render(width: int, height: int, ui_scale: str, mobile: bool) -> None:
 
     battle = TutorialWindowDialogue(
         surf,
-        [{'title': 'How a Battle Flows', 'layout': 'image_top',
-          'image': lambda: td.starter_tactics_diagram(),
-          'image_caption': 'Your three tactics: Call King, Call Villager, Block.',
-          'lines': ['A battle runs in three beats: your prelude fires, your figures',
-                    'set the score, then three tactic rounds let you swing it.',
-                    'Each round, Play a tactic — or Gamble it for new cards.',
-                    "Call King or Call Villager adds that figure's power; Block cancels the round."]}],
+        [{'title': 'Battle Phases', 'layout': 'image_top',
+          'image': lambda: td.battle_flow_diagram(),
+          'lines': ['1. Your prelude spell fires first and draws extra cards.',
+                    '2. Your figures set the base score: they matter most.',
+                    '3. Three tactic rounds swing the final result.',
+                    'Win the total, and the land is yours.']},
+         {'title': 'Tactics Choices', 'layout': 'image_top',
+          'image': lambda: td.tactics_actions_diagram(),
+          'lines': ['Each round, pick one move for a tactic card:',
+                    'Play it for its value, Gamble it for two new cards, or '
+                    'Combine two same-colour cards into one big hit.',
+                    'Try them out. This first battle is risk-free.']}],
         title='How Battles Work')
     shot('battle-1', battle, page=0)
+    shot('battle-2', battle, page=1)
 
     kingdom = TutorialWindowDialogue(
         surf,
         [{'title': 'Read Your Map', 'layout': 'image_top',
           'image': lambda: td.kingdom_map_diagram(),
           'image_caption': 'Conquer a neighbour to grow your kingdom.',
-          'lines': ['Your lands form a kingdom; rivals hold the rest.',
-                    'Conquer a neighbouring land to expand, one hex at a time.']},
+          'lines': ['Every hex is a land. Yours form your kingdom; rivals hold the rest.',
+                    'Conquer neighbouring lands to grow, one hex at a time.']},
          ],
         title='Your Kingdom')
     shot('kingdom-1', kingdom, page=0)

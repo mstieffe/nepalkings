@@ -7,6 +7,7 @@ from config import settings
 from config.screen_settings import _UI_SCALE
 #from game.components.card_img import CardImg
 from game.components.cards.hand import Hand
+from game.components.coach_card import draw_coach_highlight, draw_coach_spotlight
 from game.components.info_scroll import InfoScroll
 from game.components.scoreboard_scroll import ScoreboardScroll
 from game.components.buttons.state_button import StateButton
@@ -5240,45 +5241,33 @@ class GameScreen(Screen):
             return None
         seen = set((self._duel_onboarding() or {}).get('duel_hints_seen') or [])
         steps = [
-            {'id': 'field', 'button': self.field_button, 'subscreen': 'field', 'title': 'Playing Board',
-             'body': 'The field shows figures built from card recipes. Each round gives 6 setup turns to build figures, cast spells, or change cards before battle.'},
-            {'id': 'build', 'button': self.build_button, 'subscreen': 'build_figure', 'title': 'Build Figures',
-             'body': 'Build spends recipe cards to create figures. For example, a King is a castle figure and a Farm is a village figure. Figures produce, consume, attack, and defend.'},
-            {'id': 'cast_spell', 'button': self.cast_spell_button, 'subscreen': 'cast_spell', 'title': 'Cast Spells',
-             'body': 'Spells are recipes too, but they create one-time effects instead of figures. Use them to draw, protect, damage, or alter cards and figures.'},
+            {'id': 'field', 'button': self.field_button, 'subscreen': 'field', 'title': 'Your Playing Board',
+             'body': 'This is your board. Each round gives you 6 setup turns to build figures, cast spells, and improve your hand before battle.'},
+            {'id': 'build', 'button': self.build_button, 'subscreen': 'field', 'title': 'Build Figures',
+             'body': 'Build turns card recipes into figures: castle figures rule, village figures produce, military figures fight.'},
+            {'id': 'cast_spell', 'button': self.cast_spell_button, 'subscreen': 'field', 'title': 'Cast Spells',
+             'body': 'Spells are one-time effects: draw cards, protect your figures, or sabotage your opponent.'},
             {'id': 'change_cards', 'rects': self._duel_change_cards_rects(), 'subscreen': 'field', 'title': 'Change Cards',
              'separate_highlights': True,
-             'body': 'Use the round-arrow buttons beside your hands to swap selected cards when your hand needs better options.'},
-            {'id': 'battle_shop', 'button': self.battle_shop_button, 'subscreen': 'battle_shop', 'title': 'Battle Moves',
-             'body': 'The battle shop opens during battle prep. Pick the moves you want to carry into the fight.'},
-            {'id': 'battle', 'button': self.battle_button, 'subscreen': 'battle', 'title': 'Battle Arena',
-             'body': 'The arena unlocks when a battle begins. Each round leads to a battle where one of your figures engages in combat with an opponent\'s figure. Three battle rounds decide who scores.'},
-            {'id': 'scoreboard', 'rect': self._duel_panel_rect(self.scoreboard_scroll), 'subscreen': 'field', 'title': 'Scoreboard',
-             'body': 'Track round, turns left, scores, and the point target here.'},
-            {'id': 'turn_indicator', 'button': self.turn_button, 'subscreen': 'field', 'title': 'Turn Indicator',
-             'body': 'This icon tells you whether it is your turn. Most actions are only active on your turn.'},
-            {'id': 'ceasefire_indicator', 'button': self.ceasefire_button, 'subscreen': 'field', 'title': 'Ceasefire',
-             'body': 'When ceasefire is active, battles are blocked. Each round starts with a ceasefire. Use the setup turns to build or prepare.'},
-            {'id': 'role_indicator', 'button': self.invader_button, 'subscreen': 'field', 'title': 'Invader Or Defender',
-             'body': 'This shows your current role. The invader is forced to attack latest with his last turn left.'},
+             'body': 'Stuck with a bad hand? Select cards and tap the round-arrow buttons to swap them for new ones.'},
+            {'id': 'game_status', 'rects': self._duel_game_status_rects(), 'subscreen': 'field', 'title': 'Track The Game Here',
+             'separate_highlights': True,
+             'body': 'The scoreboard tracks rounds and points; these icons show whose turn it is, ceasefire, and your role. The invader must attack before their setup turns run out.'},
             {'id': 'resource_panel', 'rect': self._duel_panel_rect(self.resource_scroll), 'subscreen': 'field', 'title': 'Resource Panel',
-             'body': 'Resources show what your figures produce and consume. A deficit in one resource stops all figures requiring that resource from functioning. Now start playing!',
+             'body': 'Figures produce and consume resources. A shortage shuts down every figure that needs that resource. Now start playing!',
              'button_label': 'Play'},
             {'id': 'battle_shop_select_moves', 'rects': self._duel_battle_shop_family_rects(), 'subscreen': 'battle_shop', 'title': 'Choose Battle Moves',
-             'body': 'Before battle, select move families here, choose matching cards in the list, and buy up to 3 battle moves for the fight.'},
+             'body': 'Battle is coming. Pick a move family, choose matching cards, and buy up to three battle moves.'},
             {'id': 'battle_shop_ready', 'rects': self._duel_battle_shop_ready_rects(), 'subscreen': 'battle_shop', 'title': 'Ready For Battle',
-             'body': 'These slots are the moves you carry into combat. Ready appears when enough moves are chosen and locks your battle plan.'},
+             'body': "These slots hold the moves you'll carry into combat. Tap Ready to lock in your battle plan."},
             {'id': 'battle_move_panel', 'rects': self._duel_battle_move_panel_rects(), 'subscreen': 'battle', 'title': 'Play Battle Moves',
-             'body': 'In battle, click one of your move icons to open its actions. Each player plays one move per round for 3 rounds.'},
+             'body': 'Tap one of your move icons to open its actions. You play one move per round, for three rounds.'},
             {'id': 'battle_move_actions', 'rects': self._duel_battle_move_action_rects(), 'subscreen': 'battle', 'title': 'Move Actions',
-             'body': 'Use plays the move. Gamble trades it for 2 random moves. Combine same-colour Daggers into a Double Dagger; Dismantle splits one back.',
+             'body': 'Use plays the move. Gamble trades it for two random ones. Combine merges same-colour Daggers into a Double Dagger.',
              'requires_seen': 'battle_move_panel'},
-            {'id': 'battle_figure_diff', 'rects': self._duel_battle_figure_diff_rects(), 'subscreen': 'battle', 'title': 'Figure Difference',
-             'body': 'This middle value compares the battling figures before battle moves are added. Positive is good for you; negative favours the opponent.'},
-            {'id': 'battle_rounds_panel', 'rects': self._duel_battle_rounds_panel_rects(), 'subscreen': 'battle', 'title': 'Battle Rounds',
-             'body': 'The rounds panel records the three battle move exchanges. Each column shows your move, the round difference, and the opponent move.'},
-            {'id': 'battle_total_diff', 'rects': self._duel_battle_total_diff_rects(), 'subscreen': 'battle', 'title': 'Total Difference',
-             'body': 'The total adds the figure difference and all finished round differences. At the end of battle, this decides who wins the fight.'},
+            {'id': 'battle_score', 'rects': self._duel_battle_score_rects(), 'subscreen': 'battle', 'title': 'Reading The Score',
+             'separate_highlights': True,
+             'body': 'The middle value compares the fighting figures; each round adds its difference on top. The total decides the battle: positive means you win.'},
         ]
         for step in steps:
             if step['id'] in seen:
@@ -5439,6 +5428,35 @@ class GameScreen(Screen):
         return [pygame.Rect(cx - radius - pad, cy - radius - pad,
                             2 * (radius + pad), 2 * (radius + pad))]
 
+    def _duel_game_status_rects(self):
+        """Highlight rects for the merged 'game status' coach card: the
+        scoreboard panel plus the turn, ceasefire, and role icons."""
+        rects = []
+        scoreboard = self._duel_panel_rect(getattr(self, 'scoreboard_scroll', None))
+        if scoreboard:
+            rects.append(scoreboard)
+        for button in (getattr(self, 'turn_button', None),
+                       getattr(self, 'ceasefire_button', None),
+                       getattr(self, 'invader_button', None)):
+            if button is None:
+                continue
+            rect = (getattr(button, 'rect_hit', None)
+                    or getattr(button, 'rect_symbol', None)
+                    or getattr(button, 'rect', None))
+            if rect:
+                rects.append(rect.copy())
+        return rects
+
+    def _duel_battle_score_rects(self):
+        """Highlight rects for the merged battle-reading card: the figure
+        difference, the rounds panel, and the total."""
+        rects = []
+        for getter in (self._duel_battle_figure_diff_rects,
+                       self._duel_battle_rounds_panel_rects,
+                       self._duel_battle_total_diff_rects):
+            rects.extend(getter())
+        return rects
+
     def _duel_step_rects(self, step):
         if not step:
             return []
@@ -5496,11 +5514,9 @@ class GameScreen(Screen):
 
     def _skip_duel_coach(self):
         for step_id in (
-            'field', 'build', 'cast_spell', 'change_cards', 'battle_shop',
-            'battle', 'scoreboard', 'turn_indicator', 'ceasefire_indicator',
-            'role_indicator', 'resource_panel', 'battle_shop_select_moves',
-            'battle_shop_ready', 'battle_move_panel', 'battle_move_actions',
-            'battle_figure_diff', 'battle_rounds_panel', 'battle_total_diff',
+            'field', 'build', 'cast_spell', 'change_cards', 'game_status',
+            'resource_panel', 'battle_shop_select_moves', 'battle_shop_ready',
+            'battle_move_panel', 'battle_move_actions', 'battle_score',
         ):
             self._mark_duel_coach_seen(step_id)
 
@@ -5541,10 +5557,9 @@ class GameScreen(Screen):
         target = self._duel_combined_bounds(highlight_rects)
         if not target:
             return
-        pulse = 2 + int((pygame.time.get_ticks() // 280) % 2)
+        draw_coach_spotlight(self.window, highlight_rects)
+        draw_coach_highlight(self.window, highlight_rects, pygame.time.get_ticks())
         target = target.inflate(14, 14)
-        for rect in highlight_rects:
-            pygame.draw.rect(self.window, (250, 218, 92), rect.inflate(14, 14), pulse, border_radius=8)
 
         card_w = min(390, max(330, int(0.31 * settings.SCREEN_WIDTH)))
         body_lines = self._wrap_duel_coach_lines(step['body'], card_w - 24)

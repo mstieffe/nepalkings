@@ -16,18 +16,27 @@ def _utcnow():
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
+# Ordered to match the real first-session journey: open a booster, fight the
+# first conquer battle, finish the conquer tutorial, then the optional duel and
+# the remaining exploratory steps.
 CORE_STEPS = [
-    {
-        'id': 'finish_first_conquer_battle',
-        'title': 'Finish a conquer battle',
-        'description': 'Resolve one land battle in kingdom mode.',
-        'reward': {'maps': 4},
-    },
     {
         'id': 'open_first_main_booster',
         'title': 'Open a main booster',
         'description': 'Open one of your starter booster packs to grow your collection.',
         'reward': {'booster_packs_side': 1},
+    },
+    {
+        'id': 'finish_first_conquer_battle',
+        'title': 'Finish a conquer battle',
+        'description': 'Fight one battle for a land in your kingdom.',
+        'reward': {'maps': 4},
+    },
+    {
+        'id': 'finish_tutorial',
+        'title': 'Finish the conquer tutorial',
+        'description': 'Conquer your first land and finish the kingdom tour.',
+        'reward': {'booster_packs': 6, 'booster_packs_side': 2},
     },
     {
         'id': 'finish_first_duel',
@@ -48,6 +57,12 @@ CORE_STEPS = [
         'reward': {'gold': 50},
     },
     {
+        'id': 'save_first_defence_config',
+        'title': 'Save a defence',
+        'description': 'Prepare a land so it can protect itself.',
+        'reward': {'booster_packs': 1},
+    },
+    {
         'id': 'sell_first_card',
         'title': 'Sell a card',
         'description': 'Turn spare unlocked cards into gold.',
@@ -60,22 +75,10 @@ CORE_STEPS = [
         'reward': {'gold': 50},
     },
     {
-        'id': 'save_first_defence_config',
-        'title': 'Save a defence',
-        'description': 'Prepare a land so it can protect itself.',
-        'reward': {'booster_packs': 1},
-    },
-    {
         'id': 'buy_first_cosmetic',
         'title': 'Buy a cosmetic',
         'description': 'Customize a kingdom badge, color, surface, or border.',
         'reward': {'gold': 100},
-    },
-    {
-        'id': 'finish_tutorial',
-        'title': 'Finish the conquer tutorial',
-        'description': 'Conquer your first land and finish the kingdom tour.',
-        'reward': {'booster_packs': 6, 'booster_packs_side': 2},
     },
 ]
 
@@ -186,11 +189,9 @@ EARLY_GOALS = [
 CORE_STEP_IDS = {step['id'] for step in CORE_STEPS}
 EARLY_GOAL_IDS = {goal['id'] for goal in EARLY_GOALS}
 DUEL_HINT_IDS = (
-    'field', 'build', 'cast_spell', 'change_cards', 'battle_shop', 'battle',
-    'scoreboard', 'turn_indicator', 'ceasefire_indicator', 'role_indicator',
+    'field', 'build', 'cast_spell', 'change_cards', 'game_status',
     'resource_panel', 'battle_shop_select_moves', 'battle_shop_ready',
-    'battle_move_panel', 'battle_move_actions', 'battle_figure_diff',
-    'battle_rounds_panel', 'battle_total_diff',
+    'battle_move_panel', 'battle_move_actions', 'battle_score',
 )
 # Order matters: mark_menu_hint re-sorts a user's seen hints by this tuple's
 # order, and several tests assert that ordering. Keep ids in journey order.
@@ -211,7 +212,7 @@ MENU_HINT_IDS = (
     'starter_cards_present_window', 'starter_suit_reveal', 'kingdom_overview_window',
     'kingdom_after_conquer_map',
     'return_to_kingdom_loop', 'open_boosters_first',
-    'collection_starter_cards', 'collection_open_main_booster',
+    'collection_open_main_booster',
     'new_game', 'duel_tutorial_start_window',
     'beginner_duel', 'send_first_duel_challenge',
     'kingdom_production_intro',
@@ -220,7 +221,7 @@ MENU_HINT_IDS = (
     'kingdom_config_essentials',
     'kingdom_config_shields_style',
 )
-COACH_VERSION = 'first_session_v4'
+COACH_VERSION = 'first_session_v5'
 
 
 def ensure_onboarding_state_column():

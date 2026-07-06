@@ -848,7 +848,7 @@ class NewGameScreen(MenuScreenMixin, Screen):
             'id': 'send_first_duel_challenge',
             'rect': self.send_button.rect,
             'title': 'Send The Challenge',
-            'body': 'AI Strategos and beginner settings are ready. Click Send Challenge to start your first duel setup.',
+            'body': 'Everything is set: AI Strategos and beginner stakes. Tap Send Challenge to start.',
             'action': 'click',
             'mark_on_click': False,
         }
@@ -975,7 +975,7 @@ class NewGameScreen(MenuScreenMixin, Screen):
             stake=stake, game_limit=game_limit)
         if response.get('success'):
             if response.get('game'):
-                self.state.set_msg(f"{opponent_name} accepted — the duel begins!")
+                self.state.set_msg(f"{opponent_name} accepted. The duel begins!")
             else:
                 self.state.set_msg(f"Challenge sent to {opponent_name}")
         else:

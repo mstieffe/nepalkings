@@ -1252,7 +1252,7 @@ class ConquerScreen(MenuScreenMixin, Screen):
                 'id': 'conquer_build_yourself',
                 'rect': self._btn_build,
                 'title': 'Now Build It Yourself',
-                'body': 'This land has no army yet. Tap Build, pick a glowing recipe — start with your King — then confirm. Add a Farm and Warriors the same way.',
+                'body': 'Time to build an attack yourself. Tap Build and pick a glowing recipe: start with your King, then add a Farm and Warriors the same way.',
                 'action': 'click',
                 'mark_on_click': True,
                 'max_lines': 5,
@@ -1277,7 +1277,7 @@ class ConquerScreen(MenuScreenMixin, Screen):
                 'id': 'conquer_build_yourself_battle',
                 'rect': self._btn_battle,
                 'title': 'Start When Ready',
-                'body': 'Once you have at least one figure and three tactics, Start Battle lights up. This land has a real defender — your build decides it.',
+                'body': 'When you have a figure and three tactics, Start Battle lights up. This defender is real, so your build decides the fight.',
                 'action': 'next',
                 'button_label': 'Got it',
                 'max_lines': 5,
@@ -1306,7 +1306,7 @@ class ConquerScreen(MenuScreenMixin, Screen):
                 'id': 'conquer_config_to_battle',
                 'rect': self._btn_battle,
                 'title': 'Your Attack Is Ready',
-                'body': 'We pre-built this attack from your starter cards: figures, three tactics, and a prelude spell. Tap Start Battle — the prelude draws cards, then you play tactics each round.',
+                'body': 'Here is your attack: figures for power, three tactics for the rounds, and a prelude spell. Tap Start Battle to try it out.',
                 'action': 'next',
                 'button_label': 'Got it',
                 'max_lines': 5,
@@ -1919,8 +1919,21 @@ class ConquerScreen(MenuScreenMixin, Screen):
             msg = '\n'.join(f'\u2022 {p}' for p in problems)
             open_dialogue(self, msg, ['OK'], 'Cannot Start Battle')
 
+    def _first_conquer_tutorial_active(self):
+        """True during the first guided conquest, before any land is won.
+
+        The first tutorial battle is risk-free (losing costs nothing and the
+        retry is free), so the loot-and-lock lesson is meaningless there. It is
+        deferred to the second, self-built conquest — the first battle with a
+        real defender where cards can actually be looted.
+        """
+        onboarding = (getattr(self.state, 'user_dict', None) or {}).get('onboarding') or {}
+        if not onboarding or onboarding.get('onboarding_skipped'):
+            return False
+        return 'finish_first_conquer_battle' not in set(onboarding.get('completed_steps') or [])
+
     def _start_battle_with_loot_tutorial(self, use_map=False):
-        if loot_risk_tutorial_seen(self):
+        if loot_risk_tutorial_seen(self) or self._first_conquer_tutorial_active():
             self._start_battle(use_map=use_map)
             return
         open_loot_risk_tutorial(

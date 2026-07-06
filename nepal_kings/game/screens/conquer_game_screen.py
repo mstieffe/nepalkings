@@ -20,6 +20,7 @@ from config import settings
 from config.screen_settings import _UI_SCALE
 from game.components.battle_moves.battle_move_icon_renderer import draw_battle_move_icon
 from game.components.battle_moves.battle_move_manager import BattleMoveManager
+from game.components.coach_card import draw_coach_highlight, draw_coach_spotlight
 from game.components.conquer_round_ledger import ConquerRoundLedger
 from game.components.conquer_effects import ConquerEffectsLayer
 from game.components.conquer_layout import compute_conquer_layout
@@ -2372,10 +2373,10 @@ class ConquerGameScreen(GameScreen):
                     'layout': 'image_top',
                     'image': lambda: tutorial_diagrams.battle_flow_diagram(),
                     'lines': [
-                        '1. Prelude spells resolve first.',
-                        '2. Battle figures set the base score.',
-                        '3. Three tactics rounds swing the total.',
-                        'Finish Battle resolves land and loot.',
+                        '1. Your prelude spell fires first and draws extra cards.',
+                        '2. Your figures set the base score: they matter most.',
+                        '3. Three tactic rounds swing the final result.',
+                        'Win the total, and the land is yours.',
                     ],
                 },
                 {
@@ -2383,10 +2384,9 @@ class ConquerGameScreen(GameScreen):
                     'layout': 'image_top',
                     'image': lambda: tutorial_diagrams.tactics_actions_diagram(),
                     'lines': [
-                        'Play: commit a tactic value.',
-                        'Gamble: discard one, draw two.',
-                        'Combine: merge same-colour Daggers.',
-                        'Block cancels the round.',
+                        'Each round, pick one move for a tactic card:',
+                        'Play it for its value, Gamble it for two new cards, or Combine two same-colour cards into one big hit.',
+                        'Try them out. This first battle is risk-free.',
                     ],
                 },
             ],
@@ -2539,31 +2539,6 @@ class ConquerGameScreen(GameScreen):
         for step_id in self._conquer_battle_intro_step_ids():
             if step_id in seen:
                 continue
-            if step_id == 'conquer_battle_timeline_intro':
-                rects = self._conquer_battle_timeline_target_rects()
-                return {
-                    'id': step_id,
-                    'rect': (rects or self._conquer_battle_intro_fallback_rects())[0],
-                    'rects': rects or self._conquer_battle_intro_fallback_rects(),
-                    'title': 'Battle Timeline',
-                    'body': 'This row shows setup, prelude, three tactic rounds, and result. The prelude draws cards automatically; then you decide how to use tactics.',
-                    'action': 'next',
-                    'button_label': 'Got it',
-                    'max_lines': 5,
-                }
-            if step_id == 'conquer_battle_figure_power':
-                rects = (self._conquer_battle_field_overview_rects()
-                         or self._conquer_battle_intro_fallback_rects())
-                return {
-                    'id': step_id,
-                    'rect': rects[0],
-                    'rects': rects,
-                    'title': 'Your Figures Decide Most',
-                    'body': "The centre of the lane shows your figures' power versus the defender's, and it counts for most of the result. The three tactic rounds only swing things on top — so bring strong figures.",
-                    'action': 'next',
-                    'button_label': 'Got it',
-                    'max_lines': 5,
-                }
             if step_id == 'conquer_battle_tactics':
                 rects = (self._conquer_battle_tactic_action_rects()
                          or []) + (self._conquer_battle_tactics_target_rects() or [])
@@ -2573,48 +2548,10 @@ class ConquerGameScreen(GameScreen):
                     'rect': rects[0],
                     'rects': rects,
                     'title': 'Choose A Tactic',
-                    'body': 'Use this rail for each round. Pick a tactic, then use the button that matches the move you want now.',
+                    'body': 'Pick a tactic card here each round, then choose Play, Gamble, or Combine.',
                     'action': 'next',
                     'button_label': 'Got it',
                     'max_lines': 4,
-                }
-            if step_id == 'conquer_battle_block_call':
-                rects = (self._conquer_battle_tactics_target_rects()
-                         or self._conquer_battle_intro_fallback_rects())
-                return {
-                    'id': step_id,
-                    'rect': rects[0],
-                    'rects': rects,
-                    'title': 'Block & Call',
-                    'body': "Block cancels a whole round — use it to erase the defender's biggest tactic. Call pulls one of your field figures into the round, adding its power (matching suit also adds the card value).",
-                    'action': 'next',
-                    'button_label': 'Got it',
-                    'max_lines': 5,
-                }
-            if step_id == 'conquer_battle_tactic_recap':
-                rects = self._conquer_battle_tactics_target_rects()
-                rects = rects or self._conquer_battle_intro_fallback_rects()
-                return {
-                    'id': step_id,
-                    'rect': rects[0],
-                    'rects': rects,
-                    'title': 'Play, Gamble, Combine',
-                    'body': 'Use all three tools: Play a strong value, Gamble a weak tactic once per round, and Combine two red/red or black/black Daggers when one big hit can win.',
-                    'action': 'next',
-                    'button_label': 'Got it',
-                    'max_lines': 5,
-                }
-            if step_id == 'conquer_battle_finish':
-                rects = self._conquer_battle_finish_rects() or self._conquer_battle_timeline_target_rects()
-                return {
-                    'id': step_id,
-                    'rect': (rects or self._conquer_battle_intro_fallback_rects())[0],
-                    'rects': rects or self._conquer_battle_intro_fallback_rects(),
-                    'title': 'Finish Battle',
-                    'body': 'After three rounds, Finish Battle resolves ownership and loot.',
-                    'action': 'next',
-                    'button_label': 'Start battle',
-                    'max_lines': 3,
                 }
         return None
 
@@ -2675,9 +2612,8 @@ class ConquerGameScreen(GameScreen):
         target = self._conquer_battle_coach_bounds(target_rects)
         if target is None:
             return
-        pulse = 2 + int((pygame.time.get_ticks() // 280) % 2)
-        for rect in target_rects:
-            pygame.draw.rect(self.window, (250, 218, 92), rect.inflate(14, 14), pulse, border_radius=8)
+        draw_coach_spotlight(self.window, target_rects)
+        draw_coach_highlight(self.window, target_rects, pygame.time.get_ticks())
         target = target.inflate(14, 14)
 
         card_w = min(420, max(330, int(0.34 * settings.SCREEN_WIDTH)), settings.SCREEN_WIDTH - 16)
