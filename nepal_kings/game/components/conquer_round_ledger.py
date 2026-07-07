@@ -33,6 +33,7 @@ from game.components.conquer_reveal_sequencer import (
     STAGE_HOLD,
     draw_face_down_card,
 )
+from game.components.easing import ease_out_quad
 
 
 _BG_RGBA = (38, 29, 22, 218)
@@ -659,7 +660,7 @@ class ConquerRoundLedger:
             self._round_reveal_animations.pop(idx, None)
             return
         progress = max(0.0, min(1.0, elapsed / duration))
-        eased = 1 - (1 - progress) * (1 - progress)
+        eased = ease_out_quad(progress)
         alpha = max(0, int(160 * (1.0 - progress)))
         if alpha <= 0:
             return

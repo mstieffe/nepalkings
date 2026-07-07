@@ -1067,3 +1067,123 @@ class TestConquerConfigPolish:
         async_load.assert_called_once()
         sync_load.assert_not_called()
         assert screen._active_subscreen is None
+
+
+class TestEntranceAnimations:
+    """Draw-only slide-in animations for newly appearing config slots."""
+
+    def _bare_screen(self):
+        from game.screens.conquer_screen import ConquerScreen
+        screen = object.__new__(ConquerScreen)
+        screen._entrance_anims = {}
+        screen._entrance_prev_sig = None
+        screen._config = {
+            'figures': [{'id': 7}],
+            'battle_moves': [{'round_index': 0, 'family_name': 'Dagger'}],
+            'prelude_spell_name': 'Poison',
+        }
+        return screen
+
+    def test_new_config_registers_entrance_cascade(self, monkeypatch):
+        monkeypatch.setattr('pygame.time.get_ticks', lambda: 5_000)
+        screen = self._bare_screen()
+        screen._sync_entrance_animations()
+        assert ('fig', '7') in screen._entrance_anims
+        assert ('move', 0) in screen._entrance_anims
+        assert ('prelude',) in screen._entrance_anims
+        # Cascade order: figures → moves → prelude.
+        assert screen._entrance_anims[('fig', '7')]['index'] == 0
+        assert screen._entrance_anims[('move', 0)]['index'] == 1
+        assert screen._entrance_anims[('prelude',)]['index'] == 2
+        # Same signature again: nothing new, nothing restarted.
+        screen._entrance_anims.clear()
+        screen._sync_entrance_animations()
+        assert screen._entrance_anims == {}
+
+    def test_config_change_animates_only_new_slot(self, monkeypatch):
+        monkeypatch.setattr('pygame.time.get_ticks', lambda: 5_000)
+        screen = self._bare_screen()
+        screen._sync_entrance_animations()
+        screen._entrance_anims.clear()
+        screen._config['figures'].append({'id': 9})
+        screen._sync_entrance_animations()
+        assert list(screen._entrance_anims) == [('fig', '9')]
+
+    def test_entrance_offset_lifecycle(self, monkeypatch):
+        from game.screens.conquer_screen import ConquerScreen
+        screen = self._bare_screen()
+        screen._entrance_anims[('move', 0)] = {'started_at': 1_000, 'index': 1}
+        stagger = ConquerScreen.ENTRANCE_STAGGER_MS
+        slide = ConquerScreen.ENTRANCE_SLIDE_PX
+
+        # Before this slot's staggered start: parked below its resting spot.
+        monkeypatch.setattr('pygame.time.get_ticks', lambda: 1_000)
+        assert screen._entrance_offset(('move', 0)) == (0, slide)
+
+        # Mid-flight: partially risen (offset strictly between 0 and slide,
+        # allowing the ease_out_back overshoot to dip slightly above rest).
+        monkeypatch.setattr('pygame.time.get_ticks',
+                            lambda: 1_000 + stagger + 95)
+        dx, dy = screen._entrance_offset(('move', 0))
+        assert dx == 0
+        assert dy != 0
+        assert dy < slide
+
+        # Settled: no offset, record pruned.
+        monkeypatch.setattr('pygame.time.get_ticks',
+                            lambda: 1_000 + stagger + ConquerScreen.ENTRANCE_MS + 1)
+        assert screen._entrance_offset(('move', 0)) == (0, 0)
+        assert ('move', 0) not in screen._entrance_anims
+        # Unknown keys are always settled.
+        assert screen._entrance_offset(('move', 99)) == (0, 0)
+
+    def test_icon_entrance_draw_restores_logical_position(self, monkeypatch):
+        screen = self._bare_screen()
+        screen._entrance_anims[('fig', '7')] = {'started_at': 1_000, 'index': 0}
+        calls = []
+        icon = SimpleNamespace(
+            draw=lambda x, y: calls.append(('draw', x, y)),
+            set_position=lambda x, y: calls.append(('set_position', x, y)))
+
+        # Mid-entrance: the draw is offset but the logical position (used by
+        # hover / detail-open hit tests) is restored to the resting spot.
+        monkeypatch.setattr('pygame.time.get_ticks', lambda: 1_095)
+        screen._draw_icon_with_entrance(icon, 100, 200, 7)
+        assert calls[0][0] == 'draw'
+        assert calls[0][2] != 200        # visually offset
+        assert calls[-1] == ('set_position', 100, 200)
+
+        # Settled: plain draw, no restore needed.
+        calls.clear()
+        monkeypatch.setattr('pygame.time.get_ticks', lambda: 60_000)
+        screen._draw_icon_with_entrance(icon, 100, 200, 7)
+        assert calls == [('draw', 100, 200)]
+
+    def test_move_slot_x_button_suppressed_during_entrance(self, monkeypatch):
+        import game.screens.conquer_screen as module
+        state = _make_state()
+        state.action = {}
+        screen = module.ConquerScreen(state)
+        screen._land_id = 42
+        screen._config = {
+            'figures': [],
+            'battle_moves': [
+                {'round_index': 0, 'family_name': 'Dagger',
+                 'suit': 'Hearts', 'value': 3},
+            ],
+            'prelude_spell_name': None,
+        }
+        screen._build_layout()
+        monkeypatch.setattr('pygame.time.get_ticks', lambda: 50_000)
+        screen._sync_entrance_animations()
+        assert ('move', 0) in screen._entrance_anims
+        # Force the "always show X" (touch) branch so visibility is purely
+        # driven by the entrance gate.
+        monkeypatch.setattr(module.settings, 'TOUCH_TARGET_MIN', 48)
+
+        screen._draw_battle_move_slots()          # mid-entrance
+        assert 0 not in screen._move_remove_rects
+
+        monkeypatch.setattr('pygame.time.get_ticks', lambda: 60_000)
+        screen._draw_battle_move_slots()          # settled
+        assert 0 in screen._move_remove_rects

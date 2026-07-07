@@ -37,6 +37,7 @@ from game.components.conquer_tactics_rail import (
     ConquerTacticsRail,
 )
 from game.components.conquer_timeline_panel import ConquerTimelinePanel, AUTO_ADVANCE_MS
+from game.components.easing import clamp01, ease_out_back, ease_out_quad
 from game.components.cards.hand import Hand
 from game.components.figures.family_configs.skill_config import (
     SKILL_DEFINITIONS,
@@ -271,6 +272,32 @@ class ConquerGameScreen(GameScreen):
         self._tactics_rail = ConquerTacticsRail(self)
         self._round_ledger = ConquerRoundLedger(self)
         self._tactic_flight_animation = None
+        # Battle-result payoff: the outcome banner/confetti sequence that
+        # plays on this screen before the result dialogue opens.
+        # ``_conquer_payoff_pending`` holds the stashed server result while
+        # the sequence plays; ``_conquer_payoff_until_ms`` is 0 until the
+        # effects actually start (they wait for any in-flight round reveal).
+        self._conquer_payoff_pending = None
+        self._conquer_payoff_until_ms = 0
+        # Battle-start moment: "3·2·1·GO!" countdown fired when the tactics
+        # phase begins (battle_turn_player_id assigned / the diff appears),
+        # plus per-beat sound bookkeeping.  Rail actions are blocked while
+        # the countdown plays (see conquer_action_block_reason).
+        self._battle_countdown_started_ms = 0
+        self._battle_countdown_until_ms = 0
+        self._battle_countdown_last_beat = -1
+        # Battle-start detection: ``_conquer_countdown_done`` fires the
+        # moment once per game; ``_conquer_saw_prebattle`` records that we
+        # watched the pre-battle → tactics transition on-screen (so a reload
+        # straight into an in-progress battle stays silent).
+        self._conquer_countdown_done = False
+        self._conquer_saw_prebattle = False
+        # Duel-lane fighter entrances: fighters scale-pop into the lane the
+        # first time they appear.  ``None`` seen-set = unseeded; a game that
+        # is already mid-battle on first sight seeds silently so rejoining
+        # never replays the entrance (same contract as the reveal sequencer).
+        self._conquer_lane_figure_seen = None
+        self._conquer_lane_figure_entrances = {}
         # Staged round-reveal choreography (display-only; see
         # ``game/components/conquer_reveal_sequencer.py``).
         self._conquer_reveal_sequencer = ConquerRevealSequencer(self)
@@ -345,6 +372,14 @@ class ConquerGameScreen(GameScreen):
         # round ledger / timeline catch up without a blocking render fetch.
         if self.state.game and self._is_tactics_hand_game():
             self._request_battle_state_poll(force=True)
+        # Figure entrance: the field figures cascade in whenever the battle
+        # screen is (re)entered — the config screen does the same on open.
+        field = self.subscreens.get('field') if hasattr(self, 'subscreens') else None
+        if field is not None and hasattr(field, 'begin_figure_entrance_cascade'):
+            try:
+                field.begin_figure_entrance_cascade()
+            except Exception:
+                pass
 
     # ------------------------------------------------------------------ setup
     def initialize_buttons(self):
@@ -823,6 +858,168 @@ class ConquerGameScreen(GameScreen):
         result = getattr(game, 'last_battle_result', None) if game else None
         if isinstance(result, dict) and result.get('conquer_result'):
             self._handle_conquer_result_response(result)
+
+    # ------------------------------------------------- battle-result payoff
+
+    #: Duration of the on-screen outcome payoff before the result dialogue.
+    PAYOFF_WIN_MS = 1500
+    PAYOFF_LOSE_MS = 1200
+
+    def _conquer_outcome_kind(self, result):
+        """Collapse a conquer result payload to ``'win' | 'lose' | 'draw'``.
+
+        Mirrors the branch conditions of the base
+        ``_handle_conquer_result_response`` so the on-screen payoff always
+        matches the dialogue title family ('Land Conquered!' / 'Defence
+        Successful!' → win; 'Land Lost!' / 'Attack Failed' → lose).
+        """
+        if result.get('conquer_result') == 'draw':
+            return 'draw'
+        attacker_won = bool(result.get('attacker_won'))
+        is_attacker = self._is_current_player_conquer_attacker(result)
+        return 'win' if attacker_won == is_attacker else 'lose'
+
+    def _handle_conquer_result_response(self, result):
+        """Conquer override: stage an on-screen payoff before the dialogue.
+
+        Stashes the result and defers the base implementation (which owns
+        the ``game_over`` dialogue, its fanfare, and the
+        ``_conquer_result_dialogue_shown`` flag) until the payoff finishes.
+        Fail-soft: any problem falls straight through to the base path so
+        the result dialogue can never be lost.
+        """
+        try:
+            game = self.state.game if self.state else None
+            effects = getattr(self, '_conquer_effects', None)
+            if (not isinstance(result, dict)
+                    or not result.get('conquer_result')
+                    or game is None or effects is None):
+                return super()._handle_conquer_result_response(result)
+            # Re-entrancy: the battle-state poll drain re-delivers the
+            # result every poll until the dialogue has shown; once a payoff
+            # is staged (or the dialogue already showed) swallow the repeat.
+            if getattr(game, '_conquer_result_dialogue_shown', False):
+                return True
+            if self._conquer_payoff_pending is not None:
+                return True
+            self._conquer_payoff_pending = result
+            self._conquer_payoff_until_ms = 0  # effects start in the pump
+            return True
+        except Exception:
+            self._conquer_payoff_pending = None
+            return super()._handle_conquer_result_response(result)
+
+    def _conquer_reveal_sequencer_busy(self):
+        """True while the round-reveal choreography still owns the stage."""
+        sequencer = getattr(self, '_conquer_reveal_sequencer', None)
+        if sequencer is None:
+            return False
+        try:
+            return bool(sequencer.is_active() or sequencer.has_pending())
+        except Exception:
+            return False
+
+    def _start_conquer_result_payoff(self, kind):
+        """Spawn the celebration / rout effects for the battle outcome.
+
+        Draw-only and fail-soft.  No fanfare here — the result dialogue
+        plays the real win/lose sound via ``sound.play_for_dialogue`` when
+        it opens; the payoff only uses light in-world cues.
+        """
+        effects = getattr(self, '_conquer_effects', None)
+        if effects is None:
+            return
+        screen_rect = pygame.Rect(0, 0, self.window.get_width(),
+                                  self.window.get_height())
+        ledger = getattr(self, '_round_ledger', None)
+        circle = getattr(ledger, '_total_circle_rect', None) if ledger else None
+        try:
+            if kind == 'win':
+                effects.spawn_banner('VICTORY', (238, 206, 130),
+                                     duration_ms=self.PAYOFF_WIN_MS)
+                effects.spawn_confetti(
+                    screen_rect,
+                    [(238, 206, 130), (150, 230, 170), (255, 245, 200),
+                     (214, 184, 112)],
+                    count=54, delay_ms=120)
+                effects.spawn_shake(amplitude=5, duration_ms=260)
+                if circle is not None:
+                    circle = pygame.Rect(circle)
+                    effects.spawn_rect_pulse(circle, (238, 206, 130),
+                                             duration_ms=700, scale=1.2)
+                    effects.spawn_burst(circle, (238, 206, 130),
+                                        secondary=(150, 230, 170),
+                                        count=22, upward_bias=0.65,
+                                        speed=(150.0, 280.0), delay_ms=120)
+                    effects.spawn_burst(circle, (255, 245, 200),
+                                        secondary=(238, 206, 130),
+                                        count=16, upward_bias=0.65,
+                                        speed=(120.0, 220.0), delay_ms=340)
+            elif kind == 'lose':
+                effects.spawn_banner('DEFEAT', (210, 90, 80),
+                                     duration_ms=self.PAYOFF_LOSE_MS)
+                # Slow ember/ash fall instead of festive confetti.
+                effects.spawn_confetti(
+                    screen_rect,
+                    [(120, 96, 88), (96, 78, 70), (168, 110, 92)],
+                    count=36, fall_speed=(60.0, 130.0), gravity=90.0,
+                    life_ms=(800, 1400))
+                effects.spawn_shake(amplitude=6, duration_ms=200)
+                if circle is not None:
+                    effects.spawn_rect_pulse(pygame.Rect(circle),
+                                             (210, 90, 80),
+                                             duration_ms=620, scale=1.1)
+            else:
+                effects.spawn_banner('DRAW', (210, 200, 170),
+                                     duration_ms=self.PAYOFF_LOSE_MS)
+                if circle is not None:
+                    effects.spawn_rect_pulse(pygame.Rect(circle),
+                                             (210, 200, 170),
+                                             duration_ms=560, scale=1.0)
+        except Exception:
+            pass
+        try:
+            from utils import sound
+            sound.play('coin' if kind == 'win' else 'figure_place')
+        except Exception:
+            pass
+
+    def _pump_conquer_result_payoff(self):
+        """Advance the deferred battle-result payoff (called from update()).
+
+        Starts the effects once any in-flight round reveal has finished
+        (so the outcome banner never talks over the final flip), then fires
+        the base result handler — dialogue, fanfare, state flags — when the
+        payoff window elapses.
+        """
+        pending = getattr(self, '_conquer_payoff_pending', None)
+        if pending is None:
+            return
+        if self.state.game is None:
+            self._conquer_payoff_pending = None
+            self._conquer_payoff_until_ms = 0
+            return
+        now = pygame.time.get_ticks()
+        if not self._conquer_payoff_until_ms:
+            if self._conquer_reveal_sequencer_busy():
+                return
+            kind = 'draw'
+            try:
+                kind = self._conquer_outcome_kind(pending)
+            except Exception:
+                pass
+            self._start_conquer_result_payoff(kind)
+            self._conquer_payoff_until_ms = now + (
+                self.PAYOFF_WIN_MS if kind == 'win' else self.PAYOFF_LOSE_MS)
+            return
+        if now < int(self._conquer_payoff_until_ms):
+            return
+        self._conquer_payoff_pending = None
+        self._conquer_payoff_until_ms = 0
+        try:
+            super()._handle_conquer_result_response(pending)
+        except Exception:
+            logging.exception('conquer result dialogue failed after payoff')
 
     def _draw_conquer_status_chip(self, rect, label, border_color):
         pygame.draw.rect(self.window, (44, 36, 28), rect, border_radius=6)
@@ -1477,6 +1674,12 @@ class ConquerGameScreen(GameScreen):
                     return 'Revealing round…'
             except Exception:
                 pass
+        # Battle-start countdown: the rail unlocks on GO.
+        try:
+            if self._is_battle_countdown_active():
+                return 'Battle starting…'
+        except Exception:
+            pass
         # Brief round-transition pause (Tier 3.1): also block actions while
         # the "Round N" banner is animating in so the player gets a beat
         # to register the new round before being able to act.
@@ -1524,10 +1727,20 @@ class ConquerGameScreen(GameScreen):
         elapsed = now - int(animation.get('started_at') or now)
         if elapsed > duration:
             self._tactic_flight_animation = None
+            # Landing beat: one-shot pulse on the slot the tactic settled
+            # into so the flight has a visible payoff (fail-soft).
+            effects = getattr(self, '_conquer_effects', None)
+            if effects is not None:
+                try:
+                    effects.spawn_rect_pulse(
+                        pygame.Rect(animation['target']), (120, 205, 220),
+                        duration_ms=260, scale=0.7)
+                except Exception:
+                    pass
             return
 
         progress = max(0.0, min(1.0, elapsed / duration))
-        eased = 1 - (1 - progress) * (1 - progress)
+        eased = ease_out_quad(progress)
         source = pygame.Rect(animation['source'])
         target = pygame.Rect(animation['target'])
         cx = int(source.centerx + (target.centerx - source.centerx) * eased)
@@ -1543,12 +1756,18 @@ class ConquerGameScreen(GameScreen):
         label_surf = font.render(label, True, (218, 246, 244))
         pill = label_surf.get_rect()
         pill.inflate_ip(18, 10)
+        # Landing squash: compress the pill vertically over the last stretch
+        # of the flight so it visibly "settles" into the slot.
+        land_t = (progress - 0.82) / 0.18
+        if land_t > 0.0:
+            squash = 1.0 - 0.22 * math.sin(clamp01(land_t) * math.pi)
+            pill.height = max(label_surf.get_height() + 2, int(pill.height * squash))
         pill.center = (cx, cy)
         # Trailing glow: a few older positions, fading, behind the pill.  Adds
         # motion-feel without obscuring the label.
         for k in range(1, 5):
             tp = max(0.0, progress - 0.07 * k)
-            ep = 1 - (1 - tp) * (1 - tp)
+            ep = ease_out_quad(tp)
             tx = int(source.centerx + (target.centerx - source.centerx) * ep)
             ty = int(source.centery + (target.centery - source.centery) * ep)
             alpha = max(0, 110 - k * 22)
@@ -1688,6 +1907,33 @@ class ConquerGameScreen(GameScreen):
                         card_rect, text, color,
                         duration_ms=820 + 80 * round_idx)
                     if not payload.get('fast_forwarded'):
+                        if diff != 0:
+                            # Decisive round: particle payoff scaled by the
+                            # margin and the battle position (later rounds
+                            # hit harder).  Confetti for the battle OUTCOME
+                            # is reserved for the result payoff — a won
+                            # round is not a won battle.  Own guard so a
+                            # burst hiccup never eats the shakes below.
+                            try:
+                                burst_count = int(min(
+                                    28, 8 + abs(diff) * 1.4 + round_idx * 4))
+                                if diff > 0:
+                                    effects.spawn_burst(
+                                        card_rect, (238, 206, 130),
+                                        secondary=(150, 230, 170),
+                                        count=burst_count,
+                                        upward_bias=0.6,
+                                        speed=(140.0, 260.0))
+                                else:
+                                    effects.spawn_burst(
+                                        card_rect, (200, 110, 96),
+                                        secondary=(120, 96, 88),
+                                        count=max(6, burst_count - 6),
+                                        upward_bias=0.15,
+                                        speed=(90.0, 170.0),
+                                        gravity=110.0)
+                            except Exception:
+                                pass
                         if abs(diff) >= 10:
                             effects.spawn_shake(amplitude=6, duration_ms=240)
                         if round_idx == 2 and diff != 0:
@@ -3648,6 +3894,18 @@ class ConquerGameScreen(GameScreen):
         super()._reset_game_screen_state()
         self.reset_conquer_panel_state()
         self._tactic_flight_animation = None
+        self._conquer_payoff_pending = None
+        self._conquer_payoff_until_ms = 0
+        self._battle_countdown_started_ms = 0
+        self._battle_countdown_until_ms = 0
+        self._battle_countdown_last_beat = -1
+        self._conquer_countdown_done = False
+        self._conquer_saw_prebattle = False
+        self._conquer_lane_figure_seen = None
+        self._conquer_lane_figure_entrances = {}
+        effects = getattr(self, '_conquer_effects', None)
+        if effects is not None:
+            effects.clear()
         sequencer = getattr(self, '_conquer_reveal_sequencer', None)
         if sequencer is not None:
             sequencer.reset()
@@ -6048,6 +6306,77 @@ class ConquerGameScreen(GameScreen):
             rect.height,
         )
 
+    #: Lane fighter entrance timing.
+    LANE_ENTRANCE_MS = 460
+    LANE_ENTRANCE_STAGGER_MS = 160
+
+    def _stamp_conquer_lane_entrances(self, player_figures, opponent_figures):
+        """Track lane fighters; stamp entrance records for new arrivals.
+
+        Seeding contract (mirrors the reveal sequencer): the first sighting
+        of an already-active battle seeds silently so rejoining a fight
+        never replays the entrance.  ``_start_conquer_battle_countdown``
+        resets the seen-set to empty on the live battle-start transition so
+        the fighters enter *during* the countdown.
+        """
+        try:
+            now = pygame.time.get_ticks()
+            current = []
+            for side_idx, figures in enumerate(
+                    (player_figures or [], opponent_figures or [])):
+                for slot_idx, fig in enumerate(figures[:2]):
+                    fid = getattr(fig, 'id', None)
+                    if fid is not None:
+                        current.append((str(fid), side_idx, slot_idx))
+            seen = self._conquer_lane_figure_seen
+            if seen is None:
+                # First sighting this game: seed without animating.
+                self._conquer_lane_figure_seen = {fid for fid, _, _ in current}
+                return
+            for fid, side_idx, slot_idx in current:
+                if fid in seen:
+                    continue
+                seen.add(fid)
+                self._conquer_lane_figure_entrances[fid] = {
+                    'started_at': (now
+                                   + side_idx * self.LANE_ENTRANCE_STAGGER_MS
+                                   + slot_idx * 80),
+                    'is_player': side_idx == 0,
+                }
+        except Exception:
+            pass
+
+    def _conquer_lane_entrance_progress(self, figure, hit_rect=None):
+        """Entrance progress for a lane fighter, or ``None`` when settled.
+
+        Returns a float: ``<= 0`` while the (staggered) entrance has not
+        started, ``0..1`` mid-flight.  On completion the record is popped
+        and a one-shot landing pulse fires on ``hit_rect``.
+        """
+        entrances = getattr(self, '_conquer_lane_figure_entrances', None)
+        if not entrances:
+            return None
+        fid = str(getattr(figure, 'id', None))
+        rec = entrances.get(fid)
+        if rec is None:
+            return None
+        now = pygame.time.get_ticks()
+        t = (now - int(rec.get('started_at') or now)) / max(
+            1, self.LANE_ENTRANCE_MS)
+        if t < 1.0:
+            return t
+        entrances.pop(fid, None)
+        effects = getattr(self, '_conquer_effects', None)
+        if effects is not None and hit_rect is not None:
+            color = ((120, 205, 220) if rec.get('is_player')
+                     else (226, 145, 130))
+            try:
+                effects.spawn_rect_pulse(pygame.Rect(hit_rect), color,
+                                         duration_ms=300, scale=0.75)
+            except Exception:
+                pass
+        return None
+
     def _draw_conquer_lane_figure_art(self, figure, center, size, *,
                                       hovered=False):
         # When hovered, scale the whole composite up so the icon "responds"
@@ -6157,6 +6486,19 @@ class ConquerGameScreen(GameScreen):
             hit.center = center
             mouse = pygame.mouse.get_pos()
             hovered = hit.collidepoint(mouse)
+            # Fighter entrance: while entering, only the figure art draws —
+            # scaling up into place with a small rise; the name/pills/badges
+            # pop in with the landing pulse.  Hit rects stay at rest.
+            entrance_t = self._conquer_lane_entrance_progress(figure, hit)
+            if entrance_t is not None:
+                if entrance_t > 0.0:
+                    e_size = max(8, int(art_size * (
+                        0.30 + 0.70 * ease_out_back(entrance_t))))
+                    rise = int((1.0 - ease_out_quad(entrance_t))
+                               * band.height * 0.20)
+                    self._draw_conquer_lane_figure_art(
+                        figure, (center[0], center[1] + rise), e_size)
+                continue
             self._draw_conquer_lane_figure_art(figure, center, art_size,
                                                hovered=hovered)
             # Block visualization: red ring + small "BLOCKED" tag.
@@ -7878,18 +8220,27 @@ class ConquerGameScreen(GameScreen):
         opponent_rows, opponent_total = self._conquer_lane_receipt_components(
             opponent_figures, None, opponent_support, player_support)
         diff = player_total - opponent_total
-        diff_text = 'VS' if not player_figures or not opponent_figures else f'{diff:+d}'
+        # Hide the whole "FIGURES / VS" readout during pre-battle and the
+        # battle-start countdown so the centre panel stays clean for the
+        # countdown; the real number is revealed (with a pulse) only once the
+        # reveal completes — never shown, even as "VS", before then.
+        show_number = bool(player_figures and opponent_figures
+                           and not self._conquer_clash_diff_hidden())
+        if not show_number:
+            # Leave the panel empty and reset the pulse tracker so the number
+            # pops in when it is finally revealed.
+            self._conquer_diff_prev_value = None
+            return
+        diff_text = f'{diff:+d}'
         # Pulse animation: when the current battle total changes we briefly
         # scale the number up so the UI clearly broadcasts the swing.
         now = pygame.time.get_ticks()
         prev = getattr(self, '_conquer_diff_prev_value', None)
         pulse_until = getattr(self, '_conquer_diff_pulse_until', 0) or 0
-        if diff_text != 'VS' and prev != diff:
+        if prev != diff:
             self._conquer_diff_prev_value = diff
             self._conquer_diff_pulse_until = now + 650
             pulse_until = self._conquer_diff_pulse_until
-        elif diff_text == 'VS':
-            self._conquer_diff_prev_value = None
         base_size = max(22, int(settings.FS_SMALL * 1.75))
         if pulse_until and now < pulse_until:
             t = 1.0 - (pulse_until - now) / 650.0
@@ -7970,6 +8321,9 @@ class ConquerGameScreen(GameScreen):
             backdrop = backdrop_cache[1]
         self.window.blit(backdrop, lane_rect.topleft)
 
+        # Fighter entrances: stamp new lane arrivals before the bands draw.
+        self._stamp_conquer_lane_entrances(player_figures, opponent_figures)
+
         player_slots = context.get('player_slots') or [None, None, None]
         opponent_slots = context.get('opponent_slots') or [None, None, None]
         round_idx = self._conquer_lane_focus_round(player_slots, opponent_slots)
@@ -7989,6 +8343,9 @@ class ConquerGameScreen(GameScreen):
         you_band = self._conquer_lane_center_channel_rect(lane.you_fighter_band, lane)
         opp_band = self._conquer_lane_center_channel_rect(lane.opp_fighter_band, lane)
         diff_inner = self._conquer_lane_center_channel_rect(lane.diff_band, lane)
+        # Stash the clash-diff panel rect so the battle-start moment can
+        # spotlight it (see _pump_conquer_battle_countdown GO beat).
+        self._conquer_lane_diff_rect = pygame.Rect(diff_inner)
 
         self._draw_conquer_lane_band(
             you_band, 'YOU', player_figures, is_player=True,
@@ -8085,6 +8442,14 @@ class ConquerGameScreen(GameScreen):
         if rect is not None and rect.collidepoint(pygame.mouse.get_pos()):
             return None
         if getattr(self, '_tactic_flight_animation', None):
+            return None
+        # Fighter entrances animate inside the lane — bypass the cache
+        # while any are in flight so they draw live each frame.
+        if getattr(self, '_conquer_lane_figure_entrances', None):
+            return None
+        # Battle-start countdown masks the clash-diff number — redraw live
+        # so the real number is revealed the instant the countdown ends.
+        if self._is_battle_countdown_active():
             return None
         sequencer = getattr(self, '_conquer_reveal_sequencer', None)
         if sequencer is not None and sequencer.is_active():
@@ -8426,52 +8791,235 @@ class ConquerGameScreen(GameScreen):
 
         # Camera shake, applied post-composition so the whole scene moves
         # as one. scroll() shifts the frame in place; the vacated edge
-        # strips are refilled so they don't smear stale pixels.
+        # strips are refilled with a copy of the pre-scroll edge (instead of
+        # flat background color) so shakes never flash bright seams. The
+        # snapshots are at most two ≤8px strips, and only on shake frames.
         with perf_section('conquer.shake'):
             try:
                 dx, dy = self._conquer_effects.screen_shake_offset()
                 if dx or dy:
                     dx = max(-8, min(8, int(dx)))
                     dy = max(-8, min(8, int(dy)))
-                    self.window.scroll(dx, dy)
                     w, h = self.window.get_size()
+                    strips = []
                     if dx > 0:
-                        self.window.fill(settings.BACKGROUND_COLOR,
-                                         pygame.Rect(0, 0, dx, h))
+                        strips.append((self.window.subsurface(
+                            pygame.Rect(0, 0, dx, h)).copy(), (0, 0)))
                     elif dx < 0:
-                        self.window.fill(settings.BACKGROUND_COLOR,
-                                         pygame.Rect(w + dx, 0, -dx, h))
+                        strips.append((self.window.subsurface(
+                            pygame.Rect(w + dx, 0, -dx, h)).copy(), (w + dx, 0)))
                     if dy > 0:
-                        self.window.fill(settings.BACKGROUND_COLOR,
-                                         pygame.Rect(0, 0, w, dy))
+                        strips.append((self.window.subsurface(
+                            pygame.Rect(0, 0, w, dy)).copy(), (0, 0)))
                     elif dy < 0:
-                        self.window.fill(settings.BACKGROUND_COLOR,
-                                         pygame.Rect(0, h + dy, w, -dy))
+                        strips.append((self.window.subsurface(
+                            pygame.Rect(0, h + dy, w, -dy)).copy(), (0, h + dy)))
+                    self.window.scroll(dx, dy)
+                    for strip, pos in strips:
+                        self.window.blit(strip, pos)
             except Exception:
                 pass
 
     # ----------------------------------------------------------------- update
 
     def _play_conquer_transition_sounds(self):
-        """One-shot battle-start drum for the conquer battle. The win/lose/
-        draw result sound is played by the result dialog itself (via
-        sound.play_for_dialogue on its 'Land Conquered!' / 'Land Lost!' /
-        'Draw!' title), which is more reliable than polling game state here."""
+        """Fire the battle-start moment once, when the tactics phase begins.
+
+        The moment must land exactly when the clash begins — the frame the
+        power diff appears (``battle_turn_player_id`` gets assigned) — not on
+        screen entry, because the player spends a visible pre-battle beat on
+        this screen first (prelude / figure setup).  We therefore watch for
+        the pre-battle → tactics transition on-screen.
+
+        Suppression: a reload/resume straight into an already-active battle
+        never watched the transition, so it stays silent.  The config
+        screen's ``state.conquer_battle_countdown_pending`` flag is honoured
+        as a "freshly started" hint for the rare case where the tactics
+        phase is already active on the very first frame (pre-battle skipped).
+
+        Tactics-hand games get the "3·2·1·GO!" countdown (the war drum lands
+        on GO); legacy battle-move games get the immediate drum.
+        """
+        try:
+            game = self.state.game
+            if game is None or self._conquer_countdown_done:
+                return
+            # "Active" == the tactics phase is on-screen: the exact predicate
+            # that makes the fighters + power diff appear in the duel lane, so
+            # the moment lands on the frame the diff shows.
+            active = bool(self._is_battle_phase_active()
+                          and not getattr(game, 'last_battle_result', None))
+            fresh_start = bool(getattr(
+                self.state, 'conquer_battle_countdown_pending', False))
+            if not active:
+                # Still pre-battle: remember we watched this side of the
+                # transition so the upcoming edge is known to be genuine.
+                self._conquer_saw_prebattle = True
+                return
+            # Tactics phase is active.
+            self._conquer_countdown_done = True
+            self.state.conquer_battle_countdown_pending = False
+            if not (self._conquer_saw_prebattle or fresh_start):
+                # First-ever frame was already active with no fresh-start
+                # hint → we reloaded mid-battle. Stay silent.
+                return
+            from utils import sound
+            if not self._start_conquer_battle_countdown():
+                sound.play('battle_start')
+        except Exception:
+            pass
+
+    #: Battle-start countdown timing (three number beats + the GO beat).
+    COUNTDOWN_BEAT_MS = 500
+    COUNTDOWN_GO_MS = 700
+
+    def _conquer_clash_diff_hidden(self):
+        """True while the battle-start moment plays: the figures clash-diff
+        number stays masked ("VS") until the "3·2·1·GO!" countdown and the
+        lane-fighter entrance animations finish, so the real number is only
+        revealed once the reveal sequence completes — never before."""
+        try:
+            if self._is_battle_countdown_active():
+                return True
+            if getattr(self, '_conquer_lane_figure_entrances', None):
+                return True
+        except Exception:
+            pass
+        return False
+
+    def _conquer_battle_clash_rect(self):
+        """Rect of the clash-diff panel in the active battle layout, or None.
+
+        Computed from the layout (not the render-stashed rect) so it is
+        correct on the very frame the battle starts — before the lane has
+        re-rendered in the battle layout.
+        """
+        try:
+            layout = compute_conquer_layout(
+                settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT,
+                mode=self._conquer_effective_layout_mode())
+            lane = layout.battlefield.duel_lane
+            return self._conquer_lane_center_channel_rect(lane.diff_band, lane)
+        except Exception:
+            return getattr(self, '_conquer_lane_diff_rect', None)
+
+    def _start_conquer_battle_countdown(self):
+        """Kick off the "3·2·1·GO!" battle-start moment (tactics-hand only).
+
+        Returns True when the countdown was started — the caller then defers
+        the war drum to the GO beat.  Fail-soft: any problem returns False
+        and the caller falls back to the plain ``battle_start`` drum.
+        """
+        try:
+            if not self._is_tactics_hand_game():
+                return False
+            game = self.state.game
+            if game is None or getattr(game, 'last_battle_result', None):
+                return False
+            effects = getattr(self, '_conquer_effects', None)
+            if effects is None:
+                return False
+            now = pygame.time.get_ticks()
+            # Anchor the countdown to the clash-diff panel so it plays right
+            # in the centre where the battle resolves; stash the rect so the
+            # GO spotlight targets the same spot.  Font is sized to the panel
+            # height so the digits sit inside the panel (compact style).
+            clash_rect = self._conquer_battle_clash_rect()
+            font_px = None
+            if clash_rect is not None:
+                self._conquer_lane_diff_rect = pygame.Rect(clash_rect)
+                font_px = max(16, int(clash_rect.height * 0.9))
+            effects.spawn_countdown(
+                ('3', '2', '1', 'GO!'),
+                beat_ms=self.COUNTDOWN_BEAT_MS,
+                final_ms=self.COUNTDOWN_GO_MS,
+                anchor_rect=clash_rect,
+                font_px=font_px)
+            self._battle_countdown_started_ms = now
+            self._battle_countdown_until_ms = (
+                now + 3 * self.COUNTDOWN_BEAT_MS + self.COUNTDOWN_GO_MS)
+            self._battle_countdown_last_beat = -1
+            # Live battle-start transition: reset the lane seen-set so the
+            # fighters play their entrance during the countdown, even when
+            # the auto-route lands here with the battle already flagged
+            # active (the silent-seed path would otherwise swallow it).
+            self._conquer_lane_figure_seen = set()
+            self._conquer_lane_figure_entrances = {}
+            self.push_conquer_feed('Battle begins!', (255, 211, 116))
+            return True
+        except Exception:
+            return False
+
+    def _is_battle_countdown_active(self):
+        until = int(getattr(self, '_battle_countdown_until_ms', 0) or 0)
+        return bool(until and pygame.time.get_ticks() < until)
+
+    def _skip_conquer_battle_countdown(self):
+        """Collapse the countdown immediately (click-to-skip)."""
+        went_early = self._battle_countdown_last_beat < 3
+        self._battle_countdown_until_ms = 0
+        self._battle_countdown_last_beat = -1
+        effects = getattr(self, '_conquer_effects', None)
+        if effects is not None:
+            try:
+                effects.dismiss_countdowns()
+            except Exception:
+                pass
+        if went_early:
+            # The GO beat owns the war drum — keep it on a skip for closure.
+            try:
+                from utils import sound
+                sound.play('battle_start')
+            except Exception:
+                pass
+
+    def _pump_conquer_battle_countdown(self):
+        """Per-beat countdown sounds: soft ticks on 3/2/1, drum + jolt on GO."""
+        if not getattr(self, '_battle_countdown_until_ms', 0):
+            return
+        now = pygame.time.get_ticks()
+        if now >= self._battle_countdown_until_ms:
+            self._battle_countdown_until_ms = 0
+            self._battle_countdown_last_beat = -1
+            return
+        beat = min(3, (now - self._battle_countdown_started_ms)
+                   // self.COUNTDOWN_BEAT_MS)
+        if beat == self._battle_countdown_last_beat:
+            return
+        self._battle_countdown_last_beat = beat
         try:
             from utils import sound
-            game = self.state.game
-            if not game:
-                return
-            game_key = getattr(game, 'id', None)
-            if getattr(self, '_sound_state_game_id', None) != game_key:
-                self._sound_state_game_id = game_key
-                self._battle_start_played = bool(
-                    getattr(game, 'battle_turn_player_id', None) is not None
-                    or getattr(game, 'last_battle_result', None))
-            if (not self._battle_start_played
-                    and getattr(game, 'battle_turn_player_id', None) is not None):
-                self._battle_start_played = True
+            if beat >= 3:
                 sound.play('battle_start')
+                self._spotlight_conquer_clash_diff()
+            else:
+                sound.play('tally_tick')
+        except Exception:
+            pass
+
+    def _spotlight_conquer_clash_diff(self):
+        """GO beat: jolt the screen and spotlight the clash-diff panel so the
+        eye lands on the power comparison as the tactics phase opens."""
+        effects = getattr(self, '_conquer_effects', None)
+        if effects is None:
+            return
+        try:
+            effects.spawn_shake(amplitude=4, duration_ms=220)
+            diff_rect = getattr(self, '_conquer_lane_diff_rect', None)
+            if diff_rect is None:
+                return
+            diff_rect = pygame.Rect(diff_rect)
+            # Layered pulses + a small upward spark burst read as a spotlight
+            # snapping onto the diff panel.
+            effects.spawn_rect_pulse(diff_rect, (238, 206, 130),
+                                     secondary=(255, 236, 170),
+                                     duration_ms=720, scale=1.3)
+            effects.spawn_rect_pulse(diff_rect, (255, 236, 170),
+                                     duration_ms=520, scale=1.0, delay_ms=150)
+            effects.spawn_burst(diff_rect, (238, 206, 130),
+                                secondary=(150, 230, 170),
+                                count=12, upward_bias=0.45,
+                                speed=(140.0, 250.0))
         except Exception:
             pass
 
@@ -8479,6 +9027,8 @@ class ConquerGameScreen(GameScreen):
         self._play_conquer_transition_sounds()
         if not self._ensure_conquer_screen_game():
             return
+        self._pump_conquer_result_payoff()
+        self._pump_conquer_battle_countdown()
         self._normalize_conquer_subscreen()
         self._refresh_conquer_tab_locks()
 
@@ -8591,6 +9141,37 @@ class ConquerGameScreen(GameScreen):
                 self.dialogue_box = None
                 self.show_next_queued_notification()
                 return
+
+        # While the battle-start countdown plays, any click skips straight
+        # to GO (and never leaks into the UI below).
+        if self._is_battle_countdown_active():
+            for event in events:
+                if event.type == MOUSEBUTTONDOWN and event.button == 1:
+                    self._skip_conquer_battle_countdown()
+                    break
+            return
+
+        # While the battle-result payoff is staged, clicks skip ahead and
+        # never leak into the UI below.  Placed before the battle intro /
+        # coach / command / header / rail dispatch on purpose: a payoff
+        # click must not trigger those handlers.
+        if getattr(self, '_conquer_payoff_pending', None) is not None:
+            for event in events:
+                if event.type == MOUSEBUTTONDOWN and event.button == 1:
+                    if self._conquer_payoff_until_ms:
+                        # Payoff already playing → collapse to "done" so the
+                        # next update() opens the result dialogue.
+                        self._conquer_payoff_until_ms = pygame.time.get_ticks()
+                    else:
+                        # Still waiting on the round reveal → fast-forward it.
+                        sequencer = getattr(self, '_conquer_reveal_sequencer', None)
+                        if sequencer is not None:
+                            try:
+                                sequencer.fast_forward()
+                            except Exception:
+                                pass
+                    break
+            return
 
         if self._handle_battle_intro_window_events(events):
             return

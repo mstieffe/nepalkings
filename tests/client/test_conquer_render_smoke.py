@@ -837,6 +837,43 @@ def test_conquer_effects_rect_projectile_keeps_target_for_impact():
     assert layer._impacts[0]['target_rect'] == target
 
 
+def test_conquer_effects_countdown_lifecycle_and_draw(monkeypatch):
+    from game.components.conquer_effects import ConquerEffectsLayer
+
+    clock = {'now': 1_000}
+    monkeypatch.setattr('pygame.time.get_ticks', lambda: clock['now'])
+    window = pygame.Surface((800, 600), pygame.SRCALPHA)
+    layer = ConquerEffectsLayer(window, lambda _target_id: None)
+
+    layer.spawn_countdown(('3', '2', '1', 'GO!'), beat_ms=500, final_ms=700)
+    total = 3 * 500 + 700
+    assert layer.countdown_active()
+    # Draw one frame in each beat window (must not raise).
+    for offset in (10, 520, 1020, 1600):
+        clock['now'] = 1_000 + offset
+        window.fill((0, 0, 0))
+        layer.draw()
+        assert layer.countdown_active()
+    # After the total window the countdown is gone.
+    clock['now'] = 1_000 + total + 5
+    assert not layer.countdown_active()
+    window.fill((0, 0, 0))
+    layer.draw()
+    assert not layer._countdowns
+
+    # dismiss_countdowns cancels an in-flight sequence (click-to-skip).
+    clock['now'] = 5_000
+    layer.spawn_countdown(('3', '2', '1', 'GO!'))
+    assert layer.countdown_active()
+    layer.dismiss_countdowns()
+    assert not layer.countdown_active()
+    assert layer._countdowns == []
+
+    # Empty label list is a no-op, not a crash.
+    assert isinstance(layer.spawn_countdown(()), int)
+    assert not layer.countdown_active()
+
+
 def test_round_ledger_uses_revealed_opponent_tactics_and_icons(monkeypatch):
     from config import settings
     from game.components import conquer_round_ledger as ledger_module
@@ -1877,6 +1914,7 @@ def test_reveal_impact_skips_shake_when_fast_forwarded(monkeypatch):
     from game.screens.conquer_game_screen import ConquerGameScreen
 
     shakes = []
+    bursts = []
 
     class Effects:
         def spawn_rect_pulse(self, *args, **kwargs):
@@ -1884,6 +1922,9 @@ def test_reveal_impact_skips_shake_when_fast_forwarded(monkeypatch):
 
         def spawn_floating_text_at_rect(self, *args, **kwargs):
             pass
+
+        def spawn_burst(self, *args, **kwargs):
+            bursts.append(kwargs)
 
         def spawn_shake(self, **kwargs):
             shakes.append(kwargs)
@@ -1902,10 +1943,13 @@ def test_reveal_impact_skips_shake_when_fast_forwarded(monkeypatch):
 
     screen._on_conquer_round_reveal_event(2, 'impact', {'fast_forwarded': True})
     assert shakes == []
+    assert bursts == []  # fast-forwarded reveals stay calm
 
-    # Natural playback: big-diff shake + contested-final-round shake.
+    # Natural playback: big-diff shake + contested-final-round shake,
+    # plus the decisive-round particle burst.
     screen._on_conquer_round_reveal_event(2, 'impact', {})
     assert len(shakes) == 2
+    assert len(bursts) == 1
 
 
 def test_current_conquer_tactics_filters_by_displayed_step(monkeypatch):

@@ -36,32 +36,22 @@ import pygame
 
 from config import settings
 
-
 # ---------------------------------------------------------------------------
-# Easing helpers
+# Easing helpers — canonical implementations live in game.components.easing;
+# re-exported here so existing imports (``from ...conquer_effects import
+# ease_out_quad``) keep working.
 # ---------------------------------------------------------------------------
+from game.components.easing import (  # noqa: F401  (re-exports)
+    clamp01,
+    ease_in_quad,
+    ease_in_out,
+    ease_out_back,
+    ease_out_cubic,
+    ease_out_quad,
+    lerp,
+)
 
-def _clamp01(x: float) -> float:
-    if x < 0.0:
-        return 0.0
-    if x > 1.0:
-        return 1.0
-    return x
-
-
-def ease_out_quad(t: float) -> float:
-    t = _clamp01(t)
-    return 1.0 - (1.0 - t) * (1.0 - t)
-
-
-def ease_in_quad(t: float) -> float:
-    t = _clamp01(t)
-    return t * t
-
-
-def ease_in_out(t: float) -> float:
-    t = _clamp01(t)
-    return t * t * (3.0 - 2.0 * t)
+_clamp01 = clamp01
 
 
 # ---------------------------------------------------------------------------
@@ -123,6 +113,7 @@ class ConquerEffectsLayer:
     FLOATING_TEXT_MS = 720
     BANNER_MS = 900
     COPY_MS = 1500
+    MAX_PARTICLES = 400  # budget guard so stacked bursts can't sink the frame rate
 
     def __init__(self, window: pygame.Surface, rect_lookup: Callable[[Any], Optional[pygame.Rect]]):
         self.window = window
@@ -134,6 +125,7 @@ class ConquerEffectsLayer:
         self._floats: List[Dict[str, Any]] = []
         self._banners: List[Dict[str, Any]] = []
         self._copies: List[Dict[str, Any]] = []
+        self._countdowns: List[Dict[str, Any]] = []
         self._next_token = 1
 
     # ------------------------------------------------------------------ util
@@ -186,6 +178,7 @@ class ConquerEffectsLayer:
         self._floats.clear()
         self._banners.clear()
         self._copies.clear()
+        self._countdowns.clear()
 
     # ----------------------------------------------------------------- spawn
     def spawn_spell_cast(self, spell_name: str, source_rect: Optional[pygame.Rect],
@@ -348,6 +341,92 @@ class ConquerEffectsLayer:
             })
         return token
 
+    def spawn_burst(self, center_rect: Optional[pygame.Rect],
+                    color: Tuple[int, int, int],
+                    *,
+                    count: int = 16,
+                    speed: Tuple[float, float] = (120.0, 240.0),
+                    gravity: float = 60.0,
+                    secondary: Optional[Tuple[int, int, int]] = None,
+                    spread: float = math.tau,
+                    upward_bias: float = 0.0,
+                    life_ms: Tuple[int, int] = (360, 620),
+                    radius: Tuple[int, int] = (2, 4),
+                    delay_ms: int = 0) -> int:
+        """Radial particle burst from the centre of ``center_rect``.
+
+        ``upward_bias`` (0..1) shifts the velocity fan toward -y so wins read
+        as a celebratory pop rather than a symmetric explosion.  Reuses the
+        shared particle pool, so bursts, confetti and explosions all obey the
+        same ``MAX_PARTICLES`` budget.
+        """
+        center_rect = self._resolve_static_rect(center_rect)
+        token = self._new_token()
+        if center_rect is None or count <= 0:
+            return token
+        if len(self._particles) > self.MAX_PARTICLES:
+            return token
+        secondary = secondary or color
+        cx, cy = center_rect.center
+        started_at = self._ms() + max(0, int(delay_ms))
+        rng = random.Random(token * 7919 + cx)
+        for _ in range(int(count)):
+            angle = rng.uniform(0.0, max(0.05, float(spread)))
+            spd = rng.uniform(*speed)
+            vx = math.cos(angle) * spd
+            vy = math.sin(angle) * spd - _clamp01(upward_bias) * spd
+            self._particles.append({
+                'x': float(cx),
+                'y': float(cy),
+                'vx': vx,
+                'vy': vy,
+                'started_at': started_at,
+                'duration': rng.randint(*life_ms),
+                'radius': rng.randint(*radius),
+                'gravity': float(gravity),
+                'color': color if rng.random() < 0.6 else secondary,
+            })
+        return token
+
+    def spawn_confetti(self, region_rect: Optional[pygame.Rect],
+                       palette: List[Tuple[int, int, int]],
+                       *,
+                       count: int = 40,
+                       fall_speed: Tuple[float, float] = (90.0, 180.0),
+                       gravity: float = 140.0,
+                       drift: Tuple[float, float] = (-30.0, 30.0),
+                       life_ms: Tuple[int, int] = (700, 1200),
+                       delay_ms: int = 0) -> int:
+        """Particle shower falling from the top edge of ``region_rect``.
+
+        Each flake drifts sideways with a gentle sinusoidal sway so the
+        shower reads as confetti / ash rather than rain.
+        """
+        region_rect = self._resolve_static_rect(region_rect)
+        token = self._new_token()
+        if region_rect is None or count <= 0 or not palette:
+            return token
+        if len(self._particles) > self.MAX_PARTICLES:
+            return token
+        palette = list(palette)
+        rng = random.Random(token * 6151 + region_rect.width)
+        base = self._ms() + max(0, int(delay_ms))
+        for _ in range(int(count)):
+            self._particles.append({
+                'x': region_rect.left + rng.uniform(0.0, max(1.0, float(region_rect.width))),
+                'y': region_rect.top + rng.uniform(-28.0, 4.0),
+                'vx': rng.uniform(*drift),
+                'vy': rng.uniform(*fall_speed),
+                'started_at': base + rng.randint(0, 260),  # ragged front edge
+                'duration': rng.randint(*life_ms),
+                'radius': rng.randint(2, 4),
+                'gravity': float(gravity),
+                'sway': rng.uniform(4.0, 14.0),
+                'sway_phase': rng.uniform(0.0, math.tau),
+                'color': palette[rng.randrange(len(palette))],
+            })
+        return token
+
     def spawn_impact(self, target_figure_id: Any, color: Tuple[int, int, int], *,
                      duration_ms: Optional[int] = None) -> int:
         token = self._new_token()
@@ -421,6 +500,60 @@ class ConquerEffectsLayer:
             'amplitude': int(amplitude or self.SHAKE_AMPLITUDE),
         })
 
+    def spawn_countdown(self, labels: Tuple[str, ...] = ('3', '2', '1', 'GO!'),
+                        *,
+                        beat_ms: int = 500,
+                        final_ms: int = 700,
+                        color: Tuple[int, int, int] = (238, 206, 130),
+                        final_color: Tuple[int, int, int] = (255, 236, 170),
+                        anchor_rect: Optional[pygame.Rect] = None,
+                        font_px: Optional[int] = None) -> int:
+        """Countdown at ``anchor_rect`` centre (or screen-centre): each label
+        pops in, settles, and fades before the next beat; the last label (the
+        "GO!") gets a longer window and a ring pulse.
+
+        When an ``anchor_rect`` is given the countdown renders in *compact*
+        style — a tighter halo and a gentler pop, sized via ``font_px`` — so
+        it can sit inside a small UI panel (e.g. the clash-diff panel)
+        without swamping its surroundings.
+
+        Returns the token; total duration is
+        ``(len(labels) - 1) * beat_ms + final_ms``.
+        """
+        labels = tuple(str(l) for l in labels if str(l))
+        token = self._new_token()
+        if not labels:
+            return token
+        self._countdowns.append({
+            'token': token,
+            'labels': labels,
+            'beat_ms': max(120, int(beat_ms)),
+            'final_ms': max(160, int(final_ms)),
+            'color': color,
+            'final_color': final_color,
+            'anchor': pygame.Rect(anchor_rect) if anchor_rect else None,
+            'compact': anchor_rect is not None,
+            'font_px': int(font_px) if font_px else None,
+            'started_at': self._ms(),
+        })
+        return token
+
+    def countdown_active(self) -> bool:
+        """True while any countdown sequence is still playing."""
+        now = self._ms()
+        for c in self._countdowns:
+            if now < int(c['started_at']) + self._countdown_total_ms(c):
+                return True
+        return False
+
+    def dismiss_countdowns(self) -> None:
+        """Drop any active countdown (used by the click-to-skip gate)."""
+        self._countdowns.clear()
+
+    @staticmethod
+    def _countdown_total_ms(c: Dict[str, Any]) -> int:
+        return (len(c['labels']) - 1) * int(c['beat_ms']) + int(c['final_ms'])
+
     def spawn_copy_ghost(self, source_rect: Optional[pygame.Rect],
                          target_rect: Optional[pygame.Rect],
                          *,
@@ -486,9 +619,26 @@ class ConquerEffectsLayer:
         self._draw_particles(now)
         self._draw_floating_texts(now)
         self._draw_banners(now)
+        self._draw_countdowns(now)
         self._prune(now)
 
     # ---- projectiles -------------------------------------------------------
+    @staticmethod
+    def _arc_height(p: Dict[str, Any], source: pygame.Rect,
+                    target_rect: pygame.Rect) -> float:
+        """Arc height scaled by flight distance (stashed on first draw).
+
+        Short hops stay nearly flat while long casts get a pronounced
+        lob, so the trajectory always looks proportionate.
+        """
+        arc_h = p.get('arc_h')
+        if arc_h is None:
+            dist = math.hypot(target_rect.centerx - source.centerx,
+                              target_rect.centery - source.centery)
+            arc_h = max(14.0, min(90.0, dist * 0.18))
+            p['arc_h'] = arc_h
+        return float(arc_h)
+
     def _draw_projectiles(self, now: int) -> None:
         finished: List[Dict[str, Any]] = []
         for p in self._projectiles:
@@ -520,8 +670,8 @@ class ConquerEffectsLayer:
             source = p['source']
             cx = int(source.centerx + (target_rect.centerx - source.centerx) * eased)
             cy = int(source.centery + (target_rect.centery - source.centery) * eased)
-            # Slight arc.
-            arc = math.sin(eased * math.pi) * 24.0
+            # Arc height scales with flight distance so short hops stay flat.
+            arc = math.sin(eased * math.pi) * self._arc_height(p, source, target_rect)
             cy = int(cy - arc)
             self._draw_projectile_glyph(cx, cy, p, t)
         for p in finished:
@@ -539,12 +689,13 @@ class ConquerEffectsLayer:
         target_rect = self._projectile_target_rect(p)
         if target_rect is None:
             return
+        arc_h = self._arc_height(p, source, target_rect)
         for k in range(1, 5):
             t2 = max(0.0, t - 0.04 * k)
             eased2 = ease_in_out(t2)
             tx = int(source.centerx + (target_rect.centerx - source.centerx) * eased2)
             ty = int(source.centery + (target_rect.centery - source.centery) * eased2)
-            arc2 = math.sin(eased2 * math.pi) * 24.0
+            arc2 = math.sin(eased2 * math.pi) * arc_h
             ty = int(ty - arc2)
             alpha = max(0, 130 - k * 28)
             r = 10 - k
@@ -663,7 +814,9 @@ class ConquerEffectsLayer:
             cx, cy = target_rect.center
             base_r = max(target_rect.width, target_rect.height) // 2
             scale = float(im.get('scale') or 1.0)
-            eased = ease_out_quad(t)
+            # Overshoot easing makes the rings punch outward then settle;
+            # alpha still fades on plain (1 - t) so they dissolve cleanly.
+            eased = ease_out_back(t)
             # Three concentric rings expanding outward.
             for i, ring_scale in enumerate((0.9, 1.25, 1.7)):
                 r = int(base_r * ring_scale * (0.85 + 0.55 * eased) * scale)
@@ -701,9 +854,13 @@ class ConquerEffectsLayer:
                 finished.append(pt)
                 continue
             dt = (now - start) / 1000.0
-            # Apply gravity-ish slow-down.
+            # Apply gravity-ish slow-down (per-particle so confetti can fall
+            # faster than explosion sparks).
             x = pt['x'] + pt['vx'] * dt
-            y = pt['y'] + pt['vy'] * dt + 60.0 * dt * dt  # mild gravity
+            y = pt['y'] + pt['vy'] * dt + float(pt.get('gravity', 60.0)) * dt * dt
+            sway = float(pt.get('sway', 0.0))
+            if sway:
+                x += math.sin((now - start) * 0.012 + float(pt.get('sway_phase', 0.0))) * sway
             alpha = max(0, int(255 * (1.0 - t)))
             r = max(1, int(pt['radius']))
             if alpha <= 0:
@@ -777,8 +934,8 @@ class ConquerEffectsLayer:
                 alpha = int(255 * (1.0 - (t - 0.72) / 0.28))
             else:
                 alpha = 255
-            # Scale: tiny zoom-in.
-            scale = 0.85 + 0.15 * ease_out_quad(min(1.0, t / 0.4))
+            # Scale: zoom-in with a small overshoot pop.
+            scale = 0.7 + 0.3 * ease_out_back(min(1.0, t / 0.4))
             text_surf = font.render(text, True, color)
             if scale != 1.0:
                 w = max(1, int(text_surf.get_width() * scale))
@@ -809,6 +966,88 @@ class ConquerEffectsLayer:
         for b in finished:
             try:
                 self._banners.remove(b)
+            except ValueError:
+                pass
+
+    # ---- countdowns -------------------------------------------------------
+    def _draw_countdowns(self, now: int) -> None:
+        finished: List[Dict[str, Any]] = []
+        for c in self._countdowns:
+            start = int(c['started_at'])
+            total = self._countdown_total_ms(c)
+            elapsed = now - start
+            if elapsed < 0:
+                continue
+            if elapsed >= total:
+                finished.append(c)
+                continue
+            labels = c['labels']
+            beat_ms = int(c['beat_ms'])
+            final_ms = int(c['final_ms'])
+            # Which beat is on stage, and its local 0..1 progress.
+            idx = min(len(labels) - 1, elapsed // beat_ms)
+            is_final = idx == len(labels) - 1
+            window = final_ms if is_final else beat_ms
+            bt = _clamp01((elapsed - idx * beat_ms) / max(1, window))
+            label = labels[idx]
+            color = c['final_color'] if is_final else c['color']
+
+            anchor = c.get('anchor')
+            compact = bool(c.get('compact'))
+            if anchor is not None:
+                center = anchor.center
+            else:
+                center = (self.window.get_width() // 2,
+                          int(self.window.get_height() * 0.34))
+
+            # Stamp-down pop: starts oversized, settles with overshoot.
+            # Compact (panel-anchored) countdowns pop more gently so they
+            # stay within their host panel.
+            pop = 0.45 if compact else 0.8
+            halo_factor = 0.52 if compact else 0.72
+            scale = 1.0 + pop * (1.0 - ease_out_back(min(1.0, bt / 0.45)))
+            # Alpha: snap in, hold, dissolve at the tail of the beat.
+            if bt < 0.10:
+                alpha = int(255 * (bt / 0.10))
+            elif bt > 0.72:
+                alpha = int(255 * (1.0 - (bt - 0.72) / 0.28))
+            else:
+                alpha = 255
+            alpha = max(0, min(255, alpha))
+            try:
+                base_px = int(c.get('font_px') or int(settings.FS_HEADING * 2.2))
+                font = settings.get_font(max(12, base_px), bold=True)
+            except Exception:
+                continue
+            text_surf = font.render(label, True, color)
+            w = max(1, int(text_surf.get_width() * scale))
+            h = max(1, int(text_surf.get_height() * scale))
+            try:
+                text_surf = pygame.transform.smoothscale(text_surf, (w, h))
+            except Exception:
+                pass
+            # Soft dark halo behind the glyph for legibility over the field.
+            halo_r = int(max(w, h) * halo_factor)
+            if halo_r > 0:
+                halo = pygame.Surface((halo_r * 2, halo_r * 2), pygame.SRCALPHA)
+                pygame.draw.circle(halo, (14, 11, 8, min(170, alpha)),
+                                   (halo_r, halo_r), halo_r)
+                self.window.blit(halo, halo.get_rect(center=center))
+            # The "GO!" beat punches an expanding ring outward.
+            if is_final:
+                ring_r = int(halo_r * (0.9 + 0.9 * ease_out_quad(bt)))
+                ring_alpha = max(0, int(200 * (1.0 - bt)))
+                if ring_r > 0 and ring_alpha > 0:
+                    ring = pygame.Surface((ring_r * 2 + 6, ring_r * 2 + 6),
+                                          pygame.SRCALPHA)
+                    pygame.draw.circle(ring, (*color, ring_alpha),
+                                       (ring_r + 3, ring_r + 3), ring_r, 4)
+                    self.window.blit(ring, ring.get_rect(center=center))
+            text_surf.set_alpha(alpha)
+            self.window.blit(text_surf, text_surf.get_rect(center=center))
+        for c in finished:
+            try:
+                self._countdowns.remove(c)
             except ValueError:
                 pass
 

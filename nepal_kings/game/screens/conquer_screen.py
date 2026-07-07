@@ -55,6 +55,7 @@ from game.components.battle_moves.battle_move_manager import BattleMoveManager
 from game.components.battle_moves.battle_move_icon_renderer import draw_battle_move_icon
 from game.components.battle_moves.battle_move_detail_box import BattleMoveDetailBox
 from game.components.spells.spell_manager import SpellManager
+from game.components.easing import ease_out_back
 from game.components.loading_indicator import draw_loading_indicator
 from game.core.game import Game
 from game.core.screen_routing import gameplay_screen_for
@@ -200,6 +201,16 @@ class ConquerScreen(MenuScreenMixin, Screen):
         self._figure_detail_box = None
         self._move_detail_box = None
         self._config_version = 0       # incremented on config change
+        # ── Entrance animations (draw-only) ─────────────────────────
+        # Newly appearing config slots (figures / battle moves / prelude)
+        # slide up into place with a small overshoot instead of popping in.
+        # Keyed ('fig', id) / ('move', round_index) / ('prelude',); records
+        # are {'started_at': ms, 'index': stagger_slot}.  Change detection
+        # diffs a config signature (``_config_version`` is vestigial and
+        # never incremented).  Offsets apply to DRAW positions only — hit
+        # rects always use the resting position.
+        self._entrance_anims = {}
+        self._entrance_prev_sig = None
         self._pending_map_confirm = False
         self._start_battle_rid = None
         self._start_battle_fetch_game_rid = None
@@ -281,6 +292,8 @@ class ConquerScreen(MenuScreenMixin, Screen):
         self._active_subscreen = None
         self._subscreen_obj = None
         self._game_proxy = None
+        self._entrance_anims = {}
+        self._entrance_prev_sig = None   # None → full cascade on next config
         self._pending_map_confirm = False
         self._start_battle_rid = None
         self._start_battle_fetch_game_rid = None
@@ -1087,6 +1100,9 @@ class ConquerScreen(MenuScreenMixin, Screen):
         if not self._layout_built:
             self._build_layout()
 
+        # Stamp entrance animations for slots that just appeared.
+        self._sync_entrance_animations()
+
         # ── Title (centred inside box) ──────────────────────────────
         land = self._land or {}
         tier = land.get('tier', '?')
@@ -1313,6 +1329,105 @@ class ConquerScreen(MenuScreenMixin, Screen):
             }
         return None
 
+    # ── Entrance animations (draw-only) ──────────────────────────────
+
+    #: Duration of one slot's slide-in, and the cascade gap between slots.
+    ENTRANCE_MS = 380
+    ENTRANCE_STAGGER_MS = 70
+    ENTRANCE_SLIDE_PX = max(18, int(0.028 * _SH))
+
+    def _config_entrance_signature(self):
+        """Cheap identity of the visible config slots for change detection."""
+        cfg = self._config or {}
+        fig_ids = tuple(sorted(
+            str(f.get('id')) for f in (cfg.get('figures') or [])))
+        move_keys = tuple(sorted(
+            (int(m.get('round_index', -1)), str(m.get('family_name')))
+            for m in (cfg.get('battle_moves') or [])))
+        prelude = cfg.get('prelude_spell_name') or None
+        return fig_ids, move_keys, prelude
+
+    def _sync_entrance_animations(self):
+        """Stamp entrance records for newly appearing config slots.
+
+        Diffs a config signature each frame (covering every ``self._config``
+        assignment site uniformly — ``_config_version`` is never bumped), so
+        the first config sighting cascades the whole board in and later
+        changes animate only the new slot(s).  Fail-soft: on any hiccup the
+        board simply appears instantly, exactly as before.
+        """
+        try:
+            sig = self._config_entrance_signature()
+        except Exception:
+            return
+        prev = self._entrance_prev_sig
+        if sig == prev:
+            return
+        self._entrance_prev_sig = sig
+        now = pygame.time.get_ticks()
+        prev_figs = set(prev[0]) if prev else set()
+        prev_moves = set(prev[1]) if prev else set()
+        prev_prelude = prev[2] if prev else None
+        stagger = 0
+        for fid in sig[0]:
+            if fid not in prev_figs:
+                self._entrance_anims[('fig', fid)] = {
+                    'started_at': now, 'index': stagger}
+                stagger += 1
+        for key in sig[1]:
+            if key not in prev_moves:
+                self._entrance_anims[('move', key[0])] = {
+                    'started_at': now, 'index': stagger}
+                stagger += 1
+        if sig[2] and sig[2] != prev_prelude:
+            self._entrance_anims[('prelude',)] = {
+                'started_at': now, 'index': stagger}
+
+    def _entrance_offset(self, key):
+        """(dx, dy) DRAW offset for an entering slot; (0, 0) once settled.
+
+        Slots rise from ``ENTRANCE_SLIDE_PX`` below their resting spot with
+        an ``ease_out_back`` overshoot.  Callers must never apply this to
+        hit rects — hover/click always test the resting position.
+        """
+        rec = self._entrance_anims.get(key)
+        if not rec:
+            return 0, 0
+        try:
+            elapsed = (pygame.time.get_ticks() - int(rec['started_at'])
+                       - int(rec['index']) * self.ENTRANCE_STAGGER_MS)
+            t = elapsed / max(1, self.ENTRANCE_MS)
+        except Exception:
+            self._entrance_anims.pop(key, None)
+            return 0, 0
+        if t >= 1.0:
+            self._entrance_anims.pop(key, None)
+            return 0, 0
+        if t <= 0.0:
+            # Cascade slot not reached yet — parked below its resting spot.
+            return 0, self.ENTRANCE_SLIDE_PX
+        return 0, int((1.0 - ease_out_back(t)) * self.ENTRANCE_SLIDE_PX)
+
+    def _draw_icon_with_entrance(self, icon, ix, iy, fig_id):
+        """Draw a figure icon honouring its entrance offset.
+
+        ``FieldFigureIcon.draw`` moves the icon's logical rects via
+        ``set_position`` and hover / detail-open key off those rects, so
+        after an offset draw the resting position is restored immediately
+        (review finding: a naive draw offset would move hover targets).
+        """
+        dx, dy = self._entrance_offset(('fig', str(fig_id)))
+        if not dx and not dy:
+            icon.draw(ix, iy)
+            return
+        try:
+            icon.draw(ix + dx, iy + dy)
+        finally:
+            try:
+                icon.set_position(ix, iy)
+            except Exception:
+                pass
+
     def _draw_field_compartments(self):
         """Draw the three field compartments with FieldFigureIcon rendering."""
         field_colors = {
@@ -1399,16 +1514,17 @@ class ConquerScreen(MenuScreenMixin, Screen):
                 icon_y = icon_y_start + i * icon_spacing
                 icon_positions[fig.id] = (icon_x, icon_y)
                 if icon.hovered:
-                    all_hovered = (icon, icon_x, icon_y)
+                    all_hovered = (icon, icon_x, icon_y, fig.id)
                 else:
-                    all_regular.append((icon, icon_x, icon_y))
+                    all_regular.append((icon, icon_x, icon_y, fig.id))
 
-        # Draw in z-order layers
-        for icon, ix, iy in reversed(all_regular):
-            icon.draw(ix, iy)
+        # Draw in z-order layers (entrance-aware: offsets apply to the draw
+        # only; logical rects are restored to the resting position).
+        for icon, ix, iy, fig_id in reversed(all_regular):
+            self._draw_icon_with_entrance(icon, ix, iy, fig_id)
         if all_hovered:
-            icon, ix, iy = all_hovered
-            icon.draw(ix, iy)
+            icon, ix, iy, fig_id = all_hovered
+            self._draw_icon_with_entrance(icon, ix, iy, fig_id)
 
         # Draw X buttons on each figure icon (top-right of frame)
         _xbs = self._x_btn_sz
@@ -1477,8 +1593,11 @@ class ConquerScreen(MenuScreenMixin, Screen):
                 m = move_by_round[i]
                 hovered = is_hovered and not mouse_pressed
 
+                # Entrance offset applies to the DRAW only — the diamond
+                # hit-test and X-button rects stay on the resting position.
+                dxe, dye = self._entrance_offset(('move', i))
                 draw_battle_move_icon(
-                    self.window, cx, cy,
+                    self.window, cx + dxe, cy + dye,
                     m['family_name'], m['suit'],
                     self._battle_move_display_power(m),
                     self._slot_glow_cache, self._slot_icon_cache,
@@ -1487,16 +1606,20 @@ class ConquerScreen(MenuScreenMixin, Screen):
                     hovered=hovered,
                 )
 
-                xsz = self._x_btn_sz
-                xrect = pygame.Rect(cx + int(sw * 0.35), cy - int(sw * 0.65), xsz, xsz)
-                x_hovered = xrect.collidepoint(mouse_pos)
-                if settings.TOUCH_TARGET_MIN > 0 or is_hovered or x_hovered:
-                    draw_remove_x(self.window, xrect, x_hovered)
-                    self._move_remove_rects[i] = xrect
+                if not dxe and not dye:
+                    # X button only once the slot has settled, so the remove
+                    # chrome never floats detached from a sliding icon.
+                    xsz = self._x_btn_sz
+                    xrect = pygame.Rect(cx + int(sw * 0.35), cy - int(sw * 0.65), xsz, xsz)
+                    x_hovered = xrect.collidepoint(mouse_pos)
+                    if settings.TOUCH_TARGET_MIN > 0 or is_hovered or x_hovered:
+                        draw_remove_x(self.window, xrect, x_hovered)
+                        self._move_remove_rects[i] = xrect
 
                 # Round label below
                 rlbl = self._small_font.render(f'R{i + 1}', True, (160, 140, 120))
-                self.window.blit(rlbl, rlbl.get_rect(centerx=cx, top=cy + int(sw * 0.55)))
+                self.window.blit(rlbl, rlbl.get_rect(centerx=cx + dxe,
+                                                     top=cy + dye + int(sw * 0.55)))
             else:
                 # Empty slot \u2014 clickable to open the Battle Shop
                 dr = self._slot_diamond.get_rect(center=(cx, cy))
@@ -1615,15 +1738,19 @@ class ConquerScreen(MenuScreenMixin, Screen):
         if spell_name:
             icons = self._spell_icons.get(spell_name)
             if icons:
+                # Entrance offset applies to the icon draw only; the caption,
+                # badge and X-button hit rect stay on the resting position.
+                dxe, dye = self._entrance_offset(('prelude',))
+                icx, icy = cx + dxe, cy + dye
                 if icons.get('glow'):
                     glow_surf = icons['glow']
-                    gr = glow_surf.get_rect(center=(cx, cy))
+                    gr = glow_surf.get_rect(center=(icx, icy))
                     self.window.blit(glow_surf, gr.topleft)
                 if icons.get('icon'):
-                    ir = icons['icon'].get_rect(center=(cx, cy))
+                    ir = icons['icon'].get_rect(center=(icx, icy))
                     self.window.blit(icons['icon'], ir.topleft)
                 if icons.get('frame'):
-                    fr = icons['frame'].get_rect(center=(cx, cy))
+                    fr = icons['frame'].get_rect(center=(icx, icy))
                     self.window.blit(icons['frame'], fr.topleft)
                 lines = [(spell_name, self._res_font, (200, 180, 80))]
                 text_h = sum(font.get_height() for _, font, _ in lines)
@@ -1635,7 +1762,9 @@ class ConquerScreen(MenuScreenMixin, Screen):
                 _xbs = self._x_btn_sz
                 xrect = pygame.Rect(rect.right - _xbs - 2, rect.y + 2, _xbs, _xbs)
                 x_hovered = xrect.collidepoint(mx_mouse, my_mouse)
-                if settings.TOUCH_TARGET_MIN > 0 or rect.collidepoint(mx_mouse, my_mouse) or x_hovered:
+                if (not dxe and not dye) and (
+                        settings.TOUCH_TARGET_MIN > 0
+                        or rect.collidepoint(mx_mouse, my_mouse) or x_hovered):
                     self._prelude_x_rect = xrect
                     draw_remove_x(self.window, xrect, x_hovered)
                 else:
@@ -2051,6 +2180,11 @@ class ConquerScreen(MenuScreenMixin, Screen):
             game_dict = result.get('game_dict')
             self.state.game = (
                 Game(game_dict, self.state.user_dict) if game_dict else None)
+            # Mark the deliberate start so the battle screen plays its
+            # "3·2·1·GO!" moment. Lives on ``state`` (not the game) so it
+            # survives the game-object lifecycle and is naturally absent on
+            # a reload/resume (which should not replay the countdown).
+            self.state.conquer_battle_countdown_pending = True
             self.state.screen = gameplay_screen_for(self.state.game)
             logger.info(f'Battle started: game_id={game_id}')
             return
@@ -2153,6 +2287,8 @@ class ConquerScreen(MenuScreenMixin, Screen):
                 self._error = 'Failed to load battle'
                 return
             self.state.game = Game(game_dict, self.state.user_dict, lightweight=True)
+            # See _drain_start_battle_native: flag the battle-start moment.
+            self.state.conquer_battle_countdown_pending = True
             self.state.screen = gameplay_screen_for(self.state.game)
             logger.info(f'Battle started: game_id={game_id}')
 

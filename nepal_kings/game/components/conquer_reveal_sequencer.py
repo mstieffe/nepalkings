@@ -39,6 +39,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import pygame
 
+from game.components.easing import ease_out_quad
+
 
 # Stage keys, in play order.
 STAGE_HOLD = 'hold'
@@ -446,8 +448,7 @@ class ConquerRevealSequencer:
 
         # TALLY: eased 0→1 factor for the diff count-up.
         if stage == STAGE_TALLY:
-            t = active['progress']
-            active['diff_factor'] = 1.0 - (1.0 - t) * (1.0 - t)
+            active['diff_factor'] = ease_out_quad(active['progress'])
         elif stage == STAGE_IMPACT:
             active['diff_factor'] = 1.0
             if 'impact' not in fired:

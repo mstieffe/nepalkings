@@ -4341,3 +4341,486 @@ class TestConquerObjectiveTacticsHand:
         )
         assert objective is not None
         assert objective.target_tab == 'battle_shop'
+
+
+# ---------------------------------------------------------------------------
+# Battle-result payoff (on-screen VICTORY/DEFEAT sequence before the dialogue)
+# ---------------------------------------------------------------------------
+
+class _RecordingEffects:
+    """Effects-layer stub that records every spawn_* call."""
+
+    def __init__(self):
+        self.calls = []
+
+    def __getattr__(self, name):
+        if name.startswith('spawn_'):
+            def _record(*args, **kwargs):
+                self.calls.append((name, args, kwargs))
+                return 1
+            return _record
+        raise AttributeError(name)
+
+    def names(self):
+        return [name for name, _, _ in self.calls]
+
+
+def _payoff_screen(monkeypatch, *, base_calls):
+    """Bare ConquerGameScreen wired for the result-payoff flow."""
+    ConquerGameScreen = _conquer_screen_class()
+    GameScreen = _game_screen_class()
+    screen = ConquerGameScreen.__new__(ConquerGameScreen)
+    game = SimpleNamespace(_conquer_result_dialogue_shown=False)
+    screen.state = SimpleNamespace(game=game)
+    screen.window = SimpleNamespace(get_width=lambda: 800,
+                                    get_height=lambda: 600)
+    screen._conquer_effects = _RecordingEffects()
+    screen._conquer_payoff_pending = None
+    screen._conquer_payoff_until_ms = 0
+    screen._round_ledger = None
+    screen._is_current_player_conquer_attacker = lambda result=None: True
+    monkeypatch.setattr('utils.sound.play', lambda *a, **k: True)
+    monkeypatch.setattr(
+        GameScreen, '_handle_conquer_result_response',
+        lambda self, result: base_calls.append(result) or True)
+    return screen, game
+
+
+def test_conquer_result_payoff_stashes_and_defers_dialogue(monkeypatch):
+    base_calls = []
+    screen, _game = _payoff_screen(monkeypatch, base_calls=base_calls)
+    result = {'conquer_result': 'attacker_won', 'attacker_won': True}
+
+    assert screen._handle_conquer_result_response(result) is True
+    assert screen._conquer_payoff_pending is result
+    assert base_calls == []
+    # The poll drain re-delivers every frame — repeats are swallowed.
+    assert screen._handle_conquer_result_response(result) is True
+    assert screen._conquer_payoff_pending is result
+    assert base_calls == []
+
+
+def test_conquer_result_payoff_pump_fires_dialogue_once(monkeypatch):
+    base_calls = []
+    clock = {'now': 10_000}
+    monkeypatch.setattr('pygame.time.get_ticks', lambda: clock['now'])
+    screen, _game = _payoff_screen(monkeypatch, base_calls=base_calls)
+    result = {'conquer_result': 'attacker_won', 'attacker_won': True}
+    screen._handle_conquer_result_response(result)
+
+    # First pump starts the effects and opens the payoff window.
+    screen._pump_conquer_result_payoff()
+    assert screen._conquer_payoff_until_ms == 10_000 + screen.PAYOFF_WIN_MS
+    names = screen._conquer_effects.names()
+    assert 'spawn_banner' in names
+    assert 'spawn_confetti' in names
+    banner = next(c for c in screen._conquer_effects.calls
+                  if c[0] == 'spawn_banner')
+    assert banner[1][0] == 'VICTORY'
+
+    # Inside the window nothing fires yet.
+    screen._pump_conquer_result_payoff()
+    assert base_calls == []
+
+    # Past the deadline the base handler (dialogue) runs exactly once.
+    clock['now'] += screen.PAYOFF_WIN_MS + 1
+    screen._pump_conquer_result_payoff()
+    assert base_calls == [result]
+    assert screen._conquer_payoff_pending is None
+    screen._pump_conquer_result_payoff()
+    assert base_calls == [result]
+
+
+def test_conquer_result_payoff_defeat_banner_for_loss(monkeypatch):
+    base_calls = []
+    clock = {'now': 4_000}
+    monkeypatch.setattr('pygame.time.get_ticks', lambda: clock['now'])
+    screen, _game = _payoff_screen(monkeypatch, base_calls=base_calls)
+    # Local player is the attacker but the attacker lost.
+    result = {'conquer_result': 'defender_won', 'attacker_won': False}
+    screen._handle_conquer_result_response(result)
+    screen._pump_conquer_result_payoff()
+    banner = next(c for c in screen._conquer_effects.calls
+                  if c[0] == 'spawn_banner')
+    assert banner[1][0] == 'DEFEAT'
+    assert screen._conquer_payoff_until_ms == 4_000 + screen.PAYOFF_LOSE_MS
+
+
+def test_conquer_result_payoff_waits_for_reveal_sequencer(monkeypatch):
+    base_calls = []
+    clock = {'now': 7_000}
+    monkeypatch.setattr('pygame.time.get_ticks', lambda: clock['now'])
+    screen, _game = _payoff_screen(monkeypatch, base_calls=base_calls)
+    busy = {'value': True}
+    screen._conquer_reveal_sequencer = SimpleNamespace(
+        is_active=lambda: busy['value'],
+        has_pending=lambda: False,
+        fast_forward=lambda: None)
+    result = {'conquer_result': 'attacker_won', 'attacker_won': True}
+    screen._handle_conquer_result_response(result)
+
+    # While the reveal choreography owns the stage, the payoff idles.
+    screen._pump_conquer_result_payoff()
+    assert screen._conquer_payoff_until_ms == 0
+    assert screen._conquer_effects.calls == []
+
+    busy['value'] = False
+    screen._pump_conquer_result_payoff()
+    assert screen._conquer_payoff_until_ms == 7_000 + screen.PAYOFF_WIN_MS
+    assert 'spawn_banner' in screen._conquer_effects.names()
+
+
+def test_conquer_result_payoff_click_skips_to_dialogue(monkeypatch):
+    base_calls = []
+    clock = {'now': 20_000}
+    monkeypatch.setattr('pygame.time.get_ticks', lambda: clock['now'])
+    screen, _game = _payoff_screen(monkeypatch, base_calls=base_calls)
+    screen._ensure_conquer_screen_game = lambda: True
+    screen.dialogue_box = None
+    result = {'conquer_result': 'attacker_won', 'attacker_won': True}
+    screen._handle_conquer_result_response(result)
+    screen._pump_conquer_result_payoff()
+    assert screen._conquer_payoff_until_ms > clock['now']
+
+    click = SimpleNamespace(type=pygame.MOUSEBUTTONDOWN, button=1)
+    screen.handle_events([click])
+    assert screen._conquer_payoff_until_ms == clock['now']
+
+    screen._pump_conquer_result_payoff()
+    assert base_calls == [result]
+
+
+def test_conquer_result_payoff_click_fast_forwards_pending_reveal(monkeypatch):
+    base_calls = []
+    monkeypatch.setattr('pygame.time.get_ticks', lambda: 9_000)
+    screen, _game = _payoff_screen(monkeypatch, base_calls=base_calls)
+    screen._ensure_conquer_screen_game = lambda: True
+    screen.dialogue_box = None
+    fast_forwards = []
+    screen._conquer_reveal_sequencer = SimpleNamespace(
+        is_active=lambda: True,
+        has_pending=lambda: False,
+        fast_forward=lambda: fast_forwards.append(True))
+    result = {'conquer_result': 'attacker_won', 'attacker_won': True}
+    screen._handle_conquer_result_response(result)
+
+    # Payoff staged but not started (reveal busy): a click fast-forwards
+    # the reveal instead of collapsing the (not yet open) payoff window.
+    click = SimpleNamespace(type=pygame.MOUSEBUTTONDOWN, button=1)
+    screen.handle_events([click])
+    assert fast_forwards == [True]
+    assert screen._conquer_payoff_until_ms == 0
+    assert base_calls == []
+
+
+def test_conquer_result_payoff_falls_through_without_effects(monkeypatch):
+    base_calls = []
+    screen, _game = _payoff_screen(monkeypatch, base_calls=base_calls)
+    screen._conquer_effects = None
+    result = {'conquer_result': 'attacker_won', 'attacker_won': True}
+    screen._handle_conquer_result_response(result)
+    # No payoff possible — the base dialogue path runs immediately.
+    assert base_calls == [result]
+    assert screen._conquer_payoff_pending is None
+
+
+# ---------------------------------------------------------------------------
+# Battle-start countdown ("3·2·1·GO!") + fighter entrances
+# ---------------------------------------------------------------------------
+
+def _countdown_screen(monkeypatch, clock, *, tactics=True):
+    ConquerGameScreen = _conquer_screen_class()
+    monkeypatch.setattr('pygame.time.get_ticks', lambda: clock['now'])
+    screen = ConquerGameScreen.__new__(ConquerGameScreen)
+    screen.state = SimpleNamespace(game=SimpleNamespace(
+        last_battle_result=None, battle_turn_player_id=None))
+    screen._is_tactics_hand_game = lambda: tactics
+    screen._conquer_effects = _RecordingEffects()
+    screen._battle_countdown_started_ms = 0
+    screen._battle_countdown_until_ms = 0
+    screen._battle_countdown_last_beat = -1
+    screen._conquer_countdown_done = False
+    screen._conquer_saw_prebattle = False
+    screen._conquer_lane_figure_seen = None
+    screen._conquer_lane_figure_entrances = {}
+    screen._conquer_battle_feed = []
+    screen.push_conquer_feed = lambda *a, **k: None
+    return screen
+
+
+def test_battle_countdown_starts_for_tactics_hand(monkeypatch):
+    clock = {'now': 50_000}
+    screen = _countdown_screen(monkeypatch, clock)
+    assert screen._start_conquer_battle_countdown() is True
+    assert screen._is_battle_countdown_active()
+    assert 'spawn_countdown' in screen._conquer_effects.names()
+    total = 3 * screen.COUNTDOWN_BEAT_MS + screen.COUNTDOWN_GO_MS
+    assert screen._battle_countdown_until_ms == 50_000 + total
+    # The live transition resets the lane seen-set so fighters animate in.
+    assert screen._conquer_lane_figure_seen == set()
+    # Rail actions are blocked until GO.
+    screen._tactic_flight_animation = None
+    screen._conquer_reveal_sequencer = None
+    assert screen.conquer_action_block_reason() == 'Battle starting…'
+    clock['now'] += total + 1
+    assert not screen._is_battle_countdown_active()
+
+
+def test_battle_countdown_skipped_for_legacy_games(monkeypatch):
+    clock = {'now': 50_000}
+    screen = _countdown_screen(monkeypatch, clock, tactics=False)
+    assert screen._start_conquer_battle_countdown() is False
+    assert not screen._is_battle_countdown_active()
+    assert screen._conquer_effects.calls == []
+
+
+def test_battle_countdown_beats_play_once_each(monkeypatch):
+    clock = {'now': 60_000}
+    screen = _countdown_screen(monkeypatch, clock)
+    played = []
+    monkeypatch.setattr('utils.sound.play',
+                        lambda name, *a, **k: played.append(name))
+    screen._start_conquer_battle_countdown()
+    beat = screen.COUNTDOWN_BEAT_MS
+    # Pump twice inside each number beat: exactly one tick per beat.
+    for offset in (0, 50, beat, beat + 50, 2 * beat, 2 * beat + 50):
+        clock['now'] = 60_000 + offset
+        screen._pump_conquer_battle_countdown()
+    assert played == ['tally_tick'] * 3
+    # GO beat: war drum + screen jolt.
+    clock['now'] = 60_000 + 3 * beat + 10
+    screen._pump_conquer_battle_countdown()
+    assert played[-1] == 'battle_start'
+    assert 'spawn_shake' in screen._conquer_effects.names()
+
+
+def test_battle_countdown_click_skips_to_go(monkeypatch):
+    clock = {'now': 70_000}
+    screen = _countdown_screen(monkeypatch, clock)
+    played = []
+    monkeypatch.setattr('utils.sound.play',
+                        lambda name, *a, **k: played.append(name))
+    screen._ensure_conquer_screen_game = lambda: True
+    screen.dialogue_box = None
+    screen._conquer_payoff_pending = None
+    screen._start_conquer_battle_countdown()
+    click = SimpleNamespace(type=pygame.MOUSEBUTTONDOWN, button=1)
+    screen.handle_events([click])
+    assert not screen._is_battle_countdown_active()
+    # Skipping before GO still lands the war drum for closure.
+    assert played[-1] == 'battle_start'
+
+
+def test_lane_entrances_seed_silently_on_rejoin(monkeypatch):
+    clock = {'now': 80_000}
+    screen = _countdown_screen(monkeypatch, clock)
+    fig_a = SimpleNamespace(id=11)
+    fig_b = SimpleNamespace(id=22)
+    # First sighting (mid-battle rejoin): seeds without animating.
+    screen._stamp_conquer_lane_entrances([fig_a], [fig_b])
+    assert screen._conquer_lane_figure_seen == {'11', '22'}
+    assert screen._conquer_lane_figure_entrances == {}
+    # A NEW fighter afterwards (e.g. Copy Figure clone) animates.
+    fig_c = SimpleNamespace(id=33)
+    screen._stamp_conquer_lane_entrances([fig_a, fig_c], [fig_b])
+    assert '33' in screen._conquer_lane_figure_entrances
+
+
+def test_lane_entrances_animate_after_countdown_reset(monkeypatch):
+    clock = {'now': 90_000}
+    screen = _countdown_screen(monkeypatch, clock)
+    screen._start_conquer_battle_countdown()   # resets seen-set to empty
+    fig_you = SimpleNamespace(id=1)
+    fig_opp = SimpleNamespace(id=2)
+    screen._stamp_conquer_lane_entrances([fig_you], [fig_opp])
+    entrances = screen._conquer_lane_figure_entrances
+    assert set(entrances) == {'1', '2'}
+    # Opponent enters one stagger later than the player.
+    assert (entrances['2']['started_at'] - entrances['1']['started_at']
+            == screen.LANE_ENTRANCE_STAGGER_MS)
+
+    # Progress lifecycle: parked → mid-flight → landed (+ pulse, record gone).
+    hit = pygame.Rect(0, 0, 40, 40)
+    t = screen._conquer_lane_entrance_progress(fig_you, hit)
+    assert t is not None and t <= 0.0 or t < 0.2
+    clock['now'] = 90_000 + screen.LANE_ENTRANCE_MS // 2
+    t_mid = screen._conquer_lane_entrance_progress(fig_you, hit)
+    assert 0.0 < t_mid < 1.0
+    clock['now'] = 90_000 + screen.LANE_ENTRANCE_MS + 10
+    assert screen._conquer_lane_entrance_progress(fig_you, hit) is None
+    assert '1' not in screen._conquer_lane_figure_entrances
+    assert 'spawn_rect_pulse' in screen._conquer_effects.names()
+    # Settled figures report None with no side effects.
+    assert screen._conquer_lane_entrance_progress(fig_you, hit) is None
+
+
+def test_field_figure_entrance_cascade_restores_positions(monkeypatch):
+    from game.screens.field_screen import FieldScreen
+    clock = {'now': 10_000}
+    monkeypatch.setattr('pygame.time.get_ticks', lambda: clock['now'])
+    field = FieldScreen.__new__(FieldScreen)
+    field._figure_entrance_anims = {}
+    field._figure_entrance_cascade_pending = False
+
+    calls = []
+    icon = SimpleNamespace(
+        figure=SimpleNamespace(id=5),
+        draw=lambda x, y: calls.append(('draw', x, y)),
+        set_position=lambda x, y: calls.append(('set_position', x, y)))
+
+    field.begin_figure_entrance_cascade()
+    assert field._figure_entrance_cascade_pending
+    field._stamp_figure_entrance_cascade([(icon, 100, 200)])
+    assert not field._figure_entrance_cascade_pending
+    assert '5' in field._figure_entrance_anims
+
+    # Mid-entrance: offset draw, then logical position restored.
+    clock['now'] = 10_000 + FieldScreen.FIGURE_ENTRANCE_MS // 4
+    field._draw_icon_with_entrance(icon, 100, 200)
+    assert calls[0][0] == 'draw' and calls[0][2] != 200
+    assert calls[-1] == ('set_position', 100, 200)
+
+    # Settled: plain draw, record pruned.
+    calls.clear()
+    clock['now'] = 10_000 + FieldScreen.FIGURE_ENTRANCE_MS + 100
+    field._draw_icon_with_entrance(icon, 100, 200)
+    assert calls == [('draw', 100, 200)]
+    assert field._figure_entrance_anims == {}
+
+
+def test_transition_fires_on_prebattle_to_tactics_edge(monkeypatch):
+    clock = {'now': 40_000}
+    screen = _countdown_screen(monkeypatch, clock)
+    monkeypatch.setattr('utils.sound.play', lambda *a, **k: True)
+
+    # Pre-battle frames (diff not yet shown): no countdown, but the
+    # transition is armed.
+    screen._play_conquer_transition_sounds()
+    assert not screen._is_battle_countdown_active()
+    assert screen._conquer_saw_prebattle is True
+    assert screen._conquer_effects.calls == []
+
+    # The tactics phase begins (battle_turn assigned → the diff appears):
+    # the countdown fires exactly here.
+    screen.state.game.battle_turn_player_id = 7
+    screen._play_conquer_transition_sounds()
+    assert screen._is_battle_countdown_active()
+    assert 'spawn_countdown' in screen._conquer_effects.names()
+
+    # Fires once only.
+    screen._conquer_effects.calls.clear()
+    screen._play_conquer_transition_sounds()
+    assert screen._conquer_effects.calls == []
+
+
+def test_transition_silent_on_reload_mid_battle(monkeypatch):
+    clock = {'now': 40_000}
+    screen = _countdown_screen(monkeypatch, clock)
+    # First-ever frame is already active with no fresh-start flag → the
+    # player reloaded into an in-progress battle. Stay silent.
+    screen.state.game.battle_turn_player_id = 7
+    played = []
+    monkeypatch.setattr('utils.sound.play',
+                        lambda name, *a, **k: played.append(name))
+    screen._play_conquer_transition_sounds()
+    assert not screen._is_battle_countdown_active()
+    assert played == []
+    assert screen._conquer_countdown_done is True   # marked, never replays
+
+
+def test_transition_fresh_start_fires_when_active_first_frame(monkeypatch):
+    clock = {'now': 40_000}
+    screen = _countdown_screen(monkeypatch, clock)
+    # Active on the very first frame BUT the config screen flagged a fresh
+    # start (pre-battle beat was skipped) → still fire.
+    screen.state.game.battle_turn_player_id = 7
+    screen.state.conquer_battle_countdown_pending = True
+    monkeypatch.setattr('utils.sound.play', lambda *a, **k: True)
+    screen._play_conquer_transition_sounds()
+    assert screen._is_battle_countdown_active()
+    assert screen.state.conquer_battle_countdown_pending is False
+
+
+def test_transition_legacy_game_plays_drum_not_countdown(monkeypatch):
+    clock = {'now': 40_000}
+    screen = _countdown_screen(monkeypatch, clock, tactics=False)
+    played = []
+    monkeypatch.setattr('utils.sound.play',
+                        lambda name, *a, **k: played.append(name))
+    # Watch the pre-battle → tactics edge for a legacy battle-move game.
+    screen._play_conquer_transition_sounds()
+    screen.state.game.battle_turn_player_id = 7
+    screen._play_conquer_transition_sounds()
+    assert not screen._is_battle_countdown_active()
+    assert played == ['battle_start']       # immediate drum, no countdown
+
+
+def test_go_beat_spotlights_clash_diff(monkeypatch):
+    clock = {'now': 40_000}
+    screen = _countdown_screen(monkeypatch, clock)
+    monkeypatch.setattr('utils.sound.play', lambda *a, **k: True)
+    screen._conquer_lane_diff_rect = pygame.Rect(300, 260, 120, 90)
+    screen._start_conquer_battle_countdown()
+    screen._conquer_effects.calls.clear()
+
+    # Advance to the GO beat and pump.
+    clock['now'] = 40_000 + 3 * screen.COUNTDOWN_BEAT_MS + 10
+    screen._pump_conquer_battle_countdown()
+    names = screen._conquer_effects.names()
+    assert 'spawn_shake' in names
+    # Diff panel gets layered pulses + a burst.
+    pulses = [c for c in screen._conquer_effects.calls
+              if c[0] == 'spawn_rect_pulse']
+    assert len(pulses) == 2
+    assert all(c[1][0] == screen._conquer_lane_diff_rect for c in pulses)
+    assert 'spawn_burst' in names
+
+
+def test_go_beat_spotlight_survives_missing_diff_rect(monkeypatch):
+    clock = {'now': 40_000}
+    screen = _countdown_screen(monkeypatch, clock)
+    monkeypatch.setattr('utils.sound.play', lambda *a, **k: True)
+    # No _conquer_lane_diff_rect attribute at all → still jolts, no crash.
+    screen._start_conquer_battle_countdown()
+    screen._conquer_effects.calls.clear()
+    clock['now'] = 40_000 + 3 * screen.COUNTDOWN_BEAT_MS + 10
+    screen._pump_conquer_battle_countdown()
+    assert 'spawn_shake' in screen._conquer_effects.names()
+
+
+def test_clash_diff_hidden_during_battle_start(monkeypatch):
+    clock = {'now': 40_000}
+    screen = _countdown_screen(monkeypatch, clock)
+    # Idle (no countdown, no entrances): the real number shows.
+    assert screen._conquer_clash_diff_hidden() is False
+
+    # Countdown active → the clash-diff number is masked.
+    screen._start_conquer_battle_countdown()
+    assert screen._conquer_clash_diff_hidden() is True
+
+    # After the countdown ends → unmasked.
+    clock['now'] += 3 * screen.COUNTDOWN_BEAT_MS + screen.COUNTDOWN_GO_MS + 1
+    assert screen._conquer_clash_diff_hidden() is False
+
+    # Lane-fighter entrances still in flight also keep it masked.
+    screen._conquer_lane_figure_entrances = {'1': {'started_at': clock['now']}}
+    assert screen._conquer_clash_diff_hidden() is True
+
+
+def test_lane_render_cache_bypassed_during_countdown(monkeypatch):
+    clock = {'now': 40_000}
+    screen = _countdown_screen(monkeypatch, clock)
+    # Minimal wiring for the render-key path.
+    screen._conquer_duel_lane_last_rect = None
+    screen._tactic_flight_animation = None
+    screen._conquer_reveal_sequencer = None
+    screen._conquer_effective_layout_mode = lambda: 'battle'
+    screen._conquer_lane_context_fast_key = lambda: ('k',)
+    screen._conquer_support_hover_figure_id = None
+    screen._conquer_support_hover_side = None
+    screen._conquer_support_hover_kind = None
+    monkeypatch.setattr('pygame.mouse.get_pos', lambda: (-999, -999))
+
+    assert screen._conquer_duel_lane_render_key() is not None   # cacheable
+    screen._start_conquer_battle_countdown()
+    assert screen._conquer_duel_lane_render_key() is None       # live redraw

@@ -5,6 +5,7 @@ from pygame.locals import *
 from config import settings
 from game.core.figure_buffs import apply_buffs_allies_to_icon_map
 from game.components.conquer_layout import compute_conquer_layout
+from game.components.easing import ease_out_back
 from game.screens.sub_screen import SubScreen
 from game.components.figures.figure_manager import FigureManager
 from game.components.figures.figure import Figure
@@ -55,6 +56,13 @@ class FieldScreen(SubScreen):
         # by the conquer game screen to re-blit figures on top of the duel
         # lane so figure info boxes stay in the foreground.
         self._last_drawn_figure_layout = None
+        # Figure entrance cascade (draw-only): stamped when the conquer
+        # battle screen opens (see begin_figure_entrance_cascade); figures
+        # slide up into their compartments with a small overshoot.  Offsets
+        # apply to the DRAW position only — the icon's logical position is
+        # restored right after, so hover/click hit-testing is unaffected.
+        self._figure_entrance_anims = {}
+        self._figure_entrance_cascade_pending = False
         self.last_figure_ids = set()  # Track the last set of figure IDs
         self.last_enchantment_state = {}  # Track enchantment state for each figure
         self.last_player_id = None  # Track the last player ID to detect player changes
@@ -121,6 +129,83 @@ class FieldScreen(SubScreen):
 
         self.init_field_compartments()
 
+    # ── Figure entrance cascade (draw-only) ─────────────────────────
+
+    FIGURE_ENTRANCE_MS = 380
+    FIGURE_ENTRANCE_STAGGER_MS = 60
+
+    def begin_figure_entrance_cascade(self):
+        """Request a staggered slide-in of all field figures.
+
+        Called by the conquer battle screen on entry; the cascade stamps
+        itself on the first subsequent draw that actually has figures (so
+        async figure loads are waited out naturally).
+        """
+        self._figure_entrance_cascade_pending = True
+        self._figure_entrance_anims = {}
+
+    def _stamp_figure_entrance_cascade(self, positioned_icons):
+        """Assign staggered entrance records for the pending cascade.
+
+        ``positioned_icons`` is the frame's [(icon, x, y), ...] draw list;
+        stagger order is left-to-right, top-to-bottom so the board sweeps
+        in rather than popping at once.
+        """
+        if not self._figure_entrance_cascade_pending or not positioned_icons:
+            return
+        self._figure_entrance_cascade_pending = False
+        now = pygame.time.get_ticks()
+        ordered = sorted(positioned_icons, key=lambda item: (item[1], item[2]))
+        for index, (icon, _x, _y) in enumerate(ordered):
+            fig_id = getattr(getattr(icon, 'figure', None), 'id', None)
+            if fig_id is None:
+                continue
+            self._figure_entrance_anims[str(fig_id)] = {
+                'started_at': now + index * self.FIGURE_ENTRANCE_STAGGER_MS,
+            }
+
+    def _figure_entrance_offset(self, icon):
+        """(dx, dy) DRAW offset for an entering figure; (0, 0) once settled."""
+        anims = self._figure_entrance_anims
+        if not anims:
+            return 0, 0
+        fig_id = getattr(getattr(icon, 'figure', None), 'id', None)
+        rec = anims.get(str(fig_id))
+        if rec is None:
+            return 0, 0
+        slide = max(18, int(0.028 * settings.SCREEN_HEIGHT))
+        try:
+            t = ((pygame.time.get_ticks() - int(rec['started_at']))
+                 / max(1, self.FIGURE_ENTRANCE_MS))
+        except Exception:
+            anims.pop(str(fig_id), None)
+            return 0, 0
+        if t >= 1.0:
+            anims.pop(str(fig_id), None)
+            return 0, 0
+        if t <= 0.0:
+            return 0, slide
+        return 0, int((1.0 - ease_out_back(t)) * slide)
+
+    def _draw_icon_with_entrance(self, icon, x, y):
+        """Draw a figure icon honouring its entrance offset.
+
+        ``FieldFigureIcon.draw`` moves the icon's logical rects via
+        ``set_position`` and hover keys off them, so after an offset draw
+        the resting position is restored immediately.
+        """
+        dx, dy = self._figure_entrance_offset(icon)
+        if not dx and not dy:
+            icon.draw(x, y)
+            return
+        try:
+            icon.draw(x + dx, y + dy)
+        finally:
+            try:
+                icon.set_position(x, y)
+            except Exception:
+                pass
+
     def reset_state(self):
         """Reset all game-specific transient state.
 
@@ -133,6 +218,8 @@ class FieldScreen(SubScreen):
         self.last_enchantment_state = {}
         self.last_player_id = None
         self._last_figures_version = -1
+        self._figure_entrance_anims = {}
+        self._figure_entrance_cascade_pending = False
         self.categorized_figures = {
             'self': {'castle': [], 'village': [], 'military': []},
             'opponent': {'castle': [], 'village': [], 'military': []}
@@ -3499,18 +3586,24 @@ class FieldScreen(SubScreen):
 
             self._sync_conquer_selection_icon_states()
 
+            # Pending entrance cascade stamps itself on the first frame
+            # that actually has positioned figures.
+            self._stamp_figure_entrance_cascade(
+                all_regular + all_selected
+                + ([all_hovered] if all_hovered else []))
+
             # Draw in global z-order layers: regular -> selected -> hovered
             # Reverse regular so bottom icons are drawn first and top icons
             # paint over them, keeping each figure's lower info box visible.
             for icon, icon_x, icon_y in reversed(all_regular):
-                icon.draw(icon_x, icon_y)
+                self._draw_icon_with_entrance(icon, icon_x, icon_y)
 
             for icon, icon_x, icon_y in reversed(all_selected):
-                icon.draw(icon_x, icon_y)
+                self._draw_icon_with_entrance(icon, icon_x, icon_y)
 
             if all_hovered:
                 icon, icon_x, icon_y = all_hovered
-                icon.draw(icon_x, icon_y)
+                self._draw_icon_with_entrance(icon, icon_x, icon_y)
 
             # Cache the last draw layout so the conquer game screen can
             # redraw these icons as a top-of-z-order overlay above the
@@ -4000,15 +4093,15 @@ class FieldScreen(SubScreen):
 
         for icon, icon_x, icon_y in reversed(layout.get('regular') or []):
             if _needs_redraw(icon):
-                icon.draw(icon_x, icon_y)
+                self._draw_icon_with_entrance(icon, icon_x, icon_y)
         for icon, icon_x, icon_y in reversed(layout.get('selected') or []):
             if _needs_redraw(icon):
-                icon.draw(icon_x, icon_y)
+                self._draw_icon_with_entrance(icon, icon_x, icon_y)
         hovered = layout.get('hovered')
         if hovered:
             icon, icon_x, icon_y = hovered
             if _needs_redraw(icon):
-                icon.draw(icon_x, icon_y)
+                self._draw_icon_with_entrance(icon, icon_x, icon_y)
 
     def _draw_conquer_selection_focus(self, drawn_icons):
         """Dim the field and redraw selectable figure icons above it.
