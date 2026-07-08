@@ -4,6 +4,8 @@
 
 import json
 import os
+import sys
+import types
 
 import pytest
 
@@ -27,6 +29,75 @@ def test_every_event_has_a_generated_asset():
     missing = [name for name, (filename, _gain) in sound.EVENTS.items()
                if not os.path.exists(os.path.join(sound._sound_dir(), filename))]
     assert missing == [], f'missing SFX assets (run scripts/assets/generate_sfx.py): {missing}'
+
+
+def test_every_event_has_a_web_ogg_companion():
+    """pygbag/browser audio should use OGG companions, not WAV-only assets."""
+    missing = []
+    for name, (filename, _gain) in sound.EVENTS.items():
+        stem, _ext = os.path.splitext(filename)
+        if not os.path.exists(os.path.join(sound._sound_dir(), stem + '.ogg')):
+            missing.append(name)
+    assert missing == [], f'missing web OGG SFX assets: {missing}'
+
+
+def test_web_play_prefers_ogg_companion(tmp_path, monkeypatch):
+    paths = []
+
+    class FakeSound:
+        def __init__(self, path):
+            paths.append(os.path.basename(path))
+
+        def set_volume(self, volume):
+            self.volume = volume
+
+        def play(self):
+            self.played = True
+
+    fake_pygame = types.SimpleNamespace(
+        mixer=types.SimpleNamespace(Sound=FakeSound)
+    )
+    (tmp_path / 'ui_click.wav').write_bytes(b'wav')
+    (tmp_path / 'ui_click.ogg').write_bytes(b'ogg')
+    monkeypatch.setitem(sys.modules, 'pygame', fake_pygame)
+    monkeypatch.setattr(sound, '_IS_WEB', True)
+    monkeypatch.setattr(sound, '_sound_dir', lambda: str(tmp_path))
+    monkeypatch.setattr(sound, '_ensure_mixer', lambda: True)
+    monkeypatch.setattr(sound, 'EVENTS', {'ui_click': ('ui_click.wav', 1.0)})
+
+    assert sound.play('ui_click') is True
+    assert paths == ['ui_click.ogg']
+
+
+def test_web_play_falls_back_to_wav_when_ogg_load_fails(tmp_path, monkeypatch):
+    paths = []
+
+    class FakeSound:
+        def set_volume(self, volume):
+            self.volume = volume
+
+        def play(self):
+            self.played = True
+
+    def fake_sound(path):
+        paths.append(os.path.basename(path))
+        if path.endswith('.ogg'):
+            raise RuntimeError('bad browser decode')
+        return FakeSound()
+
+    fake_pygame = types.SimpleNamespace(
+        mixer=types.SimpleNamespace(Sound=fake_sound)
+    )
+    (tmp_path / 'ui_click.wav').write_bytes(b'wav')
+    (tmp_path / 'ui_click.ogg').write_bytes(b'ogg')
+    monkeypatch.setitem(sys.modules, 'pygame', fake_pygame)
+    monkeypatch.setattr(sound, '_IS_WEB', True)
+    monkeypatch.setattr(sound, '_sound_dir', lambda: str(tmp_path))
+    monkeypatch.setattr(sound, '_ensure_mixer', lambda: True)
+    monkeypatch.setattr(sound, 'EVENTS', {'ui_click': ('ui_click.wav', 1.0)})
+
+    assert sound.play('ui_click') is True
+    assert paths == ['ui_click.ogg', 'ui_click.wav']
 
 
 def test_unknown_event_is_silent_noop():
