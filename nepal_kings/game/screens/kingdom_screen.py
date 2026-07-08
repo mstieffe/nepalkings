@@ -14,6 +14,7 @@ from game.components.hex_map import HexMap
 from game.components.land_detail_box import LandDetailBox
 from game.components.leaderboard_panel import LeaderboardPanel
 from game.components.floating_text import FloatingText, FloatingTextLayer
+from game.components.conquer_effects import ConquerEffectsLayer
 from game.components.loading_indicator import draw_loading_indicator
 from game.components import sigil_cosmetics
 from config import settings
@@ -36,6 +37,15 @@ _BOX_Y      = menu_chrome_safe_top(int(0.10 * _SH))
 _BOX_W      = menu_chrome_safe_width(_BOX_X, int(0.87 * _SW))
 _BOX_BOTTOM = int(0.92 * _SH)
 _BOX_H      = _BOX_BOTTOM - _BOX_Y
+
+# Map scan modes: (key, short toolbar label).  'terrain' is the default rich
+# suit/tier view; the others wash the map by one dimension.
+_MAP_MODES = (
+    ('terrain',    'Terrain'),
+    ('ownership',  'Owner'),
+    ('gold',       'Gold'),
+    ('vulnerable', 'Targets'),
+)
 
 
 def _draw_panel(window, rect, corner_r=None):
@@ -188,6 +198,12 @@ class KingdomScreen(MenuScreenMixin, Screen):
             'zoom_out': '\u2212',  # minus sign
         }
 
+        # ── Map scan modes (toolbar inside the map frame) ──────────
+        # 'terrain' is the default rich suit/tier view; the others wash the
+        # map by one dimension so it's playful to scan.
+        self._map_mode = 'terrain'
+        self._map_mode_rects = {}
+
         # ── X close button (top-right of header) ───────────────────
         self._btn_close_rect = self._layout['close']
 
@@ -198,6 +214,14 @@ class KingdomScreen(MenuScreenMixin, Screen):
         self._floating_text_last_tick = pygame.time.get_ticks()
         self._collect_float_font = settings.get_font(
             getattr(settings, 'COLLECT_FLOAT_FONT_SIZE', settings.FS_HEADING), bold=True)
+
+        # ── Reward / conquest particle effects ─────────────────────
+        # Gold streams from owned lands to the HUD on Collect All, and a
+        # burst + border pulse celebrates a newly-conquered land on return.
+        self._fx = ConquerEffectsLayer(self.window, lambda _id: None)
+        # Set of my land ids from the last map load; diffed to detect new
+        # conquests (a land that became mine) so we can celebrate it.
+        self._prev_my_land_ids = None
 
         # ── Track last load time ────────────────────────────────────
         self._last_load_tick = 0
@@ -257,6 +281,8 @@ class KingdomScreen(MenuScreenMixin, Screen):
         """
         self._last_load_tick = pygame.time.get_ticks()
         self._floating_text_last_tick = pygame.time.get_ticks()
+        if getattr(self, '_fx', None):
+            self._fx.clear()
         self._load_map()
 
     # ── Data loading ────────────────────────────────────────────────
@@ -358,6 +384,9 @@ class KingdomScreen(MenuScreenMixin, Screen):
         else:
             self._hex_map.set_viewport(self._map_viewport_rect)
             self._hex_map.update_data(lands)
+        # Re-apply the chosen scan mode (survives cold rebuilds + refreshes).
+        if hasattr(self._hex_map, 'set_map_mode'):
+            self._hex_map.set_map_mode(self._map_mode)
 
         # Position minimap inside the framed map viewport (bottom-right)
         mm_w = settings.MINIMAP_W
@@ -397,11 +426,21 @@ class KingdomScreen(MenuScreenMixin, Screen):
         # the screen is open never points past the new list.
         self._clamp_kingdom_chip_index()
 
-        # During first-session conquest, focus the forgiving recommended
-        # target. Otherwise open where the player's kingdom is strongest.
-        if not (self._recommended_tutorial_land_id
-                and self._hex_map.focus_land(self._recommended_tutorial_land_id)):
+        # Detect lands that just became mine (e.g. after returning from a
+        # winning conquest) by diffing against the previous load.
+        new_conquered = self._diff_new_conquests(lands)
+
+        # Focus: a just-conquered land is the hero; otherwise the first-session
+        # recommended target, otherwise where the player's kingdom is strongest.
+        focused = bool(new_conquered
+                       and self._hex_map.focus_lands(new_conquered))
+        if not focused and not (self._recommended_tutorial_land_id
+                                and self._hex_map.focus_land(
+                                    self._recommended_tutorial_land_id)):
             self._focus_largest_kingdom_component()
+
+        if new_conquered:
+            self._celebrate_conquests(new_conquered)
 
         self._loading = False
         logger.debug(f'Kingdom map loaded: {len(lands)} lands')
@@ -722,10 +761,15 @@ class KingdomScreen(MenuScreenMixin, Screen):
             # Leaderboard panel sits on top of the hex map at the top-left
             # of the viewport so it mirrors the minimap (bottom-right).
             self._leaderboard_panel.render()
+            # Scan-mode toolbar sits at the top-right of the map.
+            self._draw_map_modes_toolbar()
 
         # Kingdom selector chip lives inside the header — always drawn so
         # it stays available even while the map is loading.
         self._draw_kingdom_chip()
+
+        # Hover preview card (sits above the map, below the modal layer).
+        self._draw_hover_preview()
 
         self._draw_close_x_button()
 
@@ -743,6 +787,10 @@ class KingdomScreen(MenuScreenMixin, Screen):
         self._floating_text_last_tick = now_ms
         self._floating_text.update(dt_ms)
         self._floating_text.draw(self.window)
+
+        # Reward / conquest particle effects (gold streams, conquest bursts).
+        if getattr(self, '_fx', None):
+            self._fx.draw()
 
         self._draw_menu_overlay()
         self._draw_menu_coach(self._current_kingdom_coach_step())
@@ -1501,11 +1549,24 @@ class KingdomScreen(MenuScreenMixin, Screen):
         small_font = self._kingdom_chip_small_font
         name = str(kingdom.get('name') or f'Kingdom #{kingdom.get("id")}')
 
-        # Geometry inside the header (left-aligned).
-        chip_h = max(int(0.038 * _SH), font.get_height() + 8)
-        sigil_sz = max(14, int(chip_h * 0.78))
-        chevron_w = max(14, int(chip_h * 0.55))
-        gear_sz = max(16, int(chip_h * 0.75))
+        # Level / XP progression (from serialize_kingdom_config).
+        level = int(kingdom.get('level') or 1)
+        level_max = int(kingdom.get('level_max') or level)
+        xp_into = float(kingdom.get('xp_into_level') or 0.0)
+        xp_next = float(kingdom.get('xp_for_next_level') or 0.0)
+        at_max = level >= level_max or xp_next <= 0
+        xp_frac = 1.0 if at_max else (
+            max(0.0, min(1.0, xp_into / xp_next)) if xp_next else 0.0)
+        lv_text = 'MAX' if at_max else f'Lv {level}'
+
+        # Taller two-line "hero" chip: line 1 = sigil + name + counter,
+        # line 2 = level + XP progress bar, so the active kingdom reads as
+        # the player's identity rather than a small selector.
+        chip_h = max(int(0.056 * _SH),
+                     font.get_height() + small_font.get_height() + 12)
+        sigil_sz = max(18, int(chip_h * 0.62))
+        chevron_w = max(14, int(chip_h * 0.42))
+        gear_sz = max(16, int(chip_h * 0.52))
         pad_x = max(6, int(0.006 * _SW))
 
         # Truncate name to fit a reasonable budget.
@@ -1519,13 +1580,17 @@ class KingdomScreen(MenuScreenMixin, Screen):
         position_label = f'{self._kingdom_chip_index + 1}/{len(kingdoms)}'
         pos_surf = small_font.render(position_label, True,
                                      settings.KINGDOM_ACTIVITY_DIM_CLR)
+        lv_surf = small_font.render(lv_text, True, (232, 208, 150))
 
-        chip_w = (pad_x + sigil_sz + 6 + chevron_w + 4 + name_surf.get_width()
-                  + 6 + pos_surf.get_width() + 4 + chevron_w + 6 + gear_sz
-                  + pad_x)
+        line1_w = name_surf.get_width() + 6 + pos_surf.get_width()
+        min_bar = int(0.055 * _SW)
+        block_w = max(line1_w, lv_surf.get_width() + 6 + min_bar)
+
+        chip_w = (pad_x + sigil_sz + 6 + chevron_w + 4 + block_w
+                  + 6 + chevron_w + 6 + gear_sz + pad_x)
 
         # Anchor the chip just to the right of the box's left pad, vertically
-        # aligned with the info bar.
+        # centred in the header.
         chip_x = self._header_rect.x + 6
         chip_y = self._header_rect.y + max(
             0, (self._header_rect.h - chip_h) // 2)
@@ -1533,11 +1598,12 @@ class KingdomScreen(MenuScreenMixin, Screen):
         self._kingdom_chip_rect = chip_rect
 
         # Background pill.
+        radius = min(chip_h // 2, int(0.014 * _SH))
         bg = pygame.Surface((chip_rect.w, chip_rect.h), pygame.SRCALPHA)
-        pygame.draw.rect(bg, (20, 18, 14, 200), bg.get_rect(),
-                         border_radius=chip_h // 2)
+        pygame.draw.rect(bg, (20, 18, 14, 210), bg.get_rect(),
+                         border_radius=radius)
         pygame.draw.rect(bg, settings.KINGDOM_MAP_FRAME_BORDER, bg.get_rect(),
-                         1, border_radius=chip_h // 2)
+                         1, border_radius=radius)
         self.window.blit(bg, chip_rect.topleft)
 
         cursor_x = chip_x + pad_x
@@ -1559,36 +1625,51 @@ class KingdomScreen(MenuScreenMixin, Screen):
                     sigil_key, sigil_sz, accent)
             except Exception:
                 sigil_surf = None
-        sigil_y = chip_y + (chip_h - sigil_sz) // 2
+        sigil_cy = chip_y + chip_h // 2
+        sigil_y = sigil_cy - sigil_sz // 2
         if sigil_surf is not None:
             self.window.blit(sigil_surf, (cursor_x, sigil_y))
         else:
             pygame.draw.circle(self.window, accent,
-                               (cursor_x + sigil_sz // 2,
-                                sigil_y + sigil_sz // 2),
+                               (cursor_x + sigil_sz // 2, sigil_cy),
                                sigil_sz // 2)
             pygame.draw.circle(self.window, (24, 18, 6),
-                               (cursor_x + sigil_sz // 2,
-                                sigil_y + sigil_sz // 2),
+                               (cursor_x + sigil_sz // 2, sigil_cy),
                                sigil_sz // 2, 1)
         cursor_x += sigil_sz + 6
 
-        # Prev chevron.
+        # Prev chevron (spans both lines).
         prev_rect = pygame.Rect(cursor_x, chip_y + 2, chevron_w, chip_h - 4)
         if len(kingdoms) > 1:
             self._kingdom_chip_prev_rect = prev_rect
             self._draw_chip_chevron(prev_rect, '‹')
         cursor_x += chevron_w + 4
 
-        # Name.
+        # Two-line block: name + counter (line 1), level + XP bar (line 2).
+        block_x = cursor_x
+        line1_cy = chip_y + int(chip_h * 0.31)
+        line2_cy = chip_y + int(chip_h * 0.70)
         self.window.blit(name_surf,
-                         name_surf.get_rect(midleft=(cursor_x, chip_rect.centery)))
-        cursor_x += name_surf.get_width() + 6
+                         name_surf.get_rect(midleft=(block_x, line1_cy)))
+        self.window.blit(pos_surf, pos_surf.get_rect(
+            midleft=(block_x + name_surf.get_width() + 6, line1_cy)))
 
-        # Position label (e.g. "2/4").
-        self.window.blit(pos_surf,
-                         pos_surf.get_rect(midleft=(cursor_x, chip_rect.centery)))
-        cursor_x += pos_surf.get_width() + 4
+        self.window.blit(lv_surf, lv_surf.get_rect(midleft=(block_x, line2_cy)))
+        bar_x = block_x + lv_surf.get_width() + 6
+        bar_w = max(24, block_x + block_w - bar_x)
+        bar_h = max(3, int(chip_h * 0.11))
+        bar_y = line2_cy - bar_h // 2
+        pygame.draw.rect(self.window, (46, 40, 30),
+                         (bar_x, bar_y, bar_w, bar_h), border_radius=bar_h // 2)
+        fill_w = int(bar_w * xp_frac)
+        if fill_w > 0:
+            fill_clr = (230, 200, 110) if at_max else (150, 205, 140)
+            pygame.draw.rect(self.window, fill_clr,
+                             (bar_x, bar_y, fill_w, bar_h),
+                             border_radius=bar_h // 2)
+        pygame.draw.rect(self.window, (96, 86, 64),
+                         (bar_x, bar_y, bar_w, bar_h), 1, border_radius=bar_h // 2)
+        cursor_x = block_x + block_w + 6
 
         # Next chevron.
         next_rect = pygame.Rect(cursor_x, chip_y + 2, chevron_w, chip_h - 4)
@@ -1904,36 +1985,40 @@ class KingdomScreen(MenuScreenMixin, Screen):
             # X close button
             if (event.type == MOUSEBUTTONUP and event.button == 1
                     and not self.dialogue_box
-                    and not self._detail_box
                     and self._btn_close_rect.collidepoint(event.pos)):
                 self.state.screen = 'game_menu'
                 return
 
+            # ESC → dismiss the anchored inspector first, else leave the screen.
+            if event.type == KEYDOWN and event.key == K_ESCAPE:
+                if self._detail_box:
+                    self._detail_box = None
+                    continue
+                if not self.dialogue_box:
+                    self.state.screen = 'game_menu'
+                    return
+
             # Click outside content box → back to game menu
             if (event.type == MOUSEBUTTONUP and event.button == 1
                     and not self.dialogue_box
-                    and not self._detail_box
                     and not (self._hex_map and self._hex_map.is_drag_release(event))
                     and not self._box_rect.collidepoint(event.pos)):
                 self.state.screen = 'game_menu'
                 return
 
-            # If detail box is open, route events there
+            # Anchored land inspector: consume only clicks that land on the
+            # panel itself (buttons / close).  Every other event falls through
+            # so the map stays pannable/zoomable and clicking another hex
+            # re-targets the panel (handled in the hex-map block below).
             if self._detail_box:
-                action = self._detail_box.handle_event(event)
-                if action == 'conquer':
-                    land_id = self._detail_box.tile.land_id if self._detail_box else '?'
-                    logger.info(f'Conquer requested for land {land_id}')
-                    self._detail_box = None
-                elif action == 'defence':
-                    land_id = self._detail_box.tile.land_id if self._detail_box else '?'
-                    logger.info(f'Defence config requested for land {land_id}')
-                    self._detail_box = None
-                elif action == 'message':
-                    self._detail_box = None
-                elif action == 'close':
-                    self._detail_box = None
-                continue
+                on_panel = (
+                    event.type in (MOUSEBUTTONUP, MOUSEBUTTONDOWN)
+                    and event.button == 1
+                    and self._detail_box.contains_point(event.pos)
+                )
+                if on_panel:
+                    self._detail_box.handle_event(event)
+                    continue
 
             if event.type == MOUSEWHEEL:
                 if self._activity_rect.collidepoint(pygame.mouse.get_pos()):
@@ -1952,6 +2037,10 @@ class KingdomScreen(MenuScreenMixin, Screen):
 
             if event.type == MOUSEBUTTONUP and event.button == 1:
                 if self._handle_activity_click(event.pos):
+                    continue
+
+                # Map scan-mode toolbar (top-right of the map).
+                if self._handle_map_mode_click(event.pos):
                     continue
 
                 # Kingdom selector chip (header) — prev/next + gear-to-config.
@@ -1992,7 +2081,10 @@ class KingdomScreen(MenuScreenMixin, Screen):
 
             # Hex map events (pan, zoom wheel, click) — gated so the
             # leaderboard panel and chip swallow clicks that land on them.
-            if self._hex_map and not self._detail_box:
+            # The anchored inspector no longer blocks the map; clicks on the
+            # panel were already consumed above, and clicking another hex here
+            # re-targets the inspector.
+            if self._hex_map:
                 if event.type == MOUSEBUTTONDOWN and event.button == 1:
                     lb = getattr(self, '_leaderboard_panel', None)
                     chip_rect = getattr(self, '_kingdom_chip_rect', None)
@@ -2000,6 +2092,7 @@ class KingdomScreen(MenuScreenMixin, Screen):
                         (lb is not None and lb.contains_point(event.pos))
                         or (chip_rect is not None
                             and chip_rect.collidepoint(event.pos))
+                        or self._point_in_map_modes(event.pos)
                     )
                     if blocked:
                         continue
@@ -2007,9 +2100,10 @@ class KingdomScreen(MenuScreenMixin, Screen):
                 if clicked_tile:
                     self._open_detail(clicked_tile)
 
-        # Keyboard pan (continuous)
+        # Keyboard pan (continuous) — stays live while the anchored inspector
+        # is open so the map keeps exploring.
         keys = pygame.key.get_pressed()
-        if self._hex_map and not self._detail_box:
+        if self._hex_map:
             pan_speed = 8 / self._hex_map.zoom
             if keys[K_LEFT] or keys[K_a]:
                 self._hex_map.pan(-pan_speed, 0)
@@ -2020,8 +2114,75 @@ class KingdomScreen(MenuScreenMixin, Screen):
             if keys[K_DOWN] or keys[K_s]:
                 self._hex_map.pan(0, pan_speed)
 
-        if keys[K_ESCAPE] and not self._detail_box:
-            self.state.screen = 'game_menu'
+    def _diff_new_conquests(self, lands):
+        """Return land ids that became mine since the last load; update state.
+
+        Returns [] on the very first load (no baseline to diff against) so
+        pre-existing lands are never celebrated.
+        """
+        my_ids = {ld.get('id') for ld in lands if ld.get('is_mine')}
+        prev = getattr(self, '_prev_my_land_ids', None)
+        new = [lid for lid in my_ids if lid not in prev] if prev is not None else []
+        self._prev_my_land_ids = my_ids
+        return new
+
+    def _celebrate_conquests(self, land_ids):
+        """Burst + border-merge pulse on lands that just became mine."""
+        fx = getattr(self, '_fx', None)
+        if not fx or not self._hex_map:
+            return
+        gold = (255, 214, 96)
+        pale = (255, 246, 205)
+        green = (140, 224, 150)
+        played = False
+        for lid in list(land_ids)[:4]:
+            rect = self._hex_map.land_screen_rect(lid)
+            if not rect:
+                continue
+            # The tile now wears the player's colours: pulse its border as it
+            # merges into the kingdom, then pop a celebratory upward burst.
+            fx.spawn_rect_pulse(rect, green, secondary=(230, 255, 225),
+                                duration_ms=680, scale=1.15)
+            fx.spawn_burst(rect, gold, secondary=pale, count=24,
+                           upward_bias=0.4, speed=(140.0, 320.0),
+                           life_ms=(420, 820))
+            played = True
+        if played:
+            fx.spawn_banner('Land conquered!', green, duration_ms=1100)
+
+    def _collect_reward_fx(self, gold_amount, main_boosters, side_boosters):
+        """Stream gold orbs from owned lands toward the HUD gold widget."""
+        fx = getattr(self, '_fx', None)
+        target = getattr(self, '_user_item_display_rect', None)
+        if not fx or not self._hex_map or target is None:
+            return
+        if gold_amount <= 0 and main_boosters <= 0 and side_boosters <= 0:
+            return
+        gold = (255, 214, 96)
+        pale = (255, 246, 205)
+        # Target the gold slot at the left of the HUD currency box.
+        gold_slot = pygame.Rect(target.x, target.y,
+                                max(24, int(target.w * 0.28)), target.h)
+        # Source rects: on-screen owned lands (capped so the burst stays
+        # tasteful and within the particle budget).
+        sources = []
+        for tile in self._hex_map.tiles:
+            if not tile.is_mine:
+                continue
+            rect = self._hex_map.land_screen_rect(tile.land_id)
+            if rect:
+                sources.append(rect)
+            if len(sources) >= 8:
+                break
+        if not sources:
+            fx.spawn_rect_pulse(gold_slot, gold, secondary=pale, duration_ms=520)
+            return
+        for i, src in enumerate(sources):
+            fx.spawn_copy_ghost(src, gold_slot, color=gold, secondary=pale,
+                                duration_ms=900 + i * 60)
+        # Land with a pulse on the HUD once the orbs arrive.
+        fx.spawn_rect_pulse(gold_slot, gold, secondary=pale,
+                            duration_ms=560, delay_ms=760)
 
     def _collect_all_gold(self):
         """POST to collect all kingdom production and spawn feedback."""
@@ -2102,6 +2263,9 @@ class KingdomScreen(MenuScreenMixin, Screen):
                 parts.append(f'+{side_collected} side booster')
             if hasattr(self.state, 'set_msg'):
                 self.state.set_msg('Collected ' + ', '.join(parts))
+        # Gold orbs stream from owned lands to the HUD gold widget.  Spawned
+        # before the reload so the source land rects use the current camera.
+        self._collect_reward_fx(total_collected, main_collected, side_collected)
         # Refresh map data so vault bars / pending totals update.
         # Reset the floater tick after the blocking reload so network latency
         # does not instantly age out the newly added burst.
@@ -2729,7 +2893,7 @@ class KingdomScreen(MenuScreenMixin, Screen):
     # ── Detail box ──────────────────────────────────────────────────
 
     def _open_detail(self, tile):
-        """Open the land detail modal for *tile*."""
+        """Open the anchored land inspector for *tile*."""
         conquest_outcome = (
             self._hex_map.conquest_outcome_for(tile)
             if self._hex_map else None
@@ -2744,9 +2908,294 @@ class KingdomScreen(MenuScreenMixin, Screen):
             on_message=self._on_message_owner,
             on_close=lambda: setattr(self, '_detail_box', None),
             conquest_outcome=conquest_outcome,
+            anchored=True,
+            viewport_rect=self._map_viewport_rect,
         )
+        self._keep_selected_hex_visible(tile)
         if self._kingdom_coach_ready() and self._detail_conquer_button_rect():
             self._mark_menu_coach_seen('kingdom_pick_land')
+
+    def _keep_selected_hex_visible(self, tile):
+        """Pan the map so the inspected hex stays visible above the sheet.
+
+        Only nudges the camera when the tile would otherwise sit behind (or
+        below the top edge of) the anchored inspector, recentring it into the
+        middle of the visible band above the panel.
+        """
+        if not self._hex_map or not self._detail_box:
+            return
+        box = self._detail_box.box_rect
+        if not box:
+            return
+        vp = self._map_viewport_rect
+        margin = int(0.02 * settings.SCREEN_HEIGHT)
+        tile_rect = self._hex_map.land_screen_rect(tile.land_id)
+        covered = tile_rect is None or tile_rect.bottom > box.top - margin
+        if not covered:
+            return
+        desired_sy = (vp.y + box.top) / 2
+        offset = (vp.y + vp.h / 2) - desired_sy
+        self._hex_map.focus_land(tile.land_id, screen_offset_y=offset)
+
+    # ── Hover preview ────────────────────────────────────────────────
+
+    def _draw_hover_preview(self):
+        """Draw a compact info card next to the hovered hex.
+
+        Reveals production, tier, suit bonus, owner and (for enemy/neutral
+        land) what conquering it would mean — so players can scan and compare
+        lands without opening the inspector.
+        """
+        hm = self._hex_map
+        if not hm or self._loading or self._error:
+            return
+        tile = getattr(hm, 'hovered_tile', None)
+        if tile is None:
+            return
+        # Suppress under blocking modals/overlays and for the land already
+        # open in the inspector (avoids duplicating its info).
+        if (self._thread or self._new_msg_picker
+                or getattr(self, '_kingdom_overview_dialogue', None)
+                or getattr(self, 'dialogue_box', None)):
+            return
+        if (self._detail_box
+                and getattr(self._detail_box.tile, 'land_id', None) == tile.land_id):
+            return
+
+        tan = getattr(settings, 'KINGDOM_INFO_CLR', (214, 200, 168))
+        title_clr = getattr(settings, 'LAND_DETAIL_TITLE_CLR', (236, 214, 150))
+        dim = getattr(settings, 'KINGDOM_ACTIVITY_DIM_CLR', (150, 140, 120))
+        good = getattr(settings, 'KINGDOM_CONFIG_GOOD_CLR', (132, 220, 142))
+
+        # Build (kind, text, color) rows.
+        rows = [('title', f'Land ({tile.col}, {tile.row})', title_clr),
+                ('tier', f'Tier {int(tile.tier)}', tan),
+                ('body', f'{tile.gold_rate:.1f} gold / hour', tan)]
+        if (tile.suit_bonus_suit and tile.suit_bonus_suit != 'Neutral'
+                and tile.suit_bonus_value):
+            rows.append(('body',
+                         f'Suit: {tile.suit_bonus_suit} +{tile.suit_bonus_value}',
+                         tan))
+        else:
+            rows.append(('body', 'Neutral land (no suit bonus)', dim))
+        if tile.is_mine:
+            rows.append(('body', 'Owner: You', good))
+        elif getattr(tile, 'owner_username', None):
+            rows.append(('body', f'Owner: {tile.owner_username}', tan))
+        else:
+            rows.append(('body', 'Unclaimed (AI defended)', dim))
+        if not tile.is_mine:
+            shield = getattr(tile, 'kingdom_shield_remaining', 0) or 0
+            reason = getattr(tile, 'kingdom_shield_reason', None)
+            if reason == 'core_protection' or shield < 0:
+                rows.append(('body', 'Protected: cannot be conquered',
+                             (216, 132, 132)))
+            elif shield > 0:
+                rows.append(('body', 'Kingdom shield active', (216, 168, 116)))
+            else:
+                outcome = hm.conquest_outcome_for(tile)
+                if outcome == 'expand':
+                    rows.append(('body', 'Conquer: expands your kingdom',
+                                 (124, 202, 124)))
+                elif outcome:
+                    rows.append(('body', 'Conquer: starts a new kingdom',
+                                 (205, 178, 112)))
+
+        title_font = self._activity_title_font
+        body_font = self._activity_font
+        pad = max(6, int(0.008 * settings.SCREEN_HEIGHT))
+        gap = 3
+        pip_r = max(2, int(body_font.get_height() * 0.18))
+
+        # Measure.
+        surfs = []
+        max_w = 0
+        total_h = 0
+        for kind, text, clr in rows:
+            font = title_font if kind == 'title' else body_font
+            surf = font.render(text, True, clr)
+            w = surf.get_width()
+            if kind == 'tier':
+                w += int(tile.tier) * (pip_r * 2 + 3) + 6
+            max_w = max(max_w, w)
+            surfs.append((kind, surf))
+            total_h += surf.get_height() + gap
+        total_h -= gap
+        card_w = max_w + pad * 2
+        card_h = total_h + pad * 2
+
+        # Position beside the hovered hex (flip / clamp inside the viewport).
+        vp = self._map_viewport_rect
+        hex_rect = hm.land_screen_rect(tile.land_id)
+        if hex_rect:
+            cx = hex_rect.right + 12
+            cy = hex_rect.centery - card_h // 2
+            if cx + card_w > vp.right - 4:
+                cx = hex_rect.left - card_w - 12
+        else:
+            mx, my = pygame.mouse.get_pos()
+            cx, cy = mx + 16, my + 16
+            if cx + card_w > vp.right - 4:
+                cx = mx - card_w - 16
+        cx = max(vp.x + 4, min(cx, vp.right - card_w - 4))
+        cy = max(vp.y + 4, min(cy, vp.bottom - card_h - 4))
+
+        # Panel.
+        panel = pygame.Surface((card_w, card_h), pygame.SRCALPHA)
+        pygame.draw.rect(panel, (24, 20, 15, 234), panel.get_rect(),
+                         border_radius=8)
+        pygame.draw.rect(panel, settings.KINGDOM_MAP_FRAME_BORDER,
+                         panel.get_rect(), 1, border_radius=8)
+        self.window.blit(panel, (cx, cy))
+
+        y = cy + pad
+        for kind, surf in surfs:
+            self.window.blit(surf, (cx + pad, y))
+            if kind == 'tier':
+                px = cx + pad + surf.get_width() + 6
+                py = y + surf.get_height() // 2
+                for _ in range(int(tile.tier)):
+                    pygame.draw.circle(self.window, settings.HEX_STAR_FILL,
+                                       (px + pip_r, py), pip_r)
+                    pygame.draw.circle(self.window, settings.HEX_STAR_BORDER,
+                                       (px + pip_r, py), pip_r, 1)
+                    px += pip_r * 2 + 3
+            y += surf.get_height() + gap
+
+    # ── Map scan modes toolbar ───────────────────────────────────────
+
+    def _draw_map_modes_toolbar(self):
+        """Draw the scan-mode toolbar (top-right of the map) + a legend."""
+        self._map_mode_rects = {}
+        if not self._hex_map or self._loading or self._error:
+            return
+        vp = self._map_viewport_rect
+        font = self._nav_font
+        pad_x = max(6, int(0.006 * settings.SCREEN_WIDTH))
+        pad_y = max(3, int(0.004 * settings.SCREEN_HEIGHT))
+        gap = max(4, int(0.004 * settings.SCREEN_WIDTH))
+        margin = max(6, int(0.008 * settings.SCREEN_HEIGHT))
+
+        btns = []
+        total_w = 0
+        h = 0
+        for key, label in _MAP_MODES:
+            tw, th = font.size(label)
+            bw = tw + pad_x * 2
+            bh = th + pad_y * 2
+            btns.append((key, label, bw))
+            total_w += bw + gap
+            h = max(h, bh)
+        total_w -= gap
+
+        x = vp.right - margin - total_w
+        y = vp.y + margin
+        mx, my = pygame.mouse.get_pos()
+        for key, label, bw in btns:
+            rect = pygame.Rect(x, y, bw, h)
+            active = (key == self._map_mode)
+            hovered = rect.collidepoint(mx, my)
+            if active:
+                bg, border, tclr = (196, 150, 60, 235), (236, 206, 130), (28, 22, 10)
+            elif hovered:
+                bg, border, tclr = (60, 54, 40, 232), (200, 180, 130), (245, 232, 196)
+            else:
+                bg, border, tclr = (34, 30, 22, 214), (120, 108, 82), (206, 194, 162)
+            bsurf = pygame.Surface((bw, h), pygame.SRCALPHA)
+            pygame.draw.rect(bsurf, bg, bsurf.get_rect(), border_radius=6)
+            pygame.draw.rect(bsurf, border, bsurf.get_rect(), 1, border_radius=6)
+            self.window.blit(bsurf, rect.topleft)
+            tsurf = font.render(label, True, tclr)
+            self.window.blit(tsurf, tsurf.get_rect(center=rect.center))
+            self._map_mode_rects[key] = rect
+            x += bw + gap
+
+        self._draw_map_mode_legend(vp, y + h + max(3, pad_y), margin)
+
+    def _draw_map_mode_legend(self, vp, top_y, margin):
+        """Compact right-aligned legend describing the active scan mode."""
+        mode = self._map_mode
+        font = self._activity_small_font
+        pad = max(5, int(0.005 * settings.SCREEN_HEIGHT))
+        swatch = max(8, int(0.012 * settings.SCREEN_HEIGHT))
+        border_clr = settings.KINGDOM_MAP_FRAME_BORDER
+        label_clr = (206, 194, 162)
+
+        def _panel(w, ht):
+            cx = vp.right - margin - w
+            surf = pygame.Surface((w, ht), pygame.SRCALPHA)
+            pygame.draw.rect(surf, (24, 20, 15, 224), surf.get_rect(),
+                             border_radius=6)
+            pygame.draw.rect(surf, border_clr, surf.get_rect(), 1,
+                             border_radius=6)
+            self.window.blit(surf, (cx, top_y))
+            return cx
+
+        if mode == 'gold':
+            bar_w = max(80, int(0.10 * settings.SCREEN_WIDTH))
+            lo_s = font.render('Low', True, label_clr)
+            hi_s = font.render('High', True, label_clr)
+            content_w = lo_s.get_width() + 6 + bar_w + 6 + hi_s.get_width()
+            card_w = content_w + pad * 2
+            card_h = max(swatch, lo_s.get_height()) + pad * 2
+            cx = _panel(card_w, card_h)
+            midy = top_y + card_h // 2
+            x = cx + pad
+            self.window.blit(lo_s, lo_s.get_rect(midleft=(x, midy)))
+            x += lo_s.get_width() + 6
+            for i in range(bar_w):
+                t = i / max(1, bar_w - 1)
+                clr = (int(58 + t * 197), int(50 + t * 168), int(74 - t * 44))
+                pygame.draw.line(self.window, clr,
+                                 (x + i, midy - swatch // 2),
+                                 (x + i, midy + swatch // 2))
+            pygame.draw.rect(self.window, border_clr,
+                             (x, midy - swatch // 2, bar_w, swatch), 1)
+            x += bar_w + 6
+            self.window.blit(hi_s, hi_s.get_rect(midleft=(x, midy)))
+            return
+
+        if mode == 'ownership':
+            items = [((70, 200, 120), 'You'), ((210, 90, 80), 'Rival'),
+                     ((120, 132, 150), 'Unclaimed')]
+        elif mode == 'vulnerable':
+            items = [((70, 205, 110), 'Open'), ((210, 162, 72), 'Cooldown'),
+                     ((200, 70, 70), 'Protected')]
+        else:
+            return  # terrain: no legend needed
+
+        labels = [font.render(t, True, label_clr) for _, t in items]
+        content_w = (sum(swatch + 4 + s.get_width() for s in labels)
+                     + max(0, len(items) - 1) * 8)
+        card_w = content_w + pad * 2
+        card_h = max(swatch, labels[0].get_height()) + pad * 2
+        cx = _panel(card_w, card_h)
+        midy = top_y + card_h // 2
+        x = cx + pad
+        for (clr, _), lsurf in zip(items, labels):
+            pygame.draw.rect(self.window, clr,
+                             (x, midy - swatch // 2, swatch, swatch),
+                             border_radius=3)
+            pygame.draw.rect(self.window, (0, 0, 0),
+                             (x, midy - swatch // 2, swatch, swatch), 1,
+                             border_radius=3)
+            x += swatch + 4
+            self.window.blit(lsurf, lsurf.get_rect(midleft=(x, midy)))
+            x += lsurf.get_width() + 8
+
+    def _handle_map_mode_click(self, pos):
+        """Switch scan mode if *pos* hits a toolbar button. Returns bool."""
+        for key, rect in (getattr(self, '_map_mode_rects', None) or {}).items():
+            if rect.collidepoint(pos):
+                self._map_mode = key
+                if self._hex_map and hasattr(self._hex_map, 'set_map_mode'):
+                    self._hex_map.set_map_mode(key)
+                return True
+        return False
+
+    def _point_in_map_modes(self, pos):
+        return any(r.collidepoint(pos)
+                   for r in (getattr(self, '_map_mode_rects', None) or {}).values())
 
     def _on_conquer(self, tile):
         """Transition to the conquer screen for this land."""

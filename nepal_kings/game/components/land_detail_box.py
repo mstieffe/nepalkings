@@ -153,9 +153,15 @@ class LandDetailBox:
 
     def __init__(self, window, tile, cooldown=0, land_cooldown=0,
                  on_conquer=None, on_defence=None, on_close=None,
-                 on_message=None, on_config=None, conquest_outcome=None):
+                 on_message=None, on_config=None, conquest_outcome=None,
+                 anchored=False, viewport_rect=None):
         self.window = window
         self.tile = tile
+        # Anchored mode docks a compact sheet to the bottom of the map
+        # viewport (no full-screen dim) so exploration continues around it.
+        self._anchored = bool(anchored)
+        self._viewport_rect = (pygame.Rect(viewport_rect)
+                               if viewport_rect is not None else None)
         self._base_cooldown = max(0, int(cooldown or 0))
         self._base_land_cooldown = max(0, int(land_cooldown or 0))
         self._on_conquer = on_conquer
@@ -322,10 +328,20 @@ class LandDetailBox:
         )
         content_h = pad + text_h + pad + button_stack_h + pad
 
-        # Position box (centred on screen)
+        # Position box.  Anchored mode docks a compact sheet to the bottom of
+        # the map viewport (so exploration continues around it); modal mode
+        # centres it on screen.
         sw, sh = settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT
-        self._box_rect = pygame.Rect((sw - w) // 2, (sh - content_h) // 2,
-                                     w, content_h)
+        if self._anchored and self._viewport_rect is not None:
+            vp = self._viewport_rect
+            margin = int(0.014 * sh)
+            box_x = vp.centerx - w // 2
+            box_x = max(vp.x + margin, min(box_x, vp.right - w - margin))
+            box_y = max(vp.y + margin, vp.bottom - content_h - margin)
+            self._box_rect = pygame.Rect(box_x, box_y, w, content_h)
+        else:
+            self._box_rect = pygame.Rect((sw - w) // 2, (sh - content_h) // 2,
+                                         w, content_h)
 
         # X close button (top-right of box)
         _xsz = int(0.028 * sh)
@@ -404,8 +420,10 @@ class LandDetailBox:
                         self._on_message(self.tile)
                     return action
 
-            # Click outside box → close
-            if not self._box_rect.collidepoint(event.pos):
+            # Click outside box → close (modal only).  The anchored inspector
+            # lets outside clicks fall through so the map stays interactive and
+            # clicking another hex re-targets the panel.
+            if not self._anchored and not self._box_rect.collidepoint(event.pos):
                 if self._on_close:
                     self._on_close()
                 return 'close'
@@ -417,14 +435,32 @@ class LandDetailBox:
 
         return None
 
+    def contains_point(self, pos):
+        """True when *pos* is inside the panel (used to gate map clicks)."""
+        return bool(self._box_rect and self._box_rect.collidepoint(pos))
+
+    @property
+    def box_rect(self):
+        """The panel's on-screen rect (available after construction)."""
+        return self._box_rect
+
     def render(self):
-        """Draw semi-transparent overlay + detail box."""
+        """Draw the detail panel (full-screen dim only in modal mode)."""
         sw, sh = settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT
 
-        # Dim overlay
-        overlay = pygame.Surface((sw, sh), pygame.SRCALPHA)
-        overlay.fill((0, 0, 0, 120))
-        self.window.blit(overlay, (0, 0))
+        if self._anchored:
+            # No full-screen dim so the map stays legible and explorable.
+            # Cast a soft drop shadow so the panel still reads over the map.
+            shadow = pygame.Surface(
+                (self._box_rect.w + 18, self._box_rect.h + 18), pygame.SRCALPHA)
+            pygame.draw.rect(shadow, (0, 0, 0, 90), shadow.get_rect(),
+                             border_radius=settings.LAND_DETAIL_CORNER_R + 5)
+            self.window.blit(shadow, (self._box_rect.x - 9, self._box_rect.y - 6))
+        else:
+            # Dim overlay
+            overlay = pygame.Surface((sw, sh), pygame.SRCALPHA)
+            overlay.fill((0, 0, 0, 120))
+            self.window.blit(overlay, (0, 0))
 
         # Box background
         box_surf = pygame.Surface((self._box_rect.w, self._box_rect.h), pygame.SRCALPHA)

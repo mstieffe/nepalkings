@@ -292,6 +292,11 @@ class HexMap:
         self.hovered_tile = None
         self.selected_tile = None
 
+        # Map scan mode ('terrain' = the default rich view; other modes wash
+        # each tile with a data-driven colour so the map is playful to scan).
+        self.map_mode = 'terrain'
+        self._gold_range = None
+
         # Build tiles
         self.tiles = []
         self._tile_by_coord = {}
@@ -833,6 +838,71 @@ class HexMap:
         self._draw_hex_border(tile, corners)
         self._draw_hex_details(tile, scx, scy, sz)
 
+    # ── Map scan modes ─────────────────────────────────────────────
+
+    def set_map_mode(self, mode):
+        """Switch the map scan mode ('terrain'/'ownership'/'gold'/'vulnerable')."""
+        self.map_mode = mode or 'terrain'
+
+    def _ensure_gold_range(self):
+        """Cache (min, max) gold rate across tiles for the gold heatmap."""
+        if self._gold_range is None:
+            rates = [t.gold_rate for t in self.tiles] if self.tiles else [0.0]
+            lo, hi = min(rates), max(rates)
+            self._gold_range = (lo, hi if hi > lo else lo + 1.0)
+        return self._gold_range
+
+    def _mode_overlay_color(self, tile):
+        """Return an (r, g, b, a) wash for the active scan mode, or None.
+
+        ``terrain`` (default) returns None so the rich suit/tier art shows
+        through unchanged; the other modes tint every tile by one dimension
+        so the whole map can be scanned at a glance.
+        """
+        mode = getattr(self, 'map_mode', 'terrain')
+        if mode == 'terrain':
+            return None
+        if mode == 'ownership':
+            if tile.is_mine:
+                return (70, 200, 120, 120)
+            if tile.owner:
+                return (210, 90, 80, 120)
+            return (120, 132, 150, 95)
+        if mode == 'gold':
+            lo, hi = self._ensure_gold_range()
+            t = (tile.gold_rate - lo) / (hi - lo) if hi > lo else 0.0
+            t = max(0.0, min(1.0, t))
+            # dark slate → bright gold
+            return (int(58 + t * 197), int(50 + t * 168), int(74 - t * 44), 152)
+        if mode == 'vulnerable':
+            if tile.is_mine:
+                return (60, 90, 150, 70)
+            shield = getattr(tile, 'kingdom_shield_remaining', 0) or 0
+            reason = getattr(tile, 'kingdom_shield_reason', None)
+            cooldown = getattr(tile, 'conquer_cooldown_remaining', 0) or 0
+            if reason == 'core_protection' or shield != 0:
+                return (200, 70, 70, 135)
+            if cooldown > 0:
+                return (210, 162, 72, 130)
+            return (70, 205, 110, 140)
+        return None
+
+    def _draw_mode_wash(self, tile, corners):
+        """Blit the active scan-mode colour over a tile (under hover)."""
+        mode_clr = self._mode_overlay_color(tile)
+        if mode_clr is None:
+            return
+        xs = [p[0] for p in corners]
+        ys = [p[1] for p in corners]
+        min_x = int(min(xs)) - 1
+        min_y = int(min(ys)) - 1
+        ow = int(max(xs)) - min_x + 2
+        oh = int(max(ys)) - min_y + 2
+        ovl = pygame.Surface((ow, oh), pygame.SRCALPHA)
+        local = [(p[0] - min_x, p[1] - min_y) for p in corners]
+        pygame.draw.polygon(ovl, mode_clr, local)
+        self.window.blit(ovl, (min_x, min_y))
+
     def _draw_hex_base(self, tile, corners, scx, scy, sz):
         """Draw glow, fill, and owned-land surface cosmetics."""
         # Fill colour follows suit-bonus colour; tier controls intensity.
@@ -933,6 +1003,10 @@ class HexMap:
                                              (int(scx) - sz_int, int(scy) - sz_int))
                         except Exception:
                             pass
+
+        # Map scan-mode wash (ownership / gold / vulnerable) painted over the
+        # base art, but under the hover highlight so hovering still reads.
+        self._draw_mode_wash(tile, corners)
 
         # Warm-white hover wash painted on top of fill + surface skin so the
         # highlight reads clearly even through opaque cosmetics (parchment,
@@ -2177,13 +2251,19 @@ class HexMap:
                                int(half_w * 2), int(half_h * 2))
         return None
 
-    def focus_land(self, land_id):
-        """Select and centre the map on a land id. Returns the tile if found."""
+    def focus_land(self, land_id, *, screen_offset_y=0):
+        """Select and centre the map on a land id. Returns the tile if found.
+
+        ``screen_offset_y`` shifts the tile that many pixels *above* the
+        viewport centre — used to keep a selected hex visible above the
+        anchored land inspector sheet.
+        """
         for tile in self.tiles:
             if tile.land_id == land_id:
                 self.selected_tile = tile
                 self.camera_x = tile.cx - self.viewport_rect.w / (2 * self.zoom)
-                self.camera_y = tile.cy - self.viewport_rect.h / (2 * self.zoom)
+                self.camera_y = tile.cy - (
+                    self.viewport_rect.h / 2 - screen_offset_y) / self.zoom
                 self._clamp_camera()
                 return tile
         return None
@@ -2364,3 +2444,4 @@ class HexMap:
         self.camera_x, self.camera_y, self.zoom = old_cam
         self.selected_tile = None
         self.hovered_tile = None
+        self._gold_range = None

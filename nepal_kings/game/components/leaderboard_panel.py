@@ -23,6 +23,8 @@ class LeaderboardPanel:
         # icons in the panel match the on-map badge crowns exactly.
         self._render_crown_icon = render_crown_icon
         self._row_rects = []  # [(pygame.Rect, target_dict)]
+        self.collapsed = False
+        self._toggle_rect = None
         self._top_largest = []
         self._top_realms = []
         self._my_largest_rank = None
@@ -52,19 +54,57 @@ class LeaderboardPanel:
         self._my_realm_rank = my_realm_rank
         self._my_realm_size = int(my_realm_size or 0)
 
+    def _header_h(self):
+        return self._title_font.get_height() + 8
+
+    def _visible_rect(self):
+        """Rect actually drawn/hit-tested (header only when collapsed)."""
+        if self.rect is None:
+            return None
+        if self.collapsed:
+            return pygame.Rect(self.rect.x, self.rect.y, self.rect.w,
+                               self._header_h())
+        return self.rect
+
+    def _draw_toggle(self, vr):
+        """Collapse/expand caret at the panel's top-right corner."""
+        sz = max(12, int(vr.w * 0.09))
+        tr = pygame.Rect(vr.right - sz - 5, vr.y + 5, sz, sz)
+        self._toggle_rect = tr
+        hovered = tr.collidepoint(pygame.mouse.get_pos())
+        clr = (245, 232, 196) if hovered else (200, 188, 158)
+        cx, cy = tr.center
+        w = max(4, int(sz * 0.30))
+        h = max(3, int(sz * 0.22))
+        if self.collapsed:
+            pts = [(cx - w, cy - h), (cx + w, cy - h), (cx, cy + h)]  # ▾ expand
+        else:
+            pts = [(cx - w, cy + h), (cx + w, cy + h), (cx, cy - h)]  # ▴ collapse
+        pygame.draw.polygon(self.window, clr, pts)
+
     def render(self):
         if self.rect is None:
             return
         r = self.rect
+        vr = self._visible_rect()
         self._row_rects = []
 
-        # Background panel + border.
-        surf = pygame.Surface((r.w, r.h), pygame.SRCALPHA)
+        # Background panel + border (header-height only when collapsed).
+        surf = pygame.Surface((vr.w, vr.h), pygame.SRCALPHA)
         pygame.draw.rect(surf, settings.MINIMAP_BG_CLR, surf.get_rect(),
                          border_radius=6)
-        self.window.blit(surf, r.topleft)
-        pygame.draw.rect(self.window, settings.MINIMAP_BORDER_CLR, r,
+        self.window.blit(surf, vr.topleft)
+        pygame.draw.rect(self.window, settings.MINIMAP_BORDER_CLR, vr,
                          settings.MINIMAP_BORDER_W, border_radius=6)
+
+        self._draw_toggle(vr)
+
+        if self.collapsed:
+            label = self._title_font.render('Leaderboard', True,
+                                            settings.KINGDOM_INFO_CLR)
+            self.window.blit(label, label.get_rect(
+                midleft=(vr.x + 8, vr.centery)))
+            return
 
         old_clip = self.window.get_clip()
         self.window.set_clip(r)
@@ -197,8 +237,15 @@ class LeaderboardPanel:
         """Return a target dict if a row was clicked, else None."""
         if event.type != pygame.MOUSEBUTTONUP or event.button != 1:
             return None
-        if self.rect is None or not self.rect.collidepoint(event.pos):
+        vr = self._visible_rect()
+        if vr is None or not vr.collidepoint(event.pos):
             return None
+        # Collapse / expand toggle.
+        if self._toggle_rect and self._toggle_rect.collidepoint(event.pos):
+            self.collapsed = not self.collapsed
+            return {}
+        if self.collapsed:
+            return {}  # consume clicks on the collapsed header bar
         for rect, entry in self._row_rects:
             if rect.collidepoint(event.pos):
                 if callable(self.on_focus):
@@ -209,4 +256,5 @@ class LeaderboardPanel:
         return {}
 
     def contains_point(self, pos):
-        return bool(self.rect and self.rect.collidepoint(pos))
+        vr = self._visible_rect()
+        return bool(vr and vr.collidepoint(pos))
