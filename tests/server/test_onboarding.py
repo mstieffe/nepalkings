@@ -2,6 +2,8 @@
 # See LICENSE file in the project root for full license information.
 """Tests for onboarding state, rewards, and counters."""
 
+from datetime import datetime
+
 from werkzeug.security import generate_password_hash
 
 from models import CollectionCard, Game, GameResult, Land, LandAttackLog, User
@@ -362,3 +364,153 @@ def test_finish_tutorial_reward_unlocks_on_first_conquered_land(client, db, two_
     assert claim_data['balances']['booster_packs'] == 6
     assert claim_data['balances']['booster_packs_side'] == 2
     assert 'finish_tutorial' in claim_data['onboarding']['claimed_rewards']
+
+
+def test_daily_quest_locked_before_first_conquest(client, auth_headers_user1):
+    state = client.get('/onboarding/state', headers=auth_headers_user1).get_json()['onboarding']
+
+    quest = state['daily_quest']
+    assert quest['id'] == 'daily_quest'
+    assert quest['locked'] is True
+    assert quest['claimable'] is False
+
+    blocked = client.post('/onboarding/claim_reward', headers=auth_headers_user1,
+                          json={'reward_id': 'daily_quest'})
+    assert blocked.status_code == 400
+
+
+def test_daily_quest_is_deterministic_after_unlock(client, db, two_users, auth_headers_user1, monkeypatch):
+    import onboarding_service
+
+    u1, _ = two_users
+    onboarding_service.mark_step(u1, 'finish_first_conquer_battle')
+    db.session.commit()
+    monkeypatch.setattr(onboarding_service, '_daily_quest_day_key',
+                        lambda now=None: '2026-07-08')
+    monkeypatch.setattr(onboarding_service, '_daily_quest_resets_at',
+                        lambda now=None: datetime(2026, 7, 9))
+
+    first = client.get('/onboarding/state', headers=auth_headers_user1).get_json()['onboarding']
+    second = client.get('/onboarding/state', headers=auth_headers_user1).get_json()['onboarding']
+    expected = onboarding_service._select_daily_quest(u1.id, '2026-07-08')['id']
+
+    assert first['daily_quest'].get('locked') is not True
+    assert first['daily_quest']['quest_id'] == expected
+    assert second['daily_quest']['quest_id'] == expected
+    db.session.refresh(u1)
+    assert u1.onboarding_state['daily_quest']['day_key'] == '2026-07-08'
+    assert u1.onboarding_state['daily_quest']['baseline']['duel_finishes'] == 0
+
+
+def test_daily_quest_progress_claim_and_idempotency(client, db, two_users, auth_headers_user1, monkeypatch):
+    import onboarding_service
+
+    u1, u2 = two_users
+    u1.gold = 100
+    onboarding_service.mark_step(u1, 'finish_first_conquer_battle')
+    db.session.commit()
+    monkeypatch.setattr(onboarding_service, '_daily_quest_day_key',
+                        lambda now=None: '2026-07-08')
+    monkeypatch.setattr(onboarding_service, '_daily_quest_resets_at',
+                        lambda now=None: datetime(2026, 7, 9))
+    monkeypatch.setattr(
+        onboarding_service,
+        '_select_daily_quest',
+        lambda user_id, day_key, quests=None: onboarding_service.DAILY_QUEST_BY_ID['dq_finish_1_duel'],
+    )
+
+    initial = client.get('/onboarding/state', headers=auth_headers_user1).get_json()['onboarding']
+    assert initial['daily_quest']['progress'] == 0
+    assert initial['daily_quest']['claimable'] is False
+    blocked = client.post('/onboarding/claim_reward', headers=auth_headers_user1,
+                          json={'reward_id': 'daily_quest'})
+    assert blocked.status_code == 400
+
+    _add_game_result(db, u1, u2)
+    db.session.commit()
+
+    ready = client.get('/onboarding/state', headers=auth_headers_user1).get_json()['onboarding']
+    assert ready['daily_quest']['progress'] == 1
+    assert ready['daily_quest']['completed'] is True
+    assert ready['daily_quest']['claimable'] is True
+    assert ready['pending_reward_count'] >= 1
+
+    claimed = client.post('/onboarding/claim_reward', headers=auth_headers_user1,
+                          json={'reward_id': 'daily_quest'})
+    data = claimed.get_json()
+    assert claimed.status_code == 200
+    assert data['reward_id'] == 'daily_quest'
+    assert data['reward'] == {'gold': 60}
+    assert data['balances']['gold'] == 160
+    assert data['onboarding']['daily_quest']['claimed'] is True
+
+    again = client.post('/onboarding/claim_reward', headers=auth_headers_user1,
+                        json={'reward_id': 'daily_quest'})
+    again_data = again.get_json()
+    assert again.status_code == 200
+    assert again_data['already_claimed'] is True
+    assert again_data['balances']['gold'] == 160
+
+
+def test_daily_quest_rollover_starts_fresh(client, db, two_users, auth_headers_user1, monkeypatch):
+    import onboarding_service
+
+    u1, u2 = two_users
+    day = {'value': '2026-07-08'}
+    onboarding_service.mark_step(u1, 'finish_first_conquer_battle')
+    db.session.commit()
+    monkeypatch.setattr(onboarding_service, '_daily_quest_day_key',
+                        lambda now=None: day['value'])
+    monkeypatch.setattr(onboarding_service, '_daily_quest_resets_at',
+                        lambda now=None: datetime(2026, 7, 9))
+    monkeypatch.setattr(
+        onboarding_service,
+        '_select_daily_quest',
+        lambda user_id, day_key, quests=None: onboarding_service.DAILY_QUEST_BY_ID['dq_finish_1_duel'],
+    )
+
+    client.get('/onboarding/state', headers=auth_headers_user1)
+    _add_game_result(db, u1, u2)
+    db.session.commit()
+    claimed = client.post('/onboarding/claim_reward', headers=auth_headers_user1,
+                          json={'reward_id': 'daily_quest'})
+    assert claimed.status_code == 200
+
+    day['value'] = '2026-07-09'
+    next_day = client.get('/onboarding/state', headers=auth_headers_user1).get_json()['onboarding']
+    quest = next_day['daily_quest']
+    assert quest['day_key'] == '2026-07-09'
+    assert quest['progress'] == 0
+    assert quest['claimed'] is False
+    assert quest['claimable'] is False
+
+
+def test_daily_quest_action_after_rollover_before_guide_is_counted(db, two_users, monkeypatch):
+    import onboarding_service
+
+    u1, _ = two_users
+    day = {'value': '2026-07-08'}
+    onboarding_service.mark_step(u1, 'finish_first_conquer_battle')
+    db.session.commit()
+    monkeypatch.setattr(onboarding_service, '_daily_quest_day_key',
+                        lambda now=None: day['value'])
+    monkeypatch.setattr(onboarding_service, '_daily_quest_resets_at',
+                        lambda now=None: datetime(2026, 7, 9))
+    monkeypatch.setattr(
+        onboarding_service,
+        '_select_daily_quest',
+        lambda user_id, day_key, quests=None: onboarding_service.DAILY_QUEST_BY_ID['dq_earn_100_gold'],
+    )
+
+    onboarding_service.serialize_onboarding_state(u1)
+    db.session.commit()
+    day['value'] = '2026-07-09'
+
+    onboarding_service.record_gold_earned(u1, 100)
+    db.session.commit()
+
+    state = onboarding_service.serialize_onboarding_state(u1)
+    quest = state['daily_quest']
+    assert quest['day_key'] == '2026-07-09'
+    assert quest['progress'] == 100
+    assert quest['claimable'] is True

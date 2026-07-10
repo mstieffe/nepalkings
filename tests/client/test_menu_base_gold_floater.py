@@ -2,6 +2,7 @@
 # See LICENSE file in the project root for full license information.
 """Tests for shared menu chrome gold-gain floater bookkeeping."""
 
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 
@@ -22,6 +23,37 @@ def _ensure_pygame_display():
         pygame.display.init()
     if pygame.display.get_surface() is None:
         pygame.display.set_mode((1, 1))
+
+
+def _daily_quest_screen(quest=None):
+    import pygame
+    from config import settings
+    from game.screens._menu_base import MenuScreenMixin
+
+    _ensure_pygame_display()
+    screen = object.__new__(MenuScreenMixin)
+    screen.window = pygame.Surface((620, 180), pygame.SRCALPHA)
+    screen.state = SimpleNamespace(user_dict={
+        'gold': 100,
+        'onboarding': {'daily_quest': quest} if quest is not None else {},
+    })
+    screen._onboarding_guide_buttons = []
+    screen._onboarding_guide_font = settings.get_font(max(16, int(0.020 * settings.SCREEN_HEIGHT)))
+    screen._onboarding_guide_small_font = settings.get_font(max(14, int(0.017 * settings.SCREEN_HEIGHT)))
+    screen._onboarding_guide_section_font = settings.get_font(
+        max(18, int(0.023 * settings.SCREEN_HEIGHT)), bold=True)
+    screen._onboarding_guide_icon_cache = {}
+
+    def icon(color):
+        surf = pygame.Surface((24, 24), pygame.SRCALPHA)
+        surf.fill(color)
+        return surf
+
+    screen._gold_icon = icon((220, 180, 70, 255))
+    screen._booster_icon = icon((90, 150, 220, 255))
+    screen._booster_side_icon = icon((170, 120, 220, 255))
+    screen._map_icon = icon((120, 190, 120, 255))
+    return screen
 
 
 def test_gold_gain_spawns_top_bar_floater():
@@ -101,6 +133,57 @@ def test_onboarding_reward_floaters_use_collect_animation_labels():
         settings.COLLECT_FLOAT_STAGGER_MS * 2,
         settings.COLLECT_FLOAT_STAGGER_MS * 3,
     ]
+
+
+def test_daily_quest_countdown_text_formats_reset_time():
+    screen = _daily_quest_screen()
+    future = datetime.now(timezone.utc) + timedelta(hours=2, minutes=4)
+
+    assert screen._daily_quest_countdown_text(future.isoformat()).startswith('Resets in 2h')
+    assert screen._daily_quest_countdown_text(datetime.now(timezone.utc).isoformat()) == 'Resets soon'
+    assert screen._daily_quest_countdown_text('') == ''
+    assert screen._daily_quest_countdown_text('not-a-date') == ''
+
+
+def test_daily_quest_claimable_card_registers_claim_button():
+    import pygame
+
+    screen = _daily_quest_screen({
+        'title': 'Finish 1 duel',
+        'description': 'Play one full duel today.',
+        'progress': 1,
+        'target': 1,
+        'claimable': True,
+        'claimed': False,
+        'reward': {'gold': 60},
+        'resets_at': (datetime.now(timezone.utc) + timedelta(hours=3)).isoformat(),
+    })
+
+    screen._draw_onboarding_area_overview(pygame.Rect(10, 10, 560, 120))
+
+    assert any(action == ('claim', 'daily_quest')
+               for _rect, action in screen._onboarding_guide_buttons)
+
+
+def test_daily_quest_locked_and_missing_cards_do_not_register_claim_button():
+    import pygame
+
+    locked = _daily_quest_screen({
+        'locked': True,
+        'title': 'Daily Quest',
+        'description': 'Conquer your first land to unlock daily quests.',
+        'progress': 0,
+        'target': 1,
+        'claimable': False,
+        'reward': {},
+    })
+    locked._draw_onboarding_area_overview(pygame.Rect(10, 10, 560, 120))
+
+    missing = _daily_quest_screen()
+    missing._draw_onboarding_area_overview(pygame.Rect(10, 10, 560, 120))
+
+    assert locked._onboarding_guide_buttons == []
+    assert missing._onboarding_guide_buttons == []
 
 
 def test_onboarding_guide_claim_spawns_reward_floaters(monkeypatch):

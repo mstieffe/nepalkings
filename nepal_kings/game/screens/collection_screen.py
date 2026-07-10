@@ -95,6 +95,27 @@ def _collection_stats(cards, locked=None):
     }
 
 
+def _free_card_count(cards, locked, suit, rank):
+    """Return how many owned copies are not locked in defence/conquer use."""
+    key = (suit, rank)
+    total = max(0, int(cards.get(key, 0) or 0))
+    locked_qty = max(0, int((locked or {}).get(key, 0) or 0))
+    return max(0, total - locked_qty)
+
+
+def _owned_card_fully_locked(cards, locked, suit, rank):
+    """Return True only for owned cards that have no free copies."""
+    total = max(0, int(cards.get((suit, rank), 0) or 0))
+    return total > 0 and _free_card_count(cards, locked, suit, rank) <= 0
+
+
+def _collection_card_visible(cards, locked, suit, rank, show_locked=False):
+    """Whether a collection card should be visible in the current filter."""
+    if show_locked:
+        return True
+    return not _owned_card_fully_locked(cards, locked, suit, rank)
+
+
 def _draw_panel(window, rect, corner_r=None):
     r = corner_r or settings.SUB_SCREEN_PANEL_CORNER_R
     surf = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
@@ -232,6 +253,21 @@ class CollectionScreen(MenuScreenMixin, Screen):
             _BOX_W - _panel_pad * 2,
             settings.COLLECTION_STATS_STRIP_H,
         )
+        _locked_toggle_w = min(
+            int(0.106 * _SW),
+            max(int(0.078 * _SW), self._stats_rect.w // 5),
+        )
+        _locked_toggle_h = min(
+            settings.COLLECTION_PACK_PANEL_BTN_H,
+            max(14, self._stats_rect.h - int(0.008 * _SH)),
+        )
+        self._locked_toggle_rect = pygame.Rect(
+            self._stats_rect.right - int(0.008 * _SW) - _locked_toggle_w,
+            self._stats_rect.centery - _locked_toggle_h // 2,
+            _locked_toggle_w,
+            _locked_toggle_h,
+        )
+        self._show_locked_cards = False
         _panel_top = self._stats_rect.bottom + int(0.012 * _SH)
         _panel_bottom = _pack_y - int(0.014 * _SH)
         self._panel_rect = pygame.Rect(
@@ -394,12 +430,20 @@ class CollectionScreen(MenuScreenMixin, Screen):
 
             # Main cards
             for col_i, rank in enumerate(self._main_ranks):
+                if not _collection_card_visible(
+                        self._cards, self._locked, suit, rank,
+                        getattr(self, '_show_locked_cards', False)):
+                    continue
                 cx = cards_x + col_i * (cw + gx)
                 positions.append((cx, row_y, suit, rank, 'main'))
                 self._card_rects.append((pygame.Rect(cx, row_y, cw, ch), suit, rank, 'main'))
 
             # Side cards (same row, to the right)
             for col_i, rank in enumerate(self._side_ranks):
+                if not _collection_card_visible(
+                        self._cards, self._locked, suit, rank,
+                        getattr(self, '_show_locked_cards', False)):
+                    continue
                 cx = side_x + col_i * (cw + gx)
                 positions.append((cx, row_y, suit, rank, 'side'))
                 self._card_rects.append((pygame.Rect(cx, row_y, cw, ch), suit, rank, 'side'))
@@ -499,7 +543,10 @@ class CollectionScreen(MenuScreenMixin, Screen):
             rendered.append((label_surf, value_surf, label_surf.get_width() + value_surf.get_width()))
         sep_w = int(0.018 * _SW)
         total_w = sum(width for _, _, width in rendered) + sep_w * (len(rendered) - 1)
-        x = r.centerx - total_w // 2
+        content_left = r.x + int(0.008 * _SW)
+        content_right = self._locked_toggle_rect.left - int(0.010 * _SW)
+        content_w = max(1, content_right - content_left)
+        x = content_left + max(0, (content_w - total_w) // 2)
         y = r.centery
         for i, (label_surf, value_surf, width) in enumerate(rendered):
             self.window.blit(label_surf, label_surf.get_rect(left=x, centery=y))
@@ -511,6 +558,7 @@ class CollectionScreen(MenuScreenMixin, Screen):
                                  (sep_x, r.y + int(0.010 * _SH)),
                                  (sep_x, r.bottom - int(0.010 * _SH)), 1)
                 x += sep_w
+        self._draw_locked_visibility_toggle()
 
     def _draw_pack_panel(self, pack_type):
         """Draw one grouped booster pack control panel."""
@@ -584,6 +632,9 @@ class CollectionScreen(MenuScreenMixin, Screen):
 
         # Cards
         mouse_pos = pygame.mouse.get_pos()
+        if not positions:
+            self._draw_empty_grid_message()
+            return
         for (cx, cy, suit, rank, section) in positions:
             # Skip if outside visible panel
             if cy + ch < self._panel_rect.y or cy > self._panel_rect.bottom:
@@ -610,11 +661,25 @@ class CollectionScreen(MenuScreenMixin, Screen):
                     glow_surf = pygame.Surface((cw + 4, ch + 4), pygame.SRCALPHA)
                     pygame.draw.rect(glow_surf, (250, 221, 0, 80), glow_surf.get_rect(), 2)
                     self.window.blit(glow_surf, (cx - 2, cy - 2))
-                self._draw_card_badge(cx, cy, cw, qty, locked)
+                self._draw_card_badge(
+                    cx, cy, cw, qty, locked,
+                    show_locked=getattr(self, '_show_locked_cards', False),
+                )
             else:
                 card.draw_front_bright(cx, cy)
                 self.window.blit(self._grey_overlay, (cx, cy))
                 self._draw_tier_border(cx, cy, cw, ch, rank, section, owned=False)
+
+    def _draw_empty_grid_message(self):
+        """Draw a small status message when the active filter has no cards."""
+        if not getattr(self, '_data_loaded', False):
+            text = 'Loading collection...'
+        elif getattr(self, '_show_locked_cards', False):
+            text = 'No owned cards yet'
+        else:
+            text = 'No free cards to show'
+        msg = self._stats_font.render(text, True, settings.COLLECTION_PACK_PANEL_MUTED_CLR)
+        self.window.blit(msg, msg.get_rect(center=self._panel_rect.center))
 
     def _draw_tier_border(self, cx, cy, cw, ch, rank, section, owned=True):
         """Draw a subtle tier-coloured outline just outside the card edge."""
@@ -630,15 +695,19 @@ class CollectionScreen(MenuScreenMixin, Screen):
         pygame.draw.rect(surf, clr, surf.get_rect(), thickness, border_radius=4)
         self.window.blit(surf, (cx - 2, cy - 2))
 
-    def _draw_card_badge(self, cx, cy, cw, qty, locked=0):
+    def _draw_card_badge(self, cx, cy, cw, qty, locked=0, show_locked=True):
         """Draw the available/owned badge at the bottom-right of a card."""
         free = max(0, qty - locked)
-        badge_text = f'{free}/{qty}'
-        if free == 0 and qty > 0:
-            bg_clr = (88, 80, 66, 220)        # all locked → muted grey
-        elif locked > 0:
-            bg_clr = (120, 90, 30, 210)       # some locked → amber
+        if show_locked:
+            badge_text = f'{free}/{qty}'
+            if free == 0 and qty > 0:
+                bg_clr = (88, 80, 66, 220)        # all locked -> muted grey
+            elif locked > 0:
+                bg_clr = (120, 90, 30, 210)       # some locked -> amber
+            else:
+                bg_clr = settings.COLLECTION_BADGE_BG_CLR
         else:
+            badge_text = str(free)
             bg_clr = settings.COLLECTION_BADGE_BG_CLR
         badge_surf = self._badge_font.render(badge_text, True, settings.COLLECTION_BADGE_CLR)
         bw = badge_surf.get_width() + settings.COLLECTION_BADGE_PAD_X * 2
@@ -808,6 +877,56 @@ class CollectionScreen(MenuScreenMixin, Screen):
         for mode_key, rect in self._mode_btn_rects.items():
             label = settings.COLLECTION_MODE_BTN_TEXT[mode_key]
             self._draw_mode_toggle_button(rect, label, mode_key == self._mode)
+
+    def _draw_locked_visibility_toggle(self):
+        """Draw the show-locked-cards toggle in the collection stats strip."""
+        rect = self._locked_toggle_rect
+        active = bool(getattr(self, '_show_locked_cards', False))
+        mouse_pos = pygame.mouse.get_pos()
+        hovered = (
+            rect.collidepoint(mouse_pos)
+            and not self.dialogue_box
+            and not self._sell_dialogue
+            and not self._trade_dialogue
+            and not self._profile_dialogue
+            and not self._reveal_overlay
+        )
+
+        if active:
+            bg_clr = (72, 60, 28, 228)
+            border_clr = (250, 221, 0)
+            txt_clr = (255, 245, 200)
+        elif hovered:
+            bg_clr = (52, 48, 36, 218)
+            border_clr = (190, 165, 105)
+            txt_clr = (236, 224, 190)
+        else:
+            bg_clr = (35, 35, 40, 190)
+            border_clr = (120, 110, 90, 190)
+            txt_clr = settings.COLLECTION_PACK_PANEL_TEXT_CLR
+
+        surf = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
+        pygame.draw.rect(surf, bg_clr, surf.get_rect(), border_radius=6)
+        pygame.draw.rect(surf, border_clr, surf.get_rect(),
+                         2 if active else 1, border_radius=6)
+        self.window.blit(surf, rect.topleft)
+
+        box_sz = max(10, min(rect.h - 8, int(0.018 * _SH)))
+        box = pygame.Rect(rect.x + 6, rect.centery - box_sz // 2, box_sz, box_sz)
+        pygame.draw.rect(self.window, (24, 24, 28), box, border_radius=3)
+        pygame.draw.rect(self.window, border_clr, box, 1, border_radius=3)
+        if active:
+            p1 = (box.x + max(2, box_sz // 5), box.centery)
+            p2 = (box.x + box_sz // 2, box.bottom - max(3, box_sz // 5))
+            p3 = (box.right - max(2, box_sz // 6), box.y + max(3, box_sz // 5))
+            pygame.draw.lines(self.window, txt_clr, False, [p1, p2, p3], 2)
+
+        label = self._pack_detail_font.render('Locked', True, txt_clr)
+        label_x = box.right + 5
+        self.window.blit(label, label.get_rect(
+            left=label_x,
+            centery=rect.centery,
+        ))
 
     def _draw_mode_toggle_button(self, rect, text, active):
         """Draw a mode toggle (active = highlighted)."""
@@ -2015,6 +2134,10 @@ class CollectionScreen(MenuScreenMixin, Screen):
                         break
                 if _mode_clicked:
                     self._toggle_mode(_mode_clicked)
+                    continue
+
+                if self._locked_toggle_rect.collidepoint(event.pos):
+                    self._show_locked_cards = not self._show_locked_cards
                     continue
 
                 # Card clicks (only within panel) — behaviour depends on mode

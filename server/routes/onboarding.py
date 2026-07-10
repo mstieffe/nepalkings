@@ -34,9 +34,11 @@ def get_onboarding_state():
     user = _current_user()
     if not user:
         return jsonify({'success': False, 'message': 'User not found'}), 404
+    onboarding_payload = serialize_onboarding_state(user)
+    db.session.commit()
     return jsonify({
         'success': True,
-        'onboarding': serialize_onboarding_state(user),
+        'onboarding': onboarding_payload,
     })
 
 

@@ -1319,13 +1319,15 @@ def _finalize_game_over(game, winner_player, reason='stake', checkmate_figure_na
     winner_rewards = _award_duel_rewards(winner_user, reward_draws['winner'])
     loser_rewards = _award_duel_rewards(loser_user, reward_draws['loser'])
     try:
-        from onboarding_service import mark_step, record_gold_earned
+        from onboarding_service import ensure_daily_quest, mark_step, record_gold_earned
         if winner_user:
+            ensure_daily_quest(winner_user)
             mark_step(winner_user, 'finish_first_duel')
             record_gold_earned(
                 winner_user,
                 gold_awarded + int(winner_rewards.get('gold') or 0))
         if loser_user:
+            ensure_daily_quest(loser_user)
             mark_step(loser_user, 'finish_first_duel')
             record_gold_earned(loser_user, int(loser_rewards.get('gold') or 0))
     except Exception:
@@ -7868,6 +7870,14 @@ def _resolve_conquer_battle(game, winner, requesting_player):
                 _wipe_land_config_return_unlooted(atk_cfg, looted_ids)
 
     consumed_cards = []
+
+    try:
+        from onboarding_service import ensure_daily_quest
+        ensure_daily_quest(attacker_user)
+        if defender_user and not is_ai_land:
+            ensure_daily_quest(defender_user)
+    except Exception:
+        logger.exception("Failed to refresh daily quest before conquer result")
 
     # Create attack log
     log = LandAttackLog(

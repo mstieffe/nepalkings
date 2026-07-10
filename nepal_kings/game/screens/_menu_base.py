@@ -10,6 +10,8 @@ Provides:
 """
 
 import os
+from datetime import datetime, timezone
+
 import pygame
 from config import settings
 from game.components.coach_card import draw_coach_highlight, draw_coach_spotlight
@@ -1021,7 +1023,7 @@ class MenuScreenMixin:
                 resume_rect, resume_label, ('resume_tutorial', None))
             area_top = pause_rect.bottom + int(0.018 * _SH)
 
-        area_h = max(84, int(0.108 * _SH))
+        area_h = max(104, int(0.124 * _SH))
         self._draw_onboarding_area_overview(
             pygame.Rect(rect.x + 22, area_top, rect.w - 44, area_h))
 
@@ -1159,32 +1161,115 @@ class MenuScreenMixin:
         self._ensure_guide_rulebook().draw_embedded()
 
     def _draw_onboarding_area_overview(self, rect):
+        onboarding = self._onboarding() or {}
+        quest = onboarding.get('daily_quest') or {}
         header = self._onboarding_guide_section_font.render(
-            'Where To Go', True, settings.SUB_SCREEN_HEADER_CLR)
+            'Daily Quest', True, settings.SUB_SCREEN_HEADER_CLR)
         self.window.blit(header, (rect.x, rect.y))
-        items = [
-            ('Kingdom', 'Conquer lands and collect production.'),
-            ('Duel', 'Play full duels against other players.'),
-            ('Collection', 'Open boosters, trade, and sell cards.'),
-            ('Rankings', 'Compare progress with other players.'),
-        ]
-        gap = int(0.010 * _SW)
+
+        countdown = self._daily_quest_countdown_text(quest.get('resets_at'))
+        if countdown:
+            countdown_surf = self._onboarding_guide_small_font.render(
+                countdown, True, (170, 160, 135))
+            self.window.blit(countdown_surf, (
+                rect.right - countdown_surf.get_width(),
+                rect.y + header.get_height() // 2 - countdown_surf.get_height() // 2,
+            ))
+
         top = rect.y + header.get_height() + 8
-        row_h = max(46, rect.bottom - top)
-        card_w = (rect.w - gap * (len(items) - 1)) // len(items)
-        x = rect.x
-        for title, body in items:
-            card = pygame.Rect(x, top, card_w, row_h)
-            bg = pygame.Surface((card.w, card.h), pygame.SRCALPHA)
-            bg.fill((24, 22, 19, 150))
-            self.window.blit(bg, card.topleft)
-            pygame.draw.rect(self.window, (112, 96, 66), card, 1, border_radius=5)
-            title_surf = self._onboarding_guide_font.render(title, True, (235, 222, 184))
-            self.window.blit(title_surf, (card.x + 10, card.y + 7))
-            body = self._fit_text(body, self._onboarding_guide_small_font, card.w - 20)
-            body_surf = self._onboarding_guide_small_font.render(body, True, (170, 160, 135))
-            self.window.blit(body_surf, (card.x + 10, card.bottom - body_surf.get_height() - 7))
-            x += card_w + gap
+        card = pygame.Rect(rect.x, top, rect.w, max(54, rect.bottom - top))
+        bg = pygame.Surface((card.w, card.h), pygame.SRCALPHA)
+        bg.fill((34, 29, 23, 178) if quest.get('claimable') else (24, 22, 19, 150))
+        self.window.blit(bg, card.topleft)
+        border = (215, 184, 92) if quest.get('claimable') else (112, 96, 66)
+        pygame.draw.rect(self.window, border, card, 1, border_radius=5)
+
+        pad = 12
+        side_w = max(126, min(190, int(card.w * 0.28)))
+        left_w = max(80, card.w - side_w - pad * 3)
+        title = quest.get('title') or 'Daily Quest'
+        desc = quest.get('description') or 'Open the Guide to refresh today\'s quest.'
+        title = self._fit_text(title, self._onboarding_guide_font, left_w)
+        title_surf = self._onboarding_guide_font.render(title, True, (235, 222, 184))
+        self.window.blit(title_surf, (card.x + pad, card.y + 8))
+
+        desc = self._fit_text(desc, self._onboarding_guide_small_font, left_w)
+        desc_surf = self._onboarding_guide_small_font.render(desc, True, (170, 160, 135))
+        self.window.blit(desc_surf, (card.x + pad, card.y + 32))
+
+        if quest.get('locked'):
+            lock_label = self._onboarding_guide_small_font.render(
+                'locked', True, (150, 140, 118))
+            self.window.blit(lock_label, (
+                card.right - pad - lock_label.get_width(),
+                card.y + card.h // 2 - lock_label.get_height() // 2,
+            ))
+            return
+
+        target = max(1, int(quest.get('target') or 1))
+        progress = max(0, min(target, int(quest.get('progress') or 0)))
+        bar_w = max(70, left_w - 58)
+        bar = pygame.Rect(card.x + pad, card.bottom - 18, bar_w, 8)
+        pygame.draw.rect(self.window, (45, 39, 32), bar, border_radius=4)
+        fill_w = int(bar.w * (progress / target)) if target else 0
+        if fill_w > 0:
+            pygame.draw.rect(
+                self.window, (120, 190, 105),
+                pygame.Rect(bar.x, bar.y, fill_w, bar.h),
+                border_radius=4,
+            )
+        pygame.draw.rect(self.window, (105, 92, 70), bar, 1, border_radius=4)
+        progress_txt = self._onboarding_guide_small_font.render(
+            f'{progress} / {target}', True, (205, 192, 158))
+        self.window.blit(progress_txt, (
+            bar.right + 8,
+            bar.y + bar.h // 2 - progress_txt.get_height() // 2,
+        ))
+
+        if quest.get('claimable'):
+            claim_w = max(72, self._onboarding_guide_small_font.size('Claim')[0] + 24)
+            claim_h = max(30, self._onboarding_guide_small_font.get_height() + 9)
+            claim_rect = pygame.Rect(
+                card.right - pad - claim_w,
+                card.y + card.h // 2 - claim_h // 2,
+                claim_w,
+                claim_h,
+            )
+            self._draw_onboarding_guide_button(
+                claim_rect, 'Claim', ('claim', 'daily_quest'))
+            self._draw_onboarding_reward_icons(
+                quest.get('reward') or {}, claim_rect.left - 10, claim_rect.centery)
+        elif quest.get('claimed'):
+            claimed = self._onboarding_guide_small_font.render(
+                'claimed', True, (120, 190, 125))
+            self.window.blit(claimed, (
+                card.right - pad - claimed.get_width(),
+                card.y + card.h // 2 - claimed.get_height() // 2,
+            ))
+        else:
+            self._draw_onboarding_reward_icons(
+                quest.get('reward') or {}, card.right - pad, card.y + card.h // 2)
+
+    def _daily_quest_countdown_text(self, resets_at_iso):
+        if not resets_at_iso:
+            return ''
+        try:
+            raw = str(resets_at_iso).replace('Z', '+00:00')
+            resets_at = datetime.fromisoformat(raw)
+            if resets_at.tzinfo is not None:
+                resets_at = resets_at.astimezone(timezone.utc).replace(tzinfo=None)
+            now = datetime.now(timezone.utc).replace(tzinfo=None)
+            seconds = max(0, int((resets_at - now).total_seconds()))
+        except (TypeError, ValueError):
+            return ''
+        minutes = seconds // 60
+        if minutes <= 0:
+            return 'Resets soon'
+        hours = minutes // 60
+        minutes = minutes % 60
+        if hours:
+            return f'Resets in {hours}h {minutes}m'
+        return f'Resets in {minutes}m'
 
     def _draw_onboarding_guide_section(self, title, items, rect, scroll_offset=0, clip_rect=None):
         header = self._onboarding_guide_section_font.render(

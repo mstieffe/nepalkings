@@ -146,6 +146,111 @@ class TestCollectionStats:
         assert stats['available_total'] == 3
 
 
+class TestCollectionVisibilityFilter:
+    """Verify the collection grid defaults to free cards only."""
+
+    def test_free_card_count_ignores_locked_copies(self):
+        from game.screens.collection_screen import _free_card_count
+
+        cards = {('Hearts', 'A'): 3}
+        locked = {('Hearts', 'A'): 2}
+
+        assert _free_card_count(cards, locked, 'Hearts', 'A') == 1
+        assert _free_card_count(cards, locked, 'Spades', 'A') == 0
+
+    def test_default_visibility_keeps_missing_cards_but_hides_all_locked_cards(self):
+        from game.screens.collection_screen import (
+            _collection_card_visible,
+            _owned_card_fully_locked,
+        )
+
+        cards = {
+            ('Hearts', 'A'): 3,
+            ('Clubs', 'K'): 1,
+        }
+        locked = {
+            ('Hearts', 'A'): 2,
+            ('Clubs', 'K'): 1,
+        }
+
+        assert _collection_card_visible(cards, locked, 'Hearts', 'A') is True
+        assert _collection_card_visible(cards, locked, 'Clubs', 'K') is False
+        assert _collection_card_visible(cards, locked, 'Spades', 'Q') is True
+        assert _owned_card_fully_locked(cards, locked, 'Spades', 'Q') is False
+        assert _owned_card_fully_locked(cards, locked, 'Clubs', 'K') is True
+
+    def test_show_locked_visibility_includes_owned_locked_cards(self):
+        from game.screens.collection_screen import _collection_card_visible
+
+        cards = {('Clubs', 'K'): 1}
+        locked = {('Clubs', 'K'): 1}
+
+        assert _collection_card_visible(
+            cards, locked, 'Clubs', 'K', show_locked=True) is True
+        assert _collection_card_visible(
+            cards, locked, 'Spades', 'Q', show_locked=True) is True
+
+    def test_card_positions_follow_locked_visibility_toggle(self):
+        import pygame
+        from game.screens.collection_screen import CollectionScreen
+
+        screen = object.__new__(CollectionScreen)
+        screen._panel_rect = pygame.Rect(0, 0, 1000, 600)
+        screen._main_ranks = ['A', 'K']
+        screen._side_ranks = ['2']
+        screen._cards = {
+            ('Hearts', 'A'): 2,
+            ('Clubs', 'K'): 1,
+            ('Spades', '2'): 3,
+        }
+        screen._locked = {
+            ('Clubs', 'K'): 1,
+            ('Spades', '2'): 1,
+        }
+        screen._show_locked_cards = False
+
+        positions = screen._compute_card_positions()
+        keys = {(suit, rank) for _x, _y, suit, rank, _section in positions}
+
+        assert ('Hearts', 'A') in keys
+        assert ('Spades', '2') in keys
+        assert ('Diamonds', 'K') in keys
+        assert ('Clubs', 'K') not in keys
+        assert len(screen._card_rects) == 11
+
+        screen._show_locked_cards = True
+        positions = screen._compute_card_positions()
+        keys = {(suit, rank) for _x, _y, suit, rank, _section in positions}
+
+        assert ('Clubs', 'K') in keys
+        assert len(screen._card_rects) == 12
+
+    def test_empty_collection_still_lays_out_full_catalogue(self):
+        import pygame
+        from config import settings
+        from game.screens.collection_screen import CollectionScreen, _collection_sort_key
+
+        screen = object.__new__(CollectionScreen)
+        screen._panel_rect = pygame.Rect(0, 0, 2000, 1000)
+        screen._main_ranks = sorted(
+            settings.RANKS_MAIN_CARDS,
+            key=lambda r: _collection_sort_key(r, 'main'),
+        )
+        screen._side_ranks = sorted(
+            settings.RANKS_SIDE_CARDS,
+            key=lambda r: _collection_sort_key(r, 'side'),
+        )
+        screen._cards = {}
+        screen._locked = {}
+        screen._show_locked_cards = False
+
+        positions = screen._compute_card_positions()
+
+        assert len(positions) == len(settings.SUITS) * (
+            len(settings.RANKS_MAIN_CARDS) + len(settings.RANKS_SIDE_CARDS))
+        assert len(screen._card_rects) == len(positions)
+
+
 def test_collection_basics_window_splits_rarity_and_recipe_pages():
     import pygame
     from game.components import tutorial_diagrams as td
