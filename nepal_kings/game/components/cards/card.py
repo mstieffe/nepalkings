@@ -37,7 +37,8 @@ class Card:
 
         # Derived properties
         self.is_ZK = True if self.rank in settings.RANKS_ZK else False
-        self.is_main_card = True if self.rank in settings.RANKS_MAIN_CARDS else False
+        self.is_main_card = (self.rank in settings.RANKS_MAIN_CARDS
+                             or self.rank == settings.RANK_MAHARAJA)
 
     def make_icon(self, window, game, x, y):
         return CardImg(window, self.suit, self.rank)

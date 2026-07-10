@@ -37,15 +37,23 @@ RANKS_ZK = ['3', '6', '7', '8', '9', '10']
 RANKS_MAIN_CARDS = ['7', '8', '9', '10', 'J', 'Q', 'K', 'A']
 RANKS_SIDE_CARDS = ['2', '3', '4', '5', '6']
 
+# Maharaja: a crafted king-flavour card. Not part of the regular rank pools
+# (no booster drops, no sell/convert); crafted in the collection by trading
+# one copy of every rank of a suit. Builds Maharaja castle figures in
+# conquer/defence configs.
+RANK_MAHARAJA = 'MK'
+MAHARAJA_CRAFT_RANKS = RANKS  # one of each rank of the suit is consumed
+
 NUMBER_CARDS = ['7', '8', '9', '10']
 
 # Loot bucket classification by rank.  Used by the conquer loot system to
 # bucket every captured card into either "key" or "number" pools.  All ranks
 # are covered, so any card with a rank belongs to exactly one bucket.
 LOOT_NUMBER_RANKS = frozenset({'3', '6', '7', '8', '9', '10'})
-LOOT_KEY_RANKS = frozenset({'2', '4', '5', 'J', 'Q', 'K', 'A'})
+LOOT_KEY_RANKS = frozenset({'2', '4', '5', 'J', 'Q', 'K', 'A', RANK_MAHARAJA})
 
 RANK_TO_IMG_PATH = {
+    'MK': '14_maharaja',
     'A': '14',
     'K': '13',
     'Q': '12',
@@ -63,6 +71,7 @@ RANK_TO_IMG_PATH = {
 }
 
 RANK_TO_VALUE = {
+    'MK': 4,
     'A': 3,
     'K': 4,
     'Q': 2,
@@ -79,6 +88,7 @@ RANK_TO_VALUE = {
 }
 
 RANK_TO_SORT = {
+    'MK': 0,
     'A': 2,
     'K': 1,
     'Q': 3,
