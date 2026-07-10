@@ -419,10 +419,13 @@ class LogScreen(SubScreen):
 
             if event.type == MOUSEBUTTONUP:
                 if not self._touch_scrolling:
+                    from utils import sound
                     if self.btn_log.collide():
+                        sound.play('ui_click', volume=0.6)
                         self.btn_log.active = not self.btn_log.active
                         self.show_log = self.btn_log.active
                     elif self.btn_chat.collide():
+                        sound.play('ui_click', volume=0.6)
                         self.btn_chat.active = not self.btn_chat.active
                         self.show_chat = self.btn_chat.active
                     elif self.btn_send.collide() and self.chat_input.content.strip():
@@ -560,6 +563,8 @@ class LogScreen(SubScreen):
         opponent_id = self.game.opponent_player.get('id', -1)
         try:
             self.game.send_chat_message(opponent_id, message)
+            from utils import sound
+            sound.play('card_slide', volume=0.7)
             # After sending, scroll to the bottom
             self.scroll_offset = self.calculate_max_scroll()
             self.update_scrollbar_handle()

@@ -66,6 +66,14 @@ BOOSTER_REVEAL_ALIASES = {
     "collection_booster_reveal_bulk": "bulk",
 }
 
+COLLECTION_SCREEN_ALIASES = {
+    "collection": "default",
+    "collection_profile": "profile",
+    "collection_locked": "locked",
+    "collection_loading": "loading",
+    "collection_error": "error",
+}
+
 MAIN_RANKS = {"7", "8", "9", "10", "J", "Q", "K", "A"}
 RANK_VALUE = {
     "7": 7,
@@ -1081,6 +1089,8 @@ def populate_kingdom_config(screen, section: str) -> None:
 
 
 def canonical_screen_name(screen_name: str) -> str:
+    if screen_name in COLLECTION_SCREEN_ALIASES:
+        return "collection"
     if screen_name in BOOSTER_REVEAL_ALIASES:
         return "collection"
     if screen_name in KINGDOM_SCREEN_ALIASES:
@@ -1101,8 +1111,51 @@ def uses_fixture(screen_name: str) -> bool:
         or screen_name in DUEL_SCREEN_ALIASES
         or screen_name in CONQUER_GAME_ALIASES
         or screen_name in BOOSTER_REVEAL_ALIASES
+        or screen_name in COLLECTION_SCREEN_ALIASES
         or screen_name in {"conquer", "defence"}
     )
+
+
+def populate_collection_screen(screen) -> None:
+    """Populate a mixed stock snapshot so visual reviews exercise real states."""
+    from config import settings
+
+    screen._profile_dialogue = None
+    screen._profile_card = None
+    screen._sell_dialogue = None
+    screen._trade_dialogue = None
+    screen._reveal_overlay = None
+    screen._show_locked_cards = False
+    screen._load_error = None
+    screen._recent_card_gains = {}
+    screen._recent_gains_started_at = None
+    cards = []
+    for suit_index, suit in enumerate(settings.SUITS):
+        for rank_index, rank in enumerate(settings.RANKS):
+            if (suit_index * 2 + rank_index) % 5 == 0:
+                continue
+            total = 1 + ((suit_index * 3 + rank_index) % 5)
+            if (suit_index + rank_index) % 11 == 0:
+                locked = total
+            elif (suit_index + rank_index) % 4 == 0:
+                locked = total // 2
+            else:
+                locked = 0
+            cards.append({
+                "suit": suit,
+                "rank": rank,
+                "total": total,
+                "locked": locked,
+            })
+    screen._apply_collection_data({
+        "cards": cards,
+        "gold": 1234,
+        "booster_packs": 2,
+        "booster_packs_side": 1,
+        "maps": 3,
+    })
+    screen._poller = None
+    screen._current_collection_coach_step = lambda: None
 
 
 def populate_collection_booster_reveal(screen, variant: str):
@@ -1111,16 +1164,21 @@ def populate_collection_booster_reveal(screen, variant: str):
     from config import settings
 
     cards = [
-        {"suit": "Hearts", "rank": "7", "value": 7, "tier": 1},
-        {"suit": "Clubs", "rank": "J", "value": 1, "tier": 2},
-        {"suit": "Spades", "rank": "K", "value": 4, "tier": 3},
+        {"suit": "Hearts", "rank": "7", "value": 7, "tier": 1,
+         "_impact_new_type": True, "_impact_owned_after": 1},
+        {"suit": "Clubs", "rank": "J", "value": 1, "tier": 2,
+         "_impact_new_type": False, "_impact_owned_after": 4},
+        {"suit": "Spades", "rank": "K", "value": 4, "tier": 3,
+         "_impact_new_type": True, "_impact_owned_after": 1},
     ]
     if variant == "bulk":
         suits = ["Hearts", "Diamonds", "Clubs", "Spades"]
         ranks = ["7", "8", "9", "10", "J", "Q", "K", "A"]
         cards = [
             {"suit": suits[i % 4], "rank": ranks[i % 8],
-             "value": 7, "tier": (i % 3) + 1}
+             "value": 7, "tier": (i % 3) + 1,
+             "_impact_new_type": i < 3,
+             "_impact_owned_after": 1 if i < 3 else 2 + (i % 4)}
             for i in range(12)
         ]
     overlay = BoosterRevealOverlay(screen.window, cards, pack_type="main")
@@ -1141,6 +1199,20 @@ def populate_collection_booster_reveal(screen, variant: str):
 
 
 def prepare_screen(client, screen_name: str):
+    if screen_name in COLLECTION_SCREEN_ALIASES:
+        screen = client.screens["collection"]
+        populate_collection_screen(screen)
+        variant = COLLECTION_SCREEN_ALIASES[screen_name]
+        if variant == "profile":
+            screen._open_profile_dialogue("Hearts", "A")
+        elif variant == "locked":
+            screen._show_locked_cards = True
+        elif variant in {"loading", "error"}:
+            screen._data_loaded = False
+            screen._load_error = (
+                "Could not load collection" if variant == "error" else None)
+        return screen
+
     if screen_name in BOOSTER_REVEAL_ALIASES:
         screen = client.screens["collection"]
         return populate_collection_booster_reveal(
@@ -1198,6 +1270,7 @@ def render_screens(width: int, height: int, ui_scale: str, screens: list[str]) -
             *KINGDOM_SCREEN_ALIASES.keys(),
             *KINGDOM_CONFIG_ALIASES.keys(),
             *BOOSTER_REVEAL_ALIASES.keys(),
+            *COLLECTION_SCREEN_ALIASES.keys(),
         )
         if screen_name not in known_names:
             print(f"skip {screen_name}: screen not loaded")
@@ -1239,6 +1312,7 @@ def main() -> int:
         default=(
             "login,game_menu,duel_menu,new_game,load_game,rankings,"
             "settings,kingdom,kingdom_config,conquer,defence,collection,"
+            "collection_profile,collection_locked,collection_loading,collection_error,"
             "collection_booster_reveal_special,"
             "game_field,game_battle_shop,game_battle,"
             "conquer_game_field,conquer_game_battle_shop,conquer_game_battle,"

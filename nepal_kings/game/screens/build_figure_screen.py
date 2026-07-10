@@ -78,6 +78,9 @@ class BuildFigureScreen(SubScreen):
         self.selected_figure_family = None
         self.selected_figures = []
 
+        # Tracks which families were buildable last update (one-shot pulse)
+        self._prev_buildable_family_names = None
+
         self.confirm_button = ConfirmButton(
             self.window,
             self._sx(settings.BUILD_FIGURE_CONFIRM_BUTTON_X),
@@ -102,6 +105,7 @@ class BuildFigureScreen(SubScreen):
         self.selected_figure_family = None
         self.selected_figures = []
         self.dialogue_box = None
+        self._prev_buildable_family_names = None
         logger.debug("[BuildFigureScreen] State reset for game switch")
 
     def create_figure_in_db(self, selected_figure, instant_charge_advance=False):
@@ -149,6 +153,16 @@ class BuildFigureScreen(SubScreen):
                 logger.debug(f"Figure {selected_figure.name} created successfully in the database.")
                 from utils import sound
                 sound.play('figure_place')
+                # Build flourish (duel only; the new figure also pops in on
+                # the field via the entrance record diff there).
+                fx = self._fx_layer()
+                if fx is not None:
+                    rect = pygame.Rect(self.confirm_button.rect)
+                    fx.spawn_burst(rect, (238, 206, 130),
+                                   secondary=(255, 245, 200),
+                                   count=18, upward_bias=0.6)
+                    fx.spawn_floating_text_at_rect(
+                        rect, f'+{selected_figure.name}', (238, 206, 130))
             else:
                 logger.error(f"Failed to create figure: {response.get('message', 'Unknown error')}")
                 self.game.unlock_actions()
@@ -637,6 +651,34 @@ class BuildFigureScreen(SubScreen):
                     self.get_figures_in_hand(button.family))
                 # Set active state: true if at least one figure can be built
                 button.is_active = len(buildable_figures) > 0
+
+        # One-shot pulse on families that just became buildable (duel shell
+        # only, and only while the builder tab is visible).
+        buildable_names = {
+            button.family.name
+            for color in ('offensive', 'defensive')
+            for button in self.figure_family_buttons[color]
+            if button.is_active
+        }
+        # getattr: partially-constructed screens (tests) may lack the tracker
+        prev_buildable = getattr(self, '_prev_buildable_family_names', None)
+        self._prev_buildable_family_names = buildable_names
+        if (prev_buildable is not None and self.mode == 'duel'
+                and getattr(self.state, 'subscreen', None) == 'build_figure'):
+            newly_buildable = buildable_names - prev_buildable
+            if newly_buildable:
+                fx = self._fx_layer()
+                if fx is not None:
+                    internal_color = self.color_mapping.get(self.color, self.color)
+                    for button in self.figure_family_buttons[internal_color]:
+                        if button.family.name not in newly_buildable:
+                            continue
+                        rect = (getattr(button, 'rect_frame', None)
+                                or getattr(button, 'rect_icon', None))
+                        if rect is not None:
+                            fx.spawn_rect_pulse(pygame.Rect(rect),
+                                                (238, 206, 130),
+                                                secondary=(255, 245, 200))
 
     def handle_events(self, events):
         """Handle events for button interactions."""

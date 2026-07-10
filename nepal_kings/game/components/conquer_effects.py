@@ -180,6 +180,16 @@ class ConquerEffectsLayer:
         self._copies.clear()
         self._countdowns.clear()
 
+    def any_active(self) -> bool:
+        """True while any animation primitive is alive (pools are pruned by
+        time each ``draw()``, so a non-empty pool means something is or will
+        be on screen)."""
+        return bool(
+            self._projectiles or self._impacts or self._particles
+            or self._shakes or self._floats or self._banners
+            or self._copies or self._countdowns
+        )
+
     # ----------------------------------------------------------------- spawn
     def spawn_spell_cast(self, spell_name: str, source_rect: Optional[pygame.Rect],
                          target_figure_id: Any,
@@ -1055,3 +1065,43 @@ class ConquerEffectsLayer:
     def _prune(self, now: int) -> None:
         self._shakes = [s for s in self._shakes
                         if now <= int(s.get('started_at') or 0) + int(s.get('duration') or 0)]
+
+
+def apply_screen_shake(window: pygame.Surface, offset: Tuple[int, int]) -> None:
+    """Apply a camera-shake offset post-composition (whole-frame scroll).
+
+    ``scroll()`` shifts the frame in place; the vacated edge strips are
+    refilled with a copy of the pre-scroll edge (instead of flat background
+    color) so shakes never flash bright seams. The snapshots are at most two
+    ≤8px strips, and only on shake frames.
+    """
+    try:
+        dx, dy = offset
+        if not dx and not dy:
+            return
+        dx = max(-8, min(8, int(dx)))
+        dy = max(-8, min(8, int(dy)))
+        w, h = window.get_size()
+        strips = []
+        if dx > 0:
+            strips.append((window.subsurface(
+                pygame.Rect(0, 0, dx, h)).copy(), (0, 0)))
+        elif dx < 0:
+            strips.append((window.subsurface(
+                pygame.Rect(w + dx, 0, -dx, h)).copy(), (w + dx, 0)))
+        if dy > 0:
+            strips.append((window.subsurface(
+                pygame.Rect(0, 0, w, dy)).copy(), (0, 0)))
+        elif dy < 0:
+            strips.append((window.subsurface(
+                pygame.Rect(0, h + dy, w, -dy)).copy(), (0, h + dy)))
+        window.scroll(dx, dy)
+        for strip, pos in strips:
+            window.blit(strip, pos)
+    except Exception:
+        pass
+
+
+#: Mode-neutral name — the layer is generic (kingdom + duel screens use it
+#: too); the module keeps its historical filename to avoid churning imports.
+EffectsLayer = ConquerEffectsLayer

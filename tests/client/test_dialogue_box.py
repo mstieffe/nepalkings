@@ -69,6 +69,35 @@ def test_grouped_card_sections_use_more_tile_for_large_groups():
     assert any(item['kind'] == 'more' and item['text'] == '+4' for item in flattened)
 
 
+def test_grouped_dialogue_keeps_a_lead_image_beside_message():
+    from config import settings
+    from game.components.dialogue_box import DialogueBox
+    import pygame
+
+    pygame.display.set_mode((1, 1))
+    window = pygame.Surface((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+    card = pygame.Surface((60, 90), pygame.SRCALPHA)
+    use_icon = pygame.Surface((48, 48), pygame.SRCALPHA)
+
+    box = DialogueBox(
+        window,
+        'Uncommon Main Card\n3 owned  ·  2 free  ·  1 in use',
+        actions=['Close'],
+        title='Hearts A',
+        images=[card],
+        image_groups=[{
+            'title': 'Figures',
+            'items': [use_icon],
+            'item_tooltips': ['Gorkha Warriors'],
+        }],
+    )
+
+    assert box._lead_items
+    assert box.ordered_items == []
+    assert box.text_height >= box.lead_height
+    box.draw()
+
+
 def test_dialogue_ignores_mouse_wheel_release_for_actions(monkeypatch):
     from config import settings
     from game.components.dialogue_box import DialogueBox

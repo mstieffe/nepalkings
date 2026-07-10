@@ -1713,6 +1713,7 @@ class GuideBookScreen(SubScreen):
         self.current_section = index
         self.scroll_offset = 0
         self._render_section()
+        self._section_shown_ms = pygame.time.get_ticks()
 
     # ════════════════════════════════════════════════════════════════════
     #  Embedding (menu Guide overlay)
@@ -1941,7 +1942,16 @@ class GuideBookScreen(SubScreen):
         old_clip = self.window.get_clip()
         self.window.set_clip(clip_rect)
 
-        # Blit pre-rendered content with scroll offset
+        # Blit pre-rendered content with scroll offset. A freshly-selected
+        # section fades in over 150ms (near-free: content is pre-rendered).
+        shown_ms = getattr(self, '_section_shown_ms', 0)
+        elapsed = pygame.time.get_ticks() - shown_ms if shown_ms else 999
+        if elapsed < 150:
+            from game.components.easing import ease_out_cubic
+            self._rendered_content.set_alpha(
+                int(70 + 185 * ease_out_cubic(elapsed / 150.0)))
+        else:
+            self._rendered_content.set_alpha(255)
         self.window.blit(self._rendered_content,
                          (self.content_x, body_top - self.scroll_offset))
 

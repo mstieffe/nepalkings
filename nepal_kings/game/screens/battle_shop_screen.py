@@ -694,6 +694,12 @@ class BattleShopScreen(SubScreen):
         if result.get('success'):
             from utils import sound
             sound.play('card_place')
+            sound.play('coin', volume=0.6)
+            fx = self._fx_layer()
+            if fx is not None:
+                fx.spawn_burst(pygame.Rect(self.confirm_button.rect),
+                               (238, 206, 130), secondary=(255, 245, 200),
+                               count=16, upward_bias=0.6)
             if result.get('game'):
                 self.game.update_from_dict(result['game'])
             self._load_bought_moves()

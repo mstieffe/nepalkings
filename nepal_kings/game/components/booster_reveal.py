@@ -89,6 +89,13 @@ def _card_tier(card, pack_type='main'):
             or 1)
 
 
+def _impact_badge_label(card):
+    """Only genuinely new card types need a reveal badge."""
+    if not isinstance(card, dict) or '_impact_owned_after' not in card:
+        return ''
+    return 'NEW' if card.get('_impact_new_type') else ''
+
+
 class BoosterRevealOverlay:
     """Full-screen overlay showing face-down booster cards.
 
@@ -122,6 +129,7 @@ class BoosterRevealOverlay:
         self._subtitle_font = settings.get_font(settings.FS_SMALL)
         self._close_font = settings.get_font(settings.FS_BUTTON)
         self._label_font = settings.get_font(settings.FS_SMALL)
+        self._impact_font = settings.get_font(settings.FS_TINY, bold=True)
 
         self._bulk = len(self._cards) > _CARDS_PER_PACK
         self._configure_layout()
@@ -183,6 +191,18 @@ class BoosterRevealOverlay:
 
     def _has_hidden_cards(self):
         return any(s == 'hidden' for s in self._states)
+
+    def _impact_summary_text(self):
+        annotated = [c for c in self._cards if '_impact_owned_after' in c]
+        if not annotated:
+            return f'All {len(self._cards)} cards added to your collection'
+        new_types = sum(1 for c in annotated if c.get('_impact_new_type'))
+        copies = len(annotated)
+        copy_label = 'free copy' if copies == 1 else 'free copies'
+        if new_types:
+            type_label = 'new card type' if new_types == 1 else 'new card types'
+            return f'{copies} {copy_label} added  ·  {new_types} {type_label}'
+        return f'{copies} {copy_label} added to your usable stock'
 
     def _configure_layout(self):
         n = len(self._cards)
@@ -277,7 +297,7 @@ class BoosterRevealOverlay:
         if self._bulk:
             subtitle_text = 'Click cards to reveal them, or reveal all'
         if self.all_revealed:
-            subtitle_text = f'All {len(self._cards)} cards added to your collection'
+            subtitle_text = self._impact_summary_text()
         subtitle = self._subtitle_font.render(subtitle_text, True, (220, 210, 180))
         header_surfs = [title, subtitle]
         if self._page_count > 1:
@@ -376,7 +396,38 @@ class BoosterRevealOverlay:
             self.window.blit(self._front_imgs[i], slot.topleft)
 
         self._draw_special_celebration(i, slot)
+        self._draw_impact_badge(i, slot)
         self._draw_card_labels(i, slot)
+
+    def _draw_impact_badge(self, i, slot):
+        card = self._cards[i]
+        # Duplicate draws already show the resulting owned count below the
+        # card. Reserve the reveal badge for genuinely new card types.
+        text = _impact_badge_label(card)
+        if not text:
+            return
+        text_clr = (45, 33, 5)
+        bg_clr = (250, 221, 0, 242)
+        text_surf = self._impact_font.render(text, True, text_clr)
+        pad_x = max(4, int(0.006 * _SW))
+        pad_y = max(2, int(0.003 * _SH))
+        pill = pygame.Surface(
+            (text_surf.get_width() + pad_x * 2,
+             text_surf.get_height() + pad_y * 2),
+            pygame.SRCALPHA,
+        )
+        pygame.draw.rect(pill, bg_clr, pill.get_rect(), border_radius=5)
+        pygame.draw.rect(
+            pill,
+            (255, 244, 180, 220),
+            pill.get_rect(), 1, border_radius=5,
+        )
+        pill_pos = (slot.right - pill.get_width() - 3, slot.y + 3)
+        self.window.blit(pill, pill_pos)
+        self.window.blit(text_surf, (
+            pill_pos[0] + pad_x,
+            pill_pos[1] + pad_y,
+        ))
 
     @staticmethod
     def _celebration_duration_for_tier(tier):
@@ -464,9 +515,10 @@ class BoosterRevealOverlay:
 
     def _draw_card_labels(self, i, slot):
         c = self._cards[i]
-
-        label = self._label_font.render(
-            f"{c['suit']} {c['rank']}", True, (230, 220, 190))
+        label_text = f"{c['suit']} {c['rank']}"
+        if '_impact_owned_after' in c:
+            label_text += f"  ·  ×{c['_impact_owned_after']}"
+        label = self._label_font.render(label_text, True, (230, 220, 190))
         self.window.blit(label, label.get_rect(center=(slot.centerx, slot.bottom + int(0.012 * _SH))))
 
     def _draw_tier_glow(self, slot, tier, pulse=False):

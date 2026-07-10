@@ -1,5 +1,6 @@
 # Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
 # See LICENSE file in the project root for full license information.
+import math
 import pygame
 from pygame.locals import *
 from game.screens.screen import Screen
@@ -21,6 +22,7 @@ from game.screens.guide_book_screen import GuideBookScreen
 from game.screens.battle_screen import BattleScreen
 from game.screens.battle_shop_screen import BattleShopScreen
 from game.components.figures.figure_manager import FigureManager
+from game.components.conquer_effects import EffectsLayer, apply_screen_shake
 from utils.background_poller import BackgroundPoller
 from game.core.game import Game
 import logging
@@ -142,10 +144,101 @@ class GameScreen(Screen):
         self._duel_coach_step = None
         self._duel_coach_pressed_button_action = None
 
+        # ── Duel effects layer (draw-only visual juice) ────────
+        # ConquerGameScreen bypasses this __init__ and owns its own
+        # _conquer_effects, so this layer exists only for duel games.
+        self._fx = EffectsLayer(self.window, self._lookup_duel_figure_rect)
+        self._battle_unlock_prev_locked = True
+
+    def _lookup_duel_figure_rect(self, figure_id):
+        """Return the on-screen rect of ``figure_id`` or ``None`` (fail-soft).
+
+        Anchors effects to field figure icons while the field tab is open;
+        on any other subscreen the effect falls back to its anchor-free
+        rendering (banner instead of projectile, etc.).
+        """
+        if figure_id is None:
+            return None
+        if getattr(self.state, 'subscreen', None) != 'field':
+            return None
+        field = self.subscreens.get('field') if hasattr(self, 'subscreens') else None
+        if field is None:
+            return None
+        icon = (getattr(field, 'icon_cache', None) or {}).get(figure_id)
+        if icon is None:
+            for candidate in getattr(field, 'figure_icons', None) or []:
+                if getattr(getattr(candidate, 'figure', None), 'id', None) == figure_id:
+                    icon = candidate
+                    break
+        if icon is None:
+            return None
+        rect = getattr(icon, 'rect_frame', None) or getattr(icon, 'rect_icon', None)
+        if rect is not None:
+            return pygame.Rect(rect)
+        x = getattr(icon, 'x', None)
+        y = getattr(icon, 'y', None)
+        if x is not None and y is not None:
+            return pygame.Rect(int(x) - 24, int(y) - 24, 48, 48)
+        return None
+
+    def _draw_subscreen_switch_veil(self):
+        """160ms fade-in veil over a freshly-switched subscreen.
+
+        Draw-only — never touches handle_events, so the phase gates'
+        programmatic tab switches simply trigger the same fade.
+        """
+        switched_at = getattr(self, '_subscreen_switched_at', 0)
+        if not switched_at:
+            return
+        elapsed = pygame.time.get_ticks() - switched_at
+        if elapsed >= 160:
+            return
+        from game.components.easing import ease_out_cubic
+        alpha = int(110 * (1.0 - ease_out_cubic(elapsed / 160.0)))
+        if alpha <= 0:
+            return
+        veil = getattr(self, '_subscreen_veil_surface', None)
+        if veil is None:
+            veil = pygame.Surface(
+                (settings.SUB_SCREEN_BACKGROUND_IMG_WIDTH,
+                 settings.SUB_SCREEN_BACKGROUND_IMG_HEIGHT))
+            veil.fill(settings.BACKGROUND_COLOR)
+            self._subscreen_veil_surface = veil
+        veil.set_alpha(alpha)
+        self.window.blit(veil, (settings.SUB_SCREEN_X, settings.SUB_SCREEN_Y))
+
+    def _pump_battle_unlock_pulse(self):
+        """One-shot pulse + sound when the battle tab flips locked → unlocked.
+
+        Edge-detected per frame so it covers every unlock site (battle-ready
+        check, navigation enforcement, battle-moves phase, ...) without
+        touching them individually.
+        """
+        locked = bool(getattr(self.battle_button, 'locked', True))
+        was_locked = self._battle_unlock_prev_locked
+        self._battle_unlock_prev_locked = locked
+        if not was_locked or locked:
+            return
+        rect = getattr(self.battle_button, 'rect_hit', None)
+        if rect is not None:
+            self._fx.spawn_rect_pulse(pygame.Rect(rect), (238, 206, 130),
+                                      duration_ms=700, scale=1.2)
+        from utils import sound
+        sound.play('battle_start', volume=0.5)
+
     def on_enter(self):
         """Mark this screen as the active game parent for shared subscreens."""
         self.state.parent_screen = self
-        self._ensure_duel_screen_game()
+        if not self._ensure_duel_screen_game():
+            return
+        # Figure entrance: the field figures cascade in whenever the game
+        # screen is (re)entered — same welcome-in moment as conquer.
+        field = self.subscreens.get('field') if hasattr(self, 'subscreens') else None
+        if field is not None and hasattr(field, 'begin_figure_entrance_cascade'):
+            try:
+                field.begin_figure_entrance_cascade()
+            except Exception:
+                pass
 
     def _ensure_duel_screen_game(self):
         """Route conquer battles to their dedicated parent screen."""
@@ -718,6 +811,13 @@ class GameScreen(Screen):
         
         # Re-lock battle button
         self.battle_button.locked = True
+        self._battle_unlock_prev_locked = True
+
+        # Drop any in-flight effect animations from the previous game.
+        # (getattr: this method is shared — ConquerGameScreen has no _fx.)
+        fx = getattr(self, '_fx', None)
+        if fx is not None:
+            fx.clear()
 
         # Reset unread chat counter
         self._last_seen_chat_count = 0
@@ -1591,9 +1691,21 @@ class GameScreen(Screen):
             else:
                 # Safety: clear flag even if maharaja wasn't found
                 self.state.game._game_start_pending = False
-            
+
             return
-        
+
+        # ── Duel "your turn" moment ──
+        # Every summary below announces "It's your turn now!"; give it a
+        # sound + banner beat. play_for_dialogue has no stinger for the
+        # "Your Turn" title, so this does not double-fire. Conquer runs its
+        # own transition choreography (this method is shared via update_game).
+        if getattr(self.state.game, 'mode', 'duel') != 'conquer':
+            from utils import sound
+            sound.play('your_turn', volume=0.8)
+            fx = getattr(self, '_fx', None)
+            if fx is not None:
+                fx.spawn_banner('YOUR TURN', (238, 206, 130))
+
         # Check if action is missing, None, or the string 'unknown'
         if not action or action == 'unknown':
             # Generic message if no specific action detected
@@ -3889,6 +4001,32 @@ class GameScreen(Screen):
                 stats_lines.append(f"{label}: {my_val} / {opp_val}")
             message_after = "\n".join(stats_lines)
 
+        # ── Result payoff (visual only; the dialogue plays the stinger) ──
+        # Same recipe as conquer's _start_conquer_result_payoff. Fires
+        # immediately and celebrates behind the modal — the render tail
+        # re-draws the dialogue above active effects.
+        fx = getattr(self, '_fx', None)
+        if fx is not None:
+            screen_rect = pygame.Rect(0, 0, self.window.get_width(),
+                                      self.window.get_height())
+            if is_winner:
+                fx.spawn_banner('VICTORY', (238, 206, 130), duration_ms=1500)
+                fx.spawn_confetti(
+                    screen_rect,
+                    [(238, 206, 130), (150, 230, 170), (255, 245, 200),
+                     (214, 184, 112)],
+                    count=54, delay_ms=120)
+                fx.spawn_shake(amplitude=5, duration_ms=260)
+            else:
+                fx.spawn_banner('DEFEAT', (210, 90, 80), duration_ms=1200)
+                # Slow ember/ash fall instead of festive confetti.
+                fx.spawn_confetti(
+                    screen_rect,
+                    [(120, 96, 88), (96, 78, 70), (168, 110, 92)],
+                    count=36, fall_speed=(60.0, 130.0), gravity=90.0,
+                    life_ms=(800, 1400))
+                fx.spawn_shake(amplitude=6, duration_ms=200)
+
         self.queue_or_show_notification({
             'message': message,
             'actions': ['ok'],
@@ -3966,6 +4104,15 @@ class GameScreen(Screen):
         )
         self.dialogue_box = dialogue
         self._active_dialogue_type = 'game_over_rewards'
+
+        # Celebratory pop behind the chest reveal.
+        fx = getattr(self, '_fx', None)
+        if fx is not None:
+            w, h = self.window.get_width(), self.window.get_height()
+            center = pygame.Rect(w // 2 - 20, h // 2 - 20, 40, 40)
+            fx.spawn_burst(center, (238, 206, 130),
+                           secondary=(255, 245, 200),
+                           count=20, upward_bias=0.6, speed=(140.0, 260.0))
 
     def _on_game_over_acknowledged(self, response=None):
         """Handle game-over dialogue acknowledgement — return to game menu or kingdom."""
@@ -4225,8 +4372,10 @@ class GameScreen(Screen):
         background.fill((0, 0, 0))
         self.window.blit(background, box_rect.topleft)
         
-        # Draw orange border for emphasis
-        pygame.draw.rect(self.window, (255, 200, 100), box_rect, 4)
+        # Draw orange border for emphasis (breathing brightness, pure draw)
+        border_pulse = 0.6 + 0.4 * abs(pygame.time.get_ticks() % 1000 - 500) / 500
+        border_color = tuple(int(c * border_pulse) for c in (255, 200, 100))
+        pygame.draw.rect(self.window, border_color, box_rect, 4)
         
         # Draw main prompt text centered in box
         text_x = box_rect.centerx - prompt_surface.get_width() // 2
@@ -4509,7 +4658,10 @@ class GameScreen(Screen):
         background.fill((0, 0, 0))
         self.window.blit(background, box_rect.topleft)
 
-        pygame.draw.rect(self.window, (100, 200, 255), box_rect, 4)
+        # Blue border with breathing brightness (pure draw)
+        border_pulse = 0.6 + 0.4 * abs(pygame.time.get_ticks() % 1000 - 500) / 500
+        border_color = tuple(int(c * border_pulse) for c in (100, 200, 255))
+        pygame.draw.rect(self.window, border_color, box_rect, 4)
 
         text_x = box_rect.centerx - prompt_surface.get_width() // 2
         text_y = box_rect.top + padding
@@ -4726,8 +4878,10 @@ class GameScreen(Screen):
         background.fill((0, 0, 0))
         self.window.blit(background, box_rect.topleft)
         
-        # Draw orange border for emphasis
-        pygame.draw.rect(self.window, (255, 200, 100), box_rect, 4)
+        # Draw orange border for emphasis (breathing brightness, pure draw)
+        border_pulse = 0.6 + 0.4 * abs(pygame.time.get_ticks() % 1000 - 500) / 500
+        border_color = tuple(int(c * border_pulse) for c in (255, 200, 100))
+        pygame.draw.rect(self.window, border_color, box_rect, 4)
         
         # Draw main prompt text centered in box
         text_x = box_rect.centerx - prompt_surface.get_width() // 2
@@ -5069,8 +5223,10 @@ class GameScreen(Screen):
         unread = total_opponent - seen_opponent
         if unread <= 0 or self.state.subscreen == 'log':
             return
-        # Draw red circle badge at top-right of log button
-        badge_radius = int(0.006 * settings.SCREEN_WIDTH * _UI_SCALE)
+        # Draw red circle badge at top-right of log button (gentle breathing
+        # pulse so unseen activity draws the eye — pure draw, no state)
+        badge_radius = int(0.006 * settings.SCREEN_WIDTH * _UI_SCALE
+                           * (1.0 + 0.12 * math.sin(pygame.time.get_ticks() * 0.006)))
         badge_x = self.log_button.rect_symbol.right - badge_radius // 2
         badge_y = self.log_button.rect_symbol.top + badge_radius // 2
         pygame.draw.circle(self.window, (220, 40, 40), (badge_x, badge_y), badge_radius)
@@ -5145,7 +5301,9 @@ class GameScreen(Screen):
         if count <= 0:
             return
         _ui = _UI_SCALE
-        badge_radius = int(0.006 * settings.SCREEN_WIDTH * _ui)
+        # Gentle breathing pulse — pure draw, no state.
+        badge_radius = int(0.006 * settings.SCREEN_WIDTH * _ui
+                           * (1.0 + 0.12 * math.sin(pygame.time.get_ticks() * 0.006)))
         badge_x = button.rect_symbol.right - badge_radius // 2
         badge_y = button.rect_symbol.top + badge_radius // 2
         pygame.draw.circle(self.window, (220, 40, 40), (badge_x, badge_y), badge_radius)
@@ -5684,9 +5842,16 @@ class GameScreen(Screen):
 
 
 
+        # Detect tab switches per frame (update_game polls too slowly for
+        # this) so the incoming subscreen fades in under a brief veil.
+        if self.state.subscreen != getattr(self, '_last_rendered_subscreen', None):
+            self._last_rendered_subscreen = self.state.subscreen
+            self._subscreen_switched_at = pygame.time.get_ticks()
+
         # Render the currently active subscreen
         if self.state.subscreen in self.subscreens and self.subscreens[self.state.subscreen]:
             self.subscreens[self.state.subscreen].draw()
+            self._draw_subscreen_switch_veil()
 
         # Render the main and side hands
         self.main_hand.draw()
@@ -5813,6 +5978,17 @@ class GameScreen(Screen):
 
         # Draw lightweight first-duel coach marks last, after normal prompts.
         self._draw_duel_coach()
+
+        # Announce the battle tab becoming available (locked → unlocked edge).
+        self._pump_battle_unlock_pulse()
+
+        # ── Effects layer (banners, bursts, confetti, floaters) ──
+        # Drawn above all chrome; an open modal dialogue is re-drawn on top
+        # so effects celebrate *behind* it rather than obscuring the text.
+        self._fx.draw()
+        if self.dialogue_box and self._fx.any_active():
+            self.dialogue_box.draw()
+        apply_screen_shake(self.window, self._fx.screen_shake_offset())
 
     def draw_msg(self):
         """Disable floating notifications on the game screen."""

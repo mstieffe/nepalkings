@@ -1,5 +1,6 @@
 # Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
 # See LICENSE file in the project root for full license information.
+import math
 import pygame
 from pygame.locals import *
 from config import settings
@@ -143,6 +144,34 @@ class FieldScreen(SubScreen):
         """
         self._figure_entrance_cascade_pending = True
         self._figure_entrance_anims = {}
+
+    def _figure_icon_rect(self, figure_id):
+        """On-screen rect of a figure's icon, or ``None`` (fail-soft)."""
+        icon = (self.icon_cache or {}).get(figure_id)
+        if icon is None:
+            for candidate in self.figure_icons or []:
+                if getattr(getattr(candidate, 'figure', None), 'id', None) == figure_id:
+                    icon = candidate
+                    break
+        if icon is None:
+            return None
+        rect = getattr(icon, 'rect_frame', None) or getattr(icon, 'rect_icon', None)
+        return pygame.Rect(rect) if rect is not None else None
+
+    def note_new_figures(self, figure_ids):
+        """Give newly-appeared figures an entrance pop (subset cascade).
+
+        Unlike :meth:`begin_figure_entrance_cascade` this does not clear
+        existing records — only the listed ids animate in, e.g. when the
+        opponent builds a figure between polls.
+        """
+        now = pygame.time.get_ticks()
+        for index, fig_id in enumerate(figure_ids):
+            if fig_id is None:
+                continue
+            self._figure_entrance_anims[str(fig_id)] = {
+                'started_at': now + index * self.FIGURE_ENTRANCE_STAGGER_MS,
+            }
 
     def _stamp_figure_entrance_cascade(self, positioned_icons):
         """Assign staggered entrance records for the pending cascade.
@@ -609,7 +638,17 @@ class FieldScreen(SubScreen):
                 for stale_id in stale_ids:
                     if stale_id in self.icon_cache:
                         del self.icon_cache[stale_id]
-                
+
+                # New figures (built between polls) pop in — duel only;
+                # conquer choreographs its own replay/ghost entrances, and
+                # the first load is covered by the entrance cascade.
+                if (self.last_figure_ids
+                        and not self._figure_entrance_cascade_pending
+                        and getattr(self.game, 'mode', 'duel') != 'conquer'):
+                    new_ids = current_figure_ids - self.last_figure_ids
+                    if new_ids:
+                        self.note_new_figures(sorted(new_ids, key=str))
+
                 # check if the figure is opponent or not
                 self._generate_figure_icons()
                 self.last_figure_ids = current_figure_ids
@@ -1023,7 +1062,21 @@ class FieldScreen(SubScreen):
                                 # Success message
                                 card_count = result.get('main_card_count', 0) + result.get('side_card_count', 0)
                                 logger.debug(f"Successfully picked up {self.figure_pending_pickup.name}. {card_count} cards returned to hand.")
-                                
+
+                                # Cards-return-to-hand feedback (rect captured
+                                # before the refresh drops the icon).
+                                fx = self._fx_layer()
+                                if fx is not None:
+                                    rect = self._figure_icon_rect(self.figure_pending_pickup.id)
+                                    if rect is not None:
+                                        hand_rect = pygame.Rect(
+                                            int(settings.MAIN_HAND_X), int(settings.MAIN_HAND_Y), 48, 48)
+                                        fx.spawn_copy_ghost(rect, hand_rect,
+                                                            color=(238, 206, 130),
+                                                            secondary=(255, 245, 200))
+                                from utils import sound
+                                sound.play('card_slide')
+
                                 # Refresh game state (cards, turn, figures) from server
                                 # (update() -> _apply_game_dict -> unlock_actions)
                                 self.game.update()
@@ -1066,6 +1119,15 @@ class FieldScreen(SubScreen):
                             if result.get('success'):
                                 from utils import sound
                                 sound.play('card_slide')
+                                fx = self._fx_layer()
+                                if fx is not None:
+                                    rect = self._figure_icon_rect(figure.id)
+                                    if rect is not None:
+                                        fx.spawn_burst(rect, (238, 206, 130),
+                                                       secondary=(255, 245, 200),
+                                                       count=18, upward_bias=0.5)
+                                        fx.spawn_floating_text_at_rect(
+                                            rect, 'ADVANCE!', (238, 206, 130))
                                 logger.debug(f"[FIELD] Advanced {figure.name} successfully")
                                 self.state.set_msg(f"Advanced {figure.name} toward battle!")
                                 # Update game state from response
@@ -1364,6 +1426,18 @@ class FieldScreen(SubScreen):
                                 # Success message
                                 logger.debug(f"Successfully upgraded {self.figure_pending_upgrade.name} to {self.figure_pending_upgrade.upgrade_family_name}.")
                                 self.state.set_msg(f"Upgraded {self.figure_pending_upgrade.name} to {self.figure_pending_upgrade.upgrade_family_name}.")
+                                # Upgrade feedback (rect captured before the
+                                # refresh regenerates the icon).
+                                fx = self._fx_layer()
+                                if fx is not None:
+                                    rect = self._figure_icon_rect(self.figure_pending_upgrade.id)
+                                    if rect is not None:
+                                        fx.spawn_rect_pulse(rect, (150, 230, 170),
+                                                            secondary=(255, 245, 200))
+                                        fx.spawn_floating_text_at_rect(
+                                            rect, 'UPGRADED', (150, 230, 170))
+                                from utils import sound
+                                sound.play('figure_place')
                                 # Refresh full game state (turn, cards) and figures from server
                                 # (update() -> _apply_game_dict -> unlock_actions)
                                 self.game.update()
@@ -2724,6 +2798,10 @@ class FieldScreen(SubScreen):
             'value': card.value
         } for card in real_cards]
         
+        # Target rect for the cast animation — captured before the cast so
+        # Explosion (which removes the icon on success) can still anchor.
+        _fx_target_rect = self._figure_icon_rect(target_figure.id)
+
         # Call spell service to cast the spell
         self.game.lock_actions()
         try:
@@ -2744,6 +2822,19 @@ class FieldScreen(SubScreen):
             raise
         
         if result.get('success'):
+            # Spell-glyph projectile onto the target (duel only — conquer
+            # animates its own casts; _fx_layer() is None there).
+            fx = self._fx_layer()
+            if fx is not None and _fx_target_rect is not None:
+                fx.spawn_spell_to_rect(selected_spell.name, None, _fx_target_rect)
+                if 'Explosion' in selected_spell.name:
+                    fx.spawn_shake(amplitude=5, duration_ms=160)
+                    fx.spawn_burst(_fx_target_rect, (255, 168, 56),
+                                   secondary=(255, 240, 200),
+                                   count=18, delay_ms=fx.PROJECTILE_MS)
+            from utils import sound
+            sound.play('booster_reveal', volume=0.8)
+
             # For Explosion spells, don't apply enchantment locally since figure is destroyed
             # Just update from server to remove the figure
             if 'Explosion' not in selected_spell.name:
@@ -3641,11 +3732,34 @@ class FieldScreen(SubScreen):
         
         # Draw defender selection prompt if in defender selection mode
         if self.defender_selection_mode and not conquer_parent:
+            self._draw_selectable_defender_pulse()
             self._draw_defender_selection_prompt()
 
         # Draw own-defender selection prompt for Invader Swap
         if self.conquer_own_defender_mode and not conquer_parent:
+            self._draw_selectable_defender_pulse()
             self._draw_conquer_own_defender_prompt()
+
+    def _draw_selectable_defender_pulse(self):
+        """Breathing ring around selectable defender icons (pure draw).
+
+        The selectable flags are already maintained by the selection-mode
+        updaters (own figures excluded in opponent-defender mode and vice
+        versa), so ringing every selectable icon is correct in both modes.
+        """
+        alpha = int(110 + 90 * math.sin(pygame.time.get_ticks() * 0.005))
+        for icon in self.figure_icons:
+            if not (getattr(icon, 'in_defender_selection_mode', False)
+                    and getattr(icon, 'defender_selectable', False)):
+                continue
+            rect = getattr(icon, 'rect_frame', None)
+            if rect is None:
+                continue
+            ring = pygame.Rect(rect).inflate(12, 12)
+            surf = pygame.Surface(ring.size, pygame.SRCALPHA)
+            pygame.draw.rect(surf, (100, 200, 255, alpha), surf.get_rect(),
+                             3, border_radius=10)
+            self.window.blit(surf, ring.topleft)
 
     @staticmethod
     def _figure_field(figure):

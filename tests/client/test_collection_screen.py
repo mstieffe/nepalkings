@@ -146,6 +146,35 @@ class TestCollectionStats:
         assert stats['available_total'] == 3
 
 
+class TestBoosterImpactAnnotations:
+    """Booster reveals should explain how copy stock actually changed."""
+
+    def test_duplicate_draws_advance_owned_and_free_counts_in_order(self):
+        from game.screens.collection_screen import _annotate_booster_impact
+
+        drawn = [
+            {'suit': 'Hearts', 'rank': 'A', 'tier': 2},
+            {'suit': 'Hearts', 'rank': 'A', 'tier': 2},
+            {'suit': 'Spades', 'rank': 'K', 'tier': 3},
+        ]
+        annotated = _annotate_booster_impact(
+            drawn,
+            {('Hearts', 'A'): 2},
+            {('Hearts', 'A'): 1},
+        )
+
+        assert annotated[0]['_impact_new_type'] is False
+        assert annotated[0]['_impact_owned_before'] == 2
+        assert annotated[0]['_impact_owned_after'] == 3
+        assert annotated[0]['_impact_free_after'] == 2
+        assert annotated[1]['_impact_owned_before'] == 3
+        assert annotated[1]['_impact_owned_after'] == 4
+        assert annotated[1]['_impact_free_after'] == 3
+        assert annotated[2]['_impact_new_type'] is True
+        assert annotated[2]['_impact_owned_after'] == 1
+        assert '_impact_new_type' not in drawn[0]
+
+
 class TestCollectionVisibilityFilter:
     """Verify the collection grid defaults to free cards only."""
 
@@ -158,8 +187,9 @@ class TestCollectionVisibilityFilter:
         assert _free_card_count(cards, locked, 'Hearts', 'A') == 1
         assert _free_card_count(cards, locked, 'Spades', 'A') == 0
 
-    def test_default_visibility_keeps_missing_cards_but_hides_all_locked_cards(self):
+    def test_default_view_keeps_slots_and_darkens_fully_locked_cards(self):
         from game.screens.collection_screen import (
+            _collection_card_display_state,
             _collection_card_visible,
             _owned_card_fully_locked,
         )
@@ -174,8 +204,16 @@ class TestCollectionVisibilityFilter:
         }
 
         assert _collection_card_visible(cards, locked, 'Hearts', 'A') is True
-        assert _collection_card_visible(cards, locked, 'Clubs', 'K') is False
+        assert _collection_card_visible(cards, locked, 'Clubs', 'K') is True
         assert _collection_card_visible(cards, locked, 'Spades', 'Q') is True
+        assert _collection_card_display_state(
+            cards, locked, 'Hearts', 'A') == 'owned'
+        assert _collection_card_display_state(
+            cards, locked, 'Clubs', 'K') == 'locked_placeholder'
+        assert _collection_card_display_state(
+            cards, locked, 'Spades', 'Q') == 'missing'
+        assert _collection_card_display_state(
+            cards, locked, 'Clubs', 'K', show_locked=True) == 'owned'
         assert _owned_card_fully_locked(cards, locked, 'Spades', 'Q') is False
         assert _owned_card_fully_locked(cards, locked, 'Clubs', 'K') is True
 
@@ -190,7 +228,7 @@ class TestCollectionVisibilityFilter:
         assert _collection_card_visible(
             cards, locked, 'Spades', 'Q', show_locked=True) is True
 
-    def test_card_positions_follow_locked_visibility_toggle(self):
+    def test_card_positions_stay_stable_across_locked_visibility_toggle(self):
         import pygame
         from game.screens.collection_screen import CollectionScreen
 
@@ -215,8 +253,8 @@ class TestCollectionVisibilityFilter:
         assert ('Hearts', 'A') in keys
         assert ('Spades', '2') in keys
         assert ('Diamonds', 'K') in keys
-        assert ('Clubs', 'K') not in keys
-        assert len(screen._card_rects) == 11
+        assert ('Clubs', 'K') in keys
+        assert len(screen._card_rects) == 12
 
         screen._show_locked_cards = True
         positions = screen._compute_card_positions()
@@ -263,6 +301,7 @@ def test_collection_basics_window_splits_rarity_and_recipe_pages():
 
     screen = object.__new__(CollectionScreen)
     screen.window = None
+    screen._data_loaded = True
     screen._collection_basics_dialogue = None
     screen._menu_coach_allowed_common = lambda: True
     screen._onboarding_completed_steps = lambda: set()
@@ -439,7 +478,7 @@ title_y = (
 title_font = settings.get_font(settings.COLLECTION_PACK_PANEL_TITLE_FONT_SIZE, bold=True)
 detail_font = settings.get_font(settings.COLLECTION_PACK_PANEL_DETAIL_FONT_SIZE)
 title_surf = title_font.render('Main Pack', True, settings.COLLECTION_PACK_PANEL_TITLE_CLR)
-owned_surf = detail_font.render('Owned: 999', True, settings.COLLECTION_PACK_PANEL_TEXT_CLR)
+owned_surf = detail_font.render('×999', True, settings.COLLECTION_PACK_PANEL_TEXT_CLR)
 gap = max(4, int(0.006 * settings.SCREEN_WIDTH))
 max_row_w = pack_rect.right - settings.COLLECTION_PACK_PANEL_PAD_X - title_x
 assert title_surf.get_width() + gap + owned_surf.get_width() <= max_row_w
@@ -592,6 +631,37 @@ class TestBoosterRevealLayout:
         assert overlay._celebration_progress(1) is not None
         assert overlay._celebration_progress(2) is not None
 
+    def test_reveal_summary_reports_new_types_and_usable_copies(self):
+        import pygame
+        from config import settings
+        from game.components.booster_reveal import BoosterRevealOverlay
+
+        window = pygame.display.get_surface() or pygame.display.set_mode(
+            (settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+        overlay = BoosterRevealOverlay(window, [
+            {'suit': 'Hearts', 'rank': '7', 'tier': 1,
+             '_impact_new_type': True, '_impact_owned_after': 1},
+            {'suit': 'Clubs', 'rank': 'J', 'tier': 2,
+             '_impact_new_type': False, '_impact_owned_after': 4},
+            {'suit': 'Spades', 'rank': 'K', 'tier': 3,
+             '_impact_new_type': True, '_impact_owned_after': 1},
+        ])
+
+        assert overlay._impact_summary_text() == (
+            '3 free copies added  ·  2 new card types')
+
+    def test_duplicate_reveals_have_no_redundant_plus_one_badge(self):
+        from game.components.booster_reveal import _impact_badge_label
+
+        assert _impact_badge_label({
+            '_impact_new_type': True,
+            '_impact_owned_after': 1,
+        }) == 'NEW'
+        assert _impact_badge_label({
+            '_impact_new_type': False,
+            '_impact_owned_after': 4,
+        }) == ''
+
 
 class TestCollectionService:
     """Verify collection_service module structure."""
@@ -646,6 +716,41 @@ def test_open_all_status_starts_bulk_booster_request():
     CollectionScreen.handle_events(screen, [])
 
     assert calls == [('open', 'main', 5)]
+
+
+def test_card_profile_keeps_card_art_and_contextual_copy_actions(monkeypatch):
+    import pygame
+    from config import settings
+    from game.screens.collection_screen import CollectionScreen
+    from utils import card_uses
+
+    window = pygame.display.get_surface() or pygame.display.set_mode(
+        (settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+    screen = object.__new__(CollectionScreen)
+    screen.window = window
+    screen._cards = {('Hearts', 'A'): 3}
+    screen._locked = {('Hearts', 'A'): 1}
+    screen._card_imgs = {
+        ('Hearts', 'A'): SimpleNamespace(
+            front_img=pygame.Surface((60, 90), pygame.SRCALPHA))
+    }
+    monkeypatch.setattr(card_uses, 'get_card_uses', lambda _suit, _rank: {
+        'figures': [], 'spells': [], 'battle_moves': [],
+    })
+
+    screen._open_profile_dialogue('Hearts', 'A')
+
+    dialogue = screen._profile_dialogue
+    assert dialogue.title == 'Hearts A'
+    assert [button.text for button in dialogue.buttons] == [
+        'Sell copies', 'Convert', 'Close']
+    assert dialogue._lead_items
+    assert all(button.disabled is False for button in dialogue.buttons)
+    assert all(group['icon'] is not None for group in dialogue.image_groups)
+    assert all(group['badge_icon'] is None for group in dialogue.image_groups)
+    assert '3 owned' in dialogue.message
+    assert '2 free' in dialogue.message
+    assert '1 in use' in dialogue.message
 
 
 class TestCollectionCoach:

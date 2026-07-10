@@ -1201,3 +1201,126 @@ class TestGameScreenVictoryReviewRouting:
         GameScreen._on_game_over_acknowledged(game_screen)
 
         assert game_screen.state.screen == 'kingdom'
+
+
+class TestDuelShellEffects:
+    """Duel shell polish moments: game-over payoff + your-turn banner.
+
+    Test oracle:
+    - Duel victory spawns VICTORY banner + confetti particles + shake.
+    - Duel defeat spawns DEFEAT banner (no VICTORY).
+    - Conquer game-over leaves the fx layer untouched (conquer runs its own
+      payoff choreography).
+    - "Your turn" summaries spawn exactly one YOUR TURN banner in duel and
+      none in conquer; the dialogue payload is queued either way.
+    """
+
+    def _fx_layer(self):
+        import pygame
+        from game.components.conquer_effects import EffectsLayer
+
+        return EffectsLayer(pygame.Surface((320, 200)), lambda _id: None)
+
+    def _game_over_screen(self):
+        import pygame
+
+        GameScreen = _game_screen_class()
+        game_screen = GameScreen.__new__(GameScreen)
+        game_screen.window = pygame.Surface((320, 200))
+        game_screen._fx = self._fx_layer()
+        game_screen.state = SimpleNamespace(
+            game=SimpleNamespace(
+                mode='duel',
+                player_id=10,
+                game_over=False,
+                game_over_shown=False,
+                pending_game_over=None,
+            )
+        )
+        notifications = []
+        game_screen.queue_or_show_notification = notifications.append
+        return GameScreen, game_screen, notifications
+
+    @staticmethod
+    def _game_over_info(winner_pid):
+        return {
+            'winner_player_id': winner_pid,
+            'loser_player_id': 20 if winner_pid == 10 else 10,
+            'winner_username': 'Winner',
+            'loser_username': 'Loser',
+            'winner_score': 50,
+            'loser_score': 30,
+            'stake': 45,
+            'game_limit': 45,
+            'reason': 'stake',
+            'rounds_played': 6,
+            'stats': {},
+        }
+
+    def test_duel_victory_spawns_confetti_banner_and_shake(self):
+        GameScreen, game_screen, notifications = self._game_over_screen()
+
+        GameScreen._show_game_over_dialogue(game_screen, self._game_over_info(10))
+
+        banners = [b['text'] for b in game_screen._fx._banners]
+        assert 'VICTORY' in banners
+        assert game_screen._fx._particles  # confetti flakes queued
+        assert game_screen._fx._shakes
+        assert notifications and notifications[0]['type'] == 'game_over'
+
+    def test_duel_defeat_spawns_defeat_banner(self):
+        GameScreen, game_screen, _notifications = self._game_over_screen()
+
+        GameScreen._show_game_over_dialogue(game_screen, self._game_over_info(20))
+
+        banners = [b['text'] for b in game_screen._fx._banners]
+        assert 'DEFEAT' in banners
+        assert 'VICTORY' not in banners
+
+    def test_conquer_game_over_leaves_fx_untouched(self):
+        GameScreen, game_screen, notifications = self._game_over_screen()
+        game_screen.state.game.mode = 'conquer'
+        game_screen.state.game.land_tier = 2
+        game_screen._is_current_player_conquer_attacker = lambda info: True
+
+        GameScreen._show_game_over_dialogue(game_screen, self._game_over_info(10))
+
+        assert game_screen._fx.any_active() is False
+        assert notifications  # conquer result dialogue still queued
+
+    def _turn_summary_screen(self, mode):
+        GameScreen = _game_screen_class()
+        game_screen = GameScreen.__new__(GameScreen)
+        game_screen.subscreens = {}
+        game_screen._fx = self._fx_layer()
+        game_screen.state = SimpleNamespace(
+            game=SimpleNamespace(
+                mode=mode,
+                pending_opponent_turn_summary={
+                    'opponent_name': 'Rival',
+                    'action': None,
+                },
+                game_over=False,
+                pending_game_over=False,
+            )
+        )
+        notifications = []
+        game_screen.queue_or_show_notification = notifications.append
+        return GameScreen, game_screen, notifications
+
+    def test_your_turn_banner_fires_once_for_duel_summary(self):
+        GameScreen, game_screen, notifications = self._turn_summary_screen('duel')
+
+        GameScreen.check_opponent_turn_notification(game_screen)
+
+        banners = [b['text'] for b in game_screen._fx._banners]
+        assert banners == ['YOUR TURN']
+        assert notifications and notifications[0]['title'] == 'Your Turn'
+
+    def test_your_turn_banner_gated_off_in_conquer(self):
+        GameScreen, game_screen, notifications = self._turn_summary_screen('conquer')
+
+        GameScreen.check_opponent_turn_notification(game_screen)
+
+        assert game_screen._fx._banners == []
+        assert notifications and notifications[0]['title'] == 'Your Turn'

@@ -26,6 +26,8 @@ COLLECTION_SUIT_LABEL_W         = int(0.07 * SCREEN_WIDTH)
 COLLECTION_BADGE_FONT_SIZE = int(FS_BODY * 0.75)
 COLLECTION_BADGE_CLR       = (255, 255, 255)
 COLLECTION_BADGE_BG_CLR    = (30, 100, 50, 200)
+COLLECTION_LOCK_BADGE_CLR  = (255, 240, 205)
+COLLECTION_LOCK_BADGE_BG_CLR = (126, 82, 28, 225)
 COLLECTION_BADGE_PAD_X     = int(0.004 * SCREEN_WIDTH)
 COLLECTION_BADGE_PAD_Y     = int(0.002 * SCREEN_HEIGHT)
 
@@ -122,14 +124,11 @@ COLLECTION_PACK_PREVIEWS = {
     },
 }
 
-# ── Mode / actions panel (3rd panel beside the booster panels) ──────
-# Hosts mutually-exclusive Sell / Trade mode toggles. When neither is
-# active, clicking a card opens a profile dialogue instead.
-COLLECTION_ACTIONS_PANEL_TITLE = 'Card Actions'
-COLLECTION_MODE_BTN_TEXT = {
-    'sell': 'Sell',
-    'trade': 'Trade',
-}
+# ── Card-details panel (3rd panel beside the booster panels) ───────
+# Selling and conversion live inside the selected card profile, so ordinary
+# collection browsing always remains the safe/default interaction.
+COLLECTION_ACTIONS_PANEL_TITLE = 'Card Details'
+COLLECTION_ACTIONS_PANEL_HINT = 'Tap a card to inspect'
 
 # ── Card-to-card conversion (mirror server values) ──────────────────
 COLLECTION_CONVERT_RATIO_SAME_COLOR = 2
@@ -169,6 +168,7 @@ COLLECTION_SELL_FONT_SIZE  = FS_BODY
 COLLECTION_REVEAL_FLIP_MS = 420
 COLLECTION_REVEAL_RARE_PULSE_MS = 900
 COLLECTION_REVEAL_TIER_LABEL_FONT_SIZE = int(FS_BODY * 0.82)
+COLLECTION_RECENT_GAIN_HIGHLIGHT_MS = 1800
 
 # ── Booster prices (mirror server values for UI display) ────────────
 BOOSTER_PACK_PRICE       = 100

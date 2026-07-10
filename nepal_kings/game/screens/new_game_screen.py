@@ -974,6 +974,8 @@ class NewGameScreen(MenuScreenMixin, Screen):
             self.state.user_dict['username'], opponent_name,
             stake=stake, game_limit=game_limit)
         if response.get('success'):
+            from utils import sound
+            sound.play('card_place')
             if response.get('game'):
                 self.state.set_msg(f"{opponent_name} accepted. The duel begins!")
             else:

@@ -52,6 +52,17 @@ class SubScreen:
             self.y + _margin,
             _cbsz, _cbsz)
 
+    def _fx_layer(self):
+        """Effects layer of the owning duel shell, or ``None``.
+
+        ``GameScreen`` exposes ``_fx``; ``ConquerGameScreen`` runs its own
+        effect choreography and has no ``_fx`` attribute, so subscreen effect
+        calls (``fx = self._fx_layer(); if fx: ...``) are automatically inert
+        in conquer mode.
+        """
+        state = getattr(self, 'state', None)
+        return getattr(getattr(state, 'parent_screen', None), '_fx', None)
+
     def _sx(self, x):
         """Translate a base screen x-coordinate by this subscreen origin."""
         return int(x + self._layout_offset_x)
