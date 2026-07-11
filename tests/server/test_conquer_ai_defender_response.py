@@ -427,3 +427,54 @@ def test_conquer_ai_watchdog_triggers_on_poll(app, db, monkeypatch):
                           headers=atk_headers)
         assert poll.status_code == 200
         assert calls == [game_id]
+
+
+def test_conquer_ai_watchdog_triggers_on_active_battle_poll(app, db,
+                                                            monkeypatch):
+    """The lightweight active-battle poll must also revive the AI worker."""
+    import importlib
+    games_module = importlib.import_module('routes.games')
+
+    with app.app_context():
+        attacker = _make_user(db, username='atk_battle_watchdog')
+        defender = _make_user(db, username='def_battle_watchdog')
+
+        land = _make_land(db, tier=1, owner_user_id=defender.id)
+        _make_conquer_config(db, attacker, land)
+        _make_defence_config(db, defender, land)
+        db.session.commit()
+
+        client = app.test_client()
+        atk_headers = _auth_headers(app, attacker)
+        resp = client.post('/kingdom/conquer/start_battle',
+                           json={'land_id': land.id}, headers=atk_headers)
+        assert resp.status_code == 200
+        game_id = resp.get_json()['game_id']
+
+        game = db.session.get(Game, game_id)
+        atk_player = next(p for p in game.players
+                          if p.user_id == attacker.id)
+        game.battle_confirmed = True
+        game.battle_turn_player_id = next(
+            p.id for p in game.players if p.id != atk_player.id)
+        db.session.commit()
+
+        monkeypatch.setattr(games_module.settings, 'AI_ENABLED', True)
+        games_module._conquer_ai_watchdog_last.clear()
+        calls = []
+        import ai.ai_worker as worker_module
+        monkeypatch.setattr(
+            worker_module, 'trigger_ai_if_needed',
+            lambda gid, app=None: calls.append(gid),
+        )
+
+        url = (f'/games/get_battle_state?game_id={game_id}'
+               f'&player_id={atk_player.id}')
+        poll = client.get(url, headers=atk_headers)
+        assert poll.status_code == 200
+        assert calls == [game_id]
+
+        # The endpoint shares the same per-game throttle as get_game.
+        poll = client.get(url, headers=atk_headers)
+        assert poll.status_code == 200
+        assert calls == [game_id]

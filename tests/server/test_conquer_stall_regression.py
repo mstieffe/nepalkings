@@ -123,3 +123,27 @@ def test_ai_defender_with_no_legal_response_returns_turn(app, db, monkeypatch):
             game_id=game_id, player_id=def_player_id, type='battle_skip',
         ).first()
         assert spent_log is not None
+
+
+def test_ai_defender_response_fallback_rechecks_current_legality(app, db):
+    """Do not spend the response when a legal counter-advance still exists."""
+    with app.app_context():
+        game, _atk_player, def_player = _start_conquer_and_advance(
+            app, db, attacker_name='recheck_atk', defender_name='recheck_def')
+        game_id = game.id
+        def_player_id = def_player.id
+
+        assert game.turn_player_id == def_player_id
+        assert ai_worker._conquer_pick_counter_advance_figure(
+            game, def_player_id) is not None
+
+    spent = ai_worker._conquer_spend_defender_response(
+        app, game_id, def_player_id)
+
+    assert spent is False
+    with app.app_context():
+        game_after = db.session.get(Game, game_id)
+        assert game_after.turn_player_id == def_player_id
+        assert LogEntry.query.filter_by(
+            game_id=game_id, player_id=def_player_id, type='battle_skip',
+        ).first() is None

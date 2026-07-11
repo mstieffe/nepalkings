@@ -198,3 +198,10 @@ class TestGameScreenDiscardInvalidatesPoller:
                                                  game_version=3)
         screen._consume_game_poll_result()
         assert calls == ['applied']
+
+    def test_intentional_discard_invalidates_poller_signature(self):
+        """Spell/action handlers must not strand an already-delivered body."""
+        screen, calls = self._screen_with_poller(poller_version=1,
+                                                 game_version=1)
+        assert screen._discard_game_poll_result() is True
+        assert calls == ['invalidated']

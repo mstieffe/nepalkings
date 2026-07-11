@@ -572,6 +572,24 @@ class GameScreen(Screen):
                 f"vs current v{self.state.game._game_data_version})")
             poller.invalidate_cache()
 
+    def _discard_game_poll_result(self):
+        """Discard a pending full-game result without suppressing redelivery.
+
+        Action handlers use this when their direct response is authoritative
+        and an already-finished poll may contain older state.  The web poller
+        caches delivered response signatures, so every intentional discard
+        must invalidate that cache or an identical current snapshot may never
+        be published again.
+        """
+        poller = self._game_poller
+        if poller is None or not poller.has_result():
+            return False
+        _ = poller.result
+        invalidate = getattr(poller, 'invalidate_cache', None)
+        if callable(invalidate):
+            invalidate()
+        return True
+
     def update_game(self):
         """Update the game state and related components."""
         # Check if game exists (may be None after logout)
@@ -4809,8 +4827,7 @@ class GameScreen(Screen):
             
             # Discard any stale poller result so old server data doesn't
             # overwrite the fresh response and re-trigger the spell dialogue
-            if self._game_poller and self._game_poller.has_result():
-                _ = self._game_poller.result
+            self._discard_game_poll_result()
             
             # Mark that we just allowed a spell so check_battle_modifier_changes
             # doesn't show a duplicate notification for the same modifier
@@ -4850,8 +4867,7 @@ class GameScreen(Screen):
             # must not re-trigger the dialogue.
             self._last_resolved_spell_id = resolved_spell_id
             # Discard stale poller result
-            if self._game_poller and self._game_poller.has_result():
-                _ = self._game_poller.result
+            self._discard_game_poll_result()
             # Clear spell cache on error too
             self.pending_spell_details = None
             self._cached_castable_spells = None
@@ -5047,8 +5063,7 @@ class GameScreen(Screen):
             
             # Discard any stale poller result so old server data doesn't
             # overwrite the fresh response and re-trigger the spell dialogue
-            if self._game_poller and self._game_poller.has_result():
-                _ = self._game_poller.result
+            self._discard_game_poll_result()
             
             # Update game state directly from response (no server call needed)
             if result.get('game'):
@@ -5084,8 +5099,7 @@ class GameScreen(Screen):
             # server-side, so stale polls must not re-trigger the dialogue.
             self._last_resolved_spell_id = self.state.game.pending_spell_id
             # Discard stale poller result
-            if self._game_poller and self._game_poller.has_result():
-                _ = self._game_poller.result
+            self._discard_game_poll_result()
             # Clear spell cache on error too
             self.pending_spell_details = None
             self._cached_castable_spells = None

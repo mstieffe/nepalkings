@@ -1204,6 +1204,9 @@ def _conquer_spend_defender_response(app, game_id, ai_player_id):
         from routes.games import _consume_conquer_defender_response
         game = db.session.get(Game, game_id)
         if (not game or game.mode != 'conquer' or game.state == 'finished'
+                or game.pending_spell_id is not None
+                or game.battle_confirmed
+                or game.last_battle_result
                 or game.turn_player_id != ai_player_id
                 or not game.advancing_figure_id
                 or game.advancing_player_id == ai_player_id
@@ -1211,6 +1214,18 @@ def _conquer_spend_defender_response(app, game_id, ai_player_id):
             return False
         defender_player = db.session.get(Player, ai_player_id)
         if not defender_player:
+            return False
+        # Re-check current legality after reloading the row.  The initial
+        # picker may have observed a transient modifier/resource state; do
+        # not spend the response if a counter spell or counter-advance has
+        # become legal before this fallback commits.
+        if (_conquer_should_cast_counter_spell(game, ai_player_id)
+                or _conquer_pick_counter_advance_figure(
+                    game, ai_player_id) is not None):
+            logger.info(
+                f"[CONQUER-AI] defender response became legal before "
+                f"fallback commit; keeping window open game={game_id}"
+            )
             return False
         _consume_conquer_defender_response(game, defender_player)
         db.session.add(LogEntry(
