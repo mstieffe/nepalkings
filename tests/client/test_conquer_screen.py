@@ -648,7 +648,7 @@ class TestConquerScreenLayout:
         assert abs(rect.centerx - settings.SCREEN_WIDTH // 2) <= 1
         assert abs(rect.centery - settings.SCREEN_HEIGHT // 2) <= 1
 
-    def test_config_figures_hide_duel_only_checkmate_text(self):
+    def test_config_figures_show_live_conquer_checkmate_rule(self):
         from game.screens.conquer_screen import ConquerScreen
         state = _make_state()
         screen = ConquerScreen(state)
@@ -663,9 +663,9 @@ class TestConquerScreenLayout:
             'checkmate': True,
         }, {'Djungle Maharaja': family})
 
-        assert fig.checkmate is False
-        assert 'checkmate' not in fig.description.lower()
-        assert 'checkmate' not in fig.family.description.lower()
+        assert fig.checkmate is True
+        assert 'checkmate' in fig.description.lower()
+        assert 'checkmate' in fig.family.description.lower()
 
     def test_config_figures_hide_instant_advance_in_conquer(self):
         from game.screens.conquer_screen import ConquerScreen

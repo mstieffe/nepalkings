@@ -541,7 +541,7 @@ class TestBuildFigureScreenMaharajaCastleRow:
         from config import settings
 
         screen = self._make_icons_screen('conquer')
-        dx = 0.045 * settings.SCREEN_WIDTH
+        dx = 0.060 * settings.SCREEN_WIDTH
         base_x = 0.615 * settings.SCREEN_WIDTH
 
         for color, king_name, maharaja_name in (
@@ -555,14 +555,19 @@ class TestBuildFigureScreenMaharajaCastleRow:
             king = self._by_name(buttons, king_name)
             maharaja = self._by_name(buttons, maharaja_name)
 
-            # Maharaja left of King, symmetric around build_position, exactly
-            # one village-column pitch (0.09*SW) apart, same y.
+            # Maharaja left of King in a dedicated, overlap-free castle row.
             assert maharaja.x == pytest.approx(base_x - dx)
             assert king.x == pytest.approx(base_x + dx)
             assert maharaja.x < king.x
             assert (king.x + maharaja.x) / 2 == pytest.approx(base_x)
-            assert king.x - maharaja.x == pytest.approx(0.09 * settings.SCREEN_WIDTH)
+            assert king.x - maharaja.x == pytest.approx(0.12 * settings.SCREEN_WIDTH)
             assert maharaja.y == king.y
+            assert not maharaja.rect_frame.colliderect(king.rect_frame)
+
+            pad = settings.FIGURE_NAME_PADDING
+            maharaja_caption = maharaja.text_rect.inflate(pad * 2, pad * 2)
+            king_caption = king.text_rect.inflate(pad * 2, pad * 2)
+            assert not maharaja_caption.colliderect(king_caption)
 
 
 class TestBuildFigureScreenMaharajaBuildable:

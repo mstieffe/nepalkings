@@ -103,6 +103,28 @@ class TestCraftMaharaja:
         assert CollectionCard.query.filter_by(
             user_id=u1.id, suit='Clubs', rank='MK').count() == 0
 
+    def test_craft_rolls_back_if_ingredient_claim_loses_a_race(
+            self, client, db, two_users, auth_headers_user1, monkeypatch):
+        from sqlalchemy.orm import Query
+
+        u1, _ = two_users
+        _grant_full_suit(db, u1.id, 'Hearts')
+        monkeypatch.setattr(
+            Query, 'delete',
+            lambda self, synchronize_session=False: 12,
+        )
+
+        rv = client.post('/collection/craft_maharaja',
+                         headers=auth_headers_user1,
+                         json={'suit': 'Hearts'})
+
+        assert rv.status_code == 409
+        assert 'changed while crafting' in rv.get_json()['message']
+        assert CollectionCard.query.filter_by(
+            user_id=u1.id, suit='Hearts', rank='MK').count() == 0
+        assert CollectionCard.query.filter_by(
+            user_id=u1.id, suit='Hearts').count() == 13
+
     def test_craft_consumes_only_one_of_duplicated_rank(self, client, db, two_users,
                                                           auth_headers_user1):
         u1, _ = two_users
@@ -156,10 +178,25 @@ class TestCraftMaharaja:
 # ═══════════════════════════════════════════════════════════════════
 
 class TestMaharajaRuntimeMapping:
-    def test_normalize_main_rank_maps_mk_to_king(self, app):
+    def test_normalize_main_rank_preserves_mk_for_display(self, app):
         from routes.kingdom import _normalize_main_rank
-        assert _normalize_main_rank('MK') == 'K'
+        assert _normalize_main_rank('MK') == 'MK'
 
     def test_loot_card_bucket_mk_is_key(self, app):
         from routes.games import _loot_card_bucket
         assert _loot_card_bucket('MK') == 'key'
+
+    def test_runtime_main_card_serializes_with_maharaja_identity(self, app, db):
+        from models import MainCard
+
+        card = MainCard(
+            rank='MK', suit='Hearts', value=4,
+            in_deck=False, part_of_figure=True,
+        )
+        db.session.add(card)
+        db.session.commit()
+        card_id = card.id
+        db.session.expire_all()
+
+        stored = db.session.get(MainCard, card_id)
+        assert stored.serialize()['rank'] == 'MK'

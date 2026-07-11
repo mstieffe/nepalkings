@@ -364,7 +364,7 @@ class BuildFigureScreen(SubScreen):
             return figure
         return filter_figure_for_display(
             figure,
-            hide_checkmate=True,
+            hide_checkmate=False,
             hide_instant_charge=True,
         )
 
@@ -430,9 +430,10 @@ class BuildFigureScreen(SubScreen):
         """
         self.figure_family_buttons = {}
         kingdom_mode = _is_kingdom_config_mode(self.mode)
-        # Half the village-row column pitch (VILLAGE_DELTA_X = 0.09*SW): the
-        # King/Maharaja pair ends up 0.09*SW apart and aligned with the grid.
-        castle_dx = 0.045 * settings.SCREEN_WIDTH
+        # Give the two castle families dedicated, non-overlapping slots.  At
+        # the mobile canvas size the framed icons are wider than the ordinary
+        # village-column pitch, and their full captions need additional room.
+        castle_dx = 0.060 * settings.SCREEN_WIDTH
 
         for color in ['offensive', 'defensive']:
             families = self.figure_manager.families_by_color[color]
@@ -912,6 +913,12 @@ class BuildFigureScreen(SubScreen):
                         actions = ['yes', 'cancel']
                         message = "Do you want to build this figure?"
                         message_after = None
+
+                        if getattr(selected_figure, 'checkmate', False):
+                            message_after = (
+                                'CHECKMATE: If this Maharaja is defeated, '
+                                'you immediately lose the battle.'
+                            )
 
                         # Check if building this figure would cause resource deficits
                         deficit_warning, deficit_resources = self._check_build_causes_deficit(selected_figure)

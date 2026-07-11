@@ -481,8 +481,10 @@ class GuideBookScreen(SubScreen):
                 'content': [
                     {'icon_text': _sl + 'castle_small.png',
                      'text': 'Castle figures are the rulers of your kingdom. '
-                     'Each player starts with a Maharaja already placed. '
-                     'Additional Kings can be built using King (K) cards.'},
+                     'In Duels, each player starts with a Maharaja already '
+                     'placed. In Conquer and Defence configurations, craft a '
+                     'Maharaja (MK) card in the Collection and use it to build '
+                     'a Maharaja castle. Kings use King (K) cards.'},
                     '',
                     {'heading': 'Himalaya Castle (Blue)'},
                     {'table': {
@@ -492,7 +494,7 @@ class GuideBookScreen(SubScreen):
                              'K\u2663 or K\u2660', '15', '+4',
                              '2 Villagers, 1 Warrior'],
                             [(_fi + 'maharaja_black.png', 'Himalaya Maharaja'),
-                             'K\u2663 or K\u2660', '16', '+4',
+                             'MK\u2663 or MK\u2660', '16', '+5',
                              '3 Villagers, 2 Warriors'],
                         ],
                         'col_widths': [0.24, 0.16, 0.10, 0.14, 0.36],
@@ -506,7 +508,7 @@ class GuideBookScreen(SubScreen):
                              'K\u2665 or K\u2666', '15', '+4',
                              '2 Villagers, 1 Warrior'],
                             [(_fi + 'maharaja_red.png', 'Djungle Maharaja'),
-                             'K\u2665 or K\u2666', '16', '+4',
+                             'MK\u2665 or MK\u2666', '16', '+5',
                              '3 Villagers, 2 Warriors'],
                         ],
                         'col_widths': [0.24, 0.16, 0.10, 0.14, 0.36],

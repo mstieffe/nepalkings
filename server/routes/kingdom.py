@@ -2538,6 +2538,73 @@ def _resolve_cards_by_specs(user_id, card_specs):
     return card_ids, None
 
 
+_MAHARAJA_FAMILIES = frozenset({
+    'Himalaya Maharaja',
+    'Djungle Maharaja',
+})
+
+
+def _canonicalize_maharaja_build(data, cards, card_roles):
+    """Validate the crafted MK recipe and return trusted figure attributes.
+
+    Other figure families retain their legacy payload handling for now.  MK is
+    different because it is a costly crafted card: it may build only the
+    matching Maharaja family, and Maharaja combat/resource attributes must not
+    be supplied by the client.
+    """
+    family_name = str(data.get('family_name') or '')
+    uses_mk = any(str(getattr(card, 'rank', '') or '').upper() == 'MK'
+                  for card in cards)
+    is_maharaja = family_name in _MAHARAJA_FAMILIES
+
+    if not is_maharaja:
+        if uses_mk:
+            return None, 'Maharaja cards can only build a Maharaja castle'
+        return dict(data), None
+
+    from ai.figure_recipes import FIGURE_RECIPES
+    recipe = next(
+        (item for item in FIGURE_RECIPES
+         if item.get('family_name') == family_name),
+        None,
+    )
+    if recipe is None:
+        return None, 'Maharaja recipe is unavailable'
+
+    suit = str(data.get('suit') or '')
+    if suit not in recipe.get('suits', ()):
+        return None, f'{family_name} cannot be built with {suit or "that suit"}'
+    if (len(cards) != 1
+            or str(getattr(cards[0], 'rank', '') or '').upper() != 'MK'
+            or getattr(cards[0], 'suit', None) != suit):
+        return None, f'{family_name} requires exactly one {suit} Maharaja card'
+    if card_roles and list(card_roles) != ['key']:
+        return None, 'The Maharaja card must be the figure key card'
+
+    produces = recipe['produces_fn'](suit, 0)
+    flags = recipe.get('special_flags', {}) or {}
+    canonical = dict(data)
+    canonical.update({
+        'family_name': family_name,
+        'name': recipe.get('name', family_name),
+        'suit': suit,
+        'color': recipe['color'],
+        'field': recipe['field'],
+        'card_roles': ['key'],
+        'produces': produces,
+        'requires': dict(recipe.get('requires', {})),
+        'description': (
+            f'The {family_name} supports three village slots and two '
+            'military slots. Triggers checkmate when defeated.'
+        ),
+        'upgrade_family_name': None,
+        'checkmate': bool(flags.get('checkmate', False)),
+        'cannot_be_blocked': bool(flags.get('cannot_be_blocked', False)),
+        'rest_after_attack': bool(flags.get('rest_after_attack', False)),
+    })
+    return canonical, None
+
+
 # ── POST /kingdom/conquer/build_figure ───────────────────────────────────────
 
 @kingdom.route('/conquer/build_figure', methods=['POST'])
@@ -2603,6 +2670,17 @@ def conquer_build_figure():
     if locked_cards:
         return jsonify({'success': False, 'message': 'Some cards are already locked'}), 400
 
+    trusted_data, recipe_error = _canonicalize_maharaja_build(
+        data, cards, card_roles)
+    if recipe_error:
+        return jsonify({'success': False, 'message': recipe_error}), 400
+    family_name = trusted_data.get('family_name')
+    name = trusted_data.get('name', family_name)
+    suit = trusted_data.get('suit')
+    color = trusted_data.get('color', suit)
+    field = trusted_data.get('field')
+    card_roles = trusted_data.get('card_roles', card_roles)
+
     cfg = _get_or_create_conquer_config(g.user_id, land_id)
 
     # Castle figure cap (per-tier).  Castle figures (Kings/Maharaja) on a
@@ -2625,13 +2703,13 @@ def conquer_build_figure():
         field=field,
         card_ids=card_ids,
         card_roles=card_roles,
-        produces=data.get('produces'),
-        requires=data.get('requires'),
-        description=data.get('description', ''),
-        upgrade_family_name=data.get('upgrade_family_name'),
-        checkmate=data.get('checkmate', False),
-        cannot_be_blocked=data.get('cannot_be_blocked', False),
-        rest_after_attack=data.get('rest_after_attack', False),
+        produces=trusted_data.get('produces'),
+        requires=trusted_data.get('requires'),
+        description=trusted_data.get('description', ''),
+        upgrade_family_name=trusted_data.get('upgrade_family_name'),
+        checkmate=trusted_data.get('checkmate', False),
+        cannot_be_blocked=trusted_data.get('cannot_be_blocked', False),
+        rest_after_attack=trusted_data.get('rest_after_attack', False),
     )
     db.session.add(figure)
     db.session.flush()
@@ -3336,6 +3414,17 @@ def defence_build_figure():
     if any(c.locked for c in cards):
         return jsonify({'success': False, 'message': 'Some cards are already locked'}), 400
 
+    trusted_data, recipe_error = _canonicalize_maharaja_build(
+        data, cards, card_roles)
+    if recipe_error:
+        return jsonify({'success': False, 'message': recipe_error}), 400
+    family_name = trusted_data.get('family_name')
+    name = trusted_data.get('name', family_name)
+    suit = trusted_data.get('suit')
+    color = trusted_data.get('color', suit)
+    field = trusted_data.get('field')
+    card_roles = trusted_data.get('card_roles', card_roles)
+
     cfg = _get_defence_edit_config(g.user_id, land_id)
 
     # Castle figure cap (per-tier).  Castle figures (Kings/Maharaja) on a
@@ -3354,12 +3443,12 @@ def defence_build_figure():
         family_name=family_name, name=name or family_name,
         suit=suit, color=color or suit, field=field,
         card_ids=card_ids, card_roles=card_roles,
-        produces=data.get('produces'), requires=data.get('requires'),
-        description=data.get('description', ''),
-        upgrade_family_name=data.get('upgrade_family_name'),
-        checkmate=data.get('checkmate', False),
-        cannot_be_blocked=data.get('cannot_be_blocked', False),
-        rest_after_attack=data.get('rest_after_attack', False),
+        produces=trusted_data.get('produces'), requires=trusted_data.get('requires'),
+        description=trusted_data.get('description', ''),
+        upgrade_family_name=trusted_data.get('upgrade_family_name'),
+        checkmate=trusted_data.get('checkmate', False),
+        cannot_be_blocked=trusted_data.get('cannot_be_blocked', False),
+        rest_after_attack=trusted_data.get('rest_after_attack', False),
     )
     db.session.add(figure)
     db.session.flush()
@@ -4219,7 +4308,7 @@ def defence_set_auto_gamble_threshold():
 
 _RANK_TO_VALUE = {
     '7': 7, '8': 8, '9': 9, '10': 10,
-    'J': 1, 'Q': 2, 'K': 4, 'A': 3,
+    'J': 1, 'Q': 2, 'K': 4, 'A': 3, 'MK': 4,
 }
 
 _SIDE_RANK_TO_VALUE = {
@@ -4227,7 +4316,10 @@ _SIDE_RANK_TO_VALUE = {
 }
 
 _MAIN_RANKS = set(_RANK_TO_VALUE.keys())
-_NUMERIC_TO_MAIN_RANK = {v: k for k, v in _RANK_TO_VALUE.items()}
+_NUMERIC_TO_MAIN_RANK = {
+    value: rank for rank, value in _RANK_TO_VALUE.items()
+    if rank != 'MK'
+}
 _NUMERIC_TO_MAIN_RANK.update({11: 'J', 12: 'Q', 13: 'K', 14: 'A'})
 _SIDE_RANKS = set(_SIDE_RANK_TO_VALUE.keys())
 _NUMERIC_TO_SIDE_RANK = {v: k for k, v in _SIDE_RANK_TO_VALUE.items()}
@@ -4248,10 +4340,6 @@ def _normalize_main_rank(rank, *, fallback_rank='10', value=None, context=''):
     candidate = str(raw_rank).strip().upper() if raw_rank is not None else ''
     if candidate in _MAIN_RANKS:
         return candidate
-    if candidate == 'MK':
-        # Crafted Maharaja key card plays as a King at battle runtime.
-        return 'K'
-
     for source, source_name in ((candidate, 'rank'), (value, 'value')):
         try:
             numeric = int(source)

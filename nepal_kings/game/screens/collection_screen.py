@@ -116,7 +116,9 @@ def _collection_stats(cards, locked=None):
     valid_keys = {
         (suit, rank)
         for suit in settings.SUITS
-        for rank in settings.RANKS_MAIN_CARDS + settings.RANKS_SIDE_CARDS
+        for rank in (settings.RANKS_MAIN_CARDS
+                     + settings.RANKS_SIDE_CARDS
+                     + [settings.RANK_MAHARAJA])
     }
     owned_total = sum(max(0, int(qty or 0)) for key, qty in cards.items() if key in valid_keys)
     unique_owned = sum(1 for key, qty in cards.items() if key in valid_keys and int(qty or 0) > 0)

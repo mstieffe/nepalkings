@@ -80,7 +80,7 @@ _BOX_H      = _BOX_BOTTOM - _BOX_Y
 def _strip_duel_only_skill_description(text):
     return strip_duel_only_skill_description(
         text,
-        hide_checkmate=True,
+        hide_checkmate=False,
         hide_instant_charge=True,
     )
 
@@ -88,7 +88,7 @@ def _strip_duel_only_skill_description(text):
 def _display_family_without_duel_only_skills(family):
     return filter_family_for_display(
         family,
-        hide_checkmate=True,
+        hide_checkmate=False,
         hide_instant_charge=True,
     )
 
@@ -1330,11 +1330,12 @@ class DefenceScreen(MenuScreenMixin, Screen):
             instant_charge=getattr(matched, 'instant_charge', False) if matched else False,
             cannot_be_blocked=cfg_fig.get('cannot_be_blocked', False),
             cannot_be_targeted=getattr(matched, 'cannot_be_targeted', False) if matched else False,
+            checkmate=cfg_fig.get('checkmate', False),
             override_base_power=getattr(matched, 'override_base_power', None) if matched else None,
         )
         return filter_figure_for_display(
             figure,
-            hide_checkmate=True,
+            hide_checkmate=False,
             hide_instant_charge=True,
         )
 

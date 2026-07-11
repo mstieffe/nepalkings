@@ -446,16 +446,20 @@ def craft_maharaja():
     if not user:
         return jsonify({'success': False, 'message': 'User not found'}), 404
 
-    to_consume = []
+    # Select candidate IDs first, then claim all thirteen with one conditional
+    # DELETE.  The row-count check makes concurrent craft/build requests
+    # all-or-nothing: a card locked or consumed after this read causes a
+    # rollback instead of producing an unearned Maharaja.
+    to_consume_ids = []
     missing = []
     for rank in MAHARAJA_CRAFT_RANKS:
-        card = CollectionCard.query.filter_by(
+        card_id = db.session.query(CollectionCard.id).filter_by(
             user_id=user.id, suit=suit, rank=rank, locked=False
-        ).first()
-        if card is None:
+        ).limit(1).scalar()
+        if card_id is None:
             missing.append(rank)
         else:
-            to_consume.append(card)
+            to_consume_ids.append(card_id)
 
     if missing:
         return jsonify({
@@ -463,8 +467,19 @@ def craft_maharaja():
             'message': f'Missing free {suit} cards for rank(s): {", ".join(missing)}',
         }), 400
 
-    for card in to_consume:
-        db.session.delete(card)
+    deleted = CollectionCard.query.filter(
+        CollectionCard.id.in_(to_consume_ids),
+        CollectionCard.user_id == user.id,
+        CollectionCard.suit == suit,
+        CollectionCard.locked.is_(False),
+    ).delete(synchronize_session=False)
+    if deleted != len(MAHARAJA_CRAFT_RANKS):
+        db.session.rollback()
+        return jsonify({
+            'success': False,
+            'message': 'Cards changed while crafting. Refresh and try again.',
+        }), 409
+
     db.session.add(CollectionCard(
         user_id=user.id, suit=suit, rank=MAHARAJA_RANK, value=MAHARAJA_VALUE))
     track('maharaja_crafted', user_id=user.id, suit=suit)

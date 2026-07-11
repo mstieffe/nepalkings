@@ -59,6 +59,10 @@ class MainRank(enum.Enum):
     QUEEN = 'Q'
     KING = 'K'
     ACE = 'A'
+    # Crafted collection-only rank.  Deck creation uses an explicit list of
+    # regular ranks, so MK can be represented faithfully in conquer runtime
+    # figures without ever entering a duel deck.
+    MAHARAJA = 'MK'
 
 class SideRank(enum.Enum):
     TWO = '2'

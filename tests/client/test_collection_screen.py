@@ -132,18 +132,19 @@ class TestCollectionStats:
             ('Hearts', 'A'): 2,
             ('Spades', '7'): 1,
             ('Clubs', '2'): 3,
+            ('Diamonds', 'MK'): 1,
         }
         locked = {
             ('Hearts', 'A'): 1,
             ('Clubs', '2'): 2,
         }
         stats = _collection_stats(cards, locked)
-        assert stats['owned_total'] == 6
-        assert stats['unique_owned'] == 3
-        assert stats['unique_total'] == 52
-        assert stats['missing_total'] == 49
+        assert stats['owned_total'] == 7
+        assert stats['unique_owned'] == 4
+        assert stats['unique_total'] == 56
+        assert stats['missing_total'] == 52
         assert stats['locked_total'] == 3
-        assert stats['available_total'] == 3
+        assert stats['available_total'] == 4
 
 
 class TestBoosterImpactAnnotations:
