@@ -7,6 +7,10 @@ BUILD_FIGURE_ICON_SCALE = 1.25 if _IS_MOBILE else 1.0
 
 # BUILD SCREEN
 BUILD_HIERARCHY_IMG_PATH = 'img/figures/build_hierarchy/build_hierarchy.png'
+# Kingdom config (conquer/defence) variant: the castle partition holds two
+# figures (King + Maharaja), so the tree needs its own artwork.
+BUILD_HIERARCHY_CONQUER_IMG_PATH = (
+    'img/figures/build_hierarchy/build_hierarchy_conquer.png')
 BUILD_HIERARCHY_WIDTH = int(0.452 * SCREEN_WIDTH)
 BUILD_HIERARCHY_HEIGHT = int(0.14 * SCREEN_WIDTH)
 BUILD_HIERARCHY_X = int(0.39 * SCREEN_WIDTH)

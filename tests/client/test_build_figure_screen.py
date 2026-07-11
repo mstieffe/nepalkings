@@ -570,6 +570,26 @@ class TestBuildFigureScreenMaharajaCastleRow:
             assert not maharaja_caption.colliderect(king_caption)
 
 
+class TestBuildHierarchyArtworkPerMode:
+    """Kingdom config modes get the two-castle hierarchy tree; duel keeps
+    the original single-castle artwork."""
+
+    def test_duel_uses_original_hierarchy(self):
+        from config import settings
+        from game.screens.build_figure_screen import _build_hierarchy_img_path
+        assert (_build_hierarchy_img_path('duel')
+                == settings.BUILD_HIERARCHY_IMG_PATH)
+
+    def test_kingdom_modes_use_conquer_hierarchy(self):
+        import os
+        from config import settings
+        from game.screens.build_figure_screen import _build_hierarchy_img_path
+        for mode in ('conquer', 'defence', 'defence_draft'):
+            assert (_build_hierarchy_img_path(mode)
+                    == settings.BUILD_HIERARCHY_CONQUER_IMG_PATH)
+        assert os.path.exists(settings.BUILD_HIERARCHY_CONQUER_IMG_PATH)
+
+
 class TestBuildFigureScreenMaharajaBuildable:
     """A collection MK card makes the Maharaja figure buildable through the
     kingdom card-source path (CollectionCardSource -> get_figures_in_hand)."""

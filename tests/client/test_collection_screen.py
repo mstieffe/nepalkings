@@ -743,6 +743,97 @@ class TestMaharajaCraft:
         assert _tier_label('MK') != 'Common'
         assert _card_pack_type('MK') == 'main'
 
+    def test_maharaja_craftable_tracks_free_copies(self):
+        from config import settings
+        from game.screens.collection_screen import CollectionScreen
+
+        screen = object.__new__(CollectionScreen)
+        screen._cards = {('Hearts', r): 1 for r in settings.RANKS}
+        screen._locked = {}
+        assert screen._maharaja_craftable('Hearts') is True
+
+        # Locking the only copy of one rank turns the highlight off again.
+        screen._locked = {('Hearts', 'A'): 1}
+        assert screen._maharaja_craftable('Hearts') is False
+
+    def test_craft_ready_pill_draws_on_card_bottom(self):
+        import pygame
+        from config import settings
+        from game.screens.collection_screen import CollectionScreen
+
+        window = pygame.display.get_surface() or pygame.display.set_mode(
+            (settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+        screen = object.__new__(CollectionScreen)
+        screen.window = window
+        screen._badge_font = settings.get_font(
+            settings.COLLECTION_BADGE_FONT_SIZE, bold=True)
+
+        card_rect = pygame.Rect(100, 100, settings.COLLECTION_CARD_W,
+                                settings.COLLECTION_CARD_H)
+        blits = []
+        real_blit = window.blit
+        screen.window = type('W', (), {
+            'blit': lambda _self, surf, dest, *a, **kw: blits.append(
+                (surf, dest)) or real_blit(surf, dest, *a, **kw)})()
+
+        screen._draw_maharaja_craft_ready_pill(card_rect)
+
+        assert len(blits) == 1
+        pill, dest = blits[0]
+        pill_rect = pill.get_rect(topleft=(dest.x, dest.y))
+        assert card_rect.contains(pill_rect)
+        assert pill_rect.centerx == card_rect.centerx
+
+    def test_craft_reveal_overlay_uses_craft_headline(self):
+        import pygame
+        from config import settings
+        from game.components.booster_reveal import BoosterRevealOverlay
+
+        window = pygame.display.get_surface() or pygame.display.set_mode(
+            (settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+        overlay = BoosterRevealOverlay(
+            window,
+            [{'suit': 'Hearts', 'rank': 'MK', 'value': 4, 'tier': 3}],
+            pack_type='main',
+            title='Hearts Maharaja Crafted!')
+
+        captured = []
+        real_font = overlay._title_font
+
+        class _CaptureFont:
+            def render(self, text, *args, **kwargs):
+                captured.append(text)
+                return real_font.render(text, *args, **kwargs)
+
+        overlay._title_font = _CaptureFont()
+        overlay.draw()
+
+        assert captured == ['Hearts Maharaja Crafted!']
+
+    def test_reveal_overlay_defaults_to_pack_headline(self):
+        import pygame
+        from config import settings
+        from game.components.booster_reveal import BoosterRevealOverlay
+
+        window = pygame.display.get_surface() or pygame.display.set_mode(
+            (settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+        overlay = BoosterRevealOverlay(window, [
+            {'suit': 'Hearts', 'rank': '7', 'value': 7, 'tier': 1},
+        ])
+
+        captured = []
+        real_font = overlay._title_font
+
+        class _CaptureFont:
+            def render(self, text, *args, **kwargs):
+                captured.append(text)
+                return real_font.render(text, *args, **kwargs)
+
+        overlay._title_font = _CaptureFont()
+        overlay.draw()
+
+        assert captured == ['Main Booster Pack']
+
 
 def test_maharaja_click_routes_to_craft_not_sell_or_trade():
     import pygame

@@ -865,14 +865,18 @@ class CollectionScreen(MenuScreenMixin, Screen):
                     show_locked=getattr(self, '_show_locked_cards', False),
                 )
             else:
+                mk_craftable = is_mk and self._maharaja_craftable(suit)
                 if is_mk:
-                    self._draw_maharaja_glow(card_rect, dim=True)
+                    self._draw_maharaja_glow(card_rect, dim=not mk_craftable)
                 card.draw_front_bright(cx, cy)
                 self.window.blit(self._grey_overlay, (cx, cy))
                 if is_mk:
                     # Gold frame hint on the missing slot so players discover
-                    # that the Maharaja is craftable.
-                    self._draw_maharaja_border(card_rect, owned=False)
+                    # that the Maharaja is craftable; once every rank has a
+                    # free copy the slot lights up fully and invites the craft.
+                    self._draw_maharaja_border(card_rect, owned=mk_craftable)
+                    if mk_craftable:
+                        self._draw_maharaja_craft_ready_pill(card_rect)
                 else:
                     self._draw_tier_border(cx, cy, cw, ch, rank, section, owned=False)
                 if display_state == 'locked_placeholder':
@@ -955,6 +959,34 @@ class CollectionScreen(MenuScreenMixin, Screen):
         surf = pygame.Surface((cw + 4, ch + 4), pygame.SRCALPHA)
         pygame.draw.rect(surf, clr, surf.get_rect(), thickness, border_radius=4)
         self.window.blit(surf, (cx - 2, cy - 2))
+
+    def _maharaja_craftable(self, suit):
+        """True when every rank of *suit* has a free copy to trade in."""
+        ready, total, _missing = _maharaja_craft_progress(
+            self._cards, self._locked, suit)
+        return ready >= total
+
+    def _draw_maharaja_craft_ready_pill(self, card_rect):
+        """Pulsing gold 'Craft!' pill on an uncrafted-but-ready Maharaja cell."""
+        now = pygame.time.get_ticks()
+        pulse = 0.5 + 0.5 * math.sin(now / 480.0)
+        label = self._badge_font.render(
+            'Craft!', True, settings.COLLECTION_MAHARAJA_BORDER_CLR)
+        pad_x = max(4, settings.COLLECTION_BADGE_PAD_X + 2)
+        pad_y = max(2, settings.COLLECTION_BADGE_PAD_Y)
+        pill = pygame.Surface(
+            (label.get_width() + pad_x * 2, label.get_height() + pad_y * 2),
+            pygame.SRCALPHA)
+        radius = pill.get_height() // 2
+        pygame.draw.rect(pill, (30, 27, 24, 235), pill.get_rect(),
+                         border_radius=radius)
+        r, g, b = settings.COLLECTION_MAHARAJA_BORDER_CLR
+        pygame.draw.rect(pill, (r, g, b, int(160 + 95 * pulse)),
+                         pill.get_rect(), 1, border_radius=radius)
+        pill.blit(label, (pad_x, pad_y))
+        self.window.blit(pill, pill.get_rect(
+            midbottom=(card_rect.centerx,
+                       card_rect.bottom - max(3, int(0.004 * _SH)))))
 
     def _draw_maharaja_glow(self, card_rect, dim=False):
         """Feathered royal-gold halo behind a Maharaja cell, gently pulsing."""
@@ -1740,7 +1772,8 @@ class CollectionScreen(MenuScreenMixin, Screen):
         from utils import sound
         sound.play('conquer_win')  # big-deal fanfare for a 13-card craft
         self._reveal_overlay = BoosterRevealOverlay(
-            self.window, [reveal_card], pack_type='main')
+            self.window, [reveal_card], pack_type='main',
+            title=f'{suit} Maharaja Crafted!')
         self._spawn_maharaja_floater(suit)
         self.state.set_msg(f'Crafted the {suit} Maharaja!')
         # Refresh authoritative stock (consumed cards + new MK).

@@ -45,6 +45,14 @@ def _is_kingdom_config_mode(mode):
 def _kingdom_mode_path(mode):
     return 'defence/draft' if mode == 'defence_draft' else mode
 
+
+def _build_hierarchy_img_path(mode):
+    """Kingdom config modes show two castle figures (King + Maharaja), so
+    they get their own hierarchy artwork; duel keeps the original tree."""
+    if _is_kingdom_config_mode(mode):
+        return settings.BUILD_HIERARCHY_CONQUER_IMG_PATH
+    return settings.BUILD_HIERARCHY_IMG_PATH
+
 class BuildFigureScreen(SubScreen):
     """Screen for building a figure by selecting figures and suits."""
 
@@ -489,7 +497,8 @@ class BuildFigureScreen(SubScreen):
             settings.BUILD_FIGURE_INFO_BOX_SCROLL_HEIGHT
         )
 
-        self.build_hierarchy = pygame.image.load(settings.BUILD_HIERARCHY_IMG_PATH).convert_alpha()
+        self.build_hierarchy = pygame.image.load(
+            _build_hierarchy_img_path(self.mode)).convert_alpha()
         self.build_hierarchy = pygame.transform.smoothscale(
             self.build_hierarchy,
             (settings.BUILD_HIERARCHY_WIDTH, settings.BUILD_HIERARCHY_HEIGHT)

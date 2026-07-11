@@ -103,16 +103,19 @@ class BoosterRevealOverlay:
     cards to reveal them. Once all cards are revealed a Close button appears.
     """
 
-    def __init__(self, window, drawn_cards, pack_type='main'):
+    def __init__(self, window, drawn_cards, pack_type='main', title=None):
         """
         Args:
             window: pygame display surface
             drawn_cards: list of dicts [{suit, rank, value, tier}, ...]
             pack_type: 'main' or 'side', used to infer tiers for legacy responses
+            title: optional header override for non-pack reveals (e.g. crafts);
+                defaults to the pack-type label
         """
         self.window = window
         self._cards = list(drawn_cards or [])
         self._pack_type = pack_type
+        self._title_override = title
         self._tiers = [_card_tier(c, pack_type) for c in self._cards]
 
         # State per card slot: 'hidden' | 'revealing' | 'revealed'
@@ -286,12 +289,15 @@ class BoosterRevealOverlay:
         self.window.blit(self._overlay, (0, 0))
 
         # Title
-        base_label = 'Side Booster Pack' if self._pack_type == 'side' else 'Main Booster Pack'
-        pack_count = max(1, math.ceil(len(self._cards) / _CARDS_PER_PACK))
-        if pack_count > 1:
-            pack_label = f'{pack_count} {base_label}s'
+        if self._title_override:
+            pack_label = self._title_override
         else:
-            pack_label = base_label
+            base_label = 'Side Booster Pack' if self._pack_type == 'side' else 'Main Booster Pack'
+            pack_count = max(1, math.ceil(len(self._cards) / _CARDS_PER_PACK))
+            if pack_count > 1:
+                pack_label = f'{pack_count} {base_label}s'
+            else:
+                pack_label = base_label
         title = self._title_font.render(pack_label, True, (250, 221, 0))
         subtitle_text = 'Click each card to reveal its face'
         if self._bulk:
