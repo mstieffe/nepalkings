@@ -593,3 +593,21 @@ class TestBuildFigureScreenMaharajaBuildable:
         assert any(
             f.name == 'Djungle Maharaja' and f.suit == 'Hearts'
             for f in buildable)
+
+
+class TestScrollShifterMaharajaCardImgs:
+    """Regression: the figure-info scroll's card image cache must include the
+    crafted MK rank — selecting a Maharaja family in the kingdom builder
+    renders its MK key card there (crashed with AttributeError on None)."""
+
+    def test_card_img_cache_includes_maharaja(self):
+        from types import SimpleNamespace
+        from config import settings
+        from game.components.scroll_text_list_shifter import ScrollTextListShifter
+
+        _ensure_display()
+        import pygame
+        fake = SimpleNamespace(window=pygame.display.get_surface())
+        imgs = ScrollTextListShifter.initialize_card_imgs(fake)
+        for suit in settings.SUITS:
+            assert imgs.get((suit, settings.RANK_MAHARAJA)) is not None
