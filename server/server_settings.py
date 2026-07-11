@@ -254,7 +254,7 @@ CASTLE_FIGURE_LIMIT_BY_TIER = {1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6}
 # are tier-scaled (see ``_conquer_loot_base_quota``).  Must match the client
 # constants in ``nepal_kings/config/card_settings.py``.
 LOOT_NUMBER_RANKS = frozenset({'3', '6', '7', '8', '9', '10'})
-LOOT_KEY_RANKS = frozenset({'2', '4', '5', 'J', 'Q', 'K', 'A'})
+LOOT_KEY_RANKS = frozenset({'2', '4', '5', 'J', 'Q', 'K', 'A', 'MK'})
 
 # Voronoi-style suit clustering: each suit receives exactly this many clusters
 # (seed hexes), so all suits always have the same cluster count.

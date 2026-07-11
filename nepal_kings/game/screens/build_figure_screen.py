@@ -256,7 +256,8 @@ class BuildFigureScreen(SubScreen):
                     rank=c['rank'], suit=c['suit'],
                     value=settings.RANK_TO_VALUE.get(c['rank'], 0),
                     id=c.get('id', hash((c['suit'], c['rank'], i))),
-                    type='main' if c['rank'] in settings.RANKS_MAIN_CARDS else 'side_card',
+                    type='main' if (c['rank'] in settings.RANKS_MAIN_CARDS
+                                    or c['rank'] == settings.RANK_MAHARAJA) else 'side_card',
                 ))
 
         locked_ids = set()
@@ -412,29 +413,43 @@ class BuildFigureScreen(SubScreen):
 
     def init_figure_family_icons(self):
         """Initialize figure family icons and their shifters.
-        
-        For castle families, only show the King icon (not Maharaja).
+
+        Duel mode shows only the King castle icon — each duel player is dealt a
+        Maharaja automatically, so its family stays hidden here. Kingdom config
+        modes (conquer/defence) show both King and Maharaja castle families,
+        placed symmetrically around the shared castle build_position with the
+        Maharaja to the left of the King.
         """
         self.figure_family_buttons = {}
-        
+        kingdom_mode = _is_kingdom_config_mode(self.mode)
+        # Half the village-row column pitch (VILLAGE_DELTA_X = 0.09*SW): the
+        # King/Maharaja pair ends up 0.09*SW apart and aligned with the grid.
+        castle_dx = 0.045 * settings.SCREEN_WIDTH
+
         for color in ['offensive', 'defensive']:
             families = self.figure_manager.families_by_color[color]
             buttons = []
-            
+
             for family in families:
-                # Skip Maharaja families - only show King families
-                if 'Maharaja' in family.name:
+                is_maharaja = 'Maharaja' in family.name
+                # Maharaja families only appear in kingdom config modes.
+                if is_maharaja and not kingdom_mode:
                     continue
-                
+
+                x = family.build_position[0]
+                if kingdom_mode and family.field == 'castle':
+                    # Maharaja left of King, symmetric about build_position.
+                    x += -castle_dx if is_maharaja else castle_dx
+
                 buttons.append(
                     family.make_icon(
                         self.window,
                         self.game,
-                        self._sx(family.build_position[0]),
+                        self._sx(x),
                         self._sy(family.build_position[1])
                     )
                 )
-            
+
             self.figure_family_buttons[color] = buttons
 
     def init_color_buttons(self):

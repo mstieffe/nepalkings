@@ -1851,7 +1851,8 @@ class ConquerScreen(MenuScreenMixin, Screen):
                     rank=c['rank'], suit=c['suit'],
                     value=settings.RANK_TO_VALUE.get(c['rank'], 0),
                     id=c.get('id', hash((c['suit'], c['rank'], i))),
-                    type='main' if c['rank'] in settings.RANKS_MAIN_CARDS else 'side_card',
+                    type='main' if (c['rank'] in settings.RANKS_MAIN_CARDS
+                                    or c['rank'] == settings.RANK_MAHARAJA) else 'side_card',
                 ))
 
         locked_ids = set()

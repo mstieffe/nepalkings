@@ -92,6 +92,13 @@ COLLECTION_TIER_GLOW_TINTS = {
     3: (255, 232, 74, 255),
 }
 
+# ── Maharaja crafted card (leftmost 'MK' column) ───────────────────
+# The crown jewels of the collection get a bespoke royal-gold treatment
+# instead of a booster rarity tier (Maharajas never drop from packs).
+COLLECTION_MAHARAJA_LABEL      = 'Legendary'
+COLLECTION_MAHARAJA_GLOW_CLR   = (255, 205, 70)
+COLLECTION_MAHARAJA_BORDER_CLR = (255, 216, 92)
+
 # ── Collection summary / pack panels ───────────────────────────────
 COLLECTION_STATS_STRIP_H = int(0.046 * SCREEN_HEIGHT)
 COLLECTION_STATS_FONT_SIZE = int(FS_BODY * 0.82)

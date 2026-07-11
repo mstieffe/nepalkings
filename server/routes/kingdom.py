@@ -4248,6 +4248,9 @@ def _normalize_main_rank(rank, *, fallback_rank='10', value=None, context=''):
     candidate = str(raw_rank).strip().upper() if raw_rank is not None else ''
     if candidate in _MAIN_RANKS:
         return candidate
+    if candidate == 'MK':
+        # Crafted Maharaja key card plays as a King at battle runtime.
+        return 'K'
 
     for source, source_name in ((candidate, 'rank'), (value, 'value')):
         try:

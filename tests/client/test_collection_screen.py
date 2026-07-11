@@ -674,6 +674,137 @@ class TestCollectionService:
         assert hasattr(collection_service, 'buy_booster_side')
         assert hasattr(collection_service, 'open_booster')
         assert hasattr(collection_service, 'open_booster_side')
+        assert hasattr(collection_service, 'craft_maharaja')
+
+    def test_craft_maharaja_posts_suit_payload(self, monkeypatch):
+        from utils import collection_service
+
+        captured = {}
+
+        class _Resp:
+            def json(self):
+                return {'success': True,
+                        'card': {'suit': 'Hearts', 'rank': 'MK', 'value': 4},
+                        'consumed': 13}
+
+        def _fake_post(url, json=None, timeout=None, **kwargs):
+            captured['url'] = url
+            captured['json'] = json
+            return _Resp()
+
+        monkeypatch.setattr(collection_service.requests, 'post', _fake_post)
+
+        result = collection_service.craft_maharaja('Hearts')
+
+        assert captured['json'] == {'suit': 'Hearts'}
+        assert captured['url'].endswith('/collection/craft_maharaja')
+        assert result['success'] is True
+        assert result['card']['rank'] == 'MK'
+
+
+class TestMaharajaCraft:
+    """Verify the crafted Maharaja ('MK') collection logic."""
+
+    def test_main_ranks_lead_with_maharaja(self):
+        from config import settings
+        from game.screens.collection_screen import _ordered_main_ranks
+        ranks = _ordered_main_ranks()
+        assert ranks[0] == settings.RANK_MAHARAJA
+        assert set(ranks[1:]) == set(settings.RANKS_MAIN_CARDS)
+
+    def test_craft_progress_ready_when_all_free(self):
+        from config import settings
+        from game.screens.collection_screen import _maharaja_craft_progress
+        cards = {('Hearts', r): 1 for r in settings.RANKS}
+        ready, total, missing = _maharaja_craft_progress(cards, {}, 'Hearts')
+        assert (ready, total, missing) == (13, 13, [])
+
+    def test_craft_progress_not_ready_when_rank_fully_locked(self):
+        from config import settings
+        from game.screens.collection_screen import _maharaja_craft_progress
+        cards = {('Hearts', r): 1 for r in settings.RANKS}
+        locked = {('Hearts', 'A'): 1}  # the only copy is locked → not ready
+        ready, total, missing = _maharaja_craft_progress(cards, locked, 'Hearts')
+        assert ready == 12
+        assert total == 13
+        assert 'A' in missing
+
+    def test_maharaja_never_sellable(self):
+        from game.screens.collection_screen import _sell_price
+        assert _sell_price('MK') == 0
+        assert _sell_price('MK', 5) == 0
+
+    def test_maharaja_gets_dedicated_tier_label(self):
+        from config import settings
+        from game.screens.collection_screen import _tier_label, _card_pack_type
+        assert _tier_label('MK') == settings.COLLECTION_MAHARAJA_LABEL
+        assert _tier_label('MK') != 'Common'
+        assert _card_pack_type('MK') == 'main'
+
+
+def test_maharaja_click_routes_to_craft_not_sell_or_trade():
+    import pygame
+    from config import settings
+    from game.screens.collection_screen import CollectionScreen
+    from game.components.cards.card_img import CardImg
+
+    window = pygame.display.get_surface() or pygame.display.set_mode(
+        (settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+    screen = object.__new__(CollectionScreen)
+    screen.window = window
+    screen._cards = {('Hearts', r): 1 for r in settings.RANKS}
+    screen._locked = {}
+    screen._card_imgs = {
+        ('Hearts', 'MK'): CardImg(window, 'Hearts', 'MK', 60, 90)}
+    screen._profile_dialogue = None
+    screen._profile_card = None
+    screen._profile_pinned_tooltip = None
+    screen._craft_dialogue = None
+    screen._craft_suit = None
+
+    # A click on an MK cell normally routes through _open_profile_dialogue.
+    screen._open_profile_dialogue('Hearts', 'MK')
+
+    # It must open the craft dialogue — never the sell/convert profile.
+    assert screen._profile_dialogue is None
+    assert screen._craft_dialogue is not None
+    assert screen._craft_suit == 'Hearts'
+    actions = [button.text for button in screen._craft_dialogue.buttons]
+    assert actions == ['Craft', 'cancel']
+    action_names = {a.lower() for a in actions}
+    assert 'sell copies' not in action_names
+    assert 'convert' not in action_names
+    # All 13 ranks free → the craft button is enabled.
+    craft_btn = next(b for b in screen._craft_dialogue.buttons
+                     if b.text.lower() == 'craft')
+    assert craft_btn.disabled is False
+
+
+def test_maharaja_craft_button_disabled_when_not_ready():
+    import pygame
+    from config import settings
+    from game.screens.collection_screen import CollectionScreen
+    from game.components.cards.card_img import CardImg
+
+    window = pygame.display.get_surface() or pygame.display.set_mode(
+        (settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+    screen = object.__new__(CollectionScreen)
+    screen.window = window
+    screen._cards = {('Spades', r): 1 for r in settings.RANKS}
+    screen._locked = {('Spades', 'K'): 1}  # one rank fully locked
+    screen._card_imgs = {
+        ('Spades', 'MK'): CardImg(window, 'Spades', 'MK', 60, 90)}
+    screen._profile_dialogue = None
+    screen._profile_card = None
+    screen._profile_pinned_tooltip = None
+    screen._craft_dialogue = None
+    screen._craft_suit = None
+
+    screen._open_craft_dialogue('Spades')
+
+    craft_btn = next(b for b in screen._craft_dialogue.buttons
+                     if b.text.lower() == 'craft')
+    assert craft_btn.disabled is True
 
 
 def test_open_booster_confirmation_offers_open_all_for_multiple_packs():
