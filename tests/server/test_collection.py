@@ -153,6 +153,15 @@ class TestSellCard:
         rv = client.post('/collection/sell_card', headers=auth_headers_user1, json={})
         assert rv.status_code == 400
 
+    def test_sell_maharaja_rejected(self, client, db, two_users, auth_headers_user1):
+        u1, _ = two_users
+        _add_cards(db, u1.id, 'Hearts', 'MK', 4, count=1)
+
+        rv = client.post('/collection/sell_card', headers=auth_headers_user1,
+                         json={'suit': 'Hearts', 'rank': 'MK', 'quantity': 1})
+        assert rv.status_code == 400
+        assert rv.get_json()['success'] is False
+
 
 # ═══════════════════════════════════════════════════════════════════
 #  POST /collection/buy_booster
@@ -526,3 +535,14 @@ class TestConvertCard:
         remaining = CollectionCard.query.filter_by(
             user_id=u1.id, suit='Hearts', rank='7').count()
         assert remaining == 1
+
+    def test_convert_maharaja_rejected(self, client, db, two_users, auth_headers_user1):
+        u1, _ = two_users
+        _add_cards(db, u1.id, 'Hearts', 'MK', 4, count=1)
+
+        rv = client.post('/collection/convert_card',
+                         json={'suit': 'Hearts', 'rank': 'MK',
+                               'target_suit': 'Diamonds', 'quantity': 1},
+                         headers=auth_headers_user1)
+        assert rv.status_code == 400
+        assert rv.get_json()['success'] is False

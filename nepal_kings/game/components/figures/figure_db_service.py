@@ -205,6 +205,19 @@ class FigureDbService:
                             upgrade_card = family_figure.upgrade_card
                         break
 
+            # Fallback: match by name + suit. Covers figures whose runtime
+            # cards differ from the family recipe, e.g. the duel Maharaja is
+            # placed by the server with a K card while the family recipe
+            # keys on the crafted MK card.
+            if matched_family_figure is None:
+                for family_figure in family.figures:
+                    if (family_figure.suit == figure_data['suit']
+                            and family_figure.name == figure_data['name']):
+                        matched_family_figure = family_figure
+                        if not upgrade_card:
+                            upgrade_card = family_figure.upgrade_card
+                        break
+
             # Create the figure — copy combat skills from matched family figure
             from game.components.figures.family_configs.skill_config import SKILL_KEYS
             skill_kwargs = {k: getattr(matched_family_figure, k, False) if matched_family_figure else False

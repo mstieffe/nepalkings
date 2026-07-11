@@ -81,3 +81,21 @@ def convert_card(suit, rank, target_suit, quantity):
     )
     response.raise_for_status()
     return response.json()
+
+
+def craft_maharaja(suit):
+    """POST /collection/craft_maharaja — trade one free copy of every rank of
+    *suit* for a Maharaja card of that suit.
+
+    Returns the parsed body for the caller to inspect:
+      success → {'success': True, 'card': {...}, 'consumed': 13}
+      failure → {'success': False, 'message': '...'}
+    The body carries the failure reason on 4xx too, so (unlike convert_card) we
+    return the JSON instead of raising, letting the screen surface the message.
+    """
+    response = requests.post(
+        f'{settings.SERVER_URL}/collection/craft_maharaja',
+        json={'suit': suit},
+        timeout=10,
+    )
+    return response.json()

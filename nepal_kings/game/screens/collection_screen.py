@@ -36,6 +36,9 @@ _KEY_RANKS = ['J', 'Q', 'K', 'A']
 _KEY_MULTIPLIER = 10
 
 def _sell_price(rank, quantity=1):
+    # Maharaja cards are crafted, never sellable.
+    if rank == settings.RANK_MAHARAJA:
+        return 0
     value = settings.RANK_TO_VALUE.get(rank, 0)
     if rank in _KEY_RANKS:
         return value * _KEY_MULTIPLIER * quantity
@@ -61,6 +64,9 @@ def _card_tier(rank, pack_type=None):
 
 
 def _tier_label(rank, pack_type=None):
+    # Maharaja has no booster rarity tier; it gets its own crafted label.
+    if rank == settings.RANK_MAHARAJA:
+        return settings.COLLECTION_MAHARAJA_LABEL
     return settings.COLLECTION_TIER_LABELS.get(_card_tier(rank, pack_type), 'Common')
 
 
@@ -68,11 +74,40 @@ def _collection_sort_key(rank, pack_type):
     """Sort key for the collection grid.
 
     Order: tier desc → key cards before number cards → higher card value first.
+    The crafted Maharaja always sorts leftmost.
     """
+    if rank == settings.RANK_MAHARAJA:
+        return (-99, 0, 0)
     tier = _card_tier(rank, pack_type)
     is_number = 1 if rank in settings.NUMBER_CARDS else 0  # key (0) before number (1)
     value = settings.RANK_TO_VALUE.get(rank, 0)
     return (-tier, is_number, -value)
+
+
+def _ordered_main_ranks():
+    """Main-card columns for the grid: the crafted Maharaja slot leads, then the
+    regular ranks sorted tier → key → value."""
+    return [settings.RANK_MAHARAJA] + sorted(
+        settings.RANKS_MAIN_CARDS,
+        key=lambda r: _collection_sort_key(r, 'main'),
+    )
+
+
+def _maharaja_craft_progress(cards, locked, suit):
+    """Return (ready_count, total, missing_ranks) for crafting *suit*'s Maharaja.
+
+    A rank is ready when the suit has at least one free (unlocked) copy. Only the
+    regular ranks (2..A) can be traded into the crafted card.
+    """
+    ranks = settings.MAHARAJA_CRAFT_RANKS
+    ready = 0
+    missing = []
+    for rank in ranks:
+        if _free_card_count(cards, locked, suit, rank) >= 1:
+            ready += 1
+        else:
+            missing.append(rank)
+    return ready, len(ranks), missing
 
 
 def _collection_stats(cards, locked=None):
@@ -199,10 +234,8 @@ class CollectionScreen(MenuScreenMixin, Screen):
 
         # ── Card ranks ──────────────────────────────────────────────
         # Sort: tier desc → key cards before number cards → value desc.
-        self._main_ranks = sorted(
-            settings.RANKS_MAIN_CARDS,
-            key=lambda r: _collection_sort_key(r, 'main'),
-        )
+        # The crafted Maharaja ('MK') slot leads the Main Cards section.
+        self._main_ranks = _ordered_main_ranks()
         self._side_ranks = sorted(
             settings.RANKS_SIDE_CARDS,
             key=lambda r: _collection_sort_key(r, 'side'),
@@ -223,10 +256,11 @@ class CollectionScreen(MenuScreenMixin, Screen):
         self._boosters_side = ud.get('booster_packs_side', 0)
 
         # ── Build CardImg cache ─────────────────────────────────────
+        # The crafted Maharaja ('MK') is not in RANKS, so add it explicitly.
         cw, ch = settings.COLLECTION_CARD_W, settings.COLLECTION_CARD_H
         self._card_imgs = {}   # {(suit,rank): CardImg}
         for suit in settings.SUITS:
-            for rank in settings.RANKS:
+            for rank in settings.RANKS + [settings.RANK_MAHARAJA]:
                 self._card_imgs[(suit, rank)] = CardImg(self.window, suit, rank, cw, ch)
 
         # ── Grey overlay for unowned cards ──────────────────────────
@@ -356,6 +390,10 @@ class CollectionScreen(MenuScreenMixin, Screen):
         self._profile_pinned_tooltip = None
         self._profile_pinned_tooltip_pos = None
 
+        # ── Maharaja craft dialogue (MK click — never sell/trade) ────
+        self._craft_dialogue = None
+        self._craft_suit = None
+
         # ── Booster reveal overlay ──────────────────────────────────
         self._reveal_overlay = None
         self._pending_booster_type = 'main'  # tracks which type for dialogue flow
@@ -409,6 +447,8 @@ class CollectionScreen(MenuScreenMixin, Screen):
         self._profile_dialogue = None
         self._profile_card = None
         self._profile_pinned_tooltip = None
+        self._craft_dialogue = None
+        self._craft_suit = None
         self._fetch_collection()
 
     # ── data fetching ───────────────────────────────────────────────
@@ -578,6 +618,10 @@ class CollectionScreen(MenuScreenMixin, Screen):
                     self._profile_pinned_tooltip,
                     anchor=self._profile_pinned_tooltip_pos,
                 )
+
+        # Craft dialogue (Maharaja)
+        if self._craft_dialogue:
+            self._craft_dialogue.draw()
 
         # Booster reveal overlay
         if self._reveal_overlay:
@@ -796,12 +840,20 @@ class CollectionScreen(MenuScreenMixin, Screen):
                 and not self._sell_dialogue
                 and not self._trade_dialogue
                 and not self._profile_dialogue
+                and not self._craft_dialogue
                 and not self._reveal_overlay
             )
 
+            is_mk = (rank == settings.RANK_MAHARAJA)
+
             if display_state == 'owned':
+                if is_mk:
+                    self._draw_maharaja_glow(card_rect)  # warm gold halo behind
                 card.draw_front_bright(cx, cy)
-                self._draw_tier_border(cx, cy, cw, ch, rank, section, owned=True)
+                if is_mk:
+                    self._draw_maharaja_border(card_rect, owned=True)
+                else:
+                    self._draw_tier_border(cx, cy, cw, ch, rank, section, owned=True)
                 if hovered:
                     glow_surf = pygame.Surface((cw + 4, ch + 4), pygame.SRCALPHA)
                     pygame.draw.rect(glow_surf, (250, 221, 0, 80), glow_surf.get_rect(), 2)
@@ -811,9 +863,16 @@ class CollectionScreen(MenuScreenMixin, Screen):
                     show_locked=getattr(self, '_show_locked_cards', False),
                 )
             else:
+                if is_mk:
+                    self._draw_maharaja_glow(card_rect, dim=True)
                 card.draw_front_bright(cx, cy)
                 self.window.blit(self._grey_overlay, (cx, cy))
-                self._draw_tier_border(cx, cy, cw, ch, rank, section, owned=False)
+                if is_mk:
+                    # Gold frame hint on the missing slot so players discover
+                    # that the Maharaja is craftable.
+                    self._draw_maharaja_border(card_rect, owned=False)
+                else:
+                    self._draw_tier_border(cx, cy, cw, ch, rank, section, owned=False)
                 if display_state == 'locked_placeholder':
                     self._draw_locked_card_placeholder(card_rect)
             if gain_progress is not None:
@@ -895,6 +954,47 @@ class CollectionScreen(MenuScreenMixin, Screen):
         pygame.draw.rect(surf, clr, surf.get_rect(), thickness, border_radius=4)
         self.window.blit(surf, (cx - 2, cy - 2))
 
+    def _draw_maharaja_glow(self, card_rect, dim=False):
+        """Feathered royal-gold halo behind a Maharaja cell, gently pulsing."""
+        now = pygame.time.get_ticks()
+        pulse = 0.5 + 0.5 * math.sin(now / 480.0)
+        peak = (28 if dim else 66) + int((16 if dim else 44) * pulse)
+        color = settings.COLLECTION_MAHARAJA_GLOW_CLR
+        halo_rect = card_rect.inflate(int(card_rect.w * 0.42),
+                                      int(card_rect.h * 0.28))
+        halo = pygame.Surface(halo_rect.size, pygame.SRCALPHA)
+        layers = 6
+        for step in range(layers, 0, -1):
+            t = step / layers  # 1.0 outer → ~0 inner
+            inset_x = int(halo_rect.w * 0.5 * (1.0 - t))
+            inset_y = int(halo_rect.h * 0.5 * (1.0 - t))
+            ring = pygame.Rect(inset_x, inset_y,
+                               halo_rect.w - inset_x * 2,
+                               halo_rect.h - inset_y * 2)
+            if ring.w <= 0 or ring.h <= 0:
+                continue
+            layer_alpha = max(0, int(peak * (1.0 - t) ** 2))
+            if layer_alpha == 0:
+                continue
+            pygame.draw.ellipse(halo, (*color, layer_alpha), ring)
+        self.window.blit(halo, halo_rect.topleft)
+
+    def _draw_maharaja_border(self, card_rect, owned=True):
+        """Gold frame around a Maharaja cell; pulses brighter when owned."""
+        now = pygame.time.get_ticks()
+        pulse = 0.5 + 0.5 * math.sin(now / 480.0)
+        r, g, b = settings.COLLECTION_MAHARAJA_BORDER_CLR
+        if owned:
+            alpha = int(200 + 55 * pulse)
+            thickness = 2
+        else:
+            alpha = 150
+            thickness = 1
+        surf = pygame.Surface((card_rect.w + 4, card_rect.h + 4), pygame.SRCALPHA)
+        pygame.draw.rect(surf, (r, g, b, alpha), surf.get_rect(),
+                         thickness, border_radius=4)
+        self.window.blit(surf, (card_rect.x - 2, card_rect.y - 2))
+
     def _draw_card_badge(self, cx, cy, cw, qty, locked=0, show_locked=True):
         """Draw separate free-stock and in-use badges without slash ambiguity."""
         free = max(0, qty - locked)
@@ -948,6 +1048,7 @@ class CollectionScreen(MenuScreenMixin, Screen):
             and not self._sell_dialogue
             and not self._trade_dialogue
             and not self._profile_dialogue
+            and not self._craft_dialogue
             and not self._reveal_overlay
         )
         from game.core.input_state import get_pressed as _get_pressed
@@ -1045,6 +1146,7 @@ class CollectionScreen(MenuScreenMixin, Screen):
             and not self._sell_dialogue
             and not self._trade_dialogue
             and not self._profile_dialogue
+            and not self._craft_dialogue
             and not self._reveal_overlay
         )
 
@@ -1109,6 +1211,7 @@ class CollectionScreen(MenuScreenMixin, Screen):
             and not self._sell_dialogue
             and not self._trade_dialogue
             and not self._profile_dialogue
+            and not self._craft_dialogue
             and not self._reveal_overlay
         )
 
@@ -1152,6 +1255,12 @@ class CollectionScreen(MenuScreenMixin, Screen):
 
     def _open_profile_dialogue(self, suit, rank):
         """Show a profile dialogue with all uses of (suit, rank)."""
+        # Maharaja cards are crafted, never sold or traded — every click on an
+        # MK cell routes to the dedicated craft dialogue instead.
+        if rank == settings.RANK_MAHARAJA:
+            self._open_craft_dialogue(suit)
+            return
+
         from utils.card_uses import get_card_uses
 
         qty = self._cards.get((suit, rank), 0)
@@ -1546,6 +1655,106 @@ class CollectionScreen(MenuScreenMixin, Screen):
         self._trade_dialogue = None
         self._trade_qty_rects = {}
         self._trade_target_rects = {}
+
+    # ── maharaja craft dialogue ─────────────────────────────────────
+
+    def _open_craft_dialogue(self, suit):
+        """Open the Maharaja craft dialogue for *suit* (never sell/trade)."""
+        self._profile_dialogue = None
+        self._profile_card = None
+        self._profile_pinned_tooltip = None
+        ready, total, missing = _maharaja_craft_progress(
+            self._cards, self._locked, suit)
+        card_img = self._card_imgs.get((suit, settings.RANK_MAHARAJA))
+        self._craft_suit = suit
+        msg = (f'Trade one free copy of every {suit} rank (2–A, {total} cards) '
+               f'for a {suit} Maharaja.\n'
+               'Only free (unlocked) copies count.')
+        if ready >= total:
+            after = f'Ready to craft!  {ready} / {total} ranks available.'
+        else:
+            after = (f'{ready} / {total} ranks ready.\n'
+                     f'Still need a free copy of: {", ".join(missing)}')
+        self._craft_dialogue = DialogueBox(
+            self.window, msg, actions=['Craft', 'cancel'],
+            images=[card_img] if card_img else [],
+            title='Craft Maharaja',
+            message_after_images=after)
+        for button in self._craft_dialogue.buttons:
+            if button.text.lower() == 'craft':
+                button.disabled = ready < total
+
+    def _perform_craft(self):
+        """Execute the craft_maharaja API call and celebrate on success."""
+        suit = self._craft_suit
+        self._craft_dialogue = None
+        self._craft_suit = None
+        if not suit:
+            return
+        ready, total, _missing = _maharaja_craft_progress(
+            self._cards, self._locked, suit)
+        if ready < total:
+            self.state.set_msg('Need one free copy of every rank to craft')
+            return
+        try:
+            result = collection_service.craft_maharaja(suit)
+        except Exception as e:
+            logger.error(f'Craft maharaja failed: {e}')
+            self.state.set_msg('Failed to craft Maharaja card')
+            return
+        if not result or not result.get('success'):
+            self.state.set_msg(
+                (result or {}).get('message') or 'Failed to craft Maharaja card')
+            return
+        self._apply_craft_result(suit, result)
+
+    def _apply_craft_result(self, suit, result):
+        """Apply a successful craft: update stock, celebrate with a reveal."""
+        card = result.get('card') or {}
+        # Optimistically reflect the trade locally; the follow-up fetch makes it
+        # authoritative. One free copy of every rank is consumed.
+        for rank in settings.MAHARAJA_CRAFT_RANKS:
+            key = (suit, rank)
+            self._cards[key] = max(0, int(self._cards.get(key, 0) or 0) - 1)
+        mk_key = (suit, settings.RANK_MAHARAJA)
+        self._cards[mk_key] = int(self._cards.get(mk_key, 0) or 0) + 1
+        # Highlight the new MK cell once the reveal is dismissed.
+        self._pending_reveal_gains = {mk_key: 1}
+        # Celebratory single-card reveal through the booster overlay. tier=3
+        # earns the biggest reveal celebration (rings + sparkles); the impact
+        # annotations make the label/summary read as a brand-new card.
+        reveal_card = {
+            'suit': suit,
+            'rank': settings.RANK_MAHARAJA,
+            'value': int(card.get('value', settings.RANK_TO_VALUE.get(
+                settings.RANK_MAHARAJA, 4))),
+            'tier': 3,
+            '_impact_new_type': self._cards[mk_key] == 1,
+            '_impact_owned_before': self._cards[mk_key] - 1,
+            '_impact_owned_after': self._cards[mk_key],
+            '_impact_free_after': self._cards[mk_key],
+        }
+        from game.components.booster_reveal import BoosterRevealOverlay
+        from utils import sound
+        sound.play('conquer_win')  # big-deal fanfare for a 13-card craft
+        self._reveal_overlay = BoosterRevealOverlay(
+            self.window, [reveal_card], pack_type='main')
+        self._spawn_maharaja_floater(suit)
+        self.state.set_msg(f'Crafted the {suit} Maharaja!')
+        # Refresh authoritative stock (consumed cards + new MK).
+        self._fetch_collection()
+
+    def _spawn_maharaja_floater(self, suit):
+        """Spawn a rising gold 'Maharaja crafted!' celebration floater."""
+        font = settings.get_font(settings.COLLECT_FLOAT_FONT_SIZE, bold=True)
+        self._floating_text.add(FloatingText(
+            f'{suit} Maharaja!',
+            (_SW // 2, int(0.20 * _SH)),
+            color=settings.COLLECT_FLOAT_GOLD_CLR,
+            duration_ms=settings.COLLECT_FLOAT_DURATION_MS,
+            rise_px=settings.COLLECT_FLOAT_RISE_PX,
+            font=font,
+        ))
 
     # ── sell dialogue ───────────────────────────────────────────────
 
@@ -2127,6 +2336,9 @@ class CollectionScreen(MenuScreenMixin, Screen):
         if self._profile_dialogue:
             for btn in self._profile_dialogue.buttons:
                 btn.update()
+        if self._craft_dialogue:
+            for btn in self._craft_dialogue.buttons:
+                btn.update()
 
     def handle_events(self, events):
         super().handle_events(events)
@@ -2166,6 +2378,9 @@ class CollectionScreen(MenuScreenMixin, Screen):
                 self._profile_dialogue = None
                 self._profile_card = None
                 self._profile_pinned_tooltip = None
+            if self._craft_dialogue:
+                self._craft_dialogue = None
+                self._craft_suit = None
             return
         if self.dialogue_box:
             return
@@ -2258,6 +2473,23 @@ class CollectionScreen(MenuScreenMixin, Screen):
                         self._update_trade_after_text()
                 continue
 
+            # Craft dialogue captures input (Maharaja — no sell/trade)
+            if self._craft_dialogue:
+                if event.type == MOUSEBUTTONUP and getattr(event, 'button', 0) == 1:
+                    # Click outside the dialogue box → close without action
+                    if (not self._craft_dialogue.rect.collidepoint(event.pos)
+                            and pygame.time.get_ticks() - self._craft_dialogue._created_at >= 200):
+                        self._craft_dialogue = None
+                        self._craft_suit = None
+                        continue
+                    response = self._craft_dialogue.update([event])
+                    if response == 'craft':
+                        self._perform_craft()
+                    elif response in ('cancel', 'ok', 'close'):
+                        self._craft_dialogue = None
+                        self._craft_suit = None
+                continue
+
             # Profile dialogue captures input
             if self._profile_dialogue:
                 if event.type == MOUSEBUTTONUP and getattr(event, 'button', 0) == 1:
@@ -2298,6 +2530,7 @@ class CollectionScreen(MenuScreenMixin, Screen):
                     and not self._sell_dialogue
                     and not self._trade_dialogue
                     and not self._profile_dialogue
+                    and not self._craft_dialogue
                     and not self._reveal_overlay
                     and not pygame.Rect(_BOX_X, _BOX_Y, _BOX_W, _BOX_H).collidepoint(event.pos)):
                 self.state.screen = 'game_menu'
