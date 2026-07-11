@@ -551,8 +551,8 @@ class GameMenuScreen(MenuScreenMixin, Screen):
                 return {
                     'id': 'return_to_kingdom_loop',
                     'rect': self.button_kingdom.rect,
-                    'title': 'Back To Your Kingdom',
-                    'body': 'Head back to your Kingdom. Your first land is waiting to be claimed.',
+                    'title': 'Finish the kingdom tour',
+                    'body': 'Head back to your Kingdom to see your first land and finish the final guided step.',
                     'action': 'click',
                     'mark_on_click': True,
                     'max_lines': 4,
@@ -589,28 +589,16 @@ class GameMenuScreen(MenuScreenMixin, Screen):
     def _build_welcome_stage(self, stage, username):
         """Build the dialogue for one welcome stage (or None)."""
         from game.components.tutorial_window import TutorialWindowDialogue
-        from game.components import tutorial_diagrams as td
+        from game.tutorial_content import welcome_pages
         if stage == 0:
             return TutorialWindowDialogue(
                 self.window,
-                [
-                    {
-                        'title': 'Your Path to the Crown',
-                        'layout': 'image_top',
-                        'image': lambda: td.conquer_start_image(int(0.26 * _SH)),
-                        'image_frame': False,
-                        'image_caption': '',
-                        'lines': [
-                            f'Welcome, {username}!',
-                            'Your goal: become the greatest king of Nepal.',
-                            'Turn cards into figures, spells, and tactics, then conquer land after land until the crown is yours.',
-                        ],
-                    },
-                ],
+                welcome_pages(username, screen_height=_SH),
                 title='Welcome to Nepal Kings',
             )
         if stage == 1:
             from game.components.rewards_reveal_dialogue import RewardsRevealDialogueBox
+            from game.tutorial_content import welcome_gift_lines
             present = (self._onboarding() or {}).get('starter_present') or {}
             # The gift is credited only when these boxes are opened, so the
             # account balance is still 0 here — reveal the starter DEFAULTS.
@@ -625,10 +613,7 @@ class GameMenuScreen(MenuScreenMixin, Screen):
                 self.window,
                 'Your Welcome Gift',
                 'welcome',
-                [
-                    'Every kingdom is built on cards.',
-                    'Here is a welcome gift to start yours:',
-                ],
+                welcome_gift_lines(),
                 items,
                 footer_when_done='Added to your collection!',
                 hint_text='Click each box to reveal your gift.',

@@ -8,7 +8,7 @@ from config import settings
 from config.screen_settings import _UI_SCALE
 #from game.components.card_img import CardImg
 from game.components.cards.hand import Hand
-from game.components.coach_card import draw_coach_highlight, draw_coach_spotlight
+from game.components.coach_card import draw_coach_button, draw_coach_panel
 from game.components.info_scroll import InfoScroll
 from game.components.scoreboard_scroll import ScoreboardScroll
 from game.components.buttons.state_button import StateButton
@@ -5394,37 +5394,57 @@ class GameScreen(Screen):
     def _duel_coach_has_pending_step(self):
         return self._current_duel_coach_step() is not None
 
+    def _duel_coach_blocks_updates(self, step=None):
+        """Keep the modal coach inert except over an explicit click target.
+
+        Action lessons pass target events through in ``handle_events``.  Their
+        controls also need one update tick while the pointer is over that
+        target because several game controls use the current mouse state (not
+        the event itself) to activate.
+        """
+        step = step if step is not None else self._current_duel_coach_step()
+        if not step:
+            return False
+        if step.get('action') != 'click':
+            return True
+        pointer = pygame.mouse.get_pos()
+        return not any(rect.collidepoint(pointer) for rect in self._duel_step_rects(step))
+
     def _current_duel_coach_step(self):
         if not self._duel_coach_allowed():
             return None
         seen = set((self._duel_onboarding() or {}).get('duel_hints_seen') or [])
         steps = [
-            {'id': 'field', 'button': self.field_button, 'subscreen': 'field', 'title': 'Your Playing Board',
-             'body': 'This is your board. Each round gives you 6 setup turns to build figures, cast spells, and improve your hand before battle.'},
-            {'id': 'build', 'button': self.build_button, 'subscreen': 'field', 'title': 'Build Figures',
-             'body': 'Build turns card recipes into figures: castle figures rule, village figures produce, military figures fight.'},
-            {'id': 'cast_spell', 'button': self.cast_spell_button, 'subscreen': 'field', 'title': 'Cast Spells',
-             'body': 'Spells are one-time effects: draw cards, protect your figures, or sabotage your opponent.'},
-            {'id': 'change_cards', 'rects': self._duel_change_cards_rects(), 'subscreen': 'field', 'title': 'Change Cards',
+            {'id': 'field', 'button': self.field_button, 'subscreen': 'field',
+             'title': 'Your setup turns',
+             'completes': ('field', 'game_status', 'resource_panel'),
+             'body': 'Each round gives you 6 setup turns. Build on the board, watch your resources and score, then prepare for battle.'},
+            {'id': 'build', 'button': self.build_button, 'subscreen': 'field',
+             'title': 'Build your first figure', 'action': 'click',
+             'button_label': 'Build', 'coach_subscreen': 'build_figure',
+             'body': 'Tap Build, choose a glowing recipe, and create a figure. This lesson advances after the build succeeds.'},
+            {'id': 'cast_spell',
+             'rects': self._duel_setup_option_rects(),
+             'subscreen': 'field', 'title': 'Other setup options',
+             'completes': ('cast_spell', 'change_cards'),
              'separate_highlights': True,
-             'body': 'Stuck with a bad hand? Select cards and tap the round-arrow buttons to swap them for new ones.'},
-            {'id': 'game_status', 'rects': self._duel_game_status_rects(), 'subscreen': 'field', 'title': 'Track The Game Here',
-             'separate_highlights': True,
-             'body': 'The scoreboard tracks rounds and points; these icons show whose turn it is, ceasefire, and your role. The invader must attack before their setup turns run out.'},
-            {'id': 'resource_panel', 'rect': self._duel_panel_rect(self.resource_scroll), 'subscreen': 'field', 'title': 'Resource Panel',
-             'body': 'Figures produce and consume resources. A shortage shuts down every figure that needs that resource. Now start playing!',
-             'button_label': 'Play'},
-            {'id': 'battle_shop_select_moves', 'rects': self._duel_battle_shop_family_rects(), 'subscreen': 'battle_shop', 'title': 'Choose Battle Moves',
-             'body': 'Battle is coming. Pick a move family, choose matching cards, and buy up to three battle moves.'},
-            {'id': 'battle_shop_ready', 'rects': self._duel_battle_shop_ready_rects(), 'subscreen': 'battle_shop', 'title': 'Ready For Battle',
-             'body': "These slots hold the moves you'll carry into combat. Tap Ready to lock in your battle plan."},
-            {'id': 'battle_move_panel', 'rects': self._duel_battle_move_panel_rects(), 'subscreen': 'battle', 'title': 'Play Battle Moves',
-             'body': 'Tap one of your move icons to open its actions. You play one move per round, for three rounds.'},
-            {'id': 'battle_move_actions', 'rects': self._duel_battle_move_action_rects(), 'subscreen': 'battle', 'title': 'Move Actions',
+             'body': 'Cast Spell spends a turn on a one-time effect. The round-arrow controls exchange selected cards when your hand needs help.'},
+            {'id': 'battle_shop_select_moves', 'rects': self._duel_battle_shop_family_rects(), 'subscreen': 'battle_shop', 'title': 'Choose battle moves',
+             'action': 'click',
+             'body': 'Pick a move family, choose a matching card, and buy a move. The lesson advances after a purchase succeeds.'},
+            {'id': 'battle_shop_ready', 'rects': self._duel_battle_shop_ready_rects(), 'subscreen': 'battle_shop', 'title': 'Ready for battle',
+             'action': 'click',
+             'body': "When your move slots are ready, tap Ready to lock in the battle plan."},
+            {'id': 'battle_move_panel', 'rects': self._duel_battle_move_panel_rects(), 'subscreen': 'battle', 'title': 'Inspect a battle move',
+             'action': 'click',
+             'body': 'Tap one of your move icons to open its actions. You use one move per round.'},
+            {'id': 'battle_move_actions', 'rects': self._duel_battle_move_action_rects(), 'subscreen': 'battle', 'title': 'Choose an action',
+             'action': 'click',
              'body': 'Use plays the move. Gamble trades it for two random ones. Combine merges same-colour Daggers into a Double Dagger.',
              'requires_seen': 'battle_move_panel'},
-            {'id': 'battle_score', 'rects': self._duel_battle_score_rects(), 'subscreen': 'battle', 'title': 'Reading The Score',
+            {'id': 'battle_score', 'rects': self._duel_battle_score_rects(), 'subscreen': 'battle', 'title': 'Read the score',
              'separate_highlights': True,
+             'requires_seen': 'battle_move_actions',
              'body': 'The middle value compares the fighting figures; each round adds its difference on top. The total decides the battle: positive means you win.'},
         ]
         for step in steps:
@@ -5432,6 +5452,12 @@ class GameScreen(Screen):
                 continue
             if step.get('requires_seen') and step['requires_seen'] not in seen:
                 continue
+            expected_subscreen = step.get('subscreen')
+            if (expected_subscreen
+                    and getattr(self.state, 'subscreen', None) != expected_subscreen):
+                # Do not lecture over an unrelated screen; wait until gameplay
+                # naturally reaches the relevant action surface.
+                return None
             if step.get('rect') is None and not step.get('rects') and not step.get('button'):
                 continue
             return step
@@ -5445,6 +5471,17 @@ class GameScreen(Screen):
                     rect = getattr(button, 'rect_hit', None) or getattr(button, 'rect_symbol', None)
                     if rect:
                         rects.append(rect.copy())
+        return rects
+
+    def _duel_setup_option_rects(self):
+        rects = []
+        button = getattr(self, 'cast_spell_button', None)
+        rect = (getattr(button, 'rect_hit', None)
+                or getattr(button, 'rect_symbol', None)
+                or getattr(button, 'rect', None))
+        if rect:
+            rects.append(rect.copy())
+        rects.extend(self._duel_change_cards_rects())
         return rects
 
     @staticmethod
@@ -5515,7 +5552,8 @@ class GameScreen(Screen):
         shop = self._duel_active_subscreen('battle_shop')
         if not shop:
             return []
-        return self._duel_battle_shop_slot_rects(shop)
+        ready = getattr(getattr(shop, 'ready_button', None), 'rect', None)
+        return [ready.copy()] if ready else []
 
     def _duel_battle_move_panel_rects(self):
         game = getattr(self.state, 'game', None)
@@ -5665,18 +5703,36 @@ class GameScreen(Screen):
         onboarding['duel_hints_seen'] = seen
         ud['onboarding'] = onboarding
 
+    def _mark_duel_coaches_seen(self, step_ids, *, event=None):
+        step_ids = tuple(step_ids or ())
+        if not step_ids:
+            return
+        try:
+            data = onboarding_service.mark_tips(
+                [f'duel:{step_id}' for step_id in step_ids], event=event)
+            onboarding = data.get('onboarding')
+            if onboarding is not None and getattr(self.state, 'user_dict', None) is not None:
+                self.state.user_dict['onboarding'] = onboarding
+            return
+        except Exception as exc:
+            logger.debug('Failed to persist Duel coach hints %s: %s', step_ids, exc)
+        for step_id in step_ids:
+            self._mark_duel_coach_seen(step_id)
+
     def _open_duel_coach_step_subscreen(self, step):
         subscreen = (step or {}).get('subscreen')
         if subscreen and subscreen in self.subscreens:
             self.state.subscreen = subscreen
 
     def _skip_duel_coach(self):
-        for step_id in (
+        self._mark_duel_coaches_seen((
             'field', 'build', 'cast_spell', 'change_cards', 'game_status',
             'resource_panel', 'battle_shop_select_moves', 'battle_shop_ready',
             'battle_move_panel', 'battle_move_actions', 'battle_score',
-        ):
-            self._mark_duel_coach_seen(step_id)
+        ), event='lesson_dismissed')
+        self._duel_coach_pressed_button_action = None
+        if getattr(self.state, 'set_msg', None):
+            self.state.set_msg('Duel lesson skipped. Other guidance stays active.')
 
     def _wrap_duel_coach_lines(self, text, max_width, max_lines=5):
         words = str(text or '').split()
@@ -5694,15 +5750,9 @@ class GameScreen(Screen):
             lines.append(current)
         return lines[:max_lines]
 
-    def _draw_duel_coach_button(self, rect, label, action):
-        mx, my = pygame.mouse.get_pos()
-        hovered = rect.collidepoint(mx, my)
-        bg = (96, 70, 34) if hovered else (58, 45, 28)
-        bdr = (235, 204, 105) if hovered else (150, 126, 74)
-        pygame.draw.rect(self.window, bg, rect, border_radius=4)
-        pygame.draw.rect(self.window, bdr, rect, 1, border_radius=4)
-        txt = self._duel_coach_font.render(label, True, (245, 232, 190))
-        self.window.blit(txt, txt.get_rect(center=rect.center))
+    def _draw_duel_coach_button(self, rect, label, action, muted=False):
+        draw_coach_button(
+            self.window, rect, label, self._duel_coach_font, muted=muted)
         self._duel_coach_buttons.append((rect.copy(), action))
 
     def _draw_duel_coach(self):
@@ -5715,48 +5765,39 @@ class GameScreen(Screen):
         target = self._duel_combined_bounds(highlight_rects)
         if not target:
             return
-        draw_coach_spotlight(self.window, highlight_rects)
-        draw_coach_highlight(self.window, highlight_rects, pygame.time.get_ticks())
-        target = target.inflate(14, 14)
+        card, button_h = draw_coach_panel(
+            self.window,
+            highlight_rects,
+            title=step['title'],
+            body=step['body'],
+            title_font=self._duel_coach_title_font,
+            body_font=self._duel_coach_font,
+            ticks=pygame.time.get_ticks(),
+            width_ratio=0.31,
+            min_width=330,
+            max_width=390,
+            min_height=136,
+            max_lines=5,
+            has_button_row=True,
+        )
+        if card is None:
+            return
 
-        card_w = min(390, max(330, int(0.31 * settings.SCREEN_WIDTH)))
-        body_lines = self._wrap_duel_coach_lines(step['body'], card_w - 24)
-        title_h = self._duel_coach_title_font.get_height()
-        body_line_h = self._duel_coach_font.get_height() + 3
-        button_h = max(28, self._duel_coach_font.get_height() + 10)
-        card_h = max(136, 22 + title_h + 10 + len(body_lines) * body_line_h + button_h + 16)
-        gap = 14
-        if target.right + gap + card_w < settings.SCREEN_WIDTH:
-            card_x = target.right + gap
-        else:
-            card_x = max(8, target.left - gap - card_w)
-        card_y = max(8, min(target.centery - card_h // 2,
-                            settings.SCREEN_HEIGHT - card_h - 8))
-        card = pygame.Rect(card_x, card_y, card_w, card_h)
-        surf = pygame.Surface((card.w, card.h), pygame.SRCALPHA)
-        pygame.draw.rect(surf, (24, 20, 16, 235), surf.get_rect(), border_radius=8)
-        self.window.blit(surf, card.topleft)
-        pygame.draw.rect(self.window, (220, 185, 88), card, 2, border_radius=8)
-
-        title_text = self._fit_duel_coach_text(step['title'], self._duel_coach_title_font, card.w - 24)
-        title = self._duel_coach_title_font.render(title_text, True, (248, 232, 180))
-        self.window.blit(title, (card.x + 12, card.y + 10))
-        y = card.y + 10 + title_h + 10
-        for line in body_lines:
-            line_surf = self._duel_coach_font.render(line, True, (214, 204, 174))
-            self.window.blit(line_surf, (card.x + 12, y))
-            y += body_line_h
-
-        button_label = step.get('button_label') or 'Next'
-        button_w = max(76, self._duel_coach_font.size(button_label)[0] + 28)
-        next_rect = pygame.Rect(card.right - button_w - 14, card.bottom - button_h - 12,
-                                button_w, button_h)
-        self._draw_duel_coach_button(next_rect, button_label, ('next', step['id']))
-        skip_label = 'Skip tutorial'
+        coach_subscreen = step.get('coach_subscreen')
+        if step.get('action', 'next') != 'click' or coach_subscreen:
+            button_label = step.get('button_label') or 'Next'
+            button_w = max(76, self._duel_coach_font.size(button_label)[0] + 28)
+            next_rect = pygame.Rect(card.right - button_w - 14, card.bottom - button_h - 12,
+                                    button_w, button_h)
+            action = (('open_subscreen', coach_subscreen) if coach_subscreen
+                      else ('next', step['id']))
+            self._draw_duel_coach_button(next_rect, button_label, action)
+        skip_label = 'Skip Duel lesson'
         skip_w = max(112, self._duel_coach_font.size(skip_label)[0] + 24)
         skip_rect = pygame.Rect(card.x + 14, card.bottom - button_h - 12,
                                 skip_w, button_h)
-        self._draw_duel_coach_button(skip_rect, skip_label, ('skip_tutorial', step['id']))
+        self._draw_duel_coach_button(
+            skip_rect, skip_label, ('skip_tutorial', step['id']), muted=True)
 
     @staticmethod
     def _duel_coach_blocking_event_types():
@@ -5770,6 +5811,8 @@ class GameScreen(Screen):
         if not self._duel_coach_step:
             return False
         block_types = self._duel_coach_blocking_event_types()
+        target_rects = self._duel_step_rects(self._duel_coach_step)
+        click_through = self._duel_coach_step.get('action') == 'click'
         for event in events:
             if event.type == QUIT:
                 continue
@@ -5781,7 +5824,9 @@ class GameScreen(Screen):
                 for rect, action in list(self._duel_coach_buttons):
                     if rect.collidepoint(pos):
                         self._duel_coach_pressed_button_action = action
-                        break
+                        return True
+                if click_through and any(rect.collidepoint(pos) for rect in target_rects):
+                    return False
                 return True
             if event.type == MOUSEBUTTONUP and getattr(event, 'button', 0) == 1:
                 pos = getattr(event, 'pos', pygame.mouse.get_pos())
@@ -5794,11 +5839,25 @@ class GameScreen(Screen):
                         return True
                     kind, step_id = action
                     if kind == 'next':
-                        self._mark_duel_coach_seen(step_id)
+                        completes = self._duel_coach_step.get('completes') or (step_id,)
+                        self._mark_duel_coaches_seen(completes)
                         self._open_duel_coach_step_subscreen(self._current_duel_coach_step())
+                    elif kind == 'open_subscreen':
+                        # Action CTAs navigate to the highlighted gameplay
+                        # surface without completing the lesson.  The build
+                        # step, for example, is marked only after the server
+                        # confirms that a figure was actually created.
+                        if step_id in self.subscreens:
+                            self.state.subscreen = step_id
                     elif kind == 'skip_tutorial':
-                        self._pause_onboarding_tutorial()
+                        self._skip_duel_coach()
                     return True
+                if click_through and any(rect.collidepoint(pos) for rect in target_rects):
+                    coach_subscreen = self._duel_coach_step.get('coach_subscreen')
+                    if coach_subscreen and coach_subscreen in self.subscreens:
+                        self.state.subscreen = coach_subscreen
+                        return True
+                    return False
                 return True
             return True
         return False
@@ -6019,7 +6078,8 @@ class GameScreen(Screen):
         if block_subscreen_change:
             saved_subscreen = self.state.subscreen
 
-        coach_blocks_button_updates = self._duel_coach_has_pending_step()
+        coach_step = self._current_duel_coach_step()
+        coach_blocks_button_updates = self._duel_coach_blocks_updates(coach_step)
 
         if not coach_blocks_button_updates:
             super().update()

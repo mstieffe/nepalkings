@@ -47,7 +47,17 @@ def render(width: int, height: int, ui_scale: str, mobile: bool) -> None:
     from game.components.tutorial_window import (
         TutorialWindowDialogue, StarterSuitRevealDialogue)
     from game.components.rewards_reveal_dialogue import RewardsRevealDialogueBox
-    from game.components import tutorial_diagrams as td
+    from game.tutorial_content import (
+        collection_basics_pages,
+        conquer_battle_intro_pages,
+        duel_intro_pages,
+        kingdom_overview_pages,
+        loot_risk_pages,
+        starter_present_pages,
+        welcome_pages,
+        welcome_gift_lines,
+        reward_reveal_items,
+    )
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     suffix = f"{width}x{height}"
@@ -63,27 +73,17 @@ def render(width: int, height: int, ui_scale: str, mobile: bool) -> None:
 
     welcome = TutorialWindowDialogue(
         surf,
-        [
-            {'title': 'Your Path to the Crown', 'layout': 'image_top',
-             'image': lambda: td.conquer_start_image(int(0.26 * height)),
-             'image_frame': False,
-             'lines': ['Welcome, Mira!',
-                       'Your goal: become the greatest king of Nepal.',
-                       'Turn cards into figures, spells, and tactics, then '
-                       'conquer land after land until the crown is yours.']},
-        ],
+        welcome_pages('Mira', screen_height=height),
         title='Welcome to Nepal Kings')
     shot('welcome-1', welcome, page=0)
 
     gift = RewardsRevealDialogueBox(
         surf, 'Your Welcome Gift', 'welcome',
-        ['You keep a permanent collection of cards.',
-         'Your first attack is prepared already.',
-         'Packs, maps and gold grow your options after each conquest.',
-         "Here's a gift to claim before you begin:"],
-        [{'kind': 'gold', 'label': '2000 gold', 'description': 'Spend it on booster packs, cosmetics, and shields.'},
-         {'kind': 'main_booster', 'label': '2 main boosters', 'description': 'Main cards build your core figures, spells, and tactics.'},
-         {'kind': 'side_booster', 'label': '1 side booster', 'description': 'Side cards unlock advanced figures and effects.'}],
+        welcome_gift_lines(),
+        reward_reveal_items({
+            'gold': 2000, 'booster_packs': 2,
+            'booster_packs_side': 1, 'maps': 0,
+        }),
         footer_when_done='Added to your collection!',
         hint_text='Click each box to reveal your gift.')
     shot('welcome-gift', gift)
@@ -92,34 +92,36 @@ def render(width: int, height: int, ui_scale: str, mobile: bool) -> None:
     reveal._phase = 'done'
     shot('reveal-starter', reveal)
 
+    starter = TutorialWindowDialogue(
+        surf, starter_present_pages(), title='Starter Cards')
+    shot('starter-present', starter, page=0)
+
+    collection = TutorialWindowDialogue(
+        surf, collection_basics_pages(), title='Your Collection')
+    for index in range(len(collection_basics_pages())):
+        shot(f'collection-{index + 1}', collection, page=index)
+
+    duel = TutorialWindowDialogue(
+        surf, duel_intro_pages(), title='Duel Tutorial')
+    for index in range(len(duel_intro_pages())):
+        shot(f'duel-{index + 1}', duel, page=index)
+
     battle = TutorialWindowDialogue(
         surf,
-        [{'title': 'Battle Phases', 'layout': 'image_top',
-          'image': lambda: td.battle_flow_diagram(),
-          'lines': ['1. Your prelude spell fires first and draws extra cards.',
-                    '2. Your figures set the base score: they matter most.',
-                    '3. Three tactic rounds swing the final result.',
-                    'Win the total, and the land is yours.']},
-         {'title': 'Tactics Choices', 'layout': 'image_top',
-          'image': lambda: td.tactics_actions_diagram(),
-          'lines': ['Each round, pick one move for a tactic card:',
-                    'Play it for its value, Gamble it for two new cards, or '
-                    'Combine two same-colour cards into one big hit.',
-                    'Try them out. This first battle is risk-free.']}],
+        conquer_battle_intro_pages(),
         title='How Battles Work')
     shot('battle-1', battle, page=0)
     shot('battle-2', battle, page=1)
 
     kingdom = TutorialWindowDialogue(
         surf,
-        [{'title': 'Read Your Map', 'layout': 'image_top',
-          'image': lambda: td.kingdom_map_diagram(),
-          'image_caption': 'Conquer a neighbour to grow your kingdom.',
-          'lines': ['Every hex is a land. Yours form your kingdom; rivals hold the rest.',
-                    'Conquer neighbouring lands to grow, one hex at a time.']},
-         ],
+        kingdom_overview_pages(),
         title='Your Kingdom')
     shot('kingdom-1', kingdom, page=0)
+
+    loot = TutorialWindowDialogue(
+        surf, loot_risk_pages(), title='Conquer Loot')
+    shot('loot-risk', loot, page=0)
 
     pygame.quit()
 

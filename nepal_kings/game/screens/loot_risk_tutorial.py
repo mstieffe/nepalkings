@@ -25,23 +25,11 @@ def loot_risk_tutorial_seen(screen):
 
 def build_loot_risk_tutorial(window):
     from game.components.tutorial_window import TutorialWindowDialogue
-    from game.components import tutorial_diagrams as td
+    from game.tutorial_content import loot_risk_pages
 
     return TutorialWindowDialogue(
         window,
-        [
-            {
-                'title': 'Cards, Locks, and Loot',
-                'layout': 'image_top',
-                'image': lambda: td.loot_risk_diagram(),
-                'image_caption': 'Committed cards are locked, not spent.',
-                'lines': [
-                    "Cards in an attack or defence are locked while it's active, not spent.",
-                    'If you lose, you only lose the cards the winner loots; everything else returns to your collection.',
-                    'Higher-tier lands raise the stakes with bigger loot.',
-                ],
-            },
-        ],
+        loot_risk_pages(),
         title='Conquer Loot',
     )
 

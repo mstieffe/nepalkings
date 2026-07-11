@@ -48,7 +48,7 @@ def test_duel_tutorial_intro_pages_explain_core_loop():
     assert 'point goal' in text
     assert 'building phase' in text
     assert 'battle phase' in text
-    assert 'shared pool' in text
+    assert 'shared deck' in text
     assert all(isinstance(image, pygame.Surface) for image in images)
 
 

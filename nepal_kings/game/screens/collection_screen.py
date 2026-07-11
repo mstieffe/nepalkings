@@ -1781,30 +1781,10 @@ class CollectionScreen(MenuScreenMixin, Screen):
                 or self._trade_dialogue or self._profile_dialogue or self.dialogue_box):
             return
         from game.components.tutorial_window import TutorialWindowDialogue
-        from game.components import tutorial_diagrams as td
+        from game.tutorial_content import collection_basics_pages
         self._collection_basics_dialogue = TutorialWindowDialogue(
             self.window,
-            [
-                {
-                    'title': 'Key And Number Cards',
-                    'layout': 'text_image_text',
-                    'lines': [
-                        'Key cards carry jewels; number cards carry numbers.',
-                        'The outline shows rarity: grey is common, orange is rare, and gold is the most valuable.',
-                    ],
-                    'image': lambda: td.card_rarity_code_diagram(),
-                },
-                {
-                    'title': 'Cards Become Actions',
-                    'layout': 'text_image_text',
-                    'lines': [
-                        'Every figure, spell, and tactic is built from cards: some from a single card, some from a recipe.',
-                        "Don't worry about memorizing recipes: the game always shows you what you can build.",
-                    ],
-                    'image': lambda: td.card_recipe_examples(),
-                    'image_caption': 'Some examples.',
-                },
-            ],
+            collection_basics_pages(),
             title='Your Collection',
         )
 
@@ -1841,21 +1821,10 @@ class CollectionScreen(MenuScreenMixin, Screen):
                 or self._trade_dialogue or self._profile_dialogue or self.dialogue_box):
             return
         from game.components.tutorial_window import TutorialWindowDialogue
-        from game.components import tutorial_diagrams as td
+        from game.tutorial_content import starter_present_pages
         self._starter_present_dialogue = TutorialWindowDialogue(
             self.window,
-            [
-                {
-                    'title': 'Your Starter Set',
-                    'layout': 'image_top',
-                    'image': lambda: td.suit_roulette_diagram(),
-                    'image_caption': 'One of the four suits, drawn at random.',
-                    'lines': [
-                        'One more gift: a full starter set of cards, all in one suit.',
-                        'Spin to reveal which suit is yours.',
-                    ],
-                },
-            ],
+            starter_present_pages(),
             title='Starter Cards',
         )
 

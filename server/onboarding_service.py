@@ -18,6 +18,13 @@ def _utcnow():
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
+def _nonnegative_int(value):
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
 DAILY_QUEST_REWARD_ID = 'daily_quest'
 DAILY_QUEST_RESET_HOUR_UTC = 0
 
@@ -31,60 +38,70 @@ CORE_STEPS = [
         'title': 'Open a main booster',
         'description': 'Open one of your starter booster packs to grow your collection.',
         'reward': {'booster_packs_side': 1},
+        'group': 'first_journey',
     },
     {
         'id': 'finish_first_conquer_battle',
-        'title': 'Finish a conquer battle',
-        'description': 'Fight one battle for a land in your kingdom.',
+        'title': 'Conquer your first land',
+        'description': 'Win your first land battle as the attacker.',
         'reward': {'maps': 4},
+        'group': 'first_journey',
     },
     {
         'id': 'finish_tutorial',
-        'title': 'Finish the conquer tutorial',
-        'description': 'Conquer your first land and finish the kingdom tour.',
+        'title': 'Finish the kingdom tour',
+        'description': 'Return to the kingdom map and complete the final guided step.',
         'reward': {'booster_packs': 6, 'booster_packs_side': 2},
+        'group': 'first_journey',
     },
     {
         'id': 'finish_first_duel',
         'title': 'Finish the duel tutorial',
         'description': 'Play a guided duel from start to finish.',
         'reward': {'booster_packs': 3},
+        'group': 'learn_next',
     },
     {
         'id': 'collect_first_kingdom_production',
         'title': 'Collect kingdom production',
         'description': 'Claim produced gold, packs, or maps from a kingdom.',
         'reward': {'gold': 50},
+        'group': 'learn_next',
     },
     {
         'id': 'open_first_side_booster',
         'title': 'Open a side booster',
         'description': 'Side cards enable advanced figures and spells.',
         'reward': {'gold': 50},
+        'group': 'learn_next',
     },
     {
         'id': 'save_first_defence_config',
         'title': 'Save a defence',
         'description': 'Prepare a land so it can protect itself.',
         'reward': {'booster_packs': 1},
+        'group': 'learn_next',
     },
     {
         'id': 'sell_first_card',
         'title': 'Sell a card',
         'description': 'Turn spare unlocked cards into gold.',
         'reward': {'gold': 25},
+        'group': 'explore',
     },
     {
         'id': 'trade_first_card',
         'title': 'Trade a card',
         'description': 'Convert spare cards into a suit you need.',
         'reward': {'gold': 50},
+        'group': 'explore',
     },
     {
         'id': 'buy_first_cosmetic',
         'title': 'Buy a cosmetic',
         'description': 'Customize a kingdom badge, color, surface, or border.',
         'reward': {'gold': 100},
+        'group': 'explore',
     },
 ]
 
@@ -201,7 +218,7 @@ DAILY_QUESTS = [
         'title': 'Finish 1 duel',
         'description': 'Play one full duel from start to finish.',
         'reward': {'gold': 60},
-        'requires_completed_step': 'finish_first_conquer_battle',
+        'requires_completed_step': 'finish_first_duel',
     },
     {
         'id': 'dq_finish_2_duels',
@@ -211,7 +228,7 @@ DAILY_QUESTS = [
         'title': 'Finish 2 duels',
         'description': 'Complete two full duel matches today.',
         'reward': {'booster_packs_side': 1},
-        'requires_completed_step': 'finish_first_conquer_battle',
+        'requires_completed_step': 'finish_first_duel',
     },
     {
         'id': 'dq_finish_3_duels',
@@ -221,7 +238,7 @@ DAILY_QUESTS = [
         'title': 'Finish 3 duels',
         'description': 'Play through three complete duels today.',
         'reward': {'booster_packs': 1},
-        'requires_completed_step': 'finish_first_conquer_battle',
+        'requires_completed_step': 'finish_first_duel',
     },
     {
         'id': 'dq_win_1_duel',
@@ -231,7 +248,7 @@ DAILY_QUESTS = [
         'title': 'Win 1 duel',
         'description': 'Win one finished duel today.',
         'reward': {'gold': 150},
-        'requires_completed_step': 'finish_first_conquer_battle',
+        'requires_completed_step': 'finish_first_duel',
     },
     {
         'id': 'dq_win_2_duels',
@@ -241,7 +258,7 @@ DAILY_QUESTS = [
         'title': 'Win 2 duels',
         'description': 'Win two finished duels today.',
         'reward': {'booster_packs': 2},
-        'requires_completed_step': 'finish_first_conquer_battle',
+        'requires_completed_step': 'finish_first_duel',
     },
     {
         'id': 'dq_battle_1_conquer',
@@ -370,7 +387,11 @@ DUEL_HINT_IDS = (
 MENU_HINT_IDS = (
     'duel', 'kingdom', 'collection', 'rankings', 'guide',
     'guide_first_duel_reward',
-    'post_boosters_kingdom', 'kingdom_pick_land',
+    'open_starter_pack',
+    'collection_basics_window', 'collection_open_main_booster',
+    'starter_cards_present_window', 'starter_suit_reveal',
+    'post_boosters_kingdom', 'kingdom_overview_window',
+    'kingdom_pick_land',
     'kingdom_conquer_button',
     'conquer_config_build_edit', 'conquer_config_to_battle',
     'conquer_build_yourself', 'conquer_build_yourself_tactics',
@@ -379,19 +400,19 @@ MENU_HINT_IDS = (
     'conquer_battle_timeline_intro', 'conquer_battle_figure_power',
     'conquer_battle_tactics', 'conquer_battle_block_call',
     'conquer_battle_tactic_recap', 'conquer_battle_finish',
-    'starter_cards_present_window', 'starter_suit_reveal', 'kingdom_overview_window',
     'kingdom_after_conquer_map',
     'return_to_kingdom_loop', 'open_boosters_first',
-    'collection_open_main_booster',
     'new_game', 'duel_tutorial_start_window',
     'beginner_duel', 'send_first_duel_challenge',
     'kingdom_production_intro',
     'defence_intro', 'defence_battle_plan',
     'defence_final_response', 'defence_save',
+    'loot_risk_intro',
     'kingdom_config_essentials',
     'kingdom_config_shields_style',
 )
-COACH_VERSION = 'first_session_v5'
+COACH_VERSION = 'first_session_v6'
+ONBOARDING_SCHEMA_VERSION = 2
 
 
 def ensure_onboarding_state_column():
@@ -409,6 +430,7 @@ def ensure_onboarding_state_column():
 
 def default_onboarding_state(*, new_user=False):
     return {
+        'schema_version': ONBOARDING_SCHEMA_VERSION,
         'welcome_pending': bool(new_user),
         'welcome_seen': False,
         # Set once the welcome gift (gold + packs + maps) has been credited, so
@@ -427,6 +449,7 @@ def default_onboarding_state(*, new_user=False):
         # registration; revealed one-armed-bandit style in the starter window.
         'starter_suits': None,
         'daily_quest': None,
+        'daily_quests_claimed_count': 0,
         'counters': {
             'gold_earned': 0,
             'kingdom_production_collections': 0,
@@ -452,6 +475,20 @@ def _state(user):
             base[list_key] = []
     if not isinstance(base.get('counters'), dict):
         base['counters'] = default_onboarding_state()['counters']
+    # Before schema v2, finish_tutorial was synthesized from the first land
+    # win. Preserve it only when the account demonstrably reached the final
+    # kingdom card (or already claimed its reward). Players who never saw that
+    # card can now return and finish the tour explicitly.
+    raw_version = _nonnegative_int(raw.get('schema_version')) or 1
+    if raw_version < 2:
+        completed = set(base.get('completed_steps') or [])
+        claimed = set(base.get('claimed_rewards') or [])
+        seen = set(base.get('menu_hints_seen') or [])
+        if ('finish_tutorial' in claimed
+                or 'kingdom_after_conquer_map' in seen):
+            completed.add('finish_tutorial')
+        base['completed_steps'] = sorted(completed)
+        base['schema_version'] = ONBOARDING_SCHEMA_VERSION
     return base
 
 
@@ -538,6 +575,18 @@ def mark_step(user, step_id, *, commit=False):
     return True
 
 
+def complete_tutorial(user, *, commit=False):
+    """Complete the final kingdom-tour beat after a real first conquest."""
+    if not user:
+        return False, 'User not found'
+    state = _state(user)
+    facts = _facts(user, state)
+    if int(facts.get('conquered_lands') or 0) < 1:
+        return False, 'Conquer your first land before finishing the tour'
+    changed = mark_step(user, 'finish_tutorial', commit=commit)
+    return changed, None
+
+
 def record_gold_earned(user, amount, *, commit=False):
     if not user:
         return False
@@ -586,6 +635,23 @@ def mark_duel_hint(user, hint_id, *, commit=False):
     return True
 
 
+def mark_duel_hints(user, hint_ids, *, commit=False):
+    """Atomically mark several validated Duel coach steps."""
+    if not user:
+        return False
+    requested = set(hint_ids or [])
+    if not requested or not requested.issubset(DUEL_HINT_IDS):
+        return False
+    state = _state(user)
+    seen = set(state.get('duel_hints_seen') or [])
+    changed = bool(requested - seen)
+    if changed:
+        state['duel_hints_seen'] = [
+            hint for hint in DUEL_HINT_IDS if hint in seen | requested]
+        _save_state(user, state, commit=commit)
+    return changed
+
+
 def mark_menu_hint(user, hint_id, *, commit=False):
     if not user or hint_id not in MENU_HINT_IDS:
         return False
@@ -596,6 +662,23 @@ def mark_menu_hint(user, hint_id, *, commit=False):
     state['menu_hints_seen'] = [hint for hint in MENU_HINT_IDS if hint in seen | {hint_id}]
     _save_state(user, state, commit=commit)
     return True
+
+
+def mark_menu_hints(user, hint_ids, *, commit=False):
+    """Atomically mark several validated menu coach steps."""
+    if not user:
+        return False
+    requested = set(hint_ids or [])
+    if not requested or not requested.issubset(MENU_HINT_IDS):
+        return False
+    state = _state(user)
+    seen = set(state.get('menu_hints_seen') or [])
+    changed = bool(requested - seen)
+    if changed:
+        state['menu_hints_seen'] = [
+            hint for hint in MENU_HINT_IDS if hint in seen | requested]
+        _save_state(user, state, commit=commit)
+    return changed
 
 
 def _credit_welcome_gift(user, state):
@@ -724,12 +807,6 @@ def _facts(user, state=None):
         completed.add('collect_first_kingdom_production')
     if _saved_defence_count(user_id) >= 1:
         completed.add('save_first_defence_config')
-    # The first-session tutorial completes when the player owns their first
-    # conquered land. Production collection remains a normal kingdom action,
-    # but no longer gates the tutorial finish.
-    if 'finish_first_conquer_battle' in completed:
-        completed.add('finish_tutorial')
-
     early_completed = set()
     if duel_wins >= 1:
         early_completed.add('win_first_duel')
@@ -825,12 +902,31 @@ def _daily_quest_baseline(facts):
     }
 
 
-def _eligible_daily_quests(facts):
+def _daily_quest_tiers(state, facts):
+    claimed_count = _nonnegative_int(
+        (state or {}).get('daily_quests_claimed_count'))
     completed = set((facts or {}).get('completed_steps') or [])
+    # Existing players who completed both introductory modes enter the mature
+    # pool instead of being treated like brand-new accounts.
+    if claimed_count == 0 and {
+            'finish_tutorial', 'finish_first_duel'}.issubset(completed):
+        claimed_count = 6
+    if claimed_count < 3:
+        return {'easy'}
+    if claimed_count < 6:
+        return {'easy', 'medium'}
+    return {'easy', 'medium', 'hard'}
+
+
+def _eligible_daily_quests(facts, state=None):
+    completed = set((facts or {}).get('completed_steps') or [])
+    tiers = _daily_quest_tiers(state, facts)
     eligible = []
     for quest in DAILY_QUESTS:
         required = quest.get('requires_completed_step')
         if required and required not in completed:
+            continue
+        if quest.get('tier', 'easy') not in tiers:
             continue
         eligible.append(quest)
     return eligible
@@ -843,7 +939,13 @@ def _select_daily_quest(user_id, day_key, quests=None):
     seed_text = f'{int(user_id or 0)}:{day_key}'
     seed = int(hashlib.sha256(seed_text.encode('utf-8')).hexdigest(), 16)
     rng = random.Random(seed)
-    return rng.choice(pool)
+    weights = {'easy': 60, 'medium': 30, 'hard': 10}
+    tiers = sorted({quest.get('tier', 'easy') for quest in pool})
+    selected_tier = rng.choices(
+        tiers, weights=[weights.get(tier, 1) for tier in tiers], k=1)[0]
+    tier_pool = [
+        quest for quest in pool if quest.get('tier', 'easy') == selected_tier]
+    return rng.choice(tier_pool)
 
 
 def ensure_daily_quest(user, *, state=None, facts=None, commit=False):
@@ -852,7 +954,7 @@ def ensure_daily_quest(user, *, state=None, facts=None, commit=False):
     state = state if state is not None else _state(user)
     facts = facts if facts is not None else _facts(user, state)
     day_key = _daily_quest_day_key()
-    eligible = _eligible_daily_quests(facts)
+    eligible = _eligible_daily_quests(facts, state)
     eligible_ids = {quest['id'] for quest in eligible}
     dq = state.get('daily_quest')
 
@@ -979,6 +1081,16 @@ def _journey_metadata(completed_steps):
                 'target_id': 'recommended_tutorial_land',
             },
         }
+    if 'finish_tutorial' not in completed:
+        return {
+            'coach_version': COACH_VERSION,
+            'journey_phase': 'finish_tutorial',
+            'next_action': {
+                'screen': 'kingdom',
+                'label': 'Finish the Kingdom Tour',
+                'target_id': 'kingdom_after_conquer_map',
+            },
+        }
     return {
         'coach_version': COACH_VERSION,
         'journey_phase': 'complete',
@@ -1016,6 +1128,11 @@ def serialize_onboarding_state(user):
         _step_payload(goal, goal['id'] in facts['early_completed'], goal['id'] in claimed_early)
         for goal in EARLY_GOALS
     ]
+    goals_unlocked = 'finish_tutorial' in facts['completed_steps']
+    if not goals_unlocked:
+        for goal in early_goals:
+            goal['locked'] = True
+            goal['claimable'] = False
     daily_quest = _daily_quest_payload(user, state, facts)
     facts_payload = dict(facts)
     facts_payload['completed_steps'] = sorted(facts['completed_steps'])
@@ -1023,6 +1140,9 @@ def serialize_onboarding_state(user):
     journey = _journey_metadata(facts['completed_steps'])
     return {
         **journey,
+        'schema_version': (
+            _nonnegative_int(state.get('schema_version'))
+            or ONBOARDING_SCHEMA_VERSION),
         'welcome_pending': bool(state.get('welcome_pending')),
         'welcome_seen': bool(state.get('welcome_seen')),
         'completed_steps': sorted(facts['completed_steps']),
@@ -1033,6 +1153,8 @@ def serialize_onboarding_state(user):
         'starter_suits': dict(state.get('starter_suits') or {}),
         'onboarding_skipped': bool(state.get('onboarding_skipped')),
         'counters': dict(state.get('counters') or {}),
+        'daily_quests_claimed_count': _nonnegative_int(
+            state.get('daily_quests_claimed_count')),
         'facts': facts_payload,
         'core_steps': core_steps,
         'early_goals': early_goals,
@@ -1094,6 +1216,8 @@ def claim_daily_quest(user, *, commit=False):
     dq['claimed'] = True
     dq['claimed_at'] = _utcnow().isoformat()
     state['daily_quest'] = dq
+    state['daily_quests_claimed_count'] = _nonnegative_int(
+        state.get('daily_quests_claimed_count')) + 1
     state['last_claimed_at'] = dq['claimed_at']
     _save_state(user, state, commit=False)
     if commit:
@@ -1124,7 +1248,9 @@ def claim_reward(user, reward_id, *, commit=False):
         source = core_by_id[reward_id]
     elif reward_id in early_by_id:
         claimed_key = 'early_goals_claimed'
-        eligible = reward_id in facts['early_completed']
+        eligible = (
+            'finish_tutorial' in facts['completed_steps']
+            and reward_id in facts['early_completed'])
         source = early_by_id[reward_id]
     else:
         return {'success': False, 'message': 'Unknown onboarding reward'}, 404

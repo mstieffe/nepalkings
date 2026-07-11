@@ -847,8 +847,8 @@ class NewGameScreen(MenuScreenMixin, Screen):
         return {
             'id': 'send_first_duel_challenge',
             'rect': self.send_button.rect,
-            'title': 'Send The Challenge',
-            'body': 'Everything is set: AI Strategos and beginner stakes. Tap Send Challenge to start.',
+            'title': 'Send the challenge',
+            'body': 'Practice Duel: AI Strategos, first to 7 points, with a 10 gold stake. Tap Send Challenge to start.',
             'action': 'click',
             'mark_on_click': False,
         }

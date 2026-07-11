@@ -76,3 +76,102 @@ def draw_coach_highlight(window, target_rects, ticks):
                          glow.get_rect().inflate(-2, -2), 2, border_radius=8)
         window.blit(glow, rect.topleft)
 
+
+def _wrap_lines(font, text, max_width, max_lines):
+    lines = []
+    current = ''
+    for word in str(text or '').split():
+        candidate = word if not current else f'{current} {word}'
+        if font.size(candidate)[0] <= max_width:
+            current = candidate
+        else:
+            if current:
+                lines.append(current)
+            current = word
+    if current:
+        lines.append(current)
+    return lines[:max_lines]
+
+
+def _fit_text(font, text, max_width):
+    text = str(text or '')
+    if font.size(text)[0] <= max_width:
+        return text
+    ellipsis = '...'
+    room = max(0, max_width - font.size(ellipsis)[0])
+    fitted = ''
+    for char in text:
+        if font.size(fitted + char)[0] > room:
+            break
+        fitted += char
+    return fitted.rstrip() + ellipsis
+
+
+def draw_coach_panel(window, target_rects, *, title, body, title_font,
+                     body_font, ticks, width_ratio=0.36, min_width=320,
+                     max_width=420, min_height=152, max_lines=5,
+                     has_button_row=True):
+    """Draw shared coach chrome and return ``(card_rect, button_height)``.
+
+    Screens retain their own progression and event routing while this helper
+    keeps typography, spacing, placement, spotlight, and panel styling aligned.
+    """
+    rects = [pygame.Rect(rect) for rect in target_rects if rect]
+    if not rects:
+        return None, 0
+    draw_coach_spotlight(window, rects)
+    draw_coach_highlight(window, rects, ticks)
+    target = rects[0].copy()
+    for rect in rects[1:]:
+        target.union_ip(rect)
+    target.inflate_ip(_INFLATE, _INFLATE)
+
+    screen_w, screen_h = window.get_size()
+    card_w = min(max_width, max(min_width, int(width_ratio * screen_w)), screen_w - 16)
+    body_lines = _wrap_lines(body_font, body, card_w - 28, max_lines)
+    title_h = title_font.get_height()
+    body_line_h = body_font.get_height() + 3
+    button_h = max(30, body_font.get_height() + 10)
+    button_space = button_h + 16 if has_button_row else 8
+    card_h = max(
+        min_height,
+        22 + title_h + 10 + len(body_lines) * body_line_h + button_space,
+    )
+    gap = 14
+    if target.right + gap + card_w < screen_w:
+        card_x = target.right + gap
+    else:
+        card_x = max(8, target.left - gap - card_w)
+    card_y = max(8, min(target.centery - card_h // 2, screen_h - card_h - 8))
+    card = pygame.Rect(card_x, card_y, card_w, card_h)
+    surf = pygame.Surface((card.w, card.h), pygame.SRCALPHA)
+    pygame.draw.rect(surf, (24, 20, 16, 235), surf.get_rect(), border_radius=8)
+    window.blit(surf, card.topleft)
+    pygame.draw.rect(window, (220, 185, 88), card, 2, border_radius=8)
+
+    title_surf = title_font.render(
+        _fit_text(title_font, title, card.w - 24), True, (248, 232, 180))
+    window.blit(title_surf, (card.x + 12, card.y + 10))
+    y = card.y + 10 + title_h + 10
+    for line in body_lines:
+        line_surf = body_font.render(line, True, (214, 204, 174))
+        window.blit(line_surf, (card.x + 12, y))
+        y += body_line_h
+    return card, button_h
+
+
+def draw_coach_button(window, rect, label, font, *, muted=False):
+    """Draw the shared primary or secondary coach button style."""
+    hovered = rect.collidepoint(pygame.mouse.get_pos())
+    if muted:
+        bg = (40, 37, 32) if hovered else (30, 28, 24)
+        border = (110, 100, 84) if hovered else (78, 72, 60)
+        text_color = (170, 160, 142) if hovered else (132, 124, 108)
+    else:
+        bg = (96, 70, 34) if hovered else (58, 45, 28)
+        border = (235, 204, 105) if hovered else (150, 126, 74)
+        text_color = (245, 232, 190)
+    pygame.draw.rect(window, bg, rect, border_radius=4)
+    pygame.draw.rect(window, border, rect, 1, border_radius=4)
+    text_surf = font.render(label, True, text_color)
+    window.blit(text_surf, text_surf.get_rect(center=rect.center))

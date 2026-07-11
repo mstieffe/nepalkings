@@ -816,23 +816,10 @@ class KingdomScreen(MenuScreenMixin, Screen):
         if getattr(self, 'dialogue_box', None) or getattr(self, '_onboarding_guide_open', False):
             return
         from game.components.tutorial_window import TutorialWindowDialogue
+        from game.tutorial_content import kingdom_overview_pages
         self._kingdom_overview_dialogue = TutorialWindowDialogue(
             self.window,
-            [
-                {
-                    'title': 'Read Your Map',
-                    'layout': 'image_top',
-                    'image': lambda: pygame.image.load(
-                        'img/tutorial/read_your_map.png').convert_alpha(),
-                    # The illustration carries its own frame; skip the window's.
-                    'image_frame': False,
-                    'image_caption': 'Conquer a neighbour to grow your kingdom.',
-                    'lines': [
-                        'Every hex is a land. Yours form your kingdom; rivals hold the rest.',
-                        'Conquer neighbouring lands to grow, one hex at a time.',
-                    ],
-                },
-            ],
+            kingdom_overview_pages(),
             title='Your Kingdom',
         )
 
@@ -962,8 +949,8 @@ class KingdomScreen(MenuScreenMixin, Screen):
 
     def _finish_menu_coach_tutorial(self, step_id):
         if step_id == 'kingdom_after_conquer_map':
-            self._mark_menu_coach_seen(step_id)
-            self._mark_onboarding_step_completed_local('finish_tutorial')
+            if self._complete_onboarding_step('finish_tutorial'):
+                self._mark_menu_coach_seen(step_id)
         elif step_id == 'kingdom_production_intro':
             self._collect_all_gold()
         else:

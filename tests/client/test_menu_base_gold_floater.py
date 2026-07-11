@@ -165,6 +165,42 @@ def test_daily_quest_claimable_card_registers_claim_button():
                for _rect, action in screen._onboarding_guide_buttons)
 
 
+def test_guide_tab_badges_separate_goals_from_journey_rewards():
+    screen, _ = _screen_with_gold(100)
+    screen.state.user_dict['onboarding'] = {
+        'pending_reward_count': 4,
+        'core_steps': [
+            {'id': 'journey_ready', 'claimable': True},
+            {'id': 'journey_done', 'claimable': False},
+        ],
+        'daily_quest': {'claimable': True},
+        'early_goals': [
+            {'id': 'goal_ready_1', 'claimable': True},
+            {'id': 'goal_ready_2', 'claimable': True},
+            {'id': 'goal_done', 'claimable': False},
+        ],
+    }
+
+    counts = screen._onboarding_guide_tab_badge_counts()
+
+    assert counts == {'journey': 2, 'goals': 2}
+
+
+def test_goal_accomplishment_does_not_light_journey_tab_badge():
+    screen, _ = _screen_with_gold(100)
+    screen.state.user_dict['onboarding'] = {
+        'pending_reward_count': 1,
+        'core_steps': [],
+        'daily_quest': {'claimable': False},
+        'early_goals': [{'id': 'goal_ready', 'claimable': True}],
+    }
+
+    counts = screen._onboarding_guide_tab_badge_counts()
+
+    assert counts['journey'] == 0
+    assert counts['goals'] == 1
+
+
 def test_daily_quest_locked_and_missing_cards_do_not_register_claim_button():
     import pygame
 
@@ -251,6 +287,42 @@ def test_onboarding_guide_resume_button_clears_paused_flag(monkeypatch):
     assert messages == ['Tutorial resumed']
 
 
+def test_guide_prioritizes_server_next_action_then_optional_learning():
+    from game.screens._menu_base import MenuScreenMixin
+
+    screen = object.__new__(MenuScreenMixin)
+    screen.state = SimpleNamespace(user_dict={'onboarding': {
+        'next_action': {'screen': 'kingdom', 'label': 'Conquer First Land'},
+        'core_steps': [],
+    }})
+    assert screen._guide_next_action()['screen'] == 'kingdom'
+
+    screen.state.user_dict['onboarding'] = {
+        'next_action': None,
+        'core_steps': [{
+            'id': 'finish_first_duel', 'completed': False,
+            'group': 'learn_next',
+        }],
+    }
+    assert screen._guide_next_action() == {
+        'screen': 'duel_menu',
+        'label': 'Try the Duel lesson',
+        'target_id': 'finish_first_duel',
+    }
+
+
+def test_guide_collapses_completed_nonclaimable_rows():
+    from game.screens._menu_base import MenuScreenMixin
+
+    items = [
+        {'id': 'done', 'completed': True, 'claimable': False},
+        {'id': 'reward', 'completed': True, 'claimable': True},
+        {'id': 'next', 'completed': False, 'claimable': False},
+    ]
+    assert [item['id'] for item in MenuScreenMixin._onboarding_pending_items(items)] == [
+        'reward', 'next']
+
+
 def test_menu_coach_allowed_false_when_tutorial_paused():
     from game.screens._menu_base import MenuScreenMixin
 
@@ -302,6 +374,40 @@ def test_menu_coach_skip_pauses_without_marking_seen(monkeypatch):
     assert screen.state.user_dict['onboarding']['onboarding_skipped'] is True
     assert screen.state.user_dict['onboarding']['menu_hints_seen'] == []
     assert messages == ['Tutorial paused. Open Guide to continue.']
+
+
+def test_optional_menu_lesson_dismissal_does_not_pause_guidance():
+    import pygame
+
+    screen, _ = _screen_with_gold(100)
+    screen.state.user_dict['onboarding'] = {
+        'onboarding_skipped': False,
+        'menu_hints_seen': [],
+    }
+    dismissed = []
+    messages = []
+    screen.state.set_msg = messages.append
+    screen._mark_menu_coaches_seen = lambda ids, **kwargs: dismissed.extend(ids)
+    screen._menu_coach_step = {
+        'id': 'defence_intro',
+        'rect': pygame.Rect(10, 10, 120, 40),
+        'action': 'next',
+    }
+    skip_rect = pygame.Rect(240, 80, 150, 32)
+    screen._menu_coach_buttons = [
+        (skip_rect, ('dismiss_lesson', 'defence_intro'))]
+    screen._menu_coach_pressed_button_action = None
+
+    down = pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=skip_rect.center)
+    up = pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=skip_rect.center)
+    assert screen._handle_menu_coach_events([down]) is True
+    assert screen._handle_menu_coach_events([up]) is True
+    assert dismissed == [
+        'defence_intro', 'defence_battle_plan',
+        'defence_final_response', 'defence_save',
+    ]
+    assert screen.state.user_dict['onboarding']['onboarding_skipped'] is False
+    assert messages == ['Lesson skipped. Other guidance stays active.']
 
 
 def test_final_menu_coach_draws_finish_instead_of_skip():
@@ -860,7 +966,8 @@ def test_kingdom_finish_tutorial_button_marks_first_land_seen_and_complete():
     marked_seen = []
     marked_steps = []
     screen._mark_menu_coach_seen = lambda step_id: marked_seen.append(step_id)
-    screen._mark_onboarding_step_completed_local = lambda step_id: marked_steps.append(step_id)
+    screen._complete_onboarding_step = lambda step_id: (
+        marked_steps.append(step_id) or True)
 
     screen._finish_menu_coach_tutorial('kingdom_after_conquer_map')
 
@@ -922,7 +1029,7 @@ def test_conquer_second_build_coach_guides_manual_build():
     screen.state = SimpleNamespace(user_dict={'onboarding': {
         'menu_hints_seen': [],
         'completed_steps': ['finish_first_conquer_battle'],
-        'facts': {'conquer_battles': 1},
+        'facts': {'conquer_battles': 2, 'conquered_lands': 1},
     }})
     screen._onboarding_guide_open = False
     screen._welcome_present_dialogue = None
@@ -959,6 +1066,7 @@ def test_conquer_second_build_coach_guides_manual_build():
 
     screen.state.user_dict['onboarding']['menu_hints_seen'] = [
         'conquer_build_yourself', 'conquer_build_yourself_tactics']
+    screen._config['battle_moves'] = [{}, {}, {}]
     step = screen._current_conquer_coach_step()
     assert step['id'] == 'conquer_build_yourself_battle'
     assert step['rect'] == screen._btn_battle
@@ -1147,7 +1255,7 @@ def test_tutorial_completion_celebrates_conquer_then_duel():
     pending = screen._pending_tutorial_completion()
     assert pending is not None
     assert pending[0] == 'finish_tutorial'
-    assert 'Conquer Tutorial Complete' in pending[1]
+    assert 'First Journey Complete' in pending[1]
 
     # Once celebrated, it advances to the duel tutorial.
     screen._tutorial_celebrated.add('finish_tutorial')
@@ -1261,7 +1369,7 @@ def test_kingdom_screen_surfaces_conquer_tutorial_completion():
     ]
     pending = screen._pending_tutorial_completion()
     assert pending is not None and pending[0] == 'finish_tutorial'
-    assert 'Conquer Tutorial Complete' in pending[1]
+    assert 'First Journey Complete' in pending[1]
 
 
 def test_tutorial_completion_available_on_any_menu_mixin_screen():

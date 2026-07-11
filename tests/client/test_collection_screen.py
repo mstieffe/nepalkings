@@ -319,10 +319,11 @@ def test_collection_basics_window_splits_rarity_and_recipe_pages():
     assert dialogue is not None
     assert len(dialogue.pages) == 2
     first, second = dialogue.pages
-    assert first['title'] == 'Key And Number Cards'
+    assert first['title'] == 'Key and number cards'
+    assert 'orange is Uncommon' in ' '.join(first['lines'])
     assert first['image']() is td.card_rarity_code_diagram()
     assert 'rarity' in ' '.join(first['lines'])
-    assert second['title'] == 'Cards Become Actions'
+    assert second['title'] == 'Cards become actions'
     assert second['image']() is td.card_recipe_examples()
     assert 'single card' in ' '.join(second['lines'])
     assert 'recipe' in ' '.join(second['lines'])

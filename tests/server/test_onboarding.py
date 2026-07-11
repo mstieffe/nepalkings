@@ -34,6 +34,22 @@ def _add_game_result(db, winner, loser):
     ))
 
 
+def _add_conquer_win(db, attacker, *, col=900):
+    land = Land(
+        col=col, row=0, tier=1, gold_rate=1.0,
+        suit_bonus_suit='Hearts', suit_bonus_value=1,
+    )
+    db.session.add(land)
+    db.session.flush()
+    db.session.add(LandAttackLog(
+        land_id=land.id,
+        attacker_user_id=attacker.id,
+        defender_user_id=None,
+        result='attacker_won',
+    ))
+    db.session.commit()
+
+
 def _auth_headers(app, user):
     from routes.auth import generate_token
     token = generate_token(user.id)
@@ -51,7 +67,7 @@ def test_register_sets_welcome_present_pending(client):
     data = resp.get_json()
     assert resp.status_code == 200
     onboarding = data['user']['onboarding']
-    assert onboarding['coach_version'] == 'first_session_v5'
+    assert onboarding['coach_version'] == 'first_session_v6'
     assert onboarding['journey_phase'] == 'open_starter_pack'
     assert onboarding['next_action'] == {
         'screen': 'collection',
@@ -82,11 +98,13 @@ def test_journey_metadata_progresses_with_first_session_steps(db, two_users):
 
     mark_step(u1, 'finish_first_conquer_battle')
     onboarding = serialize_onboarding_state(u1)
-    # The duel is excluded from the mandatory tutorial; the first conquered
-    # land now completes it, with no production collection or duel required.
+    assert onboarding['journey_phase'] == 'finish_tutorial'
+    assert onboarding['next_action']['screen'] == 'kingdom'
+
+    mark_step(u1, 'finish_tutorial')
+    onboarding = serialize_onboarding_state(u1)
     assert onboarding['journey_phase'] == 'complete'
     assert onboarding['next_action'] is None
-    assert 'finish_tutorial' in onboarding['completed_steps']
 
 
 def test_existing_user_has_no_pending_welcome(client, two_users):
@@ -129,6 +147,8 @@ def test_open_booster_reward_is_verified_and_idempotent(client, db, two_users, a
 
 def test_sell_card_marks_step_and_counts_gold_earned(client, db, two_users, auth_headers_user1):
     u1, _ = two_users
+    from onboarding_service import mark_step
+    mark_step(u1, 'finish_tutorial')
     u1.gold = 0
     _add_cards(db, u1.id, count=100)
 
@@ -152,6 +172,8 @@ def test_sell_card_marks_step_and_counts_gold_earned(client, db, two_users, auth
 
 def test_duel_count_goals_use_game_results(client, db, two_users, auth_headers_user1):
     u1, u2 = two_users
+    from onboarding_service import mark_step
+    mark_step(u1, 'finish_tutorial')
     u1.gold = 0
     u1.booster_packs = 0
     u1.booster_packs_side = 0
@@ -189,6 +211,8 @@ def test_conquer_lands_uses_attack_log_and_grants_gold_rewards(client, db):
     user = User(username='conqueror', password_hash=generate_password_hash('pass123'), gold=0)
     db.session.add(user)
     db.session.commit()
+    from onboarding_service import mark_step
+    mark_step(user, 'finish_tutorial')
     headers = _auth_headers(client.application, user)
     for idx in range(25):
         land = Land(col=idx, row=0, tier=1, gold_rate=1.0,
@@ -238,6 +262,8 @@ def test_conquer_lands_uses_attack_log_and_grants_gold_rewards(client, db):
 
 def test_earn_10000_gold_goal_is_claimable(client, db, two_users, auth_headers_user1):
     u1, _ = two_users
+    from onboarding_service import mark_step
+    mark_step(u1, 'finish_tutorial')
     u1.gold = 0
     _add_cards(db, u1.id, count=1000)
 
@@ -317,9 +343,9 @@ def test_menu_hint_marks_are_persisted(client, auth_headers_user1):
     assert data['onboarding']['menu_hints_seen'] == [
         'duel',
         'guide_first_duel_reward',
+        'collection_open_main_booster',
         'conquer_battle_timeline_intro',
         'kingdom_after_conquer_map',
-        'collection_open_main_booster',
         'kingdom_config_shields_style',
     ]
 
@@ -334,23 +360,30 @@ def test_menu_hint_marks_are_persisted(client, auth_headers_user1):
     assert unknown.status_code == 400
 
 
-def test_finish_tutorial_reward_unlocks_on_first_conquered_land(client, db, two_users, auth_headers_user1):
+def test_finish_tutorial_reward_unlocks_after_final_kingdom_step(client, db, two_users, auth_headers_user1):
     u1, u2 = two_users
     u1.booster_packs = 0
     db.session.commit()
 
     initial = client.get('/onboarding/state', headers=auth_headers_user1).get_json()['onboarding']
     initial_steps = {step['id']: step for step in initial['core_steps']}
-    assert initial_steps['finish_tutorial']['title'] == 'Finish the conquer tutorial'
+    assert initial_steps['finish_tutorial']['title'] == 'Finish the kingdom tour'
     assert initial_steps['finish_tutorial']['reward'] == {'booster_packs': 6, 'booster_packs_side': 2}
     assert initial_steps['finish_tutorial']['completed'] is False
     assert initial_steps['finish_tutorial']['claimable'] is False
 
-    from onboarding_service import mark_step
-    mark_step(u1, 'finish_first_conquer_battle')
-    db.session.commit()
+    _add_conquer_win(db, u1)
 
-    finished = client.get('/onboarding/state', headers=auth_headers_user1).get_json()['onboarding']
+    before_finish = client.get('/onboarding/state', headers=auth_headers_user1).get_json()['onboarding']
+    assert 'finish_first_conquer_battle' in before_finish['completed_steps']
+    assert 'finish_tutorial' not in before_finish['completed_steps']
+
+    completed = client.post(
+        '/onboarding/complete_step', headers=auth_headers_user1,
+        json={'step_id': 'finish_tutorial'},
+    )
+    assert completed.status_code == 200
+    finished = completed.get_json()['onboarding']
     steps = {step['id']: step for step in finished['core_steps']}
     assert 'finish_tutorial' in finished['completed_steps']
     assert steps['finish_tutorial']['completed'] is True
@@ -366,6 +399,55 @@ def test_finish_tutorial_reward_unlocks_on_first_conquered_land(client, db, two_
     assert 'finish_tutorial' in claim_data['onboarding']['claimed_rewards']
 
 
+def test_finish_tutorial_completion_is_gated_by_real_conquest(
+        client, auth_headers_user1):
+    response = client.post(
+        '/onboarding/complete_step', headers=auth_headers_user1,
+        json={'step_id': 'finish_tutorial'},
+    )
+    assert response.status_code == 400
+    assert 'Conquer your first land' in response.get_json()['message']
+
+
+def test_mark_tip_batch_is_atomic_and_persists_missing_client_ids(
+        client, auth_headers_user1):
+    response = client.post(
+        '/onboarding/mark_tip', headers=auth_headers_user1,
+        json={'tip_keys': [
+            'menu:open_starter_pack',
+            'menu:collection_basics_window',
+            'menu:loot_risk_intro',
+            'duel:field',
+            'duel:game_status',
+        ]},
+    )
+    assert response.status_code == 200
+    onboarding = response.get_json()['onboarding']
+    assert {'open_starter_pack', 'collection_basics_window', 'loot_risk_intro'}.issubset(
+        onboarding['menu_hints_seen'])
+    assert onboarding['duel_hints_seen'] == ['field', 'game_status']
+
+    rejected = client.post(
+        '/onboarding/mark_tip', headers=auth_headers_user1,
+        json={'tip_keys': ['duel:build', 'menu:not-real']},
+    )
+    assert rejected.status_code == 400
+    state = client.get(
+        '/onboarding/state', headers=auth_headers_user1).get_json()['onboarding']
+    assert 'build' not in state['duel_hints_seen']
+
+
+def test_starter_assignment_remains_offensive_and_defensive_only(db, two_users):
+    import onboarding_service
+
+    user, _ = two_users
+    for _ in range(20):
+        user.onboarding_state = onboarding_service.default_onboarding_state()
+        suits = onboarding_service.assign_starter_suits(user)
+        assert suits['offensive'] in {'Hearts', 'Diamonds'}
+        assert suits['defensive'] in {'Clubs', 'Spades'}
+
+
 def test_daily_quest_locked_before_first_conquest(client, auth_headers_user1):
     state = client.get('/onboarding/state', headers=auth_headers_user1).get_json()['onboarding']
 
@@ -377,6 +459,36 @@ def test_daily_quest_locked_before_first_conquest(client, auth_headers_user1):
     blocked = client.post('/onboarding/claim_reward', headers=auth_headers_user1,
                           json={'reward_id': 'daily_quest'})
     assert blocked.status_code == 400
+
+
+def test_early_goals_stay_locked_until_first_journey_finishes(
+        client, auth_headers_user1):
+    state = client.get(
+        '/onboarding/state', headers=auth_headers_user1).get_json()['onboarding']
+    assert state['early_goals']
+    assert all(goal.get('locked') is True for goal in state['early_goals'])
+    assert all(goal['claimable'] is False for goal in state['early_goals'])
+
+
+def test_daily_quest_pool_eases_new_players_and_gates_duel_quests():
+    import onboarding_service
+
+    facts = {'completed_steps': {'finish_first_conquer_battle'}}
+    new_pool = onboarding_service._eligible_daily_quests(
+        facts, {'daily_quests_claimed_count': 0})
+    assert new_pool
+    assert {quest['tier'] for quest in new_pool} == {'easy'}
+    assert all('duel' not in quest['id'] for quest in new_pool)
+
+    facts['completed_steps'].add('finish_first_duel')
+    middle_pool = onboarding_service._eligible_daily_quests(
+        facts, {'daily_quests_claimed_count': 3})
+    assert {quest['tier'] for quest in middle_pool} <= {'easy', 'medium'}
+    assert any('duel' in quest['id'] for quest in middle_pool)
+
+    mature_pool = onboarding_service._eligible_daily_quests(
+        facts, {'daily_quests_claimed_count': 6})
+    assert {quest['tier'] for quest in mature_pool} == {'easy', 'medium', 'hard'}
 
 
 def test_daily_quest_is_deterministic_after_unlock(client, db, two_users, auth_headers_user1, monkeypatch):
@@ -392,7 +504,11 @@ def test_daily_quest_is_deterministic_after_unlock(client, db, two_users, auth_h
 
     first = client.get('/onboarding/state', headers=auth_headers_user1).get_json()['onboarding']
     second = client.get('/onboarding/state', headers=auth_headers_user1).get_json()['onboarding']
-    expected = onboarding_service._select_daily_quest(u1.id, '2026-07-08')['id']
+    state = onboarding_service._state(u1)
+    facts = onboarding_service._facts(u1, state)
+    eligible = onboarding_service._eligible_daily_quests(facts, state)
+    expected = onboarding_service._select_daily_quest(
+        u1.id, '2026-07-08', eligible)['id']
 
     assert first['daily_quest'].get('locked') is not True
     assert first['daily_quest']['quest_id'] == expected
@@ -408,6 +524,7 @@ def test_daily_quest_progress_claim_and_idempotency(client, db, two_users, auth_
     u1, u2 = two_users
     u1.gold = 100
     onboarding_service.mark_step(u1, 'finish_first_conquer_battle')
+    onboarding_service.mark_step(u1, 'finish_first_duel')
     db.session.commit()
     monkeypatch.setattr(onboarding_service, '_daily_quest_day_key',
                         lambda now=None: '2026-07-08')
@@ -443,6 +560,7 @@ def test_daily_quest_progress_claim_and_idempotency(client, db, two_users, auth_
     assert data['reward'] == {'gold': 60}
     assert data['balances']['gold'] == 160
     assert data['onboarding']['daily_quest']['claimed'] is True
+    assert data['onboarding']['daily_quests_claimed_count'] == 1
 
     again = client.post('/onboarding/claim_reward', headers=auth_headers_user1,
                         json={'reward_id': 'daily_quest'})
@@ -458,6 +576,7 @@ def test_daily_quest_rollover_starts_fresh(client, db, two_users, auth_headers_u
     u1, u2 = two_users
     day = {'value': '2026-07-08'}
     onboarding_service.mark_step(u1, 'finish_first_conquer_battle')
+    onboarding_service.mark_step(u1, 'finish_first_duel')
     db.session.commit()
     monkeypatch.setattr(onboarding_service, '_daily_quest_day_key',
                         lambda now=None: day['value'])
@@ -514,3 +633,23 @@ def test_daily_quest_action_after_rollover_before_guide_is_counted(db, two_users
     assert quest['day_key'] == '2026-07-09'
     assert quest['progress'] == 100
     assert quest['claimable'] is True
+
+
+def test_v1_state_only_preserves_tutorial_finish_after_final_card(db, two_users):
+    import onboarding_service
+
+    user, _ = two_users
+    user.onboarding_state = {
+        'completed_steps': ['finish_first_conquer_battle'],
+        'menu_hints_seen': [],
+    }
+    state = onboarding_service._state(user)
+    assert 'finish_tutorial' not in state['completed_steps']
+
+    user.onboarding_state = {
+        'completed_steps': ['finish_first_conquer_battle'],
+        'menu_hints_seen': ['kingdom_after_conquer_map'],
+    }
+    state = onboarding_service._state(user)
+    assert 'finish_tutorial' in state['completed_steps']
+    assert state['schema_version'] == 2

@@ -266,7 +266,7 @@ class GuideBookScreen(SubScreen):
                     {'heading': 'Rounds & Turns'},
                     {'icon_text': _st + 'turn_active.png',
                      'text': 'Each round both the invader and the defender '
-                     'receive 5 turns. Players alternate taking one action '
+                     'receive 6 turns. Players alternate taking one action '
                      'per turn.'},
                     '',
                     {'heading': 'Turn Actions'},
@@ -302,7 +302,7 @@ class GuideBookScreen(SubScreen):
                     'After the battle is resolved a new round begins:',
                     '',
                     {'bullet': 'The winner (or the defender, on a draw) becomes the invader.'},
-                    {'bullet': 'Both players reset to 5 turns.'},
+                    {'bullet': 'Both players reset to 6 turns.'},
                     {'bullet': 'Ceasefire activates.'},
                     {'bullet': 'Each player draws 2 side cards.'},
                     {'bullet': 'Resting figures become available again.'},
@@ -1241,8 +1241,9 @@ class GuideBookScreen(SubScreen):
                     'A conquer battle is not a full duel. It is a short, '
                     'focused land fight: your prepared attack force against '
                     'the land\'s saved defence, whether that defence belongs '
-                    'to the AI or another ruler. There is no building, '
-                    'advancing, or card drawing mid-battle.',
+                    'to the AI or another ruler. There is no building or '
+                    'advancing mid-battle, and no routine deck draw. Gamble '
+                    'is the exception: it replaces one tactic with two random tactics.',
                     '',
                     {'heading': 'Three Rounds'},
                     'The battle lasts three rounds. In each round you play '

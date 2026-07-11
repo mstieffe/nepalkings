@@ -725,6 +725,14 @@ class BattleShopScreen(SubScreen):
                 title="Battle Move Bought",
             )
             self._spawn_buy_floater(move)
+            callback = getattr(self, '_on_move_bought', None)
+            if callable(callback):
+                callback()
+            if self.mode == 'duel':
+                parent = getattr(self.state, 'parent_screen', None)
+                marker = getattr(parent, '_mark_duel_coach_seen', None)
+                if callable(marker):
+                    marker('battle_shop_select_moves')
         else:
             self.make_dialogue_box(
                 message=f"Failed: {result.get('message', 'Unknown error')}",
@@ -1048,6 +1056,10 @@ class BattleShopScreen(SubScreen):
 
         if result.get('success'):
             self._battle_moves_confirmed = True
+            parent = getattr(self.state, 'parent_screen', None)
+            marker = getattr(parent, '_mark_duel_coach_seen', None)
+            if callable(marker):
+                marker('battle_shop_ready')
             if result.get('game'):
                 self.game.update_from_dict(result['game'])
 

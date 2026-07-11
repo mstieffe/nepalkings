@@ -20,7 +20,7 @@ from config import settings
 from config.screen_settings import _UI_SCALE
 from game.components.battle_moves.battle_move_icon_renderer import draw_battle_move_icon
 from game.components.battle_moves.battle_move_manager import BattleMoveManager
-from game.components.coach_card import draw_coach_highlight, draw_coach_spotlight
+from game.components.coach_card import draw_coach_button, draw_coach_panel
 from game.components.conquer_round_ledger import ConquerRoundLedger
 from game.components.conquer_effects import ConquerEffectsLayer
 from game.components.conquer_layout import compute_conquer_layout
@@ -2610,32 +2610,10 @@ class ConquerGameScreen(GameScreen):
         # — on entering the screen, before any setup/tactics coaching — rather
         # than waiting for a battle round to be active.
         from game.components.tutorial_window import TutorialWindowDialogue
-        from game.components import tutorial_diagrams
+        from game.tutorial_content import conquer_battle_intro_pages
         self._battle_intro_dialogue = TutorialWindowDialogue(
             self.window,
-            [
-                {
-                    'title': 'Battle Phases',
-                    'layout': 'image_top',
-                    'image': lambda: tutorial_diagrams.battle_flow_diagram(),
-                    'lines': [
-                        '1. Your prelude spell fires first and draws extra cards.',
-                        '2. Your figures set the base score: they matter most.',
-                        '3. Three tactic rounds swing the final result.',
-                        'Win the total, and the land is yours.',
-                    ],
-                },
-                {
-                    'title': 'Tactics Choices',
-                    'layout': 'image_top',
-                    'image': lambda: tutorial_diagrams.tactics_actions_diagram(),
-                    'lines': [
-                        'Each round, pick one move for a tactic card:',
-                        'Play it for its value, Gamble it for two new cards, or Combine two same-colour cards into one big hit.',
-                        'Try them out. This first battle is risk-free.',
-                    ],
-                },
-            ],
+            conquer_battle_intro_pages(),
             title='How Battles Work',
         )
 
@@ -2794,7 +2772,7 @@ class ConquerGameScreen(GameScreen):
                     'rect': rects[0],
                     'rects': rects,
                     'title': 'Choose A Tactic',
-                    'body': 'Pick a tactic card here each round, then choose Play, Gamble, or Combine.',
+                    'body': 'Pick one prepared tactic each round. Play it, or Gamble it for two replacements.',
                     'action': 'next',
                     'button_label': 'Got it',
                     'max_lines': 4,
@@ -2831,21 +2809,9 @@ class ConquerGameScreen(GameScreen):
         return lines[:max_lines]
 
     def _draw_conquer_battle_coach_button(self, rect, label, action, muted=False):
-        mx, my = pygame.mouse.get_pos()
-        hovered = rect.collidepoint(mx, my)
-        if muted:
-            # Secondary/ghost style so "Skip tutorial" isn't confused with Next.
-            bg = (40, 37, 32) if hovered else (30, 28, 24)
-            bdr = (110, 100, 84) if hovered else (78, 72, 60)
-            txt_clr = (170, 160, 142) if hovered else (132, 124, 108)
-        else:
-            bg = (96, 70, 34) if hovered else (58, 45, 28)
-            bdr = (235, 204, 105) if hovered else (150, 126, 74)
-            txt_clr = (245, 232, 190)
-        pygame.draw.rect(self.window, bg, rect, border_radius=4)
-        pygame.draw.rect(self.window, bdr, rect, 1, border_radius=4)
-        txt = self._conquer_battle_coach_font.render(label, True, txt_clr)
-        self.window.blit(txt, txt.get_rect(center=rect.center))
+        draw_coach_button(
+            self.window, rect, label, self._conquer_battle_coach_font,
+            muted=muted)
         self._conquer_battle_coach_buttons.append((rect.copy(), action))
 
     def _draw_conquer_battle_coach(self):
@@ -2858,41 +2824,25 @@ class ConquerGameScreen(GameScreen):
         target = self._conquer_battle_coach_bounds(target_rects)
         if target is None:
             return
-        draw_coach_spotlight(self.window, target_rects)
-        draw_coach_highlight(self.window, target_rects, pygame.time.get_ticks())
-        target = target.inflate(14, 14)
-
-        card_w = min(420, max(330, int(0.34 * settings.SCREEN_WIDTH)), settings.SCREEN_WIDTH - 16)
-        body_lines = self._wrap_conquer_battle_coach_lines(
-            step['body'], card_w - 28, max_lines=step.get('max_lines', 5))
-        title_h = self._conquer_battle_coach_title_font.get_height()
-        body_line_h = self._conquer_battle_coach_font.get_height() + 3
-        button_h = max(30, self._conquer_battle_coach_font.get_height() + 10)
         draws_next = step.get('action', 'next') == 'next'
         draws_skip = not (self._conquer_onboarding() or {}).get('onboarding_skipped')
-        button_space = button_h + 16 if (draws_next or draws_skip) else 8
-        card_h = max(152, 22 + title_h + 10 + len(body_lines) * body_line_h + button_space)
-        gap = 14
-        if target.right + gap + card_w < settings.SCREEN_WIDTH:
-            card_x = target.right + gap
-        else:
-            card_x = max(8, target.left - gap - card_w)
-        card_y = max(8, min(target.centery - card_h // 2,
-                            settings.SCREEN_HEIGHT - card_h - 8))
-        card = pygame.Rect(card_x, card_y, card_w, card_h)
-        surf = pygame.Surface((card.w, card.h), pygame.SRCALPHA)
-        pygame.draw.rect(surf, (24, 20, 16, 235), surf.get_rect(), border_radius=8)
-        self.window.blit(surf, card.topleft)
-        pygame.draw.rect(self.window, (220, 185, 88), card, 2, border_radius=8)
-
-        title_text = self._fit_text(step['title'], self._conquer_battle_coach_title_font, card.w - 24)
-        title = self._conquer_battle_coach_title_font.render(title_text, True, (248, 232, 180))
-        self.window.blit(title, (card.x + 12, card.y + 10))
-        y = card.y + 10 + title_h + 10
-        for line in body_lines:
-            line_surf = self._conquer_battle_coach_font.render(line, True, (214, 204, 174))
-            self.window.blit(line_surf, (card.x + 12, y))
-            y += body_line_h
+        card, button_h = draw_coach_panel(
+            self.window,
+            target_rects,
+            title=step['title'],
+            body=step['body'],
+            title_font=self._conquer_battle_coach_title_font,
+            body_font=self._conquer_battle_coach_font,
+            ticks=pygame.time.get_ticks(),
+            width_ratio=0.34,
+            min_width=330,
+            max_width=420,
+            min_height=152,
+            max_lines=step.get('max_lines', 5),
+            has_button_row=draws_next or draws_skip,
+        )
+        if card is None:
+            return
 
         if draws_next:
             button_label = step.get('button_label') or 'Next'
@@ -2902,7 +2852,7 @@ class ConquerGameScreen(GameScreen):
                                     button_w, button_h)
             self._draw_conquer_battle_coach_button(next_rect, button_label, ('next', step['id']))
         if draws_skip:
-            skip_label = 'Skip tutorial'
+            skip_label = 'Pause guidance'
             skip_w = max(96, self._conquer_battle_coach_font.size(skip_label)[0] + 20)
             skip_rect = pygame.Rect(card.x + 14, card.bottom - button_h - 12,
                                     skip_w, button_h)

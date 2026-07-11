@@ -1247,8 +1247,8 @@ class ConquerScreen(MenuScreenMixin, Screen):
         """True during the player's guided second conquest (build-it-yourself).
 
         The first conquer attack is pre-assembled; this coaches the *next* one,
-        which the player builds by hand. Gated to exactly one finished conquer
-        battle so it fires only for the second conquest and never again.
+        which the player builds by hand. Gated to exactly one conquered land,
+        so a no-penalty loss before the first win does not suppress it.
         """
         onboarding = (getattr(self.state, 'user_dict', None) or {}).get('onboarding') or {}
         if not onboarding or onboarding.get('onboarding_skipped'):
@@ -1257,42 +1257,43 @@ class ConquerScreen(MenuScreenMixin, Screen):
         if 'finish_first_conquer_battle' not in completed:
             return False
         facts = onboarding.get('facts') or {}
-        return int(facts.get('conquer_battles') or 0) == 1
+        return int(facts.get('conquered_lands') or 0) == 1
 
     def _second_build_coach_step(self, seen):
         if not self._second_build_coach_ready():
             return None
         figures = (self._config or {}).get('figures', []) if self._config else []
+        moves = (self._config or {}).get('battle_moves', []) if self._config else []
         if self._btn_build and 'conquer_build_yourself' not in seen:
             return {
                 'id': 'conquer_build_yourself',
                 'rect': self._btn_build,
-                'title': 'Now Build It Yourself',
-                'body': 'Time to build an attack yourself. Tap Build and pick a glowing recipe: start with your King, then add a Farm and Warriors the same way.',
+                'title': 'Now build it yourself',
+                'body': 'Tap Build and choose any glowing recipe. Start with a Castle figure, then add Village or Military figures as your cards allow.',
                 'action': 'click',
-                'mark_on_click': True,
+                'mark_on_click': False,
                 'max_lines': 5,
             }
         if not figures:
             # Wait until the player has actually built a figure before moving on.
             return None
-        battle_plan_rect = self._conquer_combined_rect(
-            self._battle_plan_rect, self._btn_buy_move)
-        if battle_plan_rect and 'conquer_build_yourself_tactics' not in seen:
+        if (len(moves) < 3 and self._btn_buy_move
+                and 'conquer_build_yourself_tactics' not in seen):
             return {
                 'id': 'conquer_build_yourself_tactics',
-                'rect': battle_plan_rect,
+                'rect': self._btn_buy_move,
                 'title': 'Add Your Tactics',
-                'body': 'Now set your battle plan: add three Daggers as tactics, just like your first attack.',
-                'action': 'next',
-                'button_label': 'Got it',
+                'body': 'Add any three available tactics. Daggers are the simplest option; Calls and Block are valid too.',
+                'action': 'click',
+                'mark_on_click': False,
                 'max_lines': 4,
             }
-        if self._btn_battle and 'conquer_build_yourself_battle' not in seen:
+        if (self._btn_battle and self._is_battle_ready()
+                and 'conquer_build_yourself_battle' not in seen):
             return {
                 'id': 'conquer_build_yourself_battle',
                 'rect': self._btn_battle,
-                'title': 'Start When Ready',
+                'title': 'Start when ready',
                 'body': 'When you have a figure and three tactics, Start Battle lights up. This defender is real, so your build decides the fight.',
                 'action': 'next',
                 'button_label': 'Got it',
@@ -1892,6 +1893,8 @@ class ConquerScreen(MenuScreenMixin, Screen):
             title='Figure Builder', card_source=card_source, mode='conquer',
         )
         self._subscreen_obj._on_done = self._close_subscreen
+        self._subscreen_obj._on_build_success = (
+            lambda: self._mark_menu_coach_seen('conquer_build_yourself'))
         self._active_subscreen = 'build_figure'
 
     def _open_battle_shop(self):
@@ -1910,6 +1913,9 @@ class ConquerScreen(MenuScreenMixin, Screen):
             title='Battle Shop', card_source=card_source, mode='conquer',
         )
         self._subscreen_obj._on_done = self._close_subscreen
+        self._subscreen_obj._on_move_bought = (
+            lambda: self._mark_menu_coach_seen(
+                'conquer_build_yourself_tactics'))
         self._active_subscreen = 'battle_shop'
 
     def _open_prelude_spell_screen(self):

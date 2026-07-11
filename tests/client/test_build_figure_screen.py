@@ -417,13 +417,13 @@ class TestBuildFigureScreenKingdomExtras:
 
 
 class TestSecondBuildTutorialGating:
-    def _screen(self, completed, conquer_battles, skipped=False):
+    def _screen(self, completed, conquered_lands, skipped=False):
         from game.screens.build_figure_screen import BuildFigureScreen
         screen = BuildFigureScreen.__new__(BuildFigureScreen)
         screen.mode = 'conquer'
         screen.state = SimpleNamespace(user_dict={'onboarding': {
             'completed_steps': completed,
-            'facts': {'conquer_battles': conquer_battles},
+            'facts': {'conquered_lands': conquered_lands},
             'onboarding_skipped': skipped,
         }})
         return screen
@@ -462,7 +462,7 @@ class TestSecondBuildHintText:
         return BuildFigureScreen._second_build_hint_text(self._screen(figures))
 
     def test_starts_with_king(self):
-        assert 'King' in self._text([])
+        assert 'Castle' in self._text([])
 
     def test_advances_to_farm_after_king(self):
         text = self._text([{'field': 'castle'}])
@@ -476,3 +476,15 @@ class TestSecondBuildHintText:
         text = self._text([
             {'field': 'castle'}, {'field': 'village'}, {'field': 'military'}])
         assert 'Daggers' in text or 'ready' in text.lower()
+
+    def test_routes_to_collection_when_no_recipe_is_buildable(self):
+        from game.screens.build_figure_screen import BuildFigureScreen
+
+        screen = self._screen([])
+        screen.figure_family_buttons = {
+            'offensive': [SimpleNamespace(is_active=False)],
+            'defensive': [SimpleNamespace(is_active=False)],
+        }
+        text = BuildFigureScreen._second_build_hint_text(screen)
+        assert 'Collection' in text
+        assert 'reward packs' in text

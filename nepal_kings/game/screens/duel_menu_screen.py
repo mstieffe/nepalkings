@@ -254,30 +254,8 @@ class DuelMenuScreen(MenuScreenMixin, Screen):
         return True
 
     def _duel_tutorial_intro_pages(self):
-        from game.components import tutorial_diagrams
-        return [
-            {
-                'title': 'The Full Game, Head To Head',
-                'layout': 'image_top',
-                'image': lambda: tutorial_diagrams.duel_start_image(),
-                'image_frame': False,
-                'image_caption': 'Draw, build, battle, and climb toward the point goal.',
-                'lines': [
-                    'A duel is Nepal Kings at full depth: two players, one board, turn by turn.',
-                    'You build your position, then clash in battles until someone reaches the point goal.',
-                ],
-            },
-            {
-                'title': 'Build, Then Battle',
-                'layout': 'image_top',
-                'image': lambda: tutorial_diagrams.duel_build_battle_diagram(),
-                'image_caption': 'Building phases create the board that decides the battle phase.',
-                'lines': [
-                    'Each round has a building phase to turn cards into figures and spells, then a battle phase where they fight for points.',
-                    "Both players draw from one shared pool, so every card you take is a card your opponent can't have.",
-                ],
-            },
-        ]
+        from game.tutorial_content import duel_intro_pages
+        return duel_intro_pages()
 
     def _maybe_show_duel_tutorial_intro_window(self):
         if getattr(self, '_duel_tutorial_intro_dialogue', None):

@@ -11,8 +11,9 @@ from onboarding_service import (
     DUEL_HINT_IDS,
     MENU_HINT_IDS,
     claim_reward,
-    mark_duel_hint,
-    mark_menu_hint,
+    complete_tutorial,
+    mark_duel_hints,
+    mark_menu_hints,
     mark_welcome_seen,
     reset_onboarding,
     resume_onboarding,
@@ -49,28 +50,100 @@ def mark_tip():
     if not user:
         return jsonify({'success': False, 'message': 'User not found'}), 404
     data = request.get_json(silent=True) or {}
-    tip_key = data.get('tip_key') or data.get('hint_id')
-    if tip_key == 'welcome':
-        mark_welcome_seen(user, commit=True)
-    elif isinstance(tip_key, str) and tip_key.startswith('duel:'):
-        hint_id = tip_key.split(':', 1)[1]
-        if hint_id not in DUEL_HINT_IDS:
-            return jsonify({'success': False, 'message': 'Unknown tip'}), 400
-        mark_duel_hint(user, hint_id, commit=True)
-    elif isinstance(tip_key, str) and tip_key.startswith('menu:'):
-        hint_id = tip_key.split(':', 1)[1]
-        if hint_id not in MENU_HINT_IDS:
-            return jsonify({'success': False, 'message': 'Unknown tip'}), 400
-        mark_menu_hint(user, hint_id, commit=True)
-    elif isinstance(tip_key, str):
-        if tip_key not in DUEL_HINT_IDS:
-            return jsonify({'success': False, 'message': 'Unknown tip'}), 400
-        mark_duel_hint(user, tip_key, commit=True)
-    else:
+    raw_keys = data.get('tip_keys')
+    if raw_keys is None:
+        raw_keys = [data.get('tip_key') or data.get('hint_id')]
+    if not isinstance(raw_keys, list) or not raw_keys or len(raw_keys) > 32:
         return jsonify({'success': False, 'message': 'Missing tip_key'}), 400
+    if any(not isinstance(key, str) or not key for key in raw_keys):
+        return jsonify({'success': False, 'message': 'Invalid tip key'}), 400
+
+    duel_ids = []
+    menu_ids = []
+    welcome = False
+    for tip_key in raw_keys:
+        if tip_key == 'welcome':
+            welcome = True
+        elif tip_key.startswith('duel:'):
+            hint_id = tip_key.split(':', 1)[1]
+            if hint_id not in DUEL_HINT_IDS:
+                return jsonify({'success': False, 'message': 'Unknown tip'}), 400
+            if hint_id not in duel_ids:
+                duel_ids.append(hint_id)
+        elif tip_key.startswith('menu:'):
+            hint_id = tip_key.split(':', 1)[1]
+            if hint_id not in MENU_HINT_IDS:
+                return jsonify({'success': False, 'message': 'Unknown tip'}), 400
+            if hint_id not in menu_ids:
+                menu_ids.append(hint_id)
+        elif tip_key in DUEL_HINT_IDS:
+            if tip_key not in duel_ids:
+                duel_ids.append(tip_key)
+        else:
+            return jsonify({'success': False, 'message': 'Unknown tip'}), 400
+
+    before = serialize_onboarding_state(user)
+    if welcome:
+        mark_welcome_seen(user, commit=False)
+    if duel_ids:
+        mark_duel_hints(user, duel_ids, commit=False)
+    if menu_ids:
+        mark_menu_hints(user, menu_ids, commit=False)
+    after = serialize_onboarding_state(user)
+    before_duel = set(before.get('duel_hints_seen') or [])
+    before_menu = set(before.get('menu_hints_seen') or [])
+    if welcome and not before.get('welcome_seen') and after.get('welcome_seen'):
+        track('tutorial_step_completed', user_id=user.id,
+              track='welcome', step_id='welcome',
+              coach_version=after.get('coach_version'))
+    for hint_id in duel_ids:
+        if hint_id not in before_duel:
+            track('tutorial_step_completed', user_id=user.id,
+                  track='duel', step_id=hint_id,
+                  coach_version=after.get('coach_version'))
+    for hint_id in menu_ids:
+        if hint_id not in before_menu:
+            track('tutorial_step_completed', user_id=user.id,
+                  track='menu', step_id=hint_id,
+                  coach_version=after.get('coach_version'))
+    event = data.get('event')
+    changed_ids = (
+        [f'duel:{hint_id}' for hint_id in duel_ids if hint_id not in before_duel]
+        + [f'menu:{hint_id}' for hint_id in menu_ids if hint_id not in before_menu]
+    )
+    if event == 'lesson_dismissed' and changed_ids:
+        track('tutorial_lesson_dismissed', user_id=user.id,
+              step_ids=changed_ids,
+              coach_version=after.get('coach_version'))
+    db.session.commit()
     return jsonify({
         'success': True,
-        'onboarding': serialize_onboarding_state(user),
+        'onboarding': after,
+    })
+
+
+@onboarding.route('/complete_step', methods=['POST'])
+@require_token
+def complete_onboarding_step():
+    user = _current_user()
+    if not user:
+        return jsonify({'success': False, 'message': 'User not found'}), 404
+    data = request.get_json(silent=True) or {}
+    step_id = data.get('step_id')
+    if step_id != 'finish_tutorial':
+        return jsonify({'success': False, 'message': 'Unknown completable step'}), 400
+    changed, error = complete_tutorial(user, commit=False)
+    if error:
+        return jsonify({'success': False, 'message': error}), 400
+    onboarding_payload = serialize_onboarding_state(user)
+    if changed:
+        track('tutorial_completed', user_id=user.id, step_id=step_id,
+              coach_version=onboarding_payload.get('coach_version'))
+    db.session.commit()
+    return jsonify({
+        'success': True,
+        'already_completed': not changed,
+        'onboarding': onboarding_payload,
     })
 
 
@@ -82,7 +155,7 @@ def claim_onboarding_reward():
     reward_id = data.get('reward_id') or data.get('step_id') or data.get('goal_id')
     if not reward_id:
         return jsonify({'success': False, 'message': 'Missing reward_id'}), 400
-    payload, status = claim_reward(user, reward_id, commit=True)
+    payload, status = claim_reward(user, reward_id, commit=False)
     if status == 200 and payload.get('success'):
         track('onboarding_reward_claimed', user_id=user.id if user else None,
               reward_id=reward_id)
@@ -96,12 +169,14 @@ def skip_onboarding_route():
     user = _current_user()
     if not user:
         return jsonify({'success': False, 'message': 'User not found'}), 404
-    skip_onboarding(user, commit=True)
+    skip_onboarding(user, commit=False)
     track('onboarding_skipped', user_id=user.id)
+    track('tutorial_paused', user_id=user.id)
+    onboarding_payload = serialize_onboarding_state(user)
     db.session.commit()
     return jsonify({
         'success': True,
-        'onboarding': serialize_onboarding_state(user),
+        'onboarding': onboarding_payload,
     })
 
 
@@ -111,10 +186,13 @@ def resume_onboarding_route():
     user = _current_user()
     if not user:
         return jsonify({'success': False, 'message': 'User not found'}), 404
-    resume_onboarding(user, commit=True)
+    resume_onboarding(user, commit=False)
+    track('tutorial_resumed', user_id=user.id)
+    onboarding_payload = serialize_onboarding_state(user)
+    db.session.commit()
     return jsonify({
         'success': True,
-        'onboarding': serialize_onboarding_state(user),
+        'onboarding': onboarding_payload,
     })
 
 

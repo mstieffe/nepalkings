@@ -1842,7 +1842,16 @@ class BattleScreen(SubScreen):
                     figure_power_bonuses=self._figure_power_bonuses(
                         eligible, is_player=True),
                 )
+                self._mark_parent_duel_coach_seen('battle_move_panel')
                 break
+
+    def _mark_parent_duel_coach_seen(self, step_id):
+        if getattr(self.game, 'mode', 'duel') == 'conquer':
+            return
+        parent = getattr(self.state, 'parent_screen', None)
+        marker = getattr(parent, '_mark_duel_coach_seen', None)
+        if callable(marker):
+            marker(step_id)
 
     def _get_combinable_daggers(self, move, move_idx):
         """Return list of other Dagger moves that can be combined with *move*.
@@ -1967,6 +1976,8 @@ class BattleScreen(SubScreen):
                 f"Failed to play move:\n{msg}",
                 actions=['ok'], icon='info', title="Error")
             return
+
+        self._mark_parent_duel_coach_seen('battle_move_actions')
 
         from utils import sound
         sound.play('card_place')
@@ -3065,6 +3076,8 @@ class BattleScreen(SubScreen):
             self.make_dialogue_box(msg, actions=['ok'], icon='info', title="Gamble Failed")
             return
 
+        self._mark_parent_duel_coach_seen('battle_move_actions')
+
         # Mark gamble as used this round
         self._gambled_this_round = True
 
@@ -3140,6 +3153,8 @@ class BattleScreen(SubScreen):
             msg = result.get('message', 'Combine failed.')
             self.make_dialogue_box(msg, actions=['ok'], icon='info', title="Combine Failed")
             return
+
+        self._mark_parent_duel_coach_seen('battle_move_actions')
 
         # Remove the two source daggers, add the combined Double Dagger
         removed_ids = set(result.get('removed_ids', []))

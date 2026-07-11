@@ -80,6 +80,7 @@ class BuildFigureScreen(SubScreen):
 
         # Tracks which families were buildable last update (one-shot pulse)
         self._prev_buildable_family_names = None
+        self._collection_tutorial_button_rect = None
 
         self.confirm_button = ConfirmButton(
             self.window,
@@ -163,6 +164,10 @@ class BuildFigureScreen(SubScreen):
                                    count=18, upward_bias=0.6)
                     fx.spawn_floating_text_at_rect(
                         rect, f'+{selected_figure.name}', (238, 206, 130))
+                parent = getattr(self.state, 'parent_screen', None)
+                marker = getattr(parent, '_mark_duel_coach_seen', None)
+                if self.mode == 'duel' and callable(marker):
+                    marker('build')
             else:
                 logger.error(f"Failed to create figure: {response.get('message', 'Unknown error')}")
                 self.game.unlock_actions()
@@ -232,6 +237,9 @@ class BuildFigureScreen(SubScreen):
             if result.get('success') and result.get('config'):
                 self.game.set_config(result['config'])
                 self._rebuild_card_source_kingdom()
+                callback = getattr(self, '_on_build_success', None)
+                if callable(callback):
+                    callback()
             return result
         except Exception as e:
             logger.error(f'Kingdom build_figure error: {e}')
@@ -853,6 +861,15 @@ class BuildFigureScreen(SubScreen):
             for event in events:
                 if event.type == MOUSEBUTTONDOWN:
 
+                    tutorial_collection = getattr(
+                        self, '_collection_tutorial_button_rect', None)
+                    if (tutorial_collection is not None
+                            and tutorial_collection.collidepoint(event.pos)):
+                        from utils import sound
+                        sound.play('ui_click')
+                        self.state.screen = 'collection'
+                        continue
+
                     # Suit-filter chips (kingdom mode only) — handle before
                     # other widgets so a chip click doesn't fall through.
                     if (_is_kingdom_config_mode(self.mode)
@@ -1059,8 +1076,8 @@ class BuildFigureScreen(SubScreen):
         """True during the player's guided second conquest build.
 
         The first conquer attack is pre-assembled; this teaches the player to
-        build the next one by hand. Gated to exactly one finished conquer battle
-        so the hint shows only for the second conquest.
+        build the next one by hand. Gated to exactly one conquered land so a
+        failed first attempt cannot skip the lesson.
         """
         onboarding = (getattr(self.state, 'user_dict', None) or {}).get('onboarding') or {}
         if not onboarding or onboarding.get('onboarding_skipped'):
@@ -1069,7 +1086,18 @@ class BuildFigureScreen(SubScreen):
         if 'finish_first_conquer_battle' not in completed:
             return False
         facts = onboarding.get('facts') or {}
-        return int(facts.get('conquer_battles') or 0) == 1
+        return int(facts.get('conquered_lands') or 0) == 1
+
+    def _has_buildable_figure_family(self):
+        buttons = getattr(self, 'figure_family_buttons', None)
+        if not isinstance(buttons, dict):
+            # Partially constructed screens have not calculated inventory yet;
+            # avoid falsely presenting the no-cards state.
+            return True
+        return any(
+            getattr(button, 'is_active', False)
+            for color in ('offensive', 'defensive')
+            for button in buttons.get(color, []))
 
     def _second_build_hint_text(self):
         """Progressive instruction reflecting what has been built so far.
@@ -1082,13 +1110,15 @@ class BuildFigureScreen(SubScreen):
             str(fig.get('field') or '').lower()
             for fig in self._kingdom_figures()
         }
+        if not self._has_buildable_figure_family():
+            return 'No recipe is glowing yet. Open your conquest reward packs in Collection, then return here.'
         if 'castle' not in fields:
-            return 'Build your King first — pick the glowing King recipe, then press "create!".'
+            return 'Choose any glowing Castle recipe, then press "create!".'
         if 'village' not in fields:
             return 'King built! Now build a Farm (village) — it turns a villager into food.'
         if 'military' not in fields:
             return 'Now build your Warriors (military) — they spend the Farm’s food to fight.'
-        return 'Army ready! Close the builder, then set three Daggers as your tactics.'
+        return 'Army ready! Close the builder, then add any three available tactics.'
 
     def _draw_second_build_hint(self):
         """Draw a progressive instruction banner along the bottom of the builder.
@@ -1102,7 +1132,10 @@ class BuildFigureScreen(SubScreen):
         screen_h = self.window.get_height()
         label = font.render(text, True, (255, 240, 200))
         pad_x, pad_y = 18, 10
-        banner_w = min(screen_w - 16, label.get_width() + pad_x * 2)
+        needs_cards = not self._has_buildable_figure_family()
+        button_w = font.size('Go to Collection')[0] + 24 if needs_cards else 0
+        banner_w = min(screen_w - 16, label.get_width() + pad_x * 2
+                       + (button_w + 12 if needs_cards else 0))
         banner_h = label.get_height() + pad_y * 2
         x = max(8, (screen_w - banner_w) // 2)
         y = int(0.88 * screen_h)
@@ -1111,6 +1144,18 @@ class BuildFigureScreen(SubScreen):
         pygame.draw.rect(surf, (224, 182, 82), surf.get_rect(), 2, border_radius=8)
         self.window.blit(surf, (x, y))
         self.window.blit(label, (x + pad_x, y + pad_y))
+        self._collection_tutorial_button_rect = None
+        if needs_cards:
+            rect = pygame.Rect(
+                x + banner_w - pad_x - button_w,
+                y + max(4, (banner_h - label.get_height() - 8) // 2),
+                button_w,
+                label.get_height() + 8,
+            )
+            pygame.draw.rect(self.window, (112, 82, 30), rect, border_radius=6)
+            pygame.draw.rect(self.window, (238, 206, 130), rect, 1, border_radius=6)
+            txt = font.render('Go to Collection', True, (255, 244, 210))
+            self.window.blit(txt, txt.get_rect(center=rect.center))
 
     def draw(self):
         """Draw the screen, including buttons and background."""

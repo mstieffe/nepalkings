@@ -343,3 +343,14 @@ def test_kingdom_and_offdef_diagrams_build():
         surf = fn()
         assert isinstance(surf, pygame.Surface)
         assert fn() is surf  # cached
+
+
+def test_starter_roulette_keeps_four_suit_presentation_contract():
+    from game.components.tutorial_window import _ALL_SUITS
+    from game.tutorial_content import starter_present_pages
+
+    assert _ALL_SUITS == ('Hearts', 'Diamonds', 'Clubs', 'Spades')
+    page = starter_present_pages()[0]
+    text = ' '.join([page.get('image_caption', ''), *(page.get('lines') or [])])
+    assert 'four suits' in text
+    assert 'Hearts' not in text and 'Diamonds' not in text
