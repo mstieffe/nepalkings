@@ -18,7 +18,7 @@ def welcome_pages(username, *, screen_height=None):
         'image_caption': '',
         'lines': [
             f'Welcome, {username}!',
-            'Your goal: become the greatest king of Nepal.',
+            'You want to become the greatest king of Nepal?',
             'Turn cards into figures, spells, and tactics, then conquer land after land until the crown is yours.',
         ],
     }]
