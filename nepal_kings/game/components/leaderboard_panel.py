@@ -25,6 +25,7 @@ class LeaderboardPanel:
         self._row_rects = []  # [(pygame.Rect, target_dict)]
         self.collapsed = False
         self._toggle_rect = None
+        self._toggle_hit_rect = None
         self._top_largest = []
         self._top_realms = []
         self._my_largest_rank = None
@@ -62,7 +63,11 @@ class LeaderboardPanel:
         if self.rect is None:
             return None
         if self.collapsed:
-            return pygame.Rect(self.rect.x, self.rect.y, self.rect.w,
+            collapsed_w = min(
+                self.rect.w,
+                max(110, int(0.16 * settings.SCREEN_WIDTH)),
+            )
+            return pygame.Rect(self.rect.x, self.rect.y, collapsed_w,
                                self._header_h())
         return self.rect
 
@@ -71,7 +76,15 @@ class LeaderboardPanel:
         sz = max(12, int(vr.w * 0.09))
         tr = pygame.Rect(vr.right - sz - 5, vr.y + 5, sz, sz)
         self._toggle_rect = tr
-        hovered = tr.collidepoint(pygame.mouse.get_pos())
+        hit = tr.copy()
+        if settings.TOUCH_TARGET_MIN > 0:
+            hit.inflate_ip(
+                max(0, settings.TOUCH_TARGET_MIN - hit.w),
+                max(0, settings.TOUCH_TARGET_MIN - hit.h),
+            )
+            hit.clamp_ip(vr)
+        self._toggle_hit_rect = hit
+        hovered = hit.collidepoint(pygame.mouse.get_pos())
         clr = (245, 232, 196) if hovered else (200, 188, 158)
         cx, cy = tr.center
         w = max(4, int(sz * 0.30))
@@ -100,7 +113,7 @@ class LeaderboardPanel:
         self._draw_toggle(vr)
 
         if self.collapsed:
-            label = self._title_font.render('Leaderboard', True,
+            label = self._title_font.render('Rankings', True,
                                             settings.KINGDOM_INFO_CLR)
             self.window.blit(label, label.get_rect(
                 midleft=(vr.x + 8, vr.centery)))
@@ -113,7 +126,8 @@ class LeaderboardPanel:
             y = r.y + pad
             section_gap = max(4, int(r.h * 0.03))
             row_h = max(self._row_font.get_height() + 4,
-                        int(r.h * 0.085))
+                        int(r.h * 0.085),
+                        settings.TOUCH_COMPACT_MIN)
 
             # Section A: Largest Kingdom → kingdom_{gold,silver,bronce}.
             self._draw_section_title('Largest Kingdom', r, y)
@@ -241,11 +255,12 @@ class LeaderboardPanel:
         if vr is None or not vr.collidepoint(event.pos):
             return None
         # Collapse / expand toggle.
-        if self._toggle_rect and self._toggle_rect.collidepoint(event.pos):
+        if self._toggle_hit_rect and self._toggle_hit_rect.collidepoint(event.pos):
             self.collapsed = not self.collapsed
             return {}
         if self.collapsed:
-            return {}  # consume clicks on the collapsed header bar
+            self.collapsed = False
+            return {}
         for rect, entry in self._row_rects:
             if rect.collidepoint(event.pos):
                 if callable(self.on_focus):

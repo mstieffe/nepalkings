@@ -690,6 +690,25 @@ class HexMap:
 
     def handle_event(self, event):
         """Process a single pygame event. Returns clicked HexTile or None."""
+        # SDL exposes two-finger pinch as MULTIGESTURE on supported mobile
+        # browsers. Mouse/touch emulation remains the fallback.
+        multi_gesture = getattr(pygame, 'MULTIGESTURE', None)
+        if multi_gesture is not None and event.type == multi_gesture:
+            fingers = int(getattr(event, 'num_fingers', 0) or 0)
+            pinch = float(getattr(event, 'pinched', 0.0) or 0.0)
+            if fingers >= 2 and abs(pinch) > 0.0001:
+                raw_x = getattr(event, 'x', 0.5)
+                raw_y = getattr(event, 'y', 0.5)
+                nx = max(0.0, min(1.0, float(
+                    0.5 if raw_x is None else raw_x)))
+                ny = max(0.0, min(1.0, float(
+                    0.5 if raw_y is None else raw_y)))
+                sx = self.viewport_rect.x + nx * self.viewport_rect.w
+                sy = self.viewport_rect.y + ny * self.viewport_rect.h
+                delta = max(-0.30, min(0.30, pinch * 12.0))
+                self._zoom_at_screen_pos(sx, sy, delta)
+            return None
+
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             if not self._in_viewport(event.pos):
                 return None
@@ -1647,13 +1666,12 @@ class HexMap:
         vp = self.viewport_rect
         # Scale badge font proportionally to the hex size so the badge
         # remains legible at all zoom levels (zoomed in and zoomed out).
-        scaled_font_size = max(
-            10,
-            min(
-                int(settings.HEX_LABEL_FONT_SIZE * 2.0),
-                int(settings.HEX_LABEL_FONT_SIZE * sz / settings.HEX_SIZE),
-            ),
+        badge_scale = max(
+            0.76,
+            min(1.22, (sz / max(1, settings.HEX_SIZE)) * 0.72),
         )
+        scaled_font_size = max(
+            9, int(settings.HEX_LABEL_FONT_SIZE * badge_scale))
         font = settings.get_font(scaled_font_size)
         subtitle_font = settings.get_font(
             max(8, int(scaled_font_size * 0.68)), bold=True)
@@ -1666,6 +1684,7 @@ class HexMap:
         cluster_icon_sz = max(20, int(sz * 1.05))
         shimmer_phase = badge_cosmetics.shimmer_phase_for(
             pygame.time.get_ticks())
+        placed_badge_rects = []
 
         for badge_data in self._kingdom_badges():
             cx_w, cy_w = badge_data['center_x'], badge_data['center_y']
@@ -1708,13 +1727,17 @@ class HexMap:
             if kingdom_rank in (1, 2, 3):
                 ico = self._render_crown_icon(
                     'kingdom', kingdom_rank,
-                    max(14, int(badge_surf.get_height() * 1.05)))
+                    max(12, int(badge_surf.get_height() * 0.58)))
                 if ico is not None:
                     crown_icons.append(ico)
-            if lands_rank in (1, 2, 3):
+            # At overview zoom one compact medal is enough.  Revealing the
+            # secondary realm medal only at close zoom prevents ranking art
+            # from obscuring the actual land shapes.
+            if (lands_rank in (1, 2, 3)
+                    and (self.zoom >= 2.0 or not crown_icons)):
                 ico = self._render_crown_icon(
                     'lands', lands_rank,
-                    max(14, int(badge_surf.get_height() * 1.05)))
+                    max(12, int(badge_surf.get_height() * 0.58)))
                 if ico is not None:
                     crown_icons.append(ico)
 
@@ -1733,6 +1756,25 @@ class HexMap:
             base_label_y = scy + offset_y + cluster_icon_sz * 0.55 + gap_px
             label_y = base_label_y + (crown_row_h + crown_row_gap) / 2
             br = badge_surf.get_rect(center=(int(scx), int(label_y)))
+
+            # Dense neighbouring kingdoms often put long names on almost the
+            # same baseline.  Try nearby vertical lanes before accepting an
+            # overlap; the identity sigil remains anchored to the cluster so
+            # the shifted nameplate still has a clear visual owner.
+            base_br = br.copy()
+            lane_step = max(target_h + 4, int(sz * 0.42))
+            candidates = [0, -lane_step, lane_step,
+                          -2 * lane_step, 2 * lane_step]
+            for dy in candidates:
+                candidate = base_br.move(0, dy)
+                if candidate.top < vp.top + 4 or candidate.bottom > vp.bottom - 4:
+                    continue
+                collision_rect = candidate.inflate(6, 4)
+                if not any(collision_rect.colliderect(other)
+                           for other in placed_badge_rects):
+                    br = candidate
+                    break
+            placed_badge_rects.append(br.inflate(6, 4))
 
             shadow_dx, shadow_dy = settings.HEX_GROUP_BADGE_SHADOW_OFFSET
             shadow_radius = max(2, int(3 * self.zoom))
@@ -2268,8 +2310,12 @@ class HexMap:
                 return tile
         return None
 
-    def focus_lands(self, land_ids):
-        """Centre the camera on a set of land IDs. Returns selected tile or None."""
+    def focus_lands(self, land_ids, *, fit=False, max_zoom=1.5, padding_px=None):
+        """Centre the camera on a set of land IDs and optionally zoom to fit.
+
+        ``fit`` is used for explicit navigation (kingdom chip, leaderboard,
+        recenter).  Ordinary refreshes leave camera state untouched.
+        """
         if not land_ids:
             return None
 
@@ -2281,8 +2327,33 @@ class HexMap:
         if not targets:
             return None
 
-        center_x = sum(tile.cx for tile in targets) / len(targets)
-        center_y = sum(tile.cy for tile in targets) / len(targets)
+        if fit:
+            padding = (padding_px if padding_px is not None
+                       else max(20, int(0.06 * min(
+                           self.viewport_rect.w, self.viewport_rect.h))))
+            min_x = min(tile.cx for tile in targets) - self._size
+            max_x = max(tile.cx for tile in targets) + self._size
+            half_h = self._size * math.sqrt(3) / 2
+            min_y = min(tile.cy for tile in targets) - half_h
+            max_y = max(tile.cy for tile in targets) + half_h
+            target_w = max(1.0, max_x - min_x)
+            target_h = max(1.0, max_y - min_y)
+            usable_w = max(1.0, self.viewport_rect.w - padding * 2)
+            usable_h = max(1.0, self.viewport_rect.h - padding * 2)
+            fit_zoom = min(usable_w / target_w, usable_h / target_h)
+            zoom_cap = (settings.HEX_MAP_ZOOM_MAX if max_zoom is None
+                        else min(settings.HEX_MAP_ZOOM_MAX, float(max_zoom)))
+            self.zoom = max(
+                settings.HEX_MAP_ZOOM_MIN,
+                min(zoom_cap, fit_zoom),
+            )
+
+        if fit:
+            center_x = (min_x + max_x) / 2
+            center_y = (min_y + max_y) / 2
+        else:
+            center_x = sum(tile.cx for tile in targets) / len(targets)
+            center_y = sum(tile.cy for tile in targets) / len(targets)
         self.camera_x = center_x - self.viewport_rect.w / (2 * self.zoom)
         self.camera_y = center_y - self.viewport_rect.h / (2 * self.zoom)
         self._clamp_camera()

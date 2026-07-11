@@ -93,6 +93,41 @@ land_y = row_h - small_font.get_height() - 5
 assert detail_y + small_font.get_height() + 3 <= land_y
 """)
 
+    def test_mobile_map_owns_full_content_width_and_nav_hits_are_tappable(self):
+        _run_mobile_geometry_check("""
+import pygame
+from types import SimpleNamespace
+from config import settings
+from game.screens.kingdom_screen import KingdomScreen, _compute_kingdom_layout
+
+pygame.display.set_mode((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+pygame.font.init()
+layout = _compute_kingdom_layout()
+assert layout['map_frame'].right == layout['box'].right - int(0.020 * settings.SCREEN_HEIGHT)
+assert layout['map_frame'].colliderect(layout['activity'])
+
+s = KingdomScreen.__new__(KingdomScreen)
+s.window = pygame.display.get_surface()
+s._mobile_ui = True
+s._map_viewport_rect = pygame.Rect(20, 20, 600, 300)
+size = settings.TOUCH_ICON_MIN
+gap = settings.TOUCH_TARGET_MIN - size
+start_x = s._map_viewport_rect.x + (settings.TOUCH_TARGET_MIN - size) // 2
+s._nav_rects = {
+    'zoom_out': pygame.Rect(start_x, 250, size, size),
+    'recenter': pygame.Rect(start_x + size + gap, 250, size, size),
+    'zoom_in': pygame.Rect(start_x + 2 * (size + gap), 250, size, size),
+}
+s._nav_labels = {'zoom_out': '-', 'recenter': 'x', 'zoom_in': '+'}
+s._nav_font = settings.get_font(settings.KINGDOM_INFO_FONT_SIZE, bold=True)
+s._draw_nav_buttons()
+assert all(r.w >= settings.TOUCH_TARGET_MIN for r in s._nav_hit_rects.values())
+assert all(r.h >= settings.TOUCH_TARGET_MIN for r in s._nav_hit_rects.values())
+hits = list(s._nav_hit_rects.values())
+assert not hits[0].colliderect(hits[1])
+assert not hits[1].colliderect(hits[2])
+""")
+
 
 class _DummyHexMap:
     def __init__(self):
@@ -709,7 +744,8 @@ class TestKingdomInfoBarHeader:
 
         KingdomScreen._draw_info_bar(screen)
 
-        assert ('kingdoms: 2  lands: 9  gold: 20.0/hr', tuple(settings.KINGDOM_INFO_CLR)) in captured
+        assert ('2 kingdoms  ·  9 lands  ·  20.0 gold/hr',
+                tuple(settings.KINGDOM_INFO_CLR)) in captured
         assert (' +3.0', tuple(settings.KINGDOM_CONFIG_GOOD_CLR)) in captured
         assert screen._collect_all_enabled is True
 
@@ -875,6 +911,61 @@ def test_kingdom_map_failure_schedules_retry_backoff(monkeypatch):
     assert screen._error == 'Connection error'
     assert screen._next_map_retry_at_ms == 5000 + module._MAP_RETRY_INITIAL_MS
     assert screen._map_retry_delay_ms == module._MAP_RETRY_INITIAL_MS * 2
+
+
+def test_warm_map_refresh_preserves_camera_and_zoom():
+    from config import settings
+    from game.components.hex_map import HexMap
+    from game.screens import kingdom_screen as module
+
+    pygame.display.set_mode((1, 1))
+    window = pygame.Surface((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+    viewport = pygame.Rect(100, 120, 900, 600)
+    lands = [
+        {'id': 1, 'col': 3, 'row': 3, 'tier': 1, 'gold_rate': 2.0,
+         'suit_bonus_suit': 'Hearts', 'suit_bonus_value': 1,
+         'owner': {'user_id': 7, 'username': 'me'}, 'is_mine': True,
+         'kingdom_id': 4, 'kingdom_component_id': 40,
+         'kingdom_component_size': 2, 'kingdom_name': 'Home'},
+        {'id': 2, 'col': 4, 'row': 3, 'tier': 2, 'gold_rate': 4.0,
+         'suit_bonus_suit': 'Spades', 'suit_bonus_value': 2,
+         'owner': {'user_id': 7, 'username': 'me'}, 'is_mine': True,
+         'kingdom_id': 4, 'kingdom_component_id': 40,
+         'kingdom_component_size': 2, 'kingdom_name': 'Home'},
+    ]
+
+    screen = module.KingdomScreen.__new__(module.KingdomScreen)
+    screen.window = window
+    screen.state = SimpleNamespace(user_dict={'id': 7})
+    screen._hex_map = HexMap(lands, window, viewport_rect=viewport)
+    screen._hex_map.zoom = 2.25
+    screen._hex_map.camera_x = 111.0
+    screen._hex_map.camera_y = 222.0
+    screen._hex_map._clamp_camera()
+    before_camera = (screen._hex_map.camera_x, screen._hex_map.camera_y,
+                     screen._hex_map.zoom)
+    screen._map_viewport_rect = viewport
+    screen._map_mode = 'terrain'
+    screen._mobile_ui = False
+    screen._leaderboard_panel = MagicMock()
+    screen._prev_my_land_ids = {1, 2}
+    screen._kingdom_chip_index = 0
+    screen._map_retry_delay_ms = module._MAP_RETRY_INITIAL_MS
+    screen._next_map_retry_at_ms = 0
+    screen._loading = True
+    screen._fx = None
+    screen._load_activity = lambda: None
+
+    data = {
+        'lands': lands,
+        'my_kingdom': {'components': [{'land_ids': [1, 2], 'size': 2}]},
+        'my_kingdoms': [{'id': 4, 'name': 'Home'}],
+    }
+    module.KingdomScreen._apply_map_response(
+        screen, {'data': data, 'status_code': 200, 'error': None})
+
+    assert (screen._hex_map.camera_x, screen._hex_map.camera_y,
+            screen._hex_map.zoom) == before_camera
 
 
 def test_kingdom_activity_uses_parallel_async_requests(monkeypatch):

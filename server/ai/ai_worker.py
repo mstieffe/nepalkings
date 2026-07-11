@@ -1187,6 +1187,49 @@ def _conquer_pick_counter_advance_figure(game, ai_player_id):
     return None
 
 
+def _conquer_spend_defender_response(app, game_id, ai_player_id):
+    """Consume a defender response window the AI cannot answer.
+
+    Safety net for the automated conquer defender: the server normally only
+    opens the response window when a legal counter-advance or counter spell
+    exists, but rule drift or a race can leave the AI holding the turn with
+    no legal action. Returning the turn to the invader (mirroring the
+    counter-spell no-target path) keeps the game moving; the invader then
+    selects the defender figure directly.
+
+    Returns True when the response was spent.
+    """
+    with app.app_context():
+        from models import Game, Player, LogEntry, db
+        from routes.games import _consume_conquer_defender_response
+        game = db.session.get(Game, game_id)
+        if (not game or game.mode != 'conquer' or game.state == 'finished'
+                or game.turn_player_id != ai_player_id
+                or not game.advancing_figure_id
+                or game.advancing_player_id == ai_player_id
+                or game.defending_figure_id):
+            return False
+        defender_player = db.session.get(Player, ai_player_id)
+        if not defender_player:
+            return False
+        _consume_conquer_defender_response(game, defender_player)
+        db.session.add(LogEntry(
+            game_id=game.id,
+            player_id=ai_player_id,
+            round_number=game.current_round,
+            turn_number=defender_player.turns_left,
+            message="Defender had no legal response to the advance.",
+            author='System',
+            type='battle_skip',
+        ))
+        db.session.commit()
+        logger.warning(
+            f"[CONQUER-AI] no legal defender response; spent the response "
+            f"window to unblock game={game_id}"
+        )
+        return True
+
+
 def _conquer_civil_war_second_pick_pending(game, ai_player_id):
     """True when the AI holds the turn only to pick/skip a second Civil War figure.
 
@@ -1325,6 +1368,13 @@ def _conquer_ai_loop(app, game_id, ai_player_id):
                     if is_current_invader:
                         _exec_cannot_advance_loss(base, game_id, ai_player_id)
                         break
+                    # Defender response window with no legal counter-advance
+                    # (rule drift or a race against the server's window
+                    # check). Spend the response so the turn returns to the
+                    # invader instead of stalling the game with the turn
+                    # stuck on the automated defender forever.
+                    if _conquer_spend_defender_response(app, game_id, ai_player_id):
+                        continue
                     logger.warning(f"[CONQUER-AI] no figure to advance, game={game_id}")
                     break
 

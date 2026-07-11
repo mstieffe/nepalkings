@@ -548,6 +548,30 @@ class GameScreen(Screen):
 
 
 
+    def _consume_game_poll_result(self):
+        """Apply the full game poller's pending result, if any.
+
+        A result is only applied when no action response updated the game
+        while the poll was in flight (version race) — otherwise the stale
+        poll would clobber the newer state. A discarded result must also
+        invalidate the poller's unchanged-body signature: that short-circuit
+        assumes every delivered result was consumed, and without the
+        invalidation an idle server (identical response bodies) would never
+        re-deliver the dropped state — the conquer pre-battle flow then
+        stalls forever on a stale `game.turn` (production game 140).
+        """
+        poller = self._game_poller
+        if poller is None or not poller.has_result():
+            return
+        result = poller.result
+        if self._poller_data_version == self.state.game._game_data_version:
+            self.state.game.apply_server_data(result)
+        else:
+            logger.warning(
+                f"[POLLER] Discarding stale result (poll v{self._poller_data_version} "
+                f"vs current v{self.state.game._game_data_version})")
+            poller.invalidate_cache()
+
     def update_game(self):
         """Update the game state and related components."""
         # Check if game exists (may be None after logout)
@@ -644,14 +668,7 @@ class GameScreen(Screen):
                     Game.fetch_server_data,
                     args=(self.state.game.game_id,))
                 self._poller_data_version = self.state.game._game_data_version
-            if self._game_poller.has_result():
-                result = self._game_poller.result
-                # Only apply if no action (discard, advance, etc.) updated
-                # the game state while this poll was in flight.
-                if self._poller_data_version == self.state.game._game_data_version:
-                    self.state.game.apply_server_data(result)
-                else:
-                    logger.warning(f"[POLLER] Discarding stale result (poll v{self._poller_data_version} vs current v{self.state.game._game_data_version})")
+            self._consume_game_poll_result()
             if not self._game_poller.busy:
                 self._poller_data_version = self.state.game._game_data_version
                 self._game_poller.poll(
@@ -3294,6 +3311,7 @@ class GameScreen(Screen):
         # ceasefire still active) doesn't re-trigger notifications
         if self._game_poller and self._game_poller.has_result():
             _ = self._game_poller.result
+            self._game_poller.invalidate_cache()
         
         self.battle_button.locked = True
         

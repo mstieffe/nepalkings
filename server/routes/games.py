@@ -358,6 +358,13 @@ def _figure_can_counter_advance(figure, player_id, game_id):
     if _figure_has_family_skill(figure, 'cannot_defend'):
         return False
     game = db.session.get(Game, game_id)
+    # Resting figures cannot counter-advance. Keep this in sync with the AI
+    # worker's _conquer_figure_can_advance: if the server considered a
+    # resting figure a legal counter here, it would open the defender
+    # response window for an automated defender that then refuses to act —
+    # stalling the game with the turn stuck on the defender.
+    if game and figure.id in set(game.resting_figure_ids or []):
+        return False
     required_field = _battle_required_field_for_game(game)
     if required_field and figure.field != required_field:
         return False
@@ -6439,6 +6446,12 @@ def get_battle_state():
         _ensure_conquer_round_deadline(game)
         _check_conquer_round_timeout(game)
         deadline = _conquer_round_deadline_for(game)
+
+        # During an active battle the client polls only this endpoint (the
+        # full get_game poll is paused), so the stalled-AI watchdog must run
+        # here too — otherwise a dead defender worker is only revived by the
+        # 60s round timeout. Throttled + idempotent.
+        _conquer_ai_watchdog_check(game)
 
         all_tactics = ConquerTactic.query.filter_by(game_id=game_id).order_by(
             ConquerTactic.sort_order.asc(), ConquerTactic.id.asc()).all()

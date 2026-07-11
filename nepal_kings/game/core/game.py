@@ -88,6 +88,15 @@ class Game:
         # Initialize to False so first update() can detect if it's their turn
         self.turn = False
         self.invader = True if self.invader_player_id == self.player_id else False
+        # Conquer battles are player-driven from the very first frame (the
+        # invader must advance a figure) and their game-start notification is
+        # fired explicitly on screen entry — not via first-poll turn-change
+        # detection. Seed `turn` from the snapshot so the pre-battle UI
+        # (forced-advance prompt, timeline attacker step) works even if the
+        # first full poll is discarded or short-circuited; duel keeps the
+        # False seed so its first-update turn detection still fires.
+        if self.mode == 'conquer':
+            self.turn = self.turn_player_id == self.player_id
 
         # Track previous turn to detect turn changes
         # Initialize to None so first login triggers turn detection if it's their turn

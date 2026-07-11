@@ -68,6 +68,20 @@ def test_anchored_inspector_contains_point():
     assert not box.contains_point((box.box_rect.x - 20, box.box_rect.y - 20))
 
 
+def test_inspector_omits_blank_owned_since_line():
+    from config import settings
+    from game.components.land_detail_box import LandDetailBox
+    pygame.display.set_mode((1, 1))
+    win = pygame.Surface((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+    tile = _tile(owner={}, owner_username='legacy-owner')
+
+    box = LandDetailBox(win, tile, anchored=True, viewport_rect=_viewport(),
+                        conquest_outcome='expand')
+
+    assert not any(kind == 'since' for kind, _text in box._lines)
+    assert ('conquest_hint', 'Expands your existing kingdom') in box._lines
+
+
 def test_modal_inspector_still_centres_on_screen():
     from config import settings
     from game.components.land_detail_box import LandDetailBox
@@ -149,6 +163,35 @@ def test_render_does_not_crash_in_any_mode():
     for key, _ in _MAP_MODES:
         hm.set_map_mode(key)
         hm.render()
+
+
+def test_focus_lands_can_zoom_to_fit_for_explicit_navigation():
+    hm = _hexmap()
+    hm.zoom = 0.5
+    target_ids = [hm.tiles[0].land_id, hm.tiles[1].land_id]
+
+    selected = hm.focus_lands(target_ids, fit=True, max_zoom=1.5)
+
+    assert selected is not None
+    assert hm.zoom == 1.5
+    for land_id in target_ids:
+        rect = hm.land_screen_rect(land_id)
+        assert rect is not None
+        assert hm.viewport_rect.colliderect(rect)
+
+
+def test_two_finger_gesture_zooms_when_runtime_exposes_it():
+    gesture_type = getattr(pygame, 'MULTIGESTURE', None)
+    if gesture_type is None:
+        return
+    hm = _hexmap()
+    before = hm.zoom
+    event = pygame.event.Event(
+        gesture_type, num_fingers=2, pinched=0.02, x=0.5, y=0.5)
+
+    hm.handle_event(event)
+
+    assert hm.zoom > before
 
 
 # ── Map-mode toolbar (kingdom screen) ───────────────────────────────

@@ -236,7 +236,9 @@ class LandDetailBox:
             return max(self._icon_sz if self._suit_icon else 0, body_h) + 2
         if kind == 'defence_warning':
             return max(self._icon_sz if self._broken_icon else 0, body_h) + 2
-        if kind in ('since', 'kingdom_bonus', 'land_cd', 'shield', 'conquest_hint'):
+        if kind == 'conquest_hint':
+            return self._body_font.get_height() + 10
+        if kind in ('since', 'kingdom_bonus', 'land_cd', 'shield'):
             return small_h + 2
         return body_h + 2
 
@@ -268,6 +270,14 @@ class LandDetailBox:
                 pct = int(round(loot_chance * 100))
                 self._lines.append(('kingdom_bonus', f'+{pct}% defensive loot chance'))
 
+        if not tile.is_mine and self._conquest_outcome:
+            if self._conquest_outcome == 'expand':
+                self._lines.append(
+                    ('conquest_hint', 'Expands your existing kingdom'))
+            else:
+                self._lines.append(
+                    ('conquest_hint', 'Starts a new separate kingdom'))
+
         if tile.is_mine and tile.defence_incomplete:
             self._lines.append(('defence_warning', 'Defence config incomplete!'))
 
@@ -278,15 +288,10 @@ class LandDetailBox:
             if since and 'T' in since:
                 since = since.split('T')[0]
             self._lines.append(('owner', f'Owner: {tile.owner_username}'))
-            self._lines.append(('since', f'Since: {since}'))
+            if since:
+                self._lines.append(('since', f'Since: {since}'))
         else:
             self._lines.append(('owner', 'Unclaimed (AI defended)'))
-
-        if not tile.is_mine and self._conquest_outcome:
-            if self._conquest_outcome == 'expand':
-                self._lines.append(('conquest_hint', 'Conquering expands your existing kingdom'))
-            else:
-                self._lines.append(('conquest_hint', 'Conquering starts a new separate kingdom'))
 
         if not tile.is_mine and land_cooldown > 0:
             self._lines.append(
@@ -544,11 +549,18 @@ class LandDetailBox:
                 self.window.blit(surf, (x, y))
                 y += surf.get_height() + 2
             elif kind == 'conquest_hint':
-                clr = ((110, 195, 110) if self._conquest_outcome == 'expand'
-                       else (170, 140, 90))
+                expands = self._conquest_outcome == 'expand'
+                clr = (142, 225, 146) if expands else (230, 198, 126)
+                bg = (30, 78, 42, 210) if expands else (82, 62, 30, 210)
+                banner_h = self._line_height(kind) - 2
+                banner = pygame.Rect(
+                    x, y, self._box_rect.w - 2 * pad, banner_h)
+                pygame.draw.rect(self.window, bg, banner, border_radius=6)
+                pygame.draw.rect(self.window, clr, banner, 1,
+                                 border_radius=6)
                 surf = self._small_font.render(text, True, clr)
-                self.window.blit(surf, (x, y))
-                y += surf.get_height() + 2
+                self.window.blit(surf, surf.get_rect(center=banner.center))
+                y += self._line_height(kind)
             elif kind == 'defence_warning':
                 if self._broken_icon:
                     self.window.blit(self._broken_icon, (x, y))

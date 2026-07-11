@@ -2939,6 +2939,8 @@ class BattleScreen(SubScreen):
         if parent and hasattr(parent, '_game_poller') and parent._game_poller:
             if parent._game_poller.has_result():
                 _ = parent._game_poller.result
+                if hasattr(parent._game_poller, 'invalidate_cache'):
+                    parent._game_poller.invalidate_cache()
 
         # Sync modifier tracking so stale poll data doesn't look "new"
         if parent and hasattr(parent, '_previous_battle_modifiers'):
