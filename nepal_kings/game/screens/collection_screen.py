@@ -1,5 +1,7 @@
 # Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
 # See LICENSE file in the project root for full license information.
+import math
+
 import pygame
 from pygame.locals import *
 from game.screens.screen import Screen
@@ -34,6 +36,9 @@ _KEY_RANKS = ['J', 'Q', 'K', 'A']
 _KEY_MULTIPLIER = 10
 
 def _sell_price(rank, quantity=1):
+    # Maharaja cards are crafted, never sellable.
+    if rank == settings.RANK_MAHARAJA:
+        return 0
     value = settings.RANK_TO_VALUE.get(rank, 0)
     if rank in _KEY_RANKS:
         return value * _KEY_MULTIPLIER * quantity
@@ -59,6 +64,9 @@ def _card_tier(rank, pack_type=None):
 
 
 def _tier_label(rank, pack_type=None):
+    # Maharaja has no booster rarity tier; it gets its own crafted label.
+    if rank == settings.RANK_MAHARAJA:
+        return settings.COLLECTION_MAHARAJA_LABEL
     return settings.COLLECTION_TIER_LABELS.get(_card_tier(rank, pack_type), 'Common')
 
 
@@ -66,11 +74,40 @@ def _collection_sort_key(rank, pack_type):
     """Sort key for the collection grid.
 
     Order: tier desc → key cards before number cards → higher card value first.
+    The crafted Maharaja always sorts leftmost.
     """
+    if rank == settings.RANK_MAHARAJA:
+        return (-99, 0, 0)
     tier = _card_tier(rank, pack_type)
     is_number = 1 if rank in settings.NUMBER_CARDS else 0  # key (0) before number (1)
     value = settings.RANK_TO_VALUE.get(rank, 0)
     return (-tier, is_number, -value)
+
+
+def _ordered_main_ranks():
+    """Main-card columns for the grid: the crafted Maharaja slot leads, then the
+    regular ranks sorted tier → key → value."""
+    return [settings.RANK_MAHARAJA] + sorted(
+        settings.RANKS_MAIN_CARDS,
+        key=lambda r: _collection_sort_key(r, 'main'),
+    )
+
+
+def _maharaja_craft_progress(cards, locked, suit):
+    """Return (ready_count, total, missing_ranks) for crafting *suit*'s Maharaja.
+
+    A rank is ready when the suit has at least one free (unlocked) copy. Only the
+    regular ranks (2..A) can be traded into the crafted card.
+    """
+    ranks = settings.MAHARAJA_CRAFT_RANKS
+    ready = 0
+    missing = []
+    for rank in ranks:
+        if _free_card_count(cards, locked, suit, rank) >= 1:
+            ready += 1
+        else:
+            missing.append(rank)
+    return ready, len(ranks), missing
 
 
 def _collection_stats(cards, locked=None):
@@ -79,7 +116,9 @@ def _collection_stats(cards, locked=None):
     valid_keys = {
         (suit, rank)
         for suit in settings.SUITS
-        for rank in settings.RANKS_MAIN_CARDS + settings.RANKS_SIDE_CARDS
+        for rank in (settings.RANKS_MAIN_CARDS
+                     + settings.RANKS_SIDE_CARDS
+                     + [settings.RANK_MAHARAJA])
     }
     owned_total = sum(max(0, int(qty or 0)) for key, qty in cards.items() if key in valid_keys)
     unique_owned = sum(1 for key, qty in cards.items() if key in valid_keys and int(qty or 0) > 0)
@@ -93,6 +132,60 @@ def _collection_stats(cards, locked=None):
         'locked_total': locked_total,
         'available_total': max(0, owned_total - locked_total),
     }
+
+
+def _free_card_count(cards, locked, suit, rank):
+    """Return how many owned copies are not locked in defence/conquer use."""
+    key = (suit, rank)
+    total = max(0, int(cards.get(key, 0) or 0))
+    locked_qty = max(0, int((locked or {}).get(key, 0) or 0))
+    return max(0, total - locked_qty)
+
+
+def _owned_card_fully_locked(cards, locked, suit, rank):
+    """Return True only for owned cards that have no free copies."""
+    total = max(0, int(cards.get((suit, rank), 0) or 0))
+    return total > 0 and _free_card_count(cards, locked, suit, rank) <= 0
+
+
+def _collection_card_visible(cards, locked, suit, rank, show_locked=False):
+    """Catalogue slots stay visible even when their owned copy is filtered."""
+    return True
+
+
+def _collection_card_display_state(cards, locked, suit, rank, show_locked=False):
+    """Return owned, missing, or a dark placeholder for fully locked stock."""
+    total = max(0, int(cards.get((suit, rank), 0) or 0))
+    if total <= 0:
+        return 'missing'
+    if (not show_locked
+            and _owned_card_fully_locked(cards, locked, suit, rank)):
+        return 'locked_placeholder'
+    return 'owned'
+
+
+def _annotate_booster_impact(drawn_cards, cards, locked=None):
+    """Return reveal cards annotated with truthful before/after stock values.
+
+    Counts advance card-by-card so duplicate draws in the same bulk opening
+    show the quantity the player will actually own after each reveal.
+    """
+    running = dict(cards or {})
+    locked = locked or {}
+    annotated = []
+    for raw in drawn_cards or []:
+        card = dict(raw)
+        key = (card.get('suit'), card.get('rank'))
+        before = max(0, int(running.get(key, 0) or 0))
+        after = before + 1
+        locked_qty = max(0, int(locked.get(key, 0) or 0))
+        card['_impact_new_type'] = before == 0
+        card['_impact_owned_before'] = before
+        card['_impact_owned_after'] = after
+        card['_impact_free_after'] = max(0, after - locked_qty)
+        annotated.append(card)
+        running[key] = after
+    return annotated
 
 
 def _draw_panel(window, rect, corner_r=None):
@@ -124,13 +217,27 @@ class CollectionScreen(MenuScreenMixin, Screen):
         self._pack_title_font = settings.get_font(settings.COLLECTION_PACK_PANEL_TITLE_FONT_SIZE, bold=True)
         self._pack_detail_font = settings.get_font(settings.COLLECTION_PACK_PANEL_DETAIL_FONT_SIZE)
         self._sell_control_font = settings.get_font(settings.COLLECTION_SELL_FONT_SIZE, bold=True)
+        _lock_badge_sz = max(7, int(0.014 * _SH))
+        _lock_badge_raw = settings.DIALOGUE_BOX_ICON_NAME_TO_IMG_DICT.get('lock')
+        self._lock_badge_icon = (
+            pygame.transform.smoothscale(
+                _lock_badge_raw, (_lock_badge_sz, _lock_badge_sz))
+            if _lock_badge_raw is not None else None
+        )
+        _lock_placeholder_sz = max(
+            12, int(min(settings.COLLECTION_CARD_W,
+                        settings.COLLECTION_CARD_H) * 0.30))
+        self._lock_placeholder_icon = (
+            pygame.transform.smoothscale(
+                _lock_badge_raw,
+                (_lock_placeholder_sz, _lock_placeholder_sz))
+            if _lock_badge_raw is not None else None
+        )
 
         # ── Card ranks ──────────────────────────────────────────────
         # Sort: tier desc → key cards before number cards → value desc.
-        self._main_ranks = sorted(
-            settings.RANKS_MAIN_CARDS,
-            key=lambda r: _collection_sort_key(r, 'main'),
-        )
+        # The crafted Maharaja ('MK') slot leads the Main Cards section.
+        self._main_ranks = _ordered_main_ranks()
         self._side_ranks = sorted(
             settings.RANKS_SIDE_CARDS,
             key=lambda r: _collection_sort_key(r, 'side'),
@@ -151,10 +258,11 @@ class CollectionScreen(MenuScreenMixin, Screen):
         self._boosters_side = ud.get('booster_packs_side', 0)
 
         # ── Build CardImg cache ─────────────────────────────────────
+        # The crafted Maharaja ('MK') is not in RANKS, so add it explicitly.
         cw, ch = settings.COLLECTION_CARD_W, settings.COLLECTION_CARD_H
         self._card_imgs = {}   # {(suit,rank): CardImg}
         for suit in settings.SUITS:
-            for rank in settings.RANKS:
+            for rank in settings.RANKS + [settings.RANK_MAHARAJA]:
                 self._card_imgs[(suit, rank)] = CardImg(self.window, suit, rank, cw, ch)
 
         # ── Grey overlay for unowned cards ──────────────────────────
@@ -172,8 +280,8 @@ class CollectionScreen(MenuScreenMixin, Screen):
             'main': pygame.Rect(_pack_x, _pack_y, _pack_w, _pack_h),
             'side': pygame.Rect(_pack_x + _pack_w + _pack_gap, _pack_y, _pack_w, _pack_h),
         }
-        # Third panel beside the two booster panels: hosts mutually-exclusive
-        # Sell / Trade mode toggles.
+        # Third panel beside the two booster panels explains the safe default
+        # card interaction. Sell/convert actions live inside the card profile.
         self._actions_panel_rect = pygame.Rect(
             _pack_x + (_pack_w + _pack_gap) * 2, _pack_y, _pack_w, _pack_h)
         self._pack_button_rects = {}
@@ -195,24 +303,6 @@ class CollectionScreen(MenuScreenMixin, Screen):
         self._btn_open_side_rect = self._pack_button_rects['side']['open']
         self._btn_buy_side_rect = self._pack_button_rects['side']['buy']
 
-        # Mode toggle buttons inside the actions panel
-        _ap = self._actions_panel_rect
-        _mode_btn_h = settings.COLLECTION_PACK_PANEL_BTN_H
-        _mode_btn_gap = settings.COLLECTION_PACK_PANEL_BTN_GAP
-        _mode_btn_w = min(
-            settings.COLLECTION_PACK_PANEL_BTN_W,
-            (_ap.w - settings.COLLECTION_PACK_PANEL_PAD_X * 2 - _mode_btn_gap) // 2,
-        )
-        _mode_btn_y = _ap.bottom - settings.COLLECTION_PACK_PANEL_PAD_Y - _mode_btn_h
-        _mode_btn_x = _ap.centerx - (_mode_btn_w * 2 + _mode_btn_gap) // 2
-        self._mode_btn_rects = {
-            'sell': pygame.Rect(_mode_btn_x, _mode_btn_y, _mode_btn_w, _mode_btn_h),
-            'trade': pygame.Rect(_mode_btn_x + _mode_btn_w + _mode_btn_gap, _mode_btn_y,
-                                 _mode_btn_w, _mode_btn_h),
-        }
-        # Active mode: None | 'sell' | 'trade'. Drives card-click behaviour.
-        self._mode = None
-
         # ── X close button (top-right of box) ──
         _xsz = int(0.028 * _SH)
         _xmargin = int(0.012 * _SW)
@@ -232,6 +322,21 @@ class CollectionScreen(MenuScreenMixin, Screen):
             _BOX_W - _panel_pad * 2,
             settings.COLLECTION_STATS_STRIP_H,
         )
+        _locked_toggle_w = min(
+            int(0.132 * _SW),
+            max(int(0.104 * _SW), self._stats_rect.w // 5),
+        )
+        _locked_toggle_h = min(
+            settings.COLLECTION_PACK_PANEL_BTN_H,
+            max(14, self._stats_rect.h - int(0.008 * _SH)),
+        )
+        self._locked_toggle_rect = pygame.Rect(
+            self._stats_rect.right - int(0.008 * _SW) - _locked_toggle_w,
+            self._stats_rect.centery - _locked_toggle_h // 2,
+            _locked_toggle_w,
+            _locked_toggle_h,
+        )
+        self._show_locked_cards = False
         _panel_top = self._stats_rect.bottom + int(0.012 * _SH)
         _panel_bottom = _pack_y - int(0.014 * _SH)
         self._panel_rect = pygame.Rect(
@@ -247,12 +352,22 @@ class CollectionScreen(MenuScreenMixin, Screen):
         self._panel_surf.fill((20, 20, 25, 180))
         pygame.draw.rect(self._panel_surf, (80, 75, 65, 200),
                          self._panel_surf.get_rect(), 2)
+        _retry_w = min(int(0.18 * _SW), max(120, self._panel_rect.w // 4))
+        _retry_h = max(settings.COLLECTION_PACK_PANEL_BTN_H,
+                       getattr(settings, 'TOUCH_COMPACT_MIN', 0))
+        self._retry_rect = pygame.Rect(0, 0, _retry_w, _retry_h)
+        self._retry_rect.center = (
+            self._panel_rect.centerx,
+            self._panel_rect.centery + int(0.055 * _SH),
+        )
 
         # ── Card click rects (computed per frame based on tab) ──────
         self._card_rects = []  # [(rect, suit, rank), ...]
 
         # ── Background poller for fetching data ─────────────────────
         self._poller = None
+        self._refreshing = False
+        self._load_error = None
         self._fetch_collection()
 
         # ── Sell dialogue state ─────────────────────────────────────
@@ -273,6 +388,13 @@ class CollectionScreen(MenuScreenMixin, Screen):
 
         # ── Profile dialogue (default click) ────────────────────────
         self._profile_dialogue = None
+        self._profile_card = None
+        self._profile_pinned_tooltip = None
+        self._profile_pinned_tooltip_pos = None
+
+        # ── Maharaja craft dialogue (MK click — never sell/trade) ────
+        self._craft_dialogue = None
+        self._craft_suit = None
 
         # ── Booster reveal overlay ──────────────────────────────────
         self._reveal_overlay = None
@@ -280,6 +402,9 @@ class CollectionScreen(MenuScreenMixin, Screen):
         self._booster_poller = None
         self._booster_action = None
         self._booster_pack_type = None
+        self._pending_reveal_gains = {}
+        self._recent_card_gains = {}
+        self._recent_gains_started_at = None
         # First-visit "collection basics" teaching window (onboarding).
         self._collection_basics_dialogue = None
         # Second welcome-present explainer, shown after the first booster card
@@ -308,10 +433,7 @@ class CollectionScreen(MenuScreenMixin, Screen):
     # ── Lifecycle ────────────────────────────────────────────────────
 
     def on_enter(self):
-        """Called each time the collection screen becomes active — force re-fetch."""
-        self._data_loaded = False
-        self._cards = {}
-        self._locked = {}
+        """Refresh while keeping the last truthful collection snapshot visible."""
         ud = getattr(self.state, 'user_dict', None) or {}
         self._gold = ud.get('gold', 0)
         self._boosters = ud.get('booster_packs', 0)
@@ -325,13 +447,20 @@ class CollectionScreen(MenuScreenMixin, Screen):
         self._trade_card = None
         self._trade_dialogue = None
         self._profile_dialogue = None
-        self._mode = None
+        self._profile_card = None
+        self._profile_pinned_tooltip = None
+        self._craft_dialogue = None
+        self._craft_suit = None
         self._fetch_collection()
 
     # ── data fetching ───────────────────────────────────────────────
 
     def _fetch_collection(self):
         """Start a background fetch of the collection data."""
+        if self._poller and self._poller.busy:
+            return
+        self._load_error = None
+        self._refreshing = True
         self._poller = BackgroundPoller(collection_service.fetch_collection_cards)
         self._poller.poll()
 
@@ -347,6 +476,8 @@ class CollectionScreen(MenuScreenMixin, Screen):
         self._boosters = data.get('booster_packs', 0)
         self._boosters_side = data.get('booster_packs_side', 0)
         self._data_loaded = True
+        self._refreshing = False
+        self._load_error = None
         # Sync gold into state so chrome displays correctly
         if self.state.user_dict:
             self.state.user_dict['gold'] = self._gold
@@ -394,17 +525,44 @@ class CollectionScreen(MenuScreenMixin, Screen):
 
             # Main cards
             for col_i, rank in enumerate(self._main_ranks):
+                if not _collection_card_visible(
+                        self._cards, self._locked, suit, rank,
+                        getattr(self, '_show_locked_cards', False)):
+                    continue
                 cx = cards_x + col_i * (cw + gx)
                 positions.append((cx, row_y, suit, rank, 'main'))
                 self._card_rects.append((pygame.Rect(cx, row_y, cw, ch), suit, rank, 'main'))
 
             # Side cards (same row, to the right)
             for col_i, rank in enumerate(self._side_ranks):
+                if not _collection_card_visible(
+                        self._cards, self._locked, suit, rank,
+                        getattr(self, '_show_locked_cards', False)):
+                    continue
                 cx = side_x + col_i * (cw + gx)
                 positions.append((cx, row_y, suit, rank, 'side'))
                 self._card_rects.append((pygame.Rect(cx, row_y, cw, ch), suit, rank, 'side'))
 
         return positions
+
+    def _card_at_pos(self, pos):
+        """Return the closest visible card, forgiving narrow mobile gaps."""
+        for rect, suit, rank, section in self._card_rects:
+            if rect.collidepoint(pos):
+                return suit, rank, section
+        pad = getattr(settings, 'TOUCH_HIT_PAD', 0)
+        if pad <= 0:
+            return None
+        candidates = []
+        for rect, suit, rank, section in self._card_rects:
+            if rect.inflate(pad * 2, pad * 2).collidepoint(pos):
+                distance = ((rect.centerx - pos[0]) ** 2
+                            + (rect.centery - pos[1]) ** 2)
+                candidates.append((distance, suit, rank, section))
+        if not candidates:
+            return None
+        _distance, suit, rank, section = min(candidates, key=lambda item: item[0])
+        return suit, rank, section
 
     # ── render ──────────────────────────────────────────────────────
 
@@ -427,7 +585,10 @@ class CollectionScreen(MenuScreenMixin, Screen):
 
         # Clip to panel area for scrollable content
         self.window.set_clip(self._panel_rect)
-        self._draw_card_grid()
+        if self._data_loaded:
+            self._draw_card_grid()
+        else:
+            self._draw_collection_load_state()
         self.window.set_clip(None)
 
         # Booster controls
@@ -454,6 +615,15 @@ class CollectionScreen(MenuScreenMixin, Screen):
             _tt = self._profile_dialogue.get_tooltip(pygame.mouse.get_pos())
             if _tt:
                 self._draw_profile_tooltip(_tt)
+            elif self._profile_pinned_tooltip:
+                self._draw_profile_tooltip(
+                    self._profile_pinned_tooltip,
+                    anchor=self._profile_pinned_tooltip_pos,
+                )
+
+        # Craft dialogue (Maharaja)
+        if self._craft_dialogue:
+            self._craft_dialogue.draw()
 
         # Booster reveal overlay
         if self._reveal_overlay:
@@ -477,19 +647,31 @@ class CollectionScreen(MenuScreenMixin, Screen):
             self._starter_reveal_dialogue.draw()
 
     def _draw_collection_stats(self):
-        """Draw a compact owned/missing/locked summary strip."""
+        """Draw a compact, player-facing stock summary strip."""
         r = self._stats_rect
         surf = pygame.Surface((r.w, r.h), pygame.SRCALPHA)
         pygame.draw.rect(surf, settings.COLLECTION_STATS_BG_CLR, surf.get_rect(), border_radius=8)
         pygame.draw.rect(surf, settings.COLLECTION_STATS_BORDER_CLR, surf.get_rect(), 1, border_radius=8)
         self.window.blit(surf, r.topleft)
 
+        if not self._data_loaded:
+            label = 'Could not load collection' if self._load_error else 'Loading your collection...'
+            color = ((235, 180, 145) if self._load_error
+                     else settings.COLLECTION_PACK_PANEL_MUTED_CLR)
+            text_surf = self._stats_font.render(label, True, color)
+            self.window.blit(text_surf, text_surf.get_rect(center=r.center))
+            return
+
         stats = _collection_stats(self._cards, self._locked)
+        if settings.TOUCH_TARGET_MIN > 0:
+            labels = ('Types', 'Owned', 'In use', 'Free')
+        else:
+            labels = ('Card types', 'Owned copies', 'In use', 'Free copies')
         items = [
-            ('Collection', f"{stats['unique_owned']}/{stats['unique_total']}"),
-            ('Total', str(stats['owned_total'])),
-            ('Locked', str(stats['locked_total'])),
-            ('Available', str(stats['available_total'])),
+            (labels[0], f"{stats['unique_owned']}/{stats['unique_total']}"),
+            (labels[1], str(stats['owned_total'])),
+            (labels[2], str(stats['locked_total'])),
+            (labels[3], str(stats['available_total'])),
         ]
 
         rendered = []
@@ -499,7 +681,10 @@ class CollectionScreen(MenuScreenMixin, Screen):
             rendered.append((label_surf, value_surf, label_surf.get_width() + value_surf.get_width()))
         sep_w = int(0.018 * _SW)
         total_w = sum(width for _, _, width in rendered) + sep_w * (len(rendered) - 1)
-        x = r.centerx - total_w // 2
+        content_left = r.x + int(0.008 * _SW)
+        content_right = self._locked_toggle_rect.left - int(0.010 * _SW)
+        content_w = max(1, content_right - content_left)
+        x = content_left + max(0, (content_w - total_w) // 2)
         y = r.centery
         for i, (label_surf, value_surf, width) in enumerate(rendered):
             self.window.blit(label_surf, label_surf.get_rect(left=x, centery=y))
@@ -511,6 +696,56 @@ class CollectionScreen(MenuScreenMixin, Screen):
                                  (sep_x, r.y + int(0.010 * _SH)),
                                  (sep_x, r.bottom - int(0.010 * _SH)), 1)
                 x += sep_w
+        self._draw_locked_visibility_toggle()
+
+    def _draw_collection_load_state(self):
+        """Draw an honest loading or retry state instead of a false 0/52 grid."""
+        if self._load_error:
+            title = self._section_font.render(
+                'Your cards could not be loaded', True, (235, 210, 175))
+            detail = self._stats_font.render(
+                'Check your connection and try again.', True,
+                settings.COLLECTION_PACK_PANEL_MUTED_CLR)
+            group_h = title.get_height() + detail.get_height() + int(0.018 * _SH)
+            top = self._panel_rect.centery - group_h // 2 - int(0.045 * _SH)
+            self.window.blit(title, title.get_rect(
+                centerx=self._panel_rect.centerx, top=top))
+            self.window.blit(detail, detail.get_rect(
+                centerx=self._panel_rect.centerx,
+                top=top + title.get_height() + int(0.010 * _SH)))
+            self._draw_action_button(
+                self._retry_rect, 'Retry', True, primary=True)
+            return
+
+        # Soft animated skeletons retain the gallery shape without claiming
+        # that the player owns zero cards while the request is in flight.
+        now = pygame.time.get_ticks()
+        pulse = 24 + int(16 * (0.5 + 0.5 * math.sin(now / 260.0)))
+        cw, ch = settings.COLLECTION_CARD_W, settings.COLLECTION_CARD_H
+        gap = max(settings.COLLECTION_CARD_GAP_X, int(0.012 * _SW))
+        cols = 8
+        total_w = cols * cw + (cols - 1) * gap
+        start_x = self._panel_rect.centerx - total_w // 2
+        start_y = self._panel_rect.centery - ch - int(0.015 * _SH)
+        for row in range(2):
+            for col in range(cols):
+                rect = pygame.Rect(
+                    start_x + col * (cw + gap),
+                    start_y + row * (ch + settings.COLLECTION_CARD_GAP_Y),
+                    cw, ch,
+                )
+                skel = pygame.Surface(rect.size, pygame.SRCALPHA)
+                pygame.draw.rect(skel, (170, 158, 130, pulse), skel.get_rect(),
+                                 border_radius=4)
+                pygame.draw.rect(skel, (205, 190, 150, pulse + 20),
+                                 skel.get_rect(), 1, border_radius=4)
+                self.window.blit(skel, rect.topleft)
+        msg = self._stats_font.render(
+            'Loading cards...', True, settings.COLLECTION_PACK_PANEL_MUTED_CLR)
+        self.window.blit(msg, msg.get_rect(
+            centerx=self._panel_rect.centerx,
+            top=start_y + 2 * (ch + settings.COLLECTION_CARD_GAP_Y)
+                + int(0.008 * _SH)))
 
     def _draw_pack_panel(self, pack_type):
         """Draw one grouped booster pack control panel."""
@@ -543,12 +778,9 @@ class CollectionScreen(MenuScreenMixin, Screen):
         if settings.TOUCH_TARGET_MIN > 0:
             gap = max(4, int(0.006 * _SW))
             max_row_w = panel.right - pad_x - title_x
-            owned_text = f'Owned: {count}'
+            owned_text = f'×{count}'
             count_surf = self._pack_detail_font.render(
                 owned_text, True, settings.COLLECTION_PACK_PANEL_TEXT_CLR)
-            if title.get_width() + gap + count_surf.get_width() > max_row_w:
-                count_surf = self._pack_detail_font.render(
-                    f'x{count}', True, settings.COLLECTION_PACK_PANEL_TEXT_CLR)
             if title.get_width() + gap + count_surf.get_width() <= max_row_w:
                 self.window.blit(
                     count_surf,
@@ -559,15 +791,18 @@ class CollectionScreen(MenuScreenMixin, Screen):
                 )
         else:
             count_text = self._pack_detail_font.render(
-                f'Owned: {count}', True, settings.COLLECTION_PACK_PANEL_TEXT_CLR)
+                f'{count} pack{"s" if count != 1 else ""} ready', True,
+                settings.COLLECTION_PACK_PANEL_TEXT_CLR)
             self.window.blit(
                 count_text,
                 (title_x, title_y + title.get_height() + int(0.004 * _SH)),
             )
 
         btns = self._pack_button_rects[pack_type]
-        self._draw_action_button(btns['open'], f'Open ({count})', count > 0)
-        self._draw_action_button(btns['buy'], f'Buy {price}g', can_buy)
+        self._draw_action_button(
+            btns['open'], 'Open pack', count > 0 and self._data_loaded,
+            primary=True)
+        self._draw_action_button(btns['buy'], f'Buy · {price}g', can_buy)
 
     def _draw_card_grid(self):
         """Draw all cards in both sections with section headers."""
@@ -584,6 +819,9 @@ class CollectionScreen(MenuScreenMixin, Screen):
 
         # Cards
         mouse_pos = pygame.mouse.get_pos()
+        if not positions:
+            self._draw_empty_grid_message()
+            return
         for (cx, cy, suit, rank, section) in positions:
             # Skip if outside visible panel
             if cy + ch < self._panel_rect.y or cy > self._panel_rect.bottom:
@@ -594,27 +832,119 @@ class CollectionScreen(MenuScreenMixin, Screen):
                 continue
             qty = self._cards.get((suit, rank), 0)
             locked = self._locked.get((suit, rank), 0)
+            display_state = _collection_card_display_state(
+                self._cards, self._locked, suit, rank,
+                getattr(self, '_show_locked_cards', False))
             card_rect = pygame.Rect(cx, cy, cw, ch)
+            gain_progress = self._recent_gain_progress((suit, rank))
             hovered = (
                 card_rect.collidepoint(mouse_pos)
                 and not self._sell_dialogue
                 and not self._trade_dialogue
                 and not self._profile_dialogue
+                and not self._craft_dialogue
                 and not self._reveal_overlay
             )
 
-            if qty > 0:
+            is_mk = (rank == settings.RANK_MAHARAJA)
+
+            if display_state == 'owned':
+                if is_mk:
+                    self._draw_maharaja_glow(card_rect)  # warm gold halo behind
                 card.draw_front_bright(cx, cy)
-                self._draw_tier_border(cx, cy, cw, ch, rank, section, owned=True)
+                if is_mk:
+                    self._draw_maharaja_border(card_rect, owned=True)
+                else:
+                    self._draw_tier_border(cx, cy, cw, ch, rank, section, owned=True)
                 if hovered:
                     glow_surf = pygame.Surface((cw + 4, ch + 4), pygame.SRCALPHA)
                     pygame.draw.rect(glow_surf, (250, 221, 0, 80), glow_surf.get_rect(), 2)
                     self.window.blit(glow_surf, (cx - 2, cy - 2))
-                self._draw_card_badge(cx, cy, cw, qty, locked)
+                self._draw_card_badge(
+                    cx, cy, cw, qty, locked,
+                    show_locked=getattr(self, '_show_locked_cards', False),
+                )
             else:
+                mk_craftable = is_mk and self._maharaja_craftable(suit)
+                if is_mk:
+                    self._draw_maharaja_glow(card_rect, dim=not mk_craftable)
                 card.draw_front_bright(cx, cy)
                 self.window.blit(self._grey_overlay, (cx, cy))
-                self._draw_tier_border(cx, cy, cw, ch, rank, section, owned=False)
+                if is_mk:
+                    # Gold frame hint on the missing slot so players discover
+                    # that the Maharaja is craftable; once every rank has a
+                    # free copy the slot lights up fully and invites the craft.
+                    self._draw_maharaja_border(card_rect, owned=mk_craftable)
+                    if mk_craftable:
+                        self._draw_maharaja_craft_ready_pill(card_rect)
+                else:
+                    self._draw_tier_border(cx, cy, cw, ch, rank, section, owned=False)
+                if display_state == 'locked_placeholder':
+                    self._draw_locked_card_placeholder(card_rect)
+            if gain_progress is not None:
+                self._draw_recent_gain_highlight(
+                    card_rect, self._recent_card_gains.get((suit, rank), 1),
+                    gain_progress)
+
+    def _draw_locked_card_placeholder(self, card_rect):
+        """Mark a filtered fully locked card without displaying its stock."""
+        icon = getattr(self, '_lock_placeholder_icon', None)
+        if icon is None:
+            return
+        pad = max(3, int(0.004 * _SW))
+        pill = pygame.Surface(
+            (icon.get_width() + pad * 2, icon.get_height() + pad * 2),
+            pygame.SRCALPHA)
+        pygame.draw.rect(pill, (30, 27, 24, 205), pill.get_rect(),
+                         border_radius=max(4, pill.get_height() // 3))
+        pygame.draw.rect(pill, (170, 138, 78, 205), pill.get_rect(), 1,
+                         border_radius=max(4, pill.get_height() // 3))
+        pill.blit(icon, (pad, pad))
+        self.window.blit(pill, pill.get_rect(center=card_rect.center))
+
+    def _recent_gain_progress(self, key):
+        started = getattr(self, '_recent_gains_started_at', None)
+        if started is None or key not in getattr(self, '_recent_card_gains', {}):
+            return None
+        duration = max(1, settings.COLLECTION_RECENT_GAIN_HIGHLIGHT_MS)
+        elapsed = pygame.time.get_ticks() - started
+        if elapsed < 0 or elapsed >= duration:
+            return None
+        return elapsed / duration
+
+    def _draw_recent_gain_highlight(self, card_rect, gained, progress):
+        """Link a completed booster reveal back to the updated grid card."""
+        pulse = 0.55 + 0.45 * math.sin(progress * math.pi * 5.0) ** 2
+        fade = max(0.0, 1.0 - progress)
+        alpha = int(205 * pulse * fade)
+        halo_rect = card_rect.inflate(12, 12)
+        halo = pygame.Surface(halo_rect.size, pygame.SRCALPHA)
+        pygame.draw.rect(halo, (250, 221, 0, max(35, alpha // 4)),
+                         halo.get_rect(), border_radius=7)
+        pygame.draw.rect(halo, (255, 234, 92, alpha),
+                         halo.get_rect().inflate(-2, -2), 2, border_radius=6)
+        self.window.blit(halo, halo_rect.topleft)
+
+        label = self._badge_font.render(
+            f'+{gained}', True, (35, 28, 10))
+        pad = max(2, settings.COLLECTION_BADGE_PAD_X)
+        pill = pygame.Surface((label.get_width() + pad * 2,
+                               label.get_height() + 2), pygame.SRCALPHA)
+        pygame.draw.rect(pill, (250, 221, 0, min(245, alpha + 40)),
+                         pill.get_rect(), border_radius=4)
+        self.window.blit(pill, (card_rect.x + 2, card_rect.y + 2))
+        self.window.blit(label, (card_rect.x + 2 + pad, card_rect.y + 3))
+
+    def _draw_empty_grid_message(self):
+        """Draw a small status message when the active filter has no cards."""
+        if not getattr(self, '_data_loaded', False):
+            text = 'Loading collection...'
+        elif getattr(self, '_show_locked_cards', False):
+            text = 'No owned cards yet'
+        else:
+            text = 'No free cards to show'
+        msg = self._stats_font.render(text, True, settings.COLLECTION_PACK_PANEL_MUTED_CLR)
+        self.window.blit(msg, msg.get_rect(center=self._panel_rect.center))
 
     def _draw_tier_border(self, cx, cy, cw, ch, rank, section, owned=True):
         """Draw a subtle tier-coloured outline just outside the card edge."""
@@ -630,16 +960,81 @@ class CollectionScreen(MenuScreenMixin, Screen):
         pygame.draw.rect(surf, clr, surf.get_rect(), thickness, border_radius=4)
         self.window.blit(surf, (cx - 2, cy - 2))
 
-    def _draw_card_badge(self, cx, cy, cw, qty, locked=0):
-        """Draw the available/owned badge at the bottom-right of a card."""
-        free = max(0, qty - locked)
-        badge_text = f'{free}/{qty}'
-        if free == 0 and qty > 0:
-            bg_clr = (88, 80, 66, 220)        # all locked → muted grey
-        elif locked > 0:
-            bg_clr = (120, 90, 30, 210)       # some locked → amber
+    def _maharaja_craftable(self, suit):
+        """True when every rank of *suit* has a free copy to trade in."""
+        ready, total, _missing = _maharaja_craft_progress(
+            self._cards, self._locked, suit)
+        return ready >= total
+
+    def _draw_maharaja_craft_ready_pill(self, card_rect):
+        """Pulsing gold 'Craft!' pill on an uncrafted-but-ready Maharaja cell."""
+        now = pygame.time.get_ticks()
+        pulse = 0.5 + 0.5 * math.sin(now / 480.0)
+        label = self._badge_font.render(
+            'Craft!', True, settings.COLLECTION_MAHARAJA_BORDER_CLR)
+        pad_x = max(4, settings.COLLECTION_BADGE_PAD_X + 2)
+        pad_y = max(2, settings.COLLECTION_BADGE_PAD_Y)
+        pill = pygame.Surface(
+            (label.get_width() + pad_x * 2, label.get_height() + pad_y * 2),
+            pygame.SRCALPHA)
+        radius = pill.get_height() // 2
+        pygame.draw.rect(pill, (30, 27, 24, 235), pill.get_rect(),
+                         border_radius=radius)
+        r, g, b = settings.COLLECTION_MAHARAJA_BORDER_CLR
+        pygame.draw.rect(pill, (r, g, b, int(160 + 95 * pulse)),
+                         pill.get_rect(), 1, border_radius=radius)
+        pill.blit(label, (pad_x, pad_y))
+        self.window.blit(pill, pill.get_rect(
+            midbottom=(card_rect.centerx,
+                       card_rect.bottom - max(3, int(0.004 * _SH)))))
+
+    def _draw_maharaja_glow(self, card_rect, dim=False):
+        """Feathered royal-gold halo behind a Maharaja cell, gently pulsing."""
+        now = pygame.time.get_ticks()
+        pulse = 0.5 + 0.5 * math.sin(now / 480.0)
+        peak = (28 if dim else 66) + int((16 if dim else 44) * pulse)
+        color = settings.COLLECTION_MAHARAJA_GLOW_CLR
+        halo_rect = card_rect.inflate(int(card_rect.w * 0.42),
+                                      int(card_rect.h * 0.28))
+        halo = pygame.Surface(halo_rect.size, pygame.SRCALPHA)
+        layers = 6
+        for step in range(layers, 0, -1):
+            t = step / layers  # 1.0 outer → ~0 inner
+            inset_x = int(halo_rect.w * 0.5 * (1.0 - t))
+            inset_y = int(halo_rect.h * 0.5 * (1.0 - t))
+            ring = pygame.Rect(inset_x, inset_y,
+                               halo_rect.w - inset_x * 2,
+                               halo_rect.h - inset_y * 2)
+            if ring.w <= 0 or ring.h <= 0:
+                continue
+            layer_alpha = max(0, int(peak * (1.0 - t) ** 2))
+            if layer_alpha == 0:
+                continue
+            pygame.draw.ellipse(halo, (*color, layer_alpha), ring)
+        self.window.blit(halo, halo_rect.topleft)
+
+    def _draw_maharaja_border(self, card_rect, owned=True):
+        """Gold frame around a Maharaja cell; pulses brighter when owned."""
+        now = pygame.time.get_ticks()
+        pulse = 0.5 + 0.5 * math.sin(now / 480.0)
+        r, g, b = settings.COLLECTION_MAHARAJA_BORDER_CLR
+        if owned:
+            alpha = int(200 + 55 * pulse)
+            thickness = 2
         else:
-            bg_clr = settings.COLLECTION_BADGE_BG_CLR
+            alpha = 150
+            thickness = 1
+        surf = pygame.Surface((card_rect.w + 4, card_rect.h + 4), pygame.SRCALPHA)
+        pygame.draw.rect(surf, (r, g, b, alpha), surf.get_rect(),
+                         thickness, border_radius=4)
+        self.window.blit(surf, (card_rect.x - 2, card_rect.y - 2))
+
+    def _draw_card_badge(self, cx, cy, cw, qty, locked=0, show_locked=True):
+        """Draw separate free-stock and in-use badges without slash ambiguity."""
+        free = max(0, qty - locked)
+        badge_text = str(free)
+        bg_clr = ((88, 80, 66, 220) if free == 0
+                  else settings.COLLECTION_BADGE_BG_CLR)
         badge_surf = self._badge_font.render(badge_text, True, settings.COLLECTION_BADGE_CLR)
         bw = badge_surf.get_width() + settings.COLLECTION_BADGE_PAD_X * 2
         bh = badge_surf.get_height() + settings.COLLECTION_BADGE_PAD_Y * 2
@@ -652,7 +1047,33 @@ class CollectionScreen(MenuScreenMixin, Screen):
                          (bx + settings.COLLECTION_BADGE_PAD_X,
                           by + settings.COLLECTION_BADGE_PAD_Y))
 
-    def _draw_action_button(self, rect, text, enabled):
+        if show_locked and locked > 0:
+            lock_icon = getattr(self, '_lock_badge_icon', None)
+            lock_text = self._badge_font.render(
+                str(locked), True, settings.COLLECTION_LOCK_BADGE_CLR)
+            icon_w = lock_icon.get_width() if lock_icon else 0
+            icon_gap = 1 if icon_w else 0
+            lw = (lock_text.get_width() + icon_w + icon_gap
+                  + settings.COLLECTION_BADGE_PAD_X * 2)
+            lh = max(lock_text.get_height(), icon_w) + settings.COLLECTION_BADGE_PAD_Y * 2
+            lock_bg = pygame.Surface((lw, lh), pygame.SRCALPHA)
+            lock_bg.fill(settings.COLLECTION_LOCK_BADGE_BG_CLR)
+            lx = cx + 2
+            ly = cy + settings.COLLECTION_CARD_H - lh - 2
+            self.window.blit(lock_bg, (lx, ly))
+            text_x = lx + settings.COLLECTION_BADGE_PAD_X
+            if lock_icon:
+                self.window.blit(lock_icon, (
+                    text_x,
+                    ly + (lh - lock_icon.get_height()) // 2,
+                ))
+                text_x += icon_w + icon_gap
+            self.window.blit(lock_text, (
+                text_x,
+                ly + (lh - lock_text.get_height()) // 2,
+            ))
+
+    def _draw_action_button(self, rect, text, enabled, primary=False):
         """Draw one of the bottom action buttons."""
         mouse_pos = pygame.mouse.get_pos()
         hovered = (
@@ -661,6 +1082,7 @@ class CollectionScreen(MenuScreenMixin, Screen):
             and not self._sell_dialogue
             and not self._trade_dialogue
             and not self._profile_dialogue
+            and not self._craft_dialogue
             and not self._reveal_overlay
         )
         from game.core.input_state import get_pressed as _get_pressed
@@ -677,25 +1099,27 @@ class CollectionScreen(MenuScreenMixin, Screen):
             bg_clr = (40, 40, 40, 180)
             txt_clr = (100, 100, 100)
         elif clicked:
-            bg_clr = (80, 70, 40, 220)
+            bg_clr = (102, 78, 28, 235) if primary else (80, 70, 40, 220)
             txt_clr = (255, 255, 220)
         elif hovered:
-            bg_clr = (60, 55, 35, 220)
+            bg_clr = (88, 69, 28, 235) if primary else (60, 55, 35, 220)
             txt_clr = (250, 240, 200)
         else:
-            bg_clr = (35, 35, 40, 200)
-            txt_clr = (200, 190, 160)
+            bg_clr = (72, 55, 23, 230) if primary else (35, 35, 40, 200)
+            txt_clr = (255, 238, 180) if primary else (200, 190, 160)
 
         surf = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
         surf.fill(bg_clr)
-        pygame.draw.rect(surf, (120, 110, 90, 200), surf.get_rect(), 1)
+        border = ((218, 180, 82, 225) if primary and enabled
+                  else (120, 110, 90, 200))
+        pygame.draw.rect(surf, border, surf.get_rect(), 2 if primary and enabled else 1)
         self.window.blit(surf, rect.topleft)
 
         txt = self._action_font.render(text, True, txt_clr)
         self.window.blit(txt, txt.get_rect(center=rect.center))
 
-    def _draw_profile_tooltip(self, text):
-        """Draw a multi-line, word-wrapped tooltip pill for a hovered profile group icon."""
+    def _draw_profile_tooltip(self, text, anchor=None):
+        """Draw a hover or tap-pinned description for a profile use tile."""
         font = settings.get_font(settings.TOOLTIP_FONT_SIZE)
         pad_x = settings.TOOLTIP_PAD_X
         pad_y = settings.TOOLTIP_PAD_Y
@@ -729,7 +1153,7 @@ class CollectionScreen(MenuScreenMixin, Screen):
         content_w = max(s.get_width() for s in line_surfs)
         pill_w = pad_x * 2 + content_w
         pill_h = pad_y * 2 + len(line_surfs) * line_h + max(0, len(line_surfs) - 1) * 2
-        mx, my = pygame.mouse.get_pos()
+        mx, my = anchor or pygame.mouse.get_pos()
         pill_x = mx + 14
         pill_y = my - pill_h // 2
         pill_x = max(4, min(pill_x, _SW - pill_w - 4))
@@ -756,6 +1180,7 @@ class CollectionScreen(MenuScreenMixin, Screen):
             and not self._sell_dialogue
             and not self._trade_dialogue
             and not self._profile_dialogue
+            and not self._craft_dialogue
             and not self._reveal_overlay
         )
 
@@ -774,7 +1199,7 @@ class CollectionScreen(MenuScreenMixin, Screen):
     # ── actions panel (mode toggles) ────────────────────────────────
 
     def _draw_actions_panel(self):
-        """Draw the third panel with Sell / Trade mode toggles."""
+        """Make the safe default inspect interaction visible everywhere."""
         panel = self._actions_panel_rect
         surf = pygame.Surface((panel.w, panel.h), pygame.SRCALPHA)
         pygame.draw.rect(surf, settings.COLLECTION_PACK_PANEL_BG_CLR,
@@ -790,27 +1215,29 @@ class CollectionScreen(MenuScreenMixin, Screen):
             settings.COLLECTION_PACK_PANEL_TITLE_CLR)
         self.window.blit(title, (panel.x + pad_x, panel.y + pad_y))
 
+        hint = self._pack_detail_font.render(
+            settings.COLLECTION_ACTIONS_PANEL_HINT, True,
+            settings.COLLECTION_PACK_PANEL_TEXT_CLR)
+        self.window.blit(
+            hint,
+            (panel.x + pad_x,
+             panel.y + pad_y + title.get_height() + int(0.004 * _SH)),
+        )
         if settings.TOUCH_TARGET_MIN <= 0:
-            if self._mode is None:
-                hint_text = 'Click a card to view its uses'
-            elif self._mode == 'sell':
-                hint_text = 'Click a card to sell copies'
-            else:
-                hint_text = 'Click a card to convert copies'
-            hint = self._pack_detail_font.render(
-                hint_text, True, settings.COLLECTION_PACK_PANEL_TEXT_CLR)
+            detail = self._pack_detail_font.render(
+                'Uses, copy stock, sell and conversion', True,
+                settings.COLLECTION_PACK_PANEL_MUTED_CLR)
             self.window.blit(
-                hint,
+                detail,
                 (panel.x + pad_x,
-                 panel.y + pad_y + title.get_height() + int(0.004 * _SH)),
+                 panel.y + pad_y + title.get_height()
+                 + self._pack_detail_font.get_height() + int(0.006 * _SH)),
             )
 
-        for mode_key, rect in self._mode_btn_rects.items():
-            label = settings.COLLECTION_MODE_BTN_TEXT[mode_key]
-            self._draw_mode_toggle_button(rect, label, mode_key == self._mode)
-
-    def _draw_mode_toggle_button(self, rect, text, active):
-        """Draw a mode toggle (active = highlighted)."""
+    def _draw_locked_visibility_toggle(self):
+        """Draw the show-locked-cards toggle in the collection stats strip."""
+        rect = self._locked_toggle_rect
+        active = bool(getattr(self, '_show_locked_cards', False))
         mouse_pos = pygame.mouse.get_pos()
         hovered = (
             rect.collidepoint(mouse_pos)
@@ -818,41 +1245,56 @@ class CollectionScreen(MenuScreenMixin, Screen):
             and not self._sell_dialogue
             and not self._trade_dialogue
             and not self._profile_dialogue
+            and not self._craft_dialogue
             and not self._reveal_overlay
         )
 
         if active:
-            bg_clr = (90, 75, 30, 235)
+            bg_clr = (72, 60, 28, 228)
             border_clr = (250, 221, 0)
             txt_clr = (255, 245, 200)
         elif hovered:
-            bg_clr = (60, 55, 35, 220)
-            border_clr = (200, 175, 110)
-            txt_clr = (250, 240, 200)
+            bg_clr = (52, 48, 36, 218)
+            border_clr = (190, 165, 105)
+            txt_clr = (236, 224, 190)
         else:
-            bg_clr = (35, 35, 40, 200)
-            border_clr = (120, 110, 90, 200)
-            txt_clr = (200, 190, 160)
+            bg_clr = (35, 35, 40, 190)
+            border_clr = (120, 110, 90, 190)
+            txt_clr = settings.COLLECTION_PACK_PANEL_TEXT_CLR
 
         surf = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
         pygame.draw.rect(surf, bg_clr, surf.get_rect(), border_radius=6)
-        pygame.draw.rect(surf, border_clr, surf.get_rect(), 2 if active else 1,
-                         border_radius=6)
+        pygame.draw.rect(surf, border_clr, surf.get_rect(),
+                         2 if active else 1, border_radius=6)
         self.window.blit(surf, rect.topleft)
-        txt = self._action_font.render(text, True, txt_clr)
-        self.window.blit(txt, txt.get_rect(center=rect.center))
 
-    def _toggle_mode(self, mode):
-        """Mutually-exclusive mode toggle: clicking active mode deactivates."""
-        if self._mode == mode:
-            self._mode = None
-        else:
-            self._mode = mode
+        box_sz = max(10, min(rect.h - 8, int(0.018 * _SH)))
+        box = pygame.Rect(rect.x + 6, rect.centery - box_sz // 2, box_sz, box_sz)
+        pygame.draw.rect(self.window, (24, 24, 28), box, border_radius=3)
+        pygame.draw.rect(self.window, border_clr, box, 1, border_radius=3)
+        if active:
+            p1 = (box.x + max(2, box_sz // 5), box.centery)
+            p2 = (box.x + box_sz // 2, box.bottom - max(3, box_sz // 5))
+            p3 = (box.right - max(2, box_sz // 6), box.y + max(3, box_sz // 5))
+            pygame.draw.lines(self.window, txt_clr, False, [p1, p2, p3], 2)
+
+        label = self._pack_detail_font.render('Show locked', True, txt_clr)
+        label_x = box.right + 5
+        self.window.blit(label, label.get_rect(
+            left=label_x,
+            centery=rect.centery,
+        ))
 
     # ── card profile dialogue (default click) ──────────────────────
 
     def _open_profile_dialogue(self, suit, rank):
         """Show a profile dialogue with all uses of (suit, rank)."""
+        # Maharaja cards are crafted, never sold or traded — every click on an
+        # MK cell routes to the dedicated craft dialogue instead.
+        if rank == settings.RANK_MAHARAJA:
+            self._open_craft_dialogue(suit)
+            return
+
         from utils.card_uses import get_card_uses
 
         qty = self._cards.get((suit, rank), 0)
@@ -862,7 +1304,7 @@ class CollectionScreen(MenuScreenMixin, Screen):
         section = _card_pack_type(rank)
         tier_label = _tier_label(rank, section)
 
-        # Card category — shown inside the Figures section, not the header.
+        # Card category shown beside the pack family in the profile overview.
         # Side cards are further split into side-key (2,4,5) and side-number (3,6)
         # based on which figure slot they typically fill.
         _SIDE_KEY_RANKS = {'2', '4', '5'}
@@ -884,7 +1326,7 @@ class CollectionScreen(MenuScreenMixin, Screen):
 
         max_items = settings.COLLECTION_PROFILE_GROUP_MAX_ITEMS
 
-        def _group(title, entries, note='', note_prefix=''):
+        def _group(title, entries, note='', icon=None):
             """Build a raw image-group dict for the profile dialogue."""
             # entries are (name, icon, description) triples
             pairs = [(name, icon, desc)
@@ -900,7 +1342,8 @@ class CollectionScreen(MenuScreenMixin, Screen):
                 'item_unit': 'option',
                 'count': len(entries),
                 'show_when_empty': True,
-                'note_prefix': note_prefix,
+                'icon': icon,
+                'badge_icon': None,
                 'description': note or (
                     ', '.join(name for name, _, _ in entries[:max_items])
                     if entries else 'No uses'
@@ -910,24 +1353,35 @@ class CollectionScreen(MenuScreenMixin, Screen):
         groups = [
             _group('Figures', uses['figures'],
                    note=', '.join(n for n, _, _ in uses['figures'][:max_items])
-                        if uses['figures'] else 'No uses',
-                   note_prefix=category_label),
-            _group('Spells', uses['spells']),
-            _group('Battle Options', uses['battle_moves']),
+                        if uses['figures'] else 'No figure recipes',
+                   icon='figure'),
+            _group('Spells', uses['spells'], icon='magic'),
+            _group('Tactics', uses['battle_moves'], icon='dices'),
         ]
 
         card_img = self._card_imgs.get((suit, rank))
         if qty > 0:
-            msg = (f'{suit} {rank}  ·  {tier_label}\n'
-                   f'Owned: {qty}  ·  Free: {free}  ·  Locked: {locked}  ·  Sell: {unit_price}g')
+            msg = (f'{tier_label} {section.title()} Card  ·  {category_label}\n'
+                   f'{qty} owned  ·  {free} free  ·  {locked} in use  ·  '
+                   f'{unit_price}g each')
         else:
-            msg = f'{suit} {rank}  ·  {tier_label}\nNot in collection'
+            msg = (f'{tier_label} {section.title()} Card  ·  {category_label}\n'
+                   'Not currently owned')
+        self._profile_card = (suit, rank)
+        self._profile_pinned_tooltip = None
+        self._profile_pinned_tooltip_pos = None
         self._profile_dialogue = DialogueBox(
-            self.window, msg, actions=['close'],
-            images=[card_img] if card_img else [],
+            self.window, msg, actions=['Sell copies', 'Convert', 'Close'],
+            images=[card_img.front_img] if card_img else [],
             image_groups=groups,
-            title='Card Profile',
+            title=f'{suit} {rank}',
         )
+        for button in self._profile_dialogue.buttons:
+            action = button.text.lower()
+            if action == 'sell copies':
+                button.disabled = free <= 0
+            elif action == 'convert':
+                button.disabled = free < settings.COLLECTION_CONVERT_RATIO_SAME_COLOR
 
     # ── trade dialogue ──────────────────────────────────────────────
 
@@ -1236,6 +1690,107 @@ class CollectionScreen(MenuScreenMixin, Screen):
         self._trade_qty_rects = {}
         self._trade_target_rects = {}
 
+    # ── maharaja craft dialogue ─────────────────────────────────────
+
+    def _open_craft_dialogue(self, suit):
+        """Open the Maharaja craft dialogue for *suit* (never sell/trade)."""
+        self._profile_dialogue = None
+        self._profile_card = None
+        self._profile_pinned_tooltip = None
+        ready, total, missing = _maharaja_craft_progress(
+            self._cards, self._locked, suit)
+        card_img = self._card_imgs.get((suit, settings.RANK_MAHARAJA))
+        self._craft_suit = suit
+        msg = (f'Trade one free copy of every {suit} rank (2–A, {total} cards) '
+               f'for a {suit} Maharaja.\n'
+               'Only free (unlocked) copies count.')
+        if ready >= total:
+            after = f'Ready to craft!  {ready} / {total} ranks available.'
+        else:
+            after = (f'{ready} / {total} ranks ready.\n'
+                     f'Still need a free copy of: {", ".join(missing)}')
+        self._craft_dialogue = DialogueBox(
+            self.window, msg, actions=['Craft', 'cancel'],
+            images=[card_img] if card_img else [],
+            title='Craft Maharaja',
+            message_after_images=after)
+        for button in self._craft_dialogue.buttons:
+            if button.text.lower() == 'craft':
+                button.disabled = ready < total
+
+    def _perform_craft(self):
+        """Execute the craft_maharaja API call and celebrate on success."""
+        suit = self._craft_suit
+        self._craft_dialogue = None
+        self._craft_suit = None
+        if not suit:
+            return
+        ready, total, _missing = _maharaja_craft_progress(
+            self._cards, self._locked, suit)
+        if ready < total:
+            self.state.set_msg('Need one free copy of every rank to craft')
+            return
+        try:
+            result = collection_service.craft_maharaja(suit)
+        except Exception as e:
+            logger.error(f'Craft maharaja failed: {e}')
+            self.state.set_msg('Failed to craft Maharaja card')
+            return
+        if not result or not result.get('success'):
+            self.state.set_msg(
+                (result or {}).get('message') or 'Failed to craft Maharaja card')
+            return
+        self._apply_craft_result(suit, result)
+
+    def _apply_craft_result(self, suit, result):
+        """Apply a successful craft: update stock, celebrate with a reveal."""
+        card = result.get('card') or {}
+        # Optimistically reflect the trade locally; the follow-up fetch makes it
+        # authoritative. One free copy of every rank is consumed.
+        for rank in settings.MAHARAJA_CRAFT_RANKS:
+            key = (suit, rank)
+            self._cards[key] = max(0, int(self._cards.get(key, 0) or 0) - 1)
+        mk_key = (suit, settings.RANK_MAHARAJA)
+        self._cards[mk_key] = int(self._cards.get(mk_key, 0) or 0) + 1
+        # Highlight the new MK cell once the reveal is dismissed.
+        self._pending_reveal_gains = {mk_key: 1}
+        # Celebratory single-card reveal through the booster overlay. tier=3
+        # earns the biggest reveal celebration (rings + sparkles); the impact
+        # annotations make the label/summary read as a brand-new card.
+        reveal_card = {
+            'suit': suit,
+            'rank': settings.RANK_MAHARAJA,
+            'value': int(card.get('value', settings.RANK_TO_VALUE.get(
+                settings.RANK_MAHARAJA, 4))),
+            'tier': 3,
+            '_impact_new_type': self._cards[mk_key] == 1,
+            '_impact_owned_before': self._cards[mk_key] - 1,
+            '_impact_owned_after': self._cards[mk_key],
+            '_impact_free_after': self._cards[mk_key],
+        }
+        from game.components.booster_reveal import BoosterRevealOverlay
+        from utils import sound
+        sound.play('conquer_win')  # big-deal fanfare for a 13-card craft
+        self._reveal_overlay = BoosterRevealOverlay(
+            self.window, [reveal_card], pack_type='main',
+            title=f'{suit} Maharaja Crafted!')
+        self._spawn_maharaja_floater(suit)
+        self.state.set_msg(f'Crafted the {suit} Maharaja!')
+        # Refresh authoritative stock (consumed cards + new MK).
+        self._fetch_collection()
+
+    def _spawn_maharaja_floater(self, suit):
+        """Spawn a rising gold 'Maharaja crafted!' celebration floater."""
+        font = settings.get_font(settings.COLLECT_FLOAT_FONT_SIZE, bold=True)
+        self._floating_text.add(FloatingText(
+            f'{suit} Maharaja!',
+            (_SW // 2, int(0.20 * _SH)),
+            color=settings.COLLECT_FLOAT_GOLD_CLR,
+            duration_ms=settings.COLLECT_FLOAT_DURATION_MS,
+            rise_px=settings.COLLECT_FLOAT_RISE_PX,
+            font=font,
+        ))
+
     # ── sell dialogue ───────────────────────────────────────────────
 
     def _open_sell_dialogue(self, suit, rank):
@@ -1429,19 +1984,34 @@ class CollectionScreen(MenuScreenMixin, Screen):
         onboarding = result.get('onboarding')
         if onboarding and self.state.user_dict is not None:
             self.state.user_dict['onboarding'] = onboarding
-        drawn_cards = result.get('cards', [])
+        drawn_cards = _annotate_booster_impact(
+            result.get('cards', []), self._cards,
+            getattr(self, '_locked', {}))
+        gains = {}
         for c in drawn_cards:
             key = (c['suit'], c['rank'])
-            self._cards[key] = self._cards.get(key, 0) + 1
+            self._cards[key] = c['_impact_owned_after']
+            gains[key] = gains.get(key, 0) + 1
+        self._pending_reveal_gains = gains
         from game.components.booster_reveal import BoosterRevealOverlay
         from utils import sound
         sound.play('booster_open')
         self._reveal_overlay = BoosterRevealOverlay(self.window, drawn_cards, pack_type=pack_type)
 
+    def _activate_recent_reveal_gains(self):
+        gains = dict(getattr(self, '_pending_reveal_gains', {}) or {})
+        self._pending_reveal_gains = {}
+        if not gains:
+            return
+        self._recent_card_gains = gains
+        self._recent_gains_started_at = pygame.time.get_ticks()
+
     def _maybe_show_collection_basics(self):
         """First collection visit during the opening 'open a starter pack' phase:
         a windowed 'collection basics' explainer (cards become recipes) before
         the player opens their first booster."""
+        if not getattr(self, '_data_loaded', False):
+            return
         if getattr(self, '_collection_basics_dialogue', None):
             return
         if not self._menu_coach_allowed_common():
@@ -1455,35 +2025,10 @@ class CollectionScreen(MenuScreenMixin, Screen):
                 or self._trade_dialogue or self._profile_dialogue or self.dialogue_box):
             return
         from game.components.tutorial_window import TutorialWindowDialogue
-        from game.components import tutorial_diagrams as td
+        from game.tutorial_content import collection_basics_pages
         self._collection_basics_dialogue = TutorialWindowDialogue(
             self.window,
-            [
-                {
-                    'title': 'Key And Number Cards',
-                    'layout': 'text_image_text',
-                    'lines': [
-                        'Key cards have jewels. Number cards have numbers.',
-                        'Grey, orange, and golden outlines show card rarity.',
-                        'Golden rare cards are the most valuable.',
-                    ],
-                    'image': lambda: td.card_rarity_code_diagram(),
-                },
-                {
-                    'title': 'Cards Become Actions',
-                    'layout': 'text_image_text',
-                    'lines': [
-                        'Figures, spells, and battle tactics can come from',
-                        'a single card or from a card recipe. But don\'t worry,',
-                        'you don\'t need to memorize all the recipes.',
-                    ],
-                    'image': lambda: td.card_recipe_examples(),
-                    'image_caption': 'Some examples.',
-                    'lines_below': [
-                        'Open a booster pack to add more cards.',
-                    ],
-                },
-            ],
+            collection_basics_pages(),
             title='Your Collection',
         )
 
@@ -1497,9 +2042,6 @@ class CollectionScreen(MenuScreenMixin, Screen):
         if win.update(events) == 'done':
             self._collection_basics_dialogue = None
             self._mark_menu_coach_seen('collection_basics_window')
-            # The window already taught collection basics — skip the small
-            # 'Your Collection' pointer that repeats the same lesson.
-            self._mark_menu_coach_seen('collection_starter_cards')
         return True
 
     def _maybe_show_starter_present(self):
@@ -1523,22 +2065,10 @@ class CollectionScreen(MenuScreenMixin, Screen):
                 or self._trade_dialogue or self._profile_dialogue or self.dialogue_box):
             return
         from game.components.tutorial_window import TutorialWindowDialogue
-        from game.components import tutorial_diagrams as td
+        from game.tutorial_content import starter_present_pages
         self._starter_present_dialogue = TutorialWindowDialogue(
             self.window,
-            [
-                {
-                    'title': 'Your Starter Set',
-                    'layout': 'image_top',
-                    'image': lambda: td.suit_roulette_diagram(),
-                    'image_caption': 'One of the four suits — drawn at random.',
-                    'lines': [
-                        'To get you going, we want to equip you with',
-                        'a random starter set of cards.',
-                        'Spin the roulette to reveal which suit you received.',
-                    ],
-                },
-            ],
+            starter_present_pages(),
             title='Starter Cards',
         )
 
@@ -1605,16 +2135,6 @@ class CollectionScreen(MenuScreenMixin, Screen):
             return None
         completed = self._onboarding_completed_steps()
         next_action = self._first_session_next_action()
-        if 'collection_starter_cards' not in self._menu_coach_seen():
-            return {
-                'id': 'collection_starter_cards',
-                'rect': self._panel_rect,
-                'title': 'Your Collection',
-                'body': 'These are the cards you combine into figures, spells and tactics. Open boosters to add more recipes.',
-                'action': 'next',
-                'button_label': 'Got it',
-                'max_lines': 4,
-            }
         if ((next_action or {}).get('screen') == 'kingdom'
                 and 'finish_first_conquer_battle' not in completed):
             home_icon = getattr(self, '_icon_home', None)
@@ -1623,7 +2143,7 @@ class CollectionScreen(MenuScreenMixin, Screen):
                 'id': 'post_boosters_kingdom',
                 'rect': target_rect,
                 'title': 'Go To Kingdom',
-                'body': 'Your starter attack is ready. Go to Kingdom and pick the recommended land for your first conquest.',
+                'body': 'Your starter set makes a ready-to-go attack. Head to your Kingdom to conquer your first land.',
                 'action': 'next',
                 'button_label': 'Go to Kingdom',
                 'navigate_screen': 'kingdom',
@@ -1635,7 +2155,7 @@ class CollectionScreen(MenuScreenMixin, Screen):
                 'id': 'collection_open_main_booster',
                 'rect': self._btn_open_main_rect,
                 'title': 'Open A Main Booster',
-                'body': 'Open a main booster. Main cards are ingredients for figure, spell, and tactic recipes.',
+                'body': 'Tap here to open your first main booster.',
                 'action': 'click',
                 'mark_on_click': True,
                 'max_lines': 4,
@@ -1807,7 +2327,7 @@ class CollectionScreen(MenuScreenMixin, Screen):
         self._maybe_show_starter_reveal()
 
         # Re-fetch if data never loaded (e.g. screen was created before login)
-        if not self._data_loaded and not self._poller:
+        if not self._data_loaded and not self._poller and not self._load_error:
             ud = getattr(self.state, 'user_dict', None) or {}
             self._gold = ud.get('gold', 0)
             self._boosters = ud.get('booster_packs', 0)
@@ -1817,13 +2337,23 @@ class CollectionScreen(MenuScreenMixin, Screen):
         # Check background poller
         if self._poller and self._poller.has_result():
             try:
-                self._apply_collection_data(self._poller.result)
+                result = self._poller.result
+                if not isinstance(result, dict):
+                    raise ValueError('Collection response was empty')
+                self._apply_collection_data(result)
             except Exception as e:
                 logger.error(f'Failed to apply collection data: {e}')
+                self._refreshing = False
+                self._load_error = 'Could not load collection'
             self._poller = None
-        # Clear a failed/stale poller so re-fetch can trigger next frame
+        # A poller that ends without publishing a result normally means the
+        # service call raised. Preserve cached cards and expose an explicit retry.
         elif self._poller and not self._poller.busy:
             self._poller = None
+            self._refreshing = False
+            self._load_error = 'Could not load collection'
+            if self._data_loaded:
+                self.state.set_msg('Could not refresh collection')
 
         self._update_booster_request()
 
@@ -1840,6 +2370,9 @@ class CollectionScreen(MenuScreenMixin, Screen):
                 btn.update()
         if self._profile_dialogue:
             for btn in self._profile_dialogue.buttons:
+                btn.update()
+        if self._craft_dialogue:
+            for btn in self._craft_dialogue.buttons:
                 btn.update()
 
     def handle_events(self, events):
@@ -1878,6 +2411,11 @@ class CollectionScreen(MenuScreenMixin, Screen):
                 self._trade_target_rects = {}
             if self._profile_dialogue:
                 self._profile_dialogue = None
+                self._profile_card = None
+                self._profile_pinned_tooltip = None
+            if self._craft_dialogue:
+                self._craft_dialogue = None
+                self._craft_suit = None
             return
         if self.dialogue_box:
             return
@@ -1907,6 +2445,7 @@ class CollectionScreen(MenuScreenMixin, Screen):
                     done = self._reveal_overlay.handle_click(event.pos)
                     if done:
                         self._reveal_overlay = None
+                        self._activate_recent_reveal_gains()
                 continue
 
             # Sell dialogue captures input
@@ -1969,6 +2508,23 @@ class CollectionScreen(MenuScreenMixin, Screen):
                         self._update_trade_after_text()
                 continue
 
+            # Craft dialogue captures input (Maharaja — no sell/trade)
+            if self._craft_dialogue:
+                if event.type == MOUSEBUTTONUP and getattr(event, 'button', 0) == 1:
+                    # Click outside the dialogue box → close without action
+                    if (not self._craft_dialogue.rect.collidepoint(event.pos)
+                            and pygame.time.get_ticks() - self._craft_dialogue._created_at >= 200):
+                        self._craft_dialogue = None
+                        self._craft_suit = None
+                        continue
+                    response = self._craft_dialogue.update([event])
+                    if response == 'craft':
+                        self._perform_craft()
+                    elif response in ('cancel', 'ok', 'close'):
+                        self._craft_dialogue = None
+                        self._craft_suit = None
+                continue
+
             # Profile dialogue captures input
             if self._profile_dialogue:
                 if event.type == MOUSEBUTTONUP and getattr(event, 'button', 0) == 1:
@@ -1976,10 +2532,28 @@ class CollectionScreen(MenuScreenMixin, Screen):
                     if (not self._profile_dialogue.rect.collidepoint(event.pos)
                             and pygame.time.get_ticks() - self._profile_dialogue._created_at >= 200):
                         self._profile_dialogue = None
+                        self._profile_card = None
+                        self._profile_pinned_tooltip = None
                         continue
+                    tooltip = self._profile_dialogue.get_tooltip(event.pos)
+                    if tooltip:
+                        self._profile_pinned_tooltip = tooltip
+                        self._profile_pinned_tooltip_pos = event.pos
+                        continue
+                    self._profile_pinned_tooltip = None
                     response = self._profile_dialogue.update([event])
-                    if response in ('close', 'ok', 'cancel'):
+                    profile_card = self._profile_card
+                    if response == 'sell copies' and profile_card:
                         self._profile_dialogue = None
+                        self._profile_card = None
+                        self._open_sell_dialogue(*profile_card)
+                    elif response == 'convert' and profile_card:
+                        self._profile_dialogue = None
+                        self._profile_card = None
+                        self._open_trade_dialogue(*profile_card)
+                    elif response in ('close', 'ok', 'cancel'):
+                        self._profile_dialogue = None
+                        self._profile_card = None
                 continue
 
             if self._handle_icon_events(event):
@@ -1991,6 +2565,7 @@ class CollectionScreen(MenuScreenMixin, Screen):
                     and not self._sell_dialogue
                     and not self._trade_dialogue
                     and not self._profile_dialogue
+                    and not self._craft_dialogue
                     and not self._reveal_overlay
                     and not pygame.Rect(_BOX_X, _BOX_Y, _BOX_W, _BOX_H).collidepoint(event.pos)):
                 self.state.screen = 'game_menu'
@@ -2002,13 +2577,17 @@ class CollectionScreen(MenuScreenMixin, Screen):
                     self.state.screen = 'game_menu'
                     continue
                 if self._btn_open_main_rect.collidepoint(event.pos):
-                    if self._boosters > 0:
+                    if not self._data_loaded:
+                        self.state.set_msg('Wait for the collection to load')
+                    elif self._boosters > 0:
                         self._confirm_open_booster('main')
                     else:
                         self.state.set_msg('No main booster packs to open')
                     continue
                 if self._btn_open_side_rect.collidepoint(event.pos):
-                    if self._boosters_side > 0:
+                    if not self._data_loaded:
+                        self.state.set_msg('Wait for the collection to load')
+                    elif self._boosters_side > 0:
                         self._confirm_open_booster('side')
                     else:
                         self.state.set_msg('No side booster packs to open')
@@ -2026,25 +2605,20 @@ class CollectionScreen(MenuScreenMixin, Screen):
                         self.state.set_msg('Not enough gold')
                     continue
 
-                # Mode toggle buttons (Sell / Trade)
-                _mode_clicked = None
-                for _mode_key, _mode_rect in self._mode_btn_rects.items():
-                    if _mode_rect.collidepoint(event.pos):
-                        _mode_clicked = _mode_key
-                        break
-                if _mode_clicked:
-                    self._toggle_mode(_mode_clicked)
+                if (not self._data_loaded and self._load_error
+                        and self._retry_rect.collidepoint(event.pos)):
+                    self._fetch_collection()
                     continue
 
-                # Card clicks (only within panel) — behaviour depends on mode
-                if self._panel_rect.collidepoint(event.pos):
-                    for rect, suit, rank, section in self._card_rects:
-                        if rect.collidepoint(event.pos):
-                            if self._mode == 'sell':
-                                self._open_sell_dialogue(suit, rank)
-                            elif self._mode == 'trade':
-                                self._open_trade_dialogue(suit, rank)
-                            else:
-                                # Default mode — show profile for any card (owned or not)
-                                self._open_profile_dialogue(suit, rank)
-                            break
+                if (self._data_loaded
+                        and self._locked_toggle_rect.collidepoint(event.pos)):
+                    self._show_locked_cards = not self._show_locked_cards
+                    continue
+
+                # Card taps always inspect; economic actions are contextual
+                # buttons inside the profile instead of persistent global modes.
+                if self._data_loaded and self._panel_rect.collidepoint(event.pos):
+                    card = self._card_at_pos(event.pos)
+                    if card:
+                        suit, rank, _section = card
+                        self._open_profile_dialogue(suit, rank)

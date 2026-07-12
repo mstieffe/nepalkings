@@ -427,15 +427,13 @@ class TestDefenceDraftFlow:
         mock_discard.assert_called_once()
         assert state.screen == 'game_menu'
 
-    def test_save_confirm_saves_draft_and_navigates(self):
+    def test_save_ready_defence_saves_draft_and_navigates(self):
         from game.screens.defence_screen import DefenceScreen
         state = _make_state()
         screen = DefenceScreen(state)
-        state.action = {'status': 'confirm'}
-        screen._pending_save_confirm = True
 
         with patch.object(screen, '_server_save_draft', return_value=True) as mock_save:
-            screen.handle_events([])
+            screen._save_ready_defence()
 
         mock_save.assert_called_once()
         assert state.screen == 'kingdom'
@@ -499,55 +497,49 @@ class TestVictoryReviewSkip:
         assert state.screen == 'defence'
 
 
-class TestDefenceConfirmData:
+class TestDefenceLootRiskTutorial:
 
-    def test_save_confirmation_lists_all_committed_cards_as_loot_risk(self):
+    def test_save_defence_shows_one_time_loot_tutorial_before_save(self):
         from game.screens.defence_screen import DefenceScreen
         import pygame
         state = _make_state()
+        state.user_dict = {'onboarding': {'menu_hints_seen': []}}
         screen = DefenceScreen(state)
-        screen._land = {
-            'tier': 2,
-            'kingdom_bonuses': {'loot_chance': 0.15},
-        }
-        screen._config = _make_config(
-            figures=[{
-                'id': 1,
-                'name': 'Guard',
-                'card_details': [{'suit': 'Hearts', 'rank': '7'}],
-            }],
-            battle_moves=[{
-                'id': 2,
-                'card_id': 20,
-                'round_index': 0,
-                'suit': 'Spades',
-                'rank': 'Q',
-            }],
-            prelude_spell_name='Health Boost',
-            prelude_spell_card_details=[{'suit': 'Clubs', 'rank': '3'}],
-            counter_spell_name='Poison',
-            counter_spell_card_details=[{'suit': 'Diamonds', 'rank': '8'}],
-        )
+        screen._is_defence_ready = lambda: True
+        screen._server_validate_draft = lambda: {'success': True}
+        seen = []
+        screen._mark_menu_coach_seen = seen.append
 
-        class _FakeCardImg:
-            def __init__(self, window, suit, rank):
-                self.front_img = pygame.Surface((70, 100), pygame.SRCALPHA)
+        with patch.object(screen, '_server_save_draft', return_value=True) as mock_save:
+            screen._on_save_click()
+            assert screen._loot_risk_tutorial_dialogue is not None
+            mock_save.assert_not_called()
 
-        with patch('game.components.cards.card_img.CardImg', _FakeCardImg):
-            msg, image_groups, after_msg = screen._build_confirm_data()
+            win = screen._loot_risk_tutorial_dialogue
+            win._created_at = pygame.time.get_ticks() - 1000
+            event = pygame.event.Event(
+                pygame.MOUSEBUTTONUP, button=1, pos=win._btn_next.rect.center)
+            screen.handle_events([event])
 
-        assert 'committed to this defence' in msg
-        assert [group['key'] for group in image_groups] == ['loot_risk']
-        group = image_groups[0]
-        assert group['icon'] == 'lock'
-        assert group['badge_icon'] == 'lock'
-        assert len(group['items']) == 4
-        assert 'Locked now:' in group['description']
-        assert 'Loot risk:' in group['description']
-        assert 'attacker loots 3 of these 4 cards' in group['description']
-        assert 'Tier 2 quota' in group['description']
-        assert 'does not increase losses from these defence cards' in group['description']
-        assert 'does not consume cards by itself' in after_msg
+        assert seen == ['loot_risk_intro']
+        mock_save.assert_called_once()
+        assert state.screen == 'kingdom'
+        assert screen._loot_risk_tutorial_dialogue is None
+
+    def test_save_defence_skips_loot_tutorial_once_seen(self):
+        from game.screens.defence_screen import DefenceScreen
+        state = _make_state()
+        state.user_dict = {'onboarding': {'menu_hints_seen': ['loot_risk_intro']}}
+        screen = DefenceScreen(state)
+        screen._is_defence_ready = lambda: True
+        screen._server_validate_draft = lambda: {'success': True}
+
+        with patch.object(screen, '_server_save_draft', return_value=True) as mock_save:
+            screen._on_save_click()
+
+        assert screen._loot_risk_tutorial_dialogue is None
+        mock_save.assert_called_once()
+        assert state.screen == 'kingdom'
 
 
 class TestPreludeSpellIcons:
@@ -586,8 +578,12 @@ class TestPreludeSpellIcons:
 
         event = pygame.event.Event(
             pygame.MOUSEBUTTONUP, button=1, pos=screen._prelude_x_rect.center)
-        screen.handle_events([event])
-        assert screen._pending_prelude_clear is True
+        # Removals are free draft edits — the spell clears immediately,
+        # without a confirmation dialog.
+        with patch.object(screen, '_server_clear_prelude_spell') as mock_clear:
+            screen.handle_events([event])
+            mock_clear.assert_called_once()
+        assert screen.dialogue_box is None
 
 
 class TestAutoGambleToggle:
@@ -756,7 +752,7 @@ class TestDefenceScreenLayout:
         assert abs(rect.centerx - settings.SCREEN_WIDTH // 2) <= 1
         assert abs(rect.centery - settings.SCREEN_HEIGHT // 2) <= 1
 
-    def test_config_figures_hide_duel_only_checkmate_text(self):
+    def test_config_figures_show_live_defence_checkmate_rule(self):
         from game.screens.defence_screen import DefenceScreen
         state = _make_state()
         screen = DefenceScreen(state)
@@ -771,9 +767,9 @@ class TestDefenceScreenLayout:
             'checkmate': True,
         }, {'Himalaya Maharaja': family})
 
-        assert fig.checkmate is False
-        assert 'checkmate' not in fig.description.lower()
-        assert 'checkmate' not in fig.family.description.lower()
+        assert fig.checkmate is True
+        assert 'checkmate' in fig.description.lower()
+        assert 'checkmate' in fig.family.description.lower()
 
     def test_config_figures_hide_instant_advance_in_defence(self):
         from game.screens.defence_screen import DefenceScreen
@@ -919,12 +915,26 @@ controls = [
 for rect in controls:
     assert not rect.colliderect(screen._move_slots_rect), (
         tuple(rect), tuple(screen._move_slots_rect))
+    assert rect.h >= settings.TOUCH_COMPACT_MIN
 info = screen._info_button_rects['battle_plan']
 assert not screen._btn_auto_gamble_inc.colliderect(info)
 caption_x = screen._counter_spell_rect.right + int(0.012 * settings.SCREEN_WIDTH)
 caption_right = screen._counter_panel_rect.right - int(0.010 * settings.SCREEN_WIDTH)
 caption_w = max(0, caption_right - caption_x)
 assert screen._res_font.size('No counter')[0] <= caption_w
+
+records = []
+screen._draw_section_panel = (
+    lambda rect, title, *, description=None, icon_rect=None, title_pos=None:
+        records.append((title, description))
+)
+screen._draw_info_buttons = lambda: None
+screen._draw_right_panels()
+assert records == [
+    ('Battle Plan', None),
+    ('Prelude Spell', None),
+    ('Defender Response', None),
+]
 pygame.quit()
 ''')
 
@@ -967,11 +977,30 @@ pygame.quit()
         screen._build_layout()
 
         assert set(screen._info_button_rects) == {
-            'battle_plan', 'prelude_spell', 'defender_response'
+            'battle_plan', 'prelude_spell', 'defender_response', 'auto_gamble'
         }
         assert screen._battle_plan_rect.contains(screen._info_button_rects['battle_plan'])
         assert screen._prelude_panel_rect.contains(screen._info_button_rects['prelude_spell'])
         assert screen._counter_panel_rect.contains(screen._info_button_rects['defender_response'])
+        # The auto-gamble (i) sits in the Battle Plan panel next to the stepper.
+        assert screen._battle_plan_rect.contains(screen._info_button_rects['auto_gamble'])
+
+    def test_auto_gamble_info_button_opens_popup(self):
+        from game.screens.defence_screen import DefenceScreen
+        import pygame
+        state = _make_state()
+        screen = DefenceScreen(state)
+        screen._land_id = 7
+        screen._config = _make_config()
+        screen._build_layout()
+
+        event = pygame.event.Event(
+            pygame.MOUSEBUTTONUP,
+            button=1,
+            pos=screen._info_button_rects['auto_gamble'].center,
+        )
+        screen.handle_events([event])
+        assert screen._active_info_key == 'auto_gamble'
 
     def test_info_button_click_opens_section_info(self):
         from game.screens.defence_screen import DefenceScreen
@@ -1325,5 +1354,116 @@ class TestCounterSpellIcons:
 
         event = pygame.event.Event(
             pygame.MOUSEBUTTONUP, button=1, pos=screen._counter_x_rect.center)
-        screen.handle_events([event])
-        assert screen._pending_counter_clear is True
+        # Removals are free draft edits — the spell clears immediately,
+        # without a confirmation dialog.
+        with patch.object(screen, '_server_clear_counter_spell') as mock_clear:
+            screen.handle_events([event])
+            mock_clear.assert_called_once()
+        assert screen.dialogue_box is None
+
+
+class TestDefenceConfigPolish:
+
+    class _FakePoller:
+        def __init__(self, result):
+            self._result = result
+            self.busy = False
+
+        def has_result(self):
+            return True
+
+        @property
+        def result(self):
+            return self._result
+
+    def _drain_with_config(self, screen, cfg):
+        screen._config_poller = self._FakePoller({
+            'config_data': {'config': cfg, 'land': {'tier': 1}},
+            'collection_data': {'cards': []},
+        })
+        screen._config_poller_land_id = screen._land_id
+        with patch.object(screen, '_rebuild_figure_objects'):
+            screen._drain_config_poller()
+
+    def test_load_does_not_force_spell_target_selection(self):
+        """A fresh load with a target-less Health Boost must not hijack the
+        player into the dim target-pick overlay (passive caption suffices)."""
+        from game.screens.defence_screen import DefenceScreen
+        state = _make_state()
+        screen = DefenceScreen(state)
+        screen._land_id = 7
+        cfg = _make_config(
+            prelude_spell_name='Health Boost',
+            figures=[{'id': 1, 'field': 'castle'}],
+        )
+        self._drain_with_config(screen, cfg)
+        assert screen._selecting_spell_target is None
+
+    def test_reload_after_subscreen_prompts_spell_target(self):
+        """Right after the player picked a spell in the subscreen, the reload
+        does prompt for the missing Health Boost target."""
+        from game.screens.defence_screen import DefenceScreen
+        state = _make_state()
+        screen = DefenceScreen(state)
+        screen._land_id = 7
+        screen._prompt_spell_target_on_next_load = True
+        cfg = _make_config(
+            prelude_spell_name='Health Boost',
+            figures=[{'id': 1, 'field': 'castle'}],
+        )
+        self._drain_with_config(screen, cfg)
+        assert screen._selecting_spell_target == 'prelude'
+        assert screen._prompt_spell_target_on_next_load is False
+
+    def test_close_subscreen_uses_async_loader_and_flags_prompt(self):
+        from game.screens.defence_screen import DefenceScreen
+        state = _make_state()
+        screen = DefenceScreen(state)
+        screen._land_id = 7
+        screen._active_subscreen = 'prelude_spell'
+        screen._subscreen_obj = MagicMock()
+
+        with patch.object(screen, '_start_config_load') as async_load, \
+                patch.object(screen, '_load_config') as sync_load:
+            screen._close_subscreen()
+
+        async_load.assert_called_once()
+        sync_load.assert_not_called()
+        assert screen._active_subscreen is None
+        assert screen._prompt_spell_target_on_next_load is True
+
+    def test_empty_move_slot_click_opens_battle_shop(self):
+        from game.screens.defence_screen import DefenceScreen
+        import pygame
+        state = _make_state()
+        screen = DefenceScreen(state)
+        screen._land_id = 7
+        screen._config = _make_config()
+        screen._build_layout()
+        screen._draw_battle_move_slots()
+        assert set(screen._empty_move_slot_rects) == {0, 1, 2}
+
+        event = pygame.event.Event(
+            pygame.MOUSEBUTTONUP, button=1,
+            pos=screen._empty_move_slot_rects[0].center)
+        with patch.object(screen, '_open_battle_shop') as mock_open:
+            screen.handle_events([event])
+            mock_open.assert_called_once()
+
+    def test_error_retry_click_reloads_config(self):
+        from game.screens import defence_screen as module
+        import pygame
+        state = _make_state()
+        screen = module.DefenceScreen(state)
+        screen._land_id = 7
+        screen._error = 'Connection error'
+        sw = module.settings.SCREEN_WIDTH
+        sh = module.settings.SCREEN_HEIGHT
+        screen._btn_retry = pygame.Rect(sw // 2 - 40, sh // 2, 80, 40)
+
+        event = pygame.event.Event(
+            pygame.MOUSEBUTTONUP, button=1, pos=screen._btn_retry.center)
+        with patch.object(screen, '_start_config_load') as mock_load:
+            screen.handle_events([event])
+        assert screen._error is None
+        mock_load.assert_called_once()

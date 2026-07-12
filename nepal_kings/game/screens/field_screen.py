@@ -1,10 +1,12 @@
 # Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
 # See LICENSE file in the project root for full license information.
+import math
 import pygame
 from pygame.locals import *
 from config import settings
 from game.core.figure_buffs import apply_buffs_allies_to_icon_map
 from game.components.conquer_layout import compute_conquer_layout
+from game.components.easing import ease_out_back
 from game.screens.sub_screen import SubScreen
 from game.components.figures.figure_manager import FigureManager
 from game.components.figures.figure import Figure
@@ -55,6 +57,13 @@ class FieldScreen(SubScreen):
         # by the conquer game screen to re-blit figures on top of the duel
         # lane so figure info boxes stay in the foreground.
         self._last_drawn_figure_layout = None
+        # Figure entrance cascade (draw-only): stamped when the conquer
+        # battle screen opens (see begin_figure_entrance_cascade); figures
+        # slide up into their compartments with a small overshoot.  Offsets
+        # apply to the DRAW position only — the icon's logical position is
+        # restored right after, so hover/click hit-testing is unaffected.
+        self._figure_entrance_anims = {}
+        self._figure_entrance_cascade_pending = False
         self.last_figure_ids = set()  # Track the last set of figure IDs
         self.last_enchantment_state = {}  # Track enchantment state for each figure
         self.last_player_id = None  # Track the last player ID to detect player changes
@@ -121,6 +130,111 @@ class FieldScreen(SubScreen):
 
         self.init_field_compartments()
 
+    # ── Figure entrance cascade (draw-only) ─────────────────────────
+
+    FIGURE_ENTRANCE_MS = 380
+    FIGURE_ENTRANCE_STAGGER_MS = 60
+
+    def begin_figure_entrance_cascade(self):
+        """Request a staggered slide-in of all field figures.
+
+        Called by the conquer battle screen on entry; the cascade stamps
+        itself on the first subsequent draw that actually has figures (so
+        async figure loads are waited out naturally).
+        """
+        self._figure_entrance_cascade_pending = True
+        self._figure_entrance_anims = {}
+
+    def _figure_icon_rect(self, figure_id):
+        """On-screen rect of a figure's icon, or ``None`` (fail-soft)."""
+        icon = (self.icon_cache or {}).get(figure_id)
+        if icon is None:
+            for candidate in self.figure_icons or []:
+                if getattr(getattr(candidate, 'figure', None), 'id', None) == figure_id:
+                    icon = candidate
+                    break
+        if icon is None:
+            return None
+        rect = getattr(icon, 'rect_frame', None) or getattr(icon, 'rect_icon', None)
+        return pygame.Rect(rect) if rect is not None else None
+
+    def note_new_figures(self, figure_ids):
+        """Give newly-appeared figures an entrance pop (subset cascade).
+
+        Unlike :meth:`begin_figure_entrance_cascade` this does not clear
+        existing records — only the listed ids animate in, e.g. when the
+        opponent builds a figure between polls.
+        """
+        now = pygame.time.get_ticks()
+        for index, fig_id in enumerate(figure_ids):
+            if fig_id is None:
+                continue
+            self._figure_entrance_anims[str(fig_id)] = {
+                'started_at': now + index * self.FIGURE_ENTRANCE_STAGGER_MS,
+            }
+
+    def _stamp_figure_entrance_cascade(self, positioned_icons):
+        """Assign staggered entrance records for the pending cascade.
+
+        ``positioned_icons`` is the frame's [(icon, x, y), ...] draw list;
+        stagger order is left-to-right, top-to-bottom so the board sweeps
+        in rather than popping at once.
+        """
+        if not self._figure_entrance_cascade_pending or not positioned_icons:
+            return
+        self._figure_entrance_cascade_pending = False
+        now = pygame.time.get_ticks()
+        ordered = sorted(positioned_icons, key=lambda item: (item[1], item[2]))
+        for index, (icon, _x, _y) in enumerate(ordered):
+            fig_id = getattr(getattr(icon, 'figure', None), 'id', None)
+            if fig_id is None:
+                continue
+            self._figure_entrance_anims[str(fig_id)] = {
+                'started_at': now + index * self.FIGURE_ENTRANCE_STAGGER_MS,
+            }
+
+    def _figure_entrance_offset(self, icon):
+        """(dx, dy) DRAW offset for an entering figure; (0, 0) once settled."""
+        anims = self._figure_entrance_anims
+        if not anims:
+            return 0, 0
+        fig_id = getattr(getattr(icon, 'figure', None), 'id', None)
+        rec = anims.get(str(fig_id))
+        if rec is None:
+            return 0, 0
+        slide = max(18, int(0.028 * settings.SCREEN_HEIGHT))
+        try:
+            t = ((pygame.time.get_ticks() - int(rec['started_at']))
+                 / max(1, self.FIGURE_ENTRANCE_MS))
+        except Exception:
+            anims.pop(str(fig_id), None)
+            return 0, 0
+        if t >= 1.0:
+            anims.pop(str(fig_id), None)
+            return 0, 0
+        if t <= 0.0:
+            return 0, slide
+        return 0, int((1.0 - ease_out_back(t)) * slide)
+
+    def _draw_icon_with_entrance(self, icon, x, y):
+        """Draw a figure icon honouring its entrance offset.
+
+        ``FieldFigureIcon.draw`` moves the icon's logical rects via
+        ``set_position`` and hover keys off them, so after an offset draw
+        the resting position is restored immediately.
+        """
+        dx, dy = self._figure_entrance_offset(icon)
+        if not dx and not dy:
+            icon.draw(x, y)
+            return
+        try:
+            icon.draw(x + dx, y + dy)
+        finally:
+            try:
+                icon.set_position(x, y)
+            except Exception:
+                pass
+
     def reset_state(self):
         """Reset all game-specific transient state.
 
@@ -133,6 +247,8 @@ class FieldScreen(SubScreen):
         self.last_enchantment_state = {}
         self.last_player_id = None
         self._last_figures_version = -1
+        self._figure_entrance_anims = {}
+        self._figure_entrance_cascade_pending = False
         self.categorized_figures = {
             'self': {'castle': [], 'village': [], 'military': []},
             'opponent': {'castle': [], 'village': [], 'military': []}
@@ -185,6 +301,32 @@ class FieldScreen(SubScreen):
             self.load_figures()
             figures_reloaded = True
         self._sync_tactics_hand_support_visibility(force=figures_reloaded)
+        self._sync_hidden_prelude_target_mode()
+
+    def _sync_hidden_prelude_target_mode(self):
+        """Enable hidden-icon hover while a Copy Figure target is pending.
+
+        Copy Figure targets opponent figures that render as hidden icons —
+        without the defender-selection hover mode those icons would never
+        register hover/clicks.  The hidden frames themselves stay face-down;
+        only selectability is toggled (no name/power/card reveal).
+        """
+        pending = getattr(self.state, 'pending_conquer_prelude_target', None)
+        scope = pending.get('target_scope') if isinstance(pending, dict) else None
+        if scope != 'opponent_hidden':
+            return
+        valid_keys = {str(fig_id) for fig_id in (pending.get('valid_target_ids') or [])}
+        own_player_id = getattr(self.game, 'player_id', None) if self.game else None
+        for icon in getattr(self, 'figure_icons', []) or []:
+            figure = getattr(icon, 'figure', None)
+            if figure is None:
+                continue
+            icon.in_defender_selection_mode = True
+            is_opponent = getattr(figure, 'player_id', None) != own_player_id
+            icon.defender_selectable = bool(
+                is_opponent
+                and (not valid_keys or self._figure_id_key(figure) in valid_keys)
+            )
 
     def update_hover_state(self, pos=None):
         """Update hover state for figure icons from the current cursor or event pos."""
@@ -214,6 +356,8 @@ class FieldScreen(SubScreen):
             'Civil War': 'civil_war.png',
             'Peasant War': 'peasant_war.png',
             'Blitzkrieg': 'blitzkrieg.png',
+            'Royal Decree': 'kings_war.png',
+            'Landslide': 'landslide.png',
         }
         for modifier_name, filename in modifier_types.items():
             icon_path = os.path.join(icon_dir, filename)
@@ -226,6 +370,29 @@ class FieldScreen(SubScreen):
         """Return a list with the modifier icon surface if available, else empty list."""
         icon = self._battle_modifier_icons.get(modifier_name)
         return [icon] if icon else []
+
+    def _battle_required_field_mode(self):
+        """Return (required_field, modifier_name) for the active battle modifiers.
+
+        ``('castle', 'Royal Decree')``, ``('village', 'Peasant War'/'Civil War')``
+        or ``(None, None)``.  Royal Decree has precedence over the
+        village-only modifiers.
+        """
+        game = self.game
+        modifiers = game.battle_modifier if game and isinstance(game.battle_modifier, list) else []
+        types = [m.get('type') for m in modifiers if isinstance(m, dict)]
+        if 'Royal Decree' in types:
+            return 'castle', 'Royal Decree'
+        if 'Peasant War' in types:
+            return 'village', 'Peasant War'
+        if 'Civil War' in types:
+            return 'village', 'Civil War'
+        return None, None
+
+    def _required_field_message(self, required_field, modifier_name, action='be selected'):
+        if required_field == 'castle':
+            return f"{modifier_name} is active — only castle figures can {action}."
+        return f"{modifier_name} is active — only village figures can {action}."
 
     def _load_slot_icons(self):
         """Load and prepare slot icons for compartment backgrounds."""
@@ -337,23 +504,33 @@ class FieldScreen(SubScreen):
         self.window.blit(panel, rect.topleft)
 
     def _get_opponent_hand_cards(self):
-        """Get opponent's hand cards (not in deck, not part of figure)."""
+        """Get opponent's hand cards (not in deck, not part of figure).
+
+        In tactics-hand conquer games, cards backing the opponent's unplayed
+        tactics (``part_of_battle_move``) are NOT hand cards — they render as
+        the face-down fan on the opponent hand strip. Including them here
+        would double-count and inflate the All Seeing Eye hand display.
+        """
         opponent_id = self.game.opponent_player.get('id') if self.game.opponent_player else None
         if not opponent_id:
             return [], []
-        
-        # Filter main cards (cards are dictionaries from server)
-        opponent_main_cards = [
-            card for card in self.game.main_cards
-            if card.get('player_id') == opponent_id and not card.get('in_deck') and not card.get('part_of_figure')
-        ]
-        
-        # Filter side cards (cards are dictionaries from server)
-        opponent_side_cards = [
-            card for card in self.game.side_cards
-            if card.get('player_id') == opponent_id and not card.get('in_deck') and not card.get('part_of_figure')
-        ]
-        
+
+        exclude_battle_move_cards = (
+            getattr(self.game, 'mode', 'duel') == 'conquer'
+            and getattr(self.game, 'conquer_move_model', 'battle_move') == 'tactics_hand'
+        )
+
+        def _in_hand(card):
+            if card.get('player_id') != opponent_id:
+                return False
+            if card.get('in_deck') or card.get('part_of_figure'):
+                return False
+            if exclude_battle_move_cards and card.get('part_of_battle_move'):
+                return False
+            return True
+
+        opponent_main_cards = [c for c in self.game.main_cards if _in_hand(c)]
+        opponent_side_cards = [c for c in self.game.side_cards if _in_hand(c)]
         return opponent_main_cards, opponent_side_cards
 
     def load_figures(self):
@@ -461,7 +638,17 @@ class FieldScreen(SubScreen):
                 for stale_id in stale_ids:
                     if stale_id in self.icon_cache:
                         del self.icon_cache[stale_id]
-                
+
+                # New figures (built between polls) pop in — duel only;
+                # conquer choreographs its own replay/ghost entrances, and
+                # the first load is covered by the entrance cascade.
+                if (self.last_figure_ids
+                        and not self._figure_entrance_cascade_pending
+                        and getattr(self.game, 'mode', 'duel') != 'conquer'):
+                    new_ids = current_figure_ids - self.last_figure_ids
+                    if new_ids:
+                        self.note_new_figures(sorted(new_ids, key=str))
+
                 # check if the figure is opponent or not
                 self._generate_figure_icons()
                 self.last_figure_ids = current_figure_ids
@@ -734,7 +921,7 @@ class FieldScreen(SubScreen):
         # Use cached status if available, otherwise check and cache
         current_time = pygame.time.get_ticks()
         if self.cached_all_seeing_eye_status is None or current_time - self.last_all_seeing_eye_check > self.all_seeing_eye_check_interval:
-            self.cached_all_seeing_eye_status = self.game.has_active_all_seeing_eye()
+            self.cached_all_seeing_eye_status = self._all_seeing_eye_revealed()
             self.last_all_seeing_eye_check = current_time
         
         conquer_revealed_support_ids = self._tactics_hand_revealed_support_figure_ids()
@@ -875,7 +1062,21 @@ class FieldScreen(SubScreen):
                                 # Success message
                                 card_count = result.get('main_card_count', 0) + result.get('side_card_count', 0)
                                 logger.debug(f"Successfully picked up {self.figure_pending_pickup.name}. {card_count} cards returned to hand.")
-                                
+
+                                # Cards-return-to-hand feedback (rect captured
+                                # before the refresh drops the icon).
+                                fx = self._fx_layer()
+                                if fx is not None:
+                                    rect = self._figure_icon_rect(self.figure_pending_pickup.id)
+                                    if rect is not None:
+                                        hand_rect = pygame.Rect(
+                                            int(settings.MAIN_HAND_X), int(settings.MAIN_HAND_Y), 48, 48)
+                                        fx.spawn_copy_ghost(rect, hand_rect,
+                                                            color=(238, 206, 130),
+                                                            secondary=(255, 245, 200))
+                                from utils import sound
+                                sound.play('card_slide')
+
                                 # Refresh game state (cards, turn, figures) from server
                                 # (update() -> _apply_game_dict -> unlock_actions)
                                 self.game.update()
@@ -918,6 +1119,15 @@ class FieldScreen(SubScreen):
                             if result.get('success'):
                                 from utils import sound
                                 sound.play('card_slide')
+                                fx = self._fx_layer()
+                                if fx is not None:
+                                    rect = self._figure_icon_rect(figure.id)
+                                    if rect is not None:
+                                        fx.spawn_burst(rect, (238, 206, 130),
+                                                       secondary=(255, 245, 200),
+                                                       count=18, upward_bias=0.5)
+                                        fx.spawn_floating_text_at_rect(
+                                            rect, 'ADVANCE!', (238, 206, 130))
                                 logger.debug(f"[FIELD] Advanced {figure.name} successfully")
                                 self.state.set_msg(f"Advanced {figure.name} toward battle!")
                                 # Update game state from response
@@ -1216,6 +1426,18 @@ class FieldScreen(SubScreen):
                                 # Success message
                                 logger.debug(f"Successfully upgraded {self.figure_pending_upgrade.name} to {self.figure_pending_upgrade.upgrade_family_name}.")
                                 self.state.set_msg(f"Upgraded {self.figure_pending_upgrade.name} to {self.figure_pending_upgrade.upgrade_family_name}.")
+                                # Upgrade feedback (rect captured before the
+                                # refresh regenerates the icon).
+                                fx = self._fx_layer()
+                                if fx is not None:
+                                    rect = self._figure_icon_rect(self.figure_pending_upgrade.id)
+                                    if rect is not None:
+                                        fx.spawn_rect_pulse(rect, (150, 230, 170),
+                                                            secondary=(255, 245, 200))
+                                        fx.spawn_floating_text_at_rect(
+                                            rect, 'UPGRADED', (150, 230, 170))
+                                from utils import sound
+                                sound.play('figure_place')
                                 # Refresh full game state (turn, cards) and figures from server
                                 # (update() -> _apply_game_dict -> unlock_actions)
                                 self.game.update()
@@ -1437,6 +1659,16 @@ class FieldScreen(SubScreen):
                         images=blitz_icons if blitz_icons else None,
                         icon="error" if not blitz_icons else None,
                         title="Blitzkrieg"
+                    )
+                elif response == 'disabled_advance_royal_decree':
+                    # Advance button clicked while disabled due to Royal Decree on non-castle figure
+                    rd_icons = self._get_modifier_icon_images('Royal Decree')
+                    self.make_dialogue_box(
+                        message="Royal Decree is active!\n\nOnly castle figures can advance during Royal Decree.",
+                        actions=['ok'],
+                        images=rd_icons if rd_icons else None,
+                        icon="error" if not rd_icons else None,
+                        title="Royal Decree"
                     )
                 elif response == 'disabled_advance_peasant_war':
                     # Advance button clicked while disabled due to Peasant War on non-village figure
@@ -1699,6 +1931,27 @@ class FieldScreen(SubScreen):
                 and hasattr(parent, 'request_conquer_figure_confirmation')):
             return parent
         return None
+
+    def _all_seeing_eye_revealed(self):
+        """Whether the player's own All Seeing Eye reveal is currently visible.
+
+        In conquer mode this is gated on the timeline so the opponent's
+        figures/hand only reveal once the All Seeing Eye step is cast on the
+        timeline (delegated to the conquer parent).  Elsewhere it is the raw
+        active-spell check.
+        """
+        game = self.game
+        if game is None:
+            return False
+        parent = self._conquer_parent()
+        gate = getattr(parent, '_conquer_all_seeing_eye_revealed', None)
+        if callable(gate):
+            try:
+                return bool(gate())
+            except Exception:
+                pass
+        check = getattr(game, 'has_active_all_seeing_eye', None)
+        return bool(callable(check) and check())
 
     def _is_tactics_hand_battle_field_view_only(self):
         game = self.game
@@ -2085,8 +2338,13 @@ class FieldScreen(SubScreen):
                 if clicked_icon:
                     # Check if target figure has checkmate (immune to all spells)
                     target_figure = clicked_icon.figure
-                    
-                    if hasattr(target_figure, 'checkmate') and target_figure.checkmate:
+                    prelude_scope = (pending_prelude_target.get('target_scope')
+                                     if isinstance(pending_prelude_target, dict) else None)
+
+                    # Copy Figure ('opponent_hidden') legally targets checkmate
+                    # figures — the copy itself is never checkmate.
+                    if (prelude_scope != 'opponent_hidden'
+                            and hasattr(target_figure, 'checkmate') and target_figure.checkmate):
                         self.make_dialogue_box(
                             message=f"{target_figure.name} is immune to spells!",
                             actions=[],
@@ -2102,7 +2360,7 @@ class FieldScreen(SubScreen):
                         return
 
                     # Conquer startup prelude targeting
-                    target_scope = pending_prelude_target.get('target_scope')
+                    target_scope = prelude_scope
                     if target_scope == 'own' and target_figure.player_id != self.game.player_id:
                         self.make_dialogue_box(
                             message="Select one of your own figures for this prelude spell.",
@@ -2112,7 +2370,8 @@ class FieldScreen(SubScreen):
                             auto_close_delay=2000
                         )
                         return
-                    if target_scope == 'opponent' and target_figure.player_id == self.game.player_id:
+                    if (target_scope in ('opponent', 'opponent_hidden')
+                            and target_figure.player_id == self.game.player_id):
                         self.make_dialogue_box(
                             message="Select one of your opponent's figures for this prelude spell.",
                             actions=[],
@@ -2164,8 +2423,9 @@ class FieldScreen(SubScreen):
         modifier_types = [m.get('type') for m in modifiers]
         has_peasant_war = 'Peasant War' in modifier_types
         has_blitzkrieg = 'Blitzkrieg' in modifier_types
-        has_civil_war = 'Civil War' in modifier_types
-        village_only = has_peasant_war or has_civil_war
+        required_field, field_mod = self._battle_required_field_mode()
+        # Royal Decree suppresses the Civil War two-pick flow.
+        has_civil_war = required_field != 'castle' and 'Civil War' in modifier_types
         
         for event in events:
             if event.type == MOUSEBUTTONDOWN:
@@ -2179,18 +2439,20 @@ class FieldScreen(SubScreen):
                 if clicked_icon:
                     logger.debug(f"[DEFENDER_CLICK] Clicked: {clicked_icon.figure.name} (id={clicked_icon.figure.id}), defender_selectable={getattr(clicked_icon, 'defender_selectable', 'N/A')}, is_visible={clicked_icon.is_visible}")
                     # Show error for non-selectable figures (works for both visible and hidden)
-                    if hasattr(clicked_icon, 'defender_selectable') and not clicked_icon.defender_selectable:
+                    clicked_selectable = self._is_opponent_defender_selectable(
+                        clicked_icon.figure, clicked_icon)
+                    clicked_icon.defender_selectable = clicked_selectable
+                    if not clicked_selectable:
                         reason = "This figure cannot be selected as a defender."
                         title = "Cannot Select"
                         images = []
                         target_fig = clicked_icon.figure
                         if target_fig.player_id == self.game.player_id:
                             reason = "You must select one of your opponent's figures."
-                        elif village_only and hasattr(target_fig, 'family') and target_fig.family.field != 'village':
-                            active_mod = 'Peasant War' if has_peasant_war else 'Civil War'
-                            reason = f"{active_mod} is active — only village figures can be selected."
-                            title = active_mod
-                            images = self._get_modifier_icon_images(active_mod)
+                        elif required_field and self._figure_field(target_fig) != required_field:
+                            reason = self._required_field_message(required_field, field_mod)
+                            title = field_mod
+                            images = self._get_modifier_icon_images(field_mod)
                         elif hasattr(target_fig, 'cannot_defend') and target_fig.cannot_defend:
                             reason = f"{target_fig.name} cannot defend and cannot be selected for battle."
                         elif hasattr(target_fig, 'cannot_be_targeted') and target_fig.cannot_be_targeted:
@@ -2224,16 +2486,16 @@ class FieldScreen(SubScreen):
                         )
                         return
                     
-                    # Village-only restriction (Peasant War / Civil War)
-                    if village_only and hasattr(target_figure, 'family') and target_figure.family.field != 'village':
-                        active_mod = 'Peasant War' if has_peasant_war else 'Civil War'
-                        mod_icons = self._get_modifier_icon_images(active_mod)
+                    # Field restriction (Royal Decree / Peasant War / Civil War)
+                    if required_field and self._figure_field(target_figure) != required_field:
+                        mod_icons = self._get_modifier_icon_images(field_mod)
                         self.make_dialogue_box(
-                            message=f"{active_mod} is active — only village figures can be selected for battle.",
+                            message=self._required_field_message(
+                                required_field, field_mod, action='be selected for battle'),
                             actions=[],
                             images=mod_icons if mod_icons else None,
                             icon="error" if not mod_icons else None,
-                            title=active_mod,
+                            title=field_mod,
                             auto_close_delay=2000
                         )
                         return
@@ -2268,8 +2530,7 @@ class FieldScreen(SubScreen):
                             and not (hasattr(fig, 'cannot_defend') and fig.cannot_defend)
                             and not (hasattr(fig, 'cannot_be_targeted') and fig.cannot_be_targeted)
                             and not (hasattr(fig, 'checkmate') and fig.checkmate)
-                            and (not village_only or (
-                                hasattr(fig, 'family') and fig.family.field == 'village'))
+                            and (not required_field or self._figure_field(fig) == required_field)
                             for fig in self.figures
                         )
                         if has_non_checkmate:
@@ -2292,11 +2553,11 @@ class FieldScreen(SubScreen):
                         and not (hasattr(fig, 'checkmate') and fig.checkmate)
                     ]
                     
-                    # Village-only filter for must_be_attacked check too
-                    if village_only:
+                    # Required-field filter for must_be_attacked check too
+                    if required_field:
                         opponent_figures = [
                             fig for fig in opponent_figures
-                            if hasattr(fig, 'family') and fig.family.field == 'village'
+                            if self._figure_field(fig) == required_field
                         ]
                     
                     # Check if advancing figure has cannot_be_blocked — if so, skip must_be_attacked
@@ -2361,9 +2622,8 @@ class FieldScreen(SubScreen):
         """Handle Invader Swap conquer own-defender mode: conquerer selects their OWN figure."""
         modifiers = self.game.battle_modifier if isinstance(self.game.battle_modifier, list) else []
         modifier_types = [m.get('type') for m in modifiers]
-        has_peasant_war = 'Peasant War' in modifier_types
-        has_civil_war = 'Civil War' in modifier_types
-        village_only = has_peasant_war or has_civil_war
+        required_field, field_mod = self._battle_required_field_mode()
+        has_civil_war = required_field != 'castle' and 'Civil War' in modifier_types
 
         for event in events:
             if event.type == MOUSEBUTTONDOWN:
@@ -2389,16 +2649,16 @@ class FieldScreen(SubScreen):
                     )
                     continue
 
-                # Village-only restriction
-                if village_only and self._figure_field(target_figure) != 'village':
-                    active_mod = 'Peasant War' if has_peasant_war else 'Civil War'
-                    mod_icons = self._get_modifier_icon_images(active_mod)
+                # Field restriction (Royal Decree / Peasant War / Civil War)
+                if required_field and self._figure_field(target_figure) != required_field:
+                    mod_icons = self._get_modifier_icon_images(field_mod)
                     self.make_dialogue_box(
-                        message=f"{active_mod} is active — only village figures can defend.",
+                        message=self._required_field_message(
+                            required_field, field_mod, action='defend'),
                         actions=[],
                         images=mod_icons if mod_icons else None,
                         icon="error" if not mod_icons else None,
-                        title=active_mod,
+                        title=field_mod,
                         auto_close_delay=2000,
                     )
                     continue
@@ -2451,6 +2711,16 @@ class FieldScreen(SubScreen):
                     )
                     continue
 
+                if getattr(target_figure, 'cannot_be_targeted', False):
+                    self.make_dialogue_box(
+                        message=f"{target_figure.name} cannot be targeted.",
+                        actions=[],
+                        icon="error",
+                        title="Cannot Be Targeted",
+                        auto_close_delay=2000,
+                    )
+                    continue
+
                 # Valid own figure - confirm
                 self.figure_pending_own_defender_selection = target_figure
                 confirm_msg = f"Select {target_figure.name} as your defending figure?"
@@ -2492,7 +2762,7 @@ class FieldScreen(SubScreen):
         # Explosion always reveals the destroyed figure
         # Other spells (Poison, Health Boost) respect the figure's actual visibility
         is_opponent_figure = target_figure.player_id != self.game.player_id
-        player_has_all_seeing_eye = self.game.has_active_all_seeing_eye()
+        player_has_all_seeing_eye = self._all_seeing_eye_revealed()
         is_maharaja = target_figure.name in ['Himalaya Maharaja', 'Djungle Maharaja']
         
         if 'Explosion' in selected_spell.name:
@@ -2517,6 +2787,7 @@ class FieldScreen(SubScreen):
         )
         # Explicitly set battle bonus and deficit to hide them
         figure_icon.battle_bonus_received = 0
+        figure_icon.suppress_battle_bonus = True
         figure_icon.has_deficit = False
         
         # Prepare card data for server
@@ -2527,6 +2798,10 @@ class FieldScreen(SubScreen):
             'value': card.value
         } for card in real_cards]
         
+        # Target rect for the cast animation — captured before the cast so
+        # Explosion (which removes the icon on success) can still anchor.
+        _fx_target_rect = self._figure_icon_rect(target_figure.id)
+
         # Call spell service to cast the spell
         self.game.lock_actions()
         try:
@@ -2547,6 +2822,19 @@ class FieldScreen(SubScreen):
             raise
         
         if result.get('success'):
+            # Spell-glyph projectile onto the target (duel only — conquer
+            # animates its own casts; _fx_layer() is None there).
+            fx = self._fx_layer()
+            if fx is not None and _fx_target_rect is not None:
+                fx.spawn_spell_to_rect(selected_spell.name, None, _fx_target_rect)
+                if 'Explosion' in selected_spell.name:
+                    fx.spawn_shake(amplitude=5, duration_ms=160)
+                    fx.spawn_burst(_fx_target_rect, (255, 168, 56),
+                                   secondary=(255, 240, 200),
+                                   count=18, delay_ms=fx.PROJECTILE_MS)
+            from utils import sound
+            sound.play('booster_reveal', volume=0.8)
+
             # For Explosion spells, don't apply enchantment locally since figure is destroyed
             # Just update from server to remove the figure
             if 'Explosion' not in selected_spell.name:
@@ -2642,7 +2930,7 @@ class FieldScreen(SubScreen):
             return
 
         is_opponent_figure = target_figure.player_id != self.game.player_id
-        player_has_all_seeing_eye = self.game.has_active_all_seeing_eye()
+        player_has_all_seeing_eye = self._all_seeing_eye_revealed()
         is_maharaja = target_figure.name in ['Himalaya Maharaja', 'Djungle Maharaja']
         if 'Explosion' in spell_name:
             show_figure_visible = True
@@ -2682,6 +2970,7 @@ class FieldScreen(SubScreen):
             self.load_figures()
             self.state.pending_conquer_prelude_target = None
             self.game.pending_conquer_prelude_target = False
+            self._reset_defender_selectable()
 
             spell_effect = result.get('spell_effect') or {}
             self._sync_resolved_conquer_prelude_snapshot(
@@ -2716,6 +3005,7 @@ class FieldScreen(SubScreen):
         if reason == 'no_valid_target':
             self.state.pending_conquer_prelude_target = None
             self.game.pending_conquer_prelude_target = False
+            self._reset_defender_selectable()
             self.make_dialogue_box(
                 message=result.get('message', f"No valid target is available for {spell_name}."),
                 actions=['ok'],
@@ -2942,7 +3232,10 @@ class FieldScreen(SubScreen):
         elif pending_prelude_target:
             spell_name = pending_prelude_target.get('spell_name', 'Prelude Spell')
             prompt_text = f"SELECT A PRELUDE TARGET FOR {spell_name.upper()}"
-            cancel_text = "Checkmate figures cannot be targeted"
+            if pending_prelude_target.get('target_scope') == 'opponent_hidden':
+                cancel_text = "Targets stay hidden — pick any enemy figure"
+            else:
+                cancel_text = "Checkmate figures cannot be targeted"
         else:
             return
         
@@ -3133,8 +3426,7 @@ class FieldScreen(SubScreen):
         if current_time - self.last_all_seeing_eye_check <= self.all_seeing_eye_check_interval:
             return
         try:
-            self.cached_all_seeing_eye_status = (
-                self.game.has_active_all_seeing_eye() if self.game else False)
+            self.cached_all_seeing_eye_status = self._all_seeing_eye_revealed()
             self.cached_opponent_all_seeing_eye_status = (
                 self.game.has_opponent_cast_all_seeing_eye() if self.game else False)
         except Exception:
@@ -3383,18 +3675,26 @@ class FieldScreen(SubScreen):
                             else:
                                 all_regular.append((icon, icon_x, icon_y))
 
+            self._sync_conquer_selection_icon_states()
+
+            # Pending entrance cascade stamps itself on the first frame
+            # that actually has positioned figures.
+            self._stamp_figure_entrance_cascade(
+                all_regular + all_selected
+                + ([all_hovered] if all_hovered else []))
+
             # Draw in global z-order layers: regular -> selected -> hovered
             # Reverse regular so bottom icons are drawn first and top icons
             # paint over them, keeping each figure's lower info box visible.
             for icon, icon_x, icon_y in reversed(all_regular):
-                icon.draw(icon_x, icon_y)
+                self._draw_icon_with_entrance(icon, icon_x, icon_y)
 
             for icon, icon_x, icon_y in reversed(all_selected):
-                icon.draw(icon_x, icon_y)
+                self._draw_icon_with_entrance(icon, icon_x, icon_y)
 
             if all_hovered:
                 icon, icon_x, icon_y = all_hovered
-                icon.draw(icon_x, icon_y)
+                self._draw_icon_with_entrance(icon, icon_x, icon_y)
 
             # Cache the last draw layout so the conquer game screen can
             # redraw these icons as a top-of-z-order overlay above the
@@ -3432,11 +3732,34 @@ class FieldScreen(SubScreen):
         
         # Draw defender selection prompt if in defender selection mode
         if self.defender_selection_mode and not conquer_parent:
+            self._draw_selectable_defender_pulse()
             self._draw_defender_selection_prompt()
 
         # Draw own-defender selection prompt for Invader Swap
         if self.conquer_own_defender_mode and not conquer_parent:
+            self._draw_selectable_defender_pulse()
             self._draw_conquer_own_defender_prompt()
+
+    def _draw_selectable_defender_pulse(self):
+        """Breathing ring around selectable defender icons (pure draw).
+
+        The selectable flags are already maintained by the selection-mode
+        updaters (own figures excluded in opponent-defender mode and vice
+        versa), so ringing every selectable icon is correct in both modes.
+        """
+        alpha = int(110 + 90 * math.sin(pygame.time.get_ticks() * 0.005))
+        for icon in self.figure_icons:
+            if not (getattr(icon, 'in_defender_selection_mode', False)
+                    and getattr(icon, 'defender_selectable', False)):
+                continue
+            rect = getattr(icon, 'rect_frame', None)
+            if rect is None:
+                continue
+            ring = pygame.Rect(rect).inflate(12, 12)
+            surf = pygame.Surface(ring.size, pygame.SRCALPHA)
+            pygame.draw.rect(surf, (100, 200, 255, alpha), surf.get_rect(),
+                             3, border_radius=10)
+            self.window.blit(surf, ring.topleft)
 
     @staticmethod
     def _figure_field(figure):
@@ -3449,8 +3772,20 @@ class FieldScreen(SubScreen):
         return getattr(figure, 'color', None) or getattr(family, 'color', None)
 
     def _active_modifier_types(self):
-        modifiers = self.game.battle_modifier if self.game and isinstance(self.game.battle_modifier, list) else []
-        return [m.get('type') for m in modifiers if isinstance(m, dict)]
+        modifiers = getattr(self.game, 'battle_modifier', None) if self.game else None
+        if isinstance(modifiers, dict):
+            modifiers = [modifiers]
+        elif not isinstance(modifiers, (list, tuple)):
+            modifiers = []
+        types = []
+        for modifier in modifiers:
+            if isinstance(modifier, dict):
+                modifier_type = modifier.get('type')
+            else:
+                modifier_type = modifier
+            if modifier_type:
+                types.append(modifier_type)
+        return types
 
     def _is_civil_war_second_attacker_selectable(self, figure, icon=None):
         game = self.game
@@ -3498,12 +3833,144 @@ class FieldScreen(SubScreen):
             return False
         return True
 
+    @staticmethod
+    def _figure_id_key(figure):
+        fig_id = getattr(figure, 'id', None)
+        return None if fig_id is None else str(fig_id)
+
+    def _opponent_defender_selection_context(self):
+        game = self.game
+        empty = {
+            'eligible_id_keys': set(),
+            'must_be_attacked_id_keys': set(),
+            'eligible_figures': [],
+            'must_be_attacked_figures': [],
+            'advancing_figure': None,
+            'advancing_cannot_be_blocked': False,
+            'has_peasant_war': False,
+            'has_blitzkrieg': False,
+            'has_civil_war': False,
+        }
+        if not game:
+            return empty
+
+        modifier_types = self._active_modifier_types()
+        has_peasant_war = 'Peasant War' in modifier_types
+        has_blitzkrieg = 'Blitzkrieg' in modifier_types
+        required_field, _field_mod = self._battle_required_field_mode()
+        has_civil_war = required_field != 'castle' and 'Civil War' in modifier_types
+
+        figures = getattr(self, 'figures', []) or []
+        advancing_figure = None
+        advancing_id = getattr(game, 'advancing_figure_id', None)
+        if advancing_id is not None:
+            advancing_key = str(advancing_id)
+            for fig in figures:
+                if self._figure_id_key(fig) == advancing_key:
+                    advancing_figure = fig
+                    break
+
+        advancing_cannot_be_blocked = bool(
+            advancing_figure
+            and getattr(advancing_figure, 'cannot_be_blocked', False)
+        )
+        skip_must_be_attacked = advancing_cannot_be_blocked or has_blitzkrieg
+
+        eligible = []
+        checkmate_fallback = []
+        own_player_id = getattr(game, 'player_id', None)
+        for fig in figures:
+            if self._is_conquer_visual_ghost_figure(fig):
+                continue
+            if getattr(fig, 'player_id', None) == own_player_id:
+                continue
+            if getattr(fig, 'cannot_defend', False):
+                continue
+            if getattr(fig, 'cannot_be_targeted', False):
+                continue
+            if required_field and self._figure_field(fig) != required_field:
+                continue
+            if (has_civil_war
+                    and getattr(game, 'civil_war_defender_second', False)):
+                if self._figure_id_key(fig) == str(getattr(game, 'defending_figure_id', None)):
+                    continue
+                required_color = getattr(game, 'civil_war_required_color', None)
+                if required_color and self._figure_color(fig) != required_color:
+                    continue
+            if getattr(fig, 'checkmate', False):
+                checkmate_fallback.append(fig)
+                continue
+            eligible.append(fig)
+
+        if not eligible and checkmate_fallback:
+            eligible = checkmate_fallback
+
+        must_be_attacked = []
+        if not skip_must_be_attacked:
+            must_be_attacked = [
+                fig for fig in eligible
+                if getattr(fig, 'must_be_attacked', False)
+            ]
+
+        return {
+            'eligible_id_keys': {
+                self._figure_id_key(fig) for fig in eligible
+                if self._figure_id_key(fig) is not None
+            },
+            'must_be_attacked_id_keys': {
+                self._figure_id_key(fig) for fig in must_be_attacked
+                if self._figure_id_key(fig) is not None
+            },
+            'eligible_figures': eligible,
+            'must_be_attacked_figures': must_be_attacked,
+            'advancing_figure': advancing_figure,
+            'advancing_cannot_be_blocked': advancing_cannot_be_blocked,
+            'has_peasant_war': has_peasant_war,
+            'has_blitzkrieg': has_blitzkrieg,
+            'has_civil_war': has_civil_war,
+        }
+
+    def _is_opponent_defender_selectable(self, figure, icon=None, context=None):
+        game = self.game
+        if not game or figure is None:
+            return False
+        if self._is_conquer_visual_ghost_figure(figure):
+            return False
+        if getattr(figure, 'player_id', None) == getattr(game, 'player_id', None):
+            return False
+        context = context or self._opponent_defender_selection_context()
+        fig_key = self._figure_id_key(figure)
+        if fig_key is None or fig_key not in context['eligible_id_keys']:
+            return False
+        must_keys = context['must_be_attacked_id_keys']
+        if must_keys and fig_key not in must_keys:
+            return False
+        return True
+
+    def _sync_conquer_selection_icon_states(self):
+        active = self._is_conquer_selection_active()
+        defender_context = (
+            self._opponent_defender_selection_context()
+            if active and getattr(self, 'defender_selection_mode', False) else None
+        )
+        for icon in getattr(self, 'figure_icons', []) or []:
+            if not active:
+                icon.conquer_selection_selectable = True
+                continue
+            if getattr(self, 'defender_selection_mode', False):
+                icon.conquer_selection_selectable = self._is_opponent_defender_selectable(
+                    getattr(icon, 'figure', None), icon, context=defender_context)
+            else:
+                icon.conquer_selection_selectable = (
+                    self._icon_is_selectable_for_current_mode(icon)
+                )
+
     def _icon_is_selectable_for_current_mode(self, icon):
         """Return True when ``icon`` is a valid click target right now.
 
         Rules per active conquer selection mode:
-          * Opponent-defender mode → trust ``icon.defender_selectable``
-            (already computed by ``_update_defender_selectable``).
+          * Opponent-defender mode → compute the same live legality used by
+            ``_update_defender_selectable``.
           * Own-defender mode → only own figures whose family field is village
             when Peasant War / Civil War is active, otherwise all own figures
             that don't have ``cannot_defend`` / ``cannot_be_targeted``.
@@ -3519,12 +3986,10 @@ class FieldScreen(SubScreen):
 
         game = self.game
         is_own = (game is not None and figure.player_id == game.player_id)
-        modifier_types = self._active_modifier_types()
-        village_only = ('Peasant War' in modifier_types
-                        or 'Civil War' in modifier_types)
+        required_field, _field_mod = self._battle_required_field_mode()
 
         if self.defender_selection_mode:
-            return bool(getattr(icon, 'defender_selectable', True)) and not is_own
+            return self._is_opponent_defender_selectable(figure, icon)
 
         if self.conquer_own_defender_mode:
             return self._is_conquer_own_defender_selectable(figure, icon)
@@ -3542,7 +4007,9 @@ class FieldScreen(SubScreen):
                 return False
             if getattr(figure, 'cannot_attack', False):
                 return False
-            if village_only and self._figure_field(figure) != 'village':
+            if icon is not None and getattr(icon, 'has_deficit', False):
+                return False
+            if required_field and self._figure_field(figure) != required_field:
                 return False
             return True
 
@@ -3550,11 +4017,18 @@ class FieldScreen(SubScreen):
         if scope_target:
             target_scope = (scope_target.get('target_scope')
                             if isinstance(scope_target, dict) else None)
-            if getattr(figure, 'checkmate', False):
+            # Copy Figure ('opponent_hidden') may target checkmate figures;
+            # every other targeted prelude excludes them.
+            if target_scope != 'opponent_hidden' and getattr(figure, 'checkmate', False):
                 return False
+            valid_ids = scope_target.get('valid_target_ids', [])
+            if valid_ids:
+                valid_keys = {str(fig_id) for fig_id in valid_ids}
+                if self._figure_id_key(figure) not in valid_keys:
+                    return False
             if target_scope == 'own':
                 return is_own
-            if target_scope == 'opponent':
+            if target_scope in ('opponent', 'opponent_hidden'):
                 return not is_own
             return True
 
@@ -3733,15 +4207,15 @@ class FieldScreen(SubScreen):
 
         for icon, icon_x, icon_y in reversed(layout.get('regular') or []):
             if _needs_redraw(icon):
-                icon.draw(icon_x, icon_y)
+                self._draw_icon_with_entrance(icon, icon_x, icon_y)
         for icon, icon_x, icon_y in reversed(layout.get('selected') or []):
             if _needs_redraw(icon):
-                icon.draw(icon_x, icon_y)
+                self._draw_icon_with_entrance(icon, icon_x, icon_y)
         hovered = layout.get('hovered')
         if hovered:
             icon, icon_x, icon_y = hovered
             if _needs_redraw(icon):
-                icon.draw(icon_x, icon_y)
+                self._draw_icon_with_entrance(icon, icon_x, icon_y)
 
     def _draw_conquer_selection_focus(self, drawn_icons):
         """Dim the field and redraw selectable figure icons above it.
@@ -3813,73 +4287,15 @@ class FieldScreen(SubScreen):
 
     def _update_defender_selectable(self):
         """Mark figure icons as selectable/non-selectable for defender selection mode."""
-        # Get advancing figure to check cannot_be_blocked
-        advancing_figure = None
-        if self.game.advancing_figure_id:
-            for fig in self.figures:
-                if fig.id == self.game.advancing_figure_id:
-                    advancing_figure = fig
-                    break
-        
-        advancing_cannot_be_blocked = (
-            advancing_figure and 
-            hasattr(advancing_figure, 'cannot_be_blocked') and 
-            advancing_figure.cannot_be_blocked
-        )
-        
-        # Check active battle modifiers
-        modifiers = self.game.battle_modifier if isinstance(self.game.battle_modifier, list) else []
-        modifier_types = [m.get('type') for m in modifiers]
-        has_peasant_war = 'Peasant War' in modifier_types
-        has_blitzkrieg = 'Blitzkrieg' in modifier_types
-        has_civil_war = 'Civil War' in modifier_types
-        village_only = has_peasant_war or has_civil_war
-        
-        # Blitzkrieg acts like cannot_be_blocked for must_be_attacked purposes
-        skip_must_be_attacked = advancing_cannot_be_blocked or has_blitzkrieg
-        
-        # Determine which opponent figures are eligible
-        opponent_figures_eligible = []
-        checkmate_fallback = []
-        for fig in self.figures:
-            if fig.player_id == self.game.player_id:
-                continue
-            if hasattr(fig, 'cannot_defend') and fig.cannot_defend:
-                continue
-            if hasattr(fig, 'cannot_be_targeted') and fig.cannot_be_targeted:
-                continue
-            if hasattr(fig, 'checkmate') and fig.checkmate:
-                checkmate_fallback.append(fig)
-                continue
-            # Village-only restriction (Peasant War / Civil War)
-            if village_only and hasattr(fig, 'family') and fig.family.field != 'village':
-                continue
-            # Civil War second pick: must match color of first defender
-            if has_civil_war and hasattr(self.game, 'civil_war_defender_second') and self.game.civil_war_defender_second:
-                required_color = getattr(self.game, 'civil_war_required_color', None)
-                if required_color and hasattr(fig, 'family') and fig.family.color != required_color:
-                    continue
-                # Exclude the figure already selected as first defender
-                if fig.id == self.game.defending_figure_id:
-                    continue
-            opponent_figures_eligible.append(fig)
-        
-        # Fallback: if no non-checkmate targets, allow checkmate figures
-        if not opponent_figures_eligible and checkmate_fallback:
-            opponent_figures_eligible = checkmate_fallback
-        
-        # must_be_attacked filtering — only consider village figures if village_only
-        must_be_attacked_figures = []
-        if not skip_must_be_attacked:
-            must_be_attacked_figures = [
-                fig for fig in opponent_figures_eligible
-                if hasattr(fig, 'must_be_attacked') and fig.must_be_attacked
-            ]
-        
-        # Build set of must_be_attacked figure IDs for reliable comparison
-        must_be_attacked_ids = {fig.id for fig in must_be_attacked_figures}
-        eligible_ids = {fig.id for fig in opponent_figures_eligible}
-        
+        context = self._opponent_defender_selection_context()
+        advancing_figure = context['advancing_figure']
+        advancing_cannot_be_blocked = context['advancing_cannot_be_blocked']
+        has_peasant_war = context['has_peasant_war']
+        has_blitzkrieg = context['has_blitzkrieg']
+        has_civil_war = context['has_civil_war']
+        opponent_figures_eligible = context['eligible_figures']
+        must_be_attacked_figures = context['must_be_attacked_figures']
+
         logger.debug(f"[DEFENDER_SELECT] Advancing figure: {advancing_figure.name if advancing_figure else 'None'}, cannot_be_blocked: {advancing_cannot_be_blocked}")
         logger.debug(f"[DEFENDER_SELECT] Battle modifiers: peasant_war={has_peasant_war}, blitzkrieg={has_blitzkrieg}, civil_war={has_civil_war}")
         logger.debug(f"[DEFENDER_SELECT] Eligible opponent figures: {[(f.name, f.id, getattr(f, 'must_be_attacked', False)) for f in opponent_figures_eligible]}")
@@ -3894,19 +4310,14 @@ class FieldScreen(SubScreen):
             if fig.player_id == self.game.player_id:
                 icon.defender_selectable = False
                 continue
-            
-            # Opponent figure must be in the eligible set (handles cannot_defend, cannot_be_targeted, village_only)
-            if fig.id not in eligible_ids:
+
+            icon.defender_selectable = self._is_opponent_defender_selectable(
+                fig, icon, context=context)
+            if not icon.defender_selectable:
                 icon.defender_selectable = False
+                logger.debug(f"[DEFENDER_SELECT] {fig.name} (id={fig.id}) NOT selectable")
                 continue
             
-            # If must_be_attacked applies, only those figures are selectable
-            if must_be_attacked_ids and fig.id not in must_be_attacked_ids:
-                icon.defender_selectable = False
-                logger.debug(f"[DEFENDER_SELECT] {fig.name} (id={fig.id}) NOT selectable (must_be_attacked constraint)")
-                continue
-            
-            icon.defender_selectable = True
             logger.debug(f"[DEFENDER_SELECT] {fig.name} (id={fig.id}) IS selectable")
 
     def _update_conquer_own_defender_selectable(self):
@@ -3925,6 +4336,7 @@ class FieldScreen(SubScreen):
         """
         if not getattr(self, 'defender_selection_mode', False):
             return []
+        context = self._opponent_defender_selection_context()
         ids = []
         for icon in self.figure_icons:
             fig = getattr(icon, 'figure', None)
@@ -3932,7 +4344,7 @@ class FieldScreen(SubScreen):
                 continue
             if self._is_conquer_visual_ghost_figure(fig):
                 continue
-            if not getattr(icon, 'defender_selectable', False):
+            if not self._is_opponent_defender_selectable(fig, icon, context=context):
                 continue
             if getattr(fig, 'player_id', None) == self.game.player_id:
                 continue
@@ -3963,3 +4375,4 @@ class FieldScreen(SubScreen):
         for icon in self.figure_icons:
             icon.defender_selectable = True
             icon.in_defender_selection_mode = False
+            icon.conquer_selection_selectable = True

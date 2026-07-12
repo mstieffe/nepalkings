@@ -119,6 +119,21 @@ class BackgroundPoller:
                 self._check_multi_async()
         return self._busy
 
+    def invalidate_cache(self):
+        """Forget the last-delivered response signature.
+
+        The async paths short-circuit when a poll's response bodies are
+        byte-identical to the previous delivery, so unchanged server state
+        costs no JSON parse/apply. That is only safe while every delivered
+        result is actually consumed: a caller that DISCARDS a delivered
+        result (e.g. the game screen drops a poll that raced an action
+        response) must call this, otherwise an idle server would keep
+        matching the stored signature and the discarded state would never
+        be re-delivered — leaving the client stale indefinitely.
+        """
+        self._prev_response_sig = None
+        self._prev_simple_text = None
+
     # ── internals (threaded, desktop) ───────────────────────────
 
     def _run(self, args, kwargs):
@@ -360,12 +375,14 @@ class BackgroundPoller:
         if sig is not None and sig == getattr(self, '_prev_response_sig', None):
             self._async_responses = {}
             return None
-        if sig is not None:
-            self._prev_response_sig = sig
 
         game_dict = game_resp.json().get('game')
         if not game_dict:
             return None
+        # Record the signature only once a usable result is being delivered;
+        # a malformed/empty game payload must not suppress future deliveries.
+        if sig is not None:
+            self._prev_response_sig = sig
 
         logs_resp = r.get('logs')
         logs = logs_resp.json().get('log_entries', []) if logs_resp and logs_resp.status_code == 200 else []

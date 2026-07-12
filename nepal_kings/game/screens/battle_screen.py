@@ -17,6 +17,8 @@ from game.screens.sub_screen import SubScreen
 from game.components.battle_moves.battle_move_manager import BattleMoveManager
 from game.components.battle_moves.battle_move_detail_box import BattleMoveDetailBox
 from game.components.battle_moves.battle_move_icon_renderer import draw_battle_move_icon
+from game.components.duel_battle_animator import DuelSlotAnimator
+from game.components.easing import ease_out_back
 from game.components.figures.figure_icon import FieldFigureIcon
 from game.components.figures.figure_manager import FigureManager
 from game.components.figure_detail_box import FigureDetailBox
@@ -28,6 +30,12 @@ from utils.background_poller import BackgroundPoller
 import logging
 
 logger = logging.getLogger('nk.screens.battle')
+
+# Shared payoff palette (matches the conquer result payoff colors)
+_GOLD = (238, 206, 130)
+_GOLD_LIGHT = (255, 245, 200)
+_WIN_GREEN = (150, 230, 170)
+_LOSS_RED = (210, 90, 80)
 
 
 
@@ -107,6 +115,11 @@ class BattleScreen(SubScreen):
         # Each entry is a server dict or None
         self.player_played = [None, None, None]
         self.opponent_played = [None, None, None]
+
+        # Draw-only reveal animator for the rounds panel (duel mode only)
+        self._slot_animator = DuelSlotAnimator()
+        self._turn_indicator_prev = None  # last drawn is_player_turn (edge detect)
+        self._turn_indicator_anim_started = 0
 
         # ── figure icons for display ──
         self.player_figure_icon = None
@@ -226,6 +239,9 @@ class BattleScreen(SubScreen):
         self.opponent_moves = []
         self.player_played = [None, None, None]
         self.opponent_played = [None, None, None]
+        self._slot_animator.reset()
+        self._turn_indicator_prev = None
+        self._turn_indicator_anim_started = 0
         self.player_figure_icon = None
         self.opponent_figure_icon = None
         self.player_figure = None
@@ -1044,7 +1060,12 @@ class BattleScreen(SubScreen):
         base = figure.get_value()
         # buffs_allies bonus (treated as base power, not affected by blocks_bonus)
         buffs_bonus = getattr(figure_icon, 'buffs_allies_bonus', 0) if figure_icon else 0
-        bonus = figure_icon.battle_bonus_received if figure_icon else 0
+        # Live variant includes the land component (Landslide can invert it
+        # after the icon was built); fall back to the cached value.
+        if figure_icon and callable(getattr(figure_icon, '_current_battle_bonus_received', None)):
+            bonus = figure_icon._current_battle_bonus_received()
+        else:
+            bonus = figure_icon.battle_bonus_received if figure_icon else 0
         # blocks_bonus negates the support bonus (NOT wall defence)
         if figure_icon and getattr(figure_icon, 'battle_bonus_blocked', False):
             bonus = 0
@@ -1275,7 +1296,10 @@ class BattleScreen(SubScreen):
                     return "None"
                 base = fig.get_value()
                 buffs = getattr(icon, 'buffs_allies_bonus', 0) if icon else 0
-                bonus = icon.battle_bonus_received if icon else 0
+                if icon and callable(getattr(icon, '_current_battle_bonus_received', None)):
+                    bonus = icon._current_battle_bonus_received()
+                else:
+                    bonus = icon.battle_bonus_received if icon else 0
                 blocked = getattr(icon, 'battle_bonus_blocked', False) if icon else False
                 if blocked:
                     bonus = 0
@@ -1410,6 +1434,11 @@ class BattleScreen(SubScreen):
         # Apply result when ready (non-blocking)
         if self._battle_poller and self._battle_poller.has_result():
             self._apply_battle_state(self._battle_poller.result)
+
+        # ── Duel reveal beats: diff played slots every frame (draw-only;
+        # conquer runs its own reveal choreography) ──
+        if getattr(game, 'mode', 'duel') != 'conquer':
+            self._pump_slot_reveal_events()
 
         # Auto-finish: if all moves are played and the opponent already
         # resolved the battle (battle_confirmed went False or fold_winner_id
@@ -1697,6 +1726,16 @@ class BattleScreen(SubScreen):
             self._handle_card_picker_events(events)
             return
 
+        # Click-to-skip: a click on the rounds panel while the reveal is
+        # playing fast-forwards it and does nothing else this frame.
+        if self._slot_animator.is_active():
+            for event in events:
+                if (event.type == pygame.MOUSEBUTTONDOWN
+                        and getattr(event, 'button', 1) == 1
+                        and self._rounds_panel_rect().collidepoint(event.pos)):
+                    self._slot_animator.fast_forward()
+                    return
+
         # Update figure icon hover state on mouse motion
         for event in events:
             if event.type == pygame.MOUSEMOTION:
@@ -1803,7 +1842,16 @@ class BattleScreen(SubScreen):
                     figure_power_bonuses=self._figure_power_bonuses(
                         eligible, is_player=True),
                 )
+                self._mark_parent_duel_coach_seen('battle_move_panel')
                 break
+
+    def _mark_parent_duel_coach_seen(self, step_id):
+        if getattr(self.game, 'mode', 'duel') == 'conquer':
+            return
+        parent = getattr(self.state, 'parent_screen', None)
+        marker = getattr(parent, '_mark_duel_coach_seen', None)
+        if callable(marker):
+            marker(step_id)
 
     def _get_combinable_daggers(self, move, move_idx):
         """Return list of other Dagger moves that can be combined with *move*.
@@ -1837,6 +1885,14 @@ class BattleScreen(SubScreen):
         move_idx = action_dict.get('move_index')
         selected_fig = action_dict.get('selected_figure')
         logger.info(f"[BattleScreen] Action '{action}' for move {move_idx}, figure={getattr(selected_fig, 'name', None)}")
+
+        # Block user-initiated actions while the reveal is playing so a
+        # request can't race the animation (time-bounded — never wedges).
+        # The update-loop safety nets are deliberately not gated.
+        block_reason = self.duel_action_block_reason()
+        if block_reason:
+            self._notify_action_blocked(block_reason)
+            return
 
         if action == 'use':
             self._start_use(move_idx, selected_fig)
@@ -1920,6 +1976,8 @@ class BattleScreen(SubScreen):
                 f"Failed to play move:\n{msg}",
                 actions=['ok'], icon='info', title="Error")
             return
+
+        self._mark_parent_duel_coach_seen('battle_move_actions')
 
         from utils import sound
         sound.play('card_place')
@@ -2047,6 +2105,20 @@ class BattleScreen(SubScreen):
         if large_icon:
             images.append(large_icon)
 
+        # Battle-won payoff (duel only; visual — the dialogue plays the
+        # stinger). The game-over payoff has its own banner, so skip the
+        # banner here when the game is about to end.
+        if not is_conquer:
+            fx = self._fx_layer()
+            if fx is not None:
+                panel = self._rounds_panel_rect()
+                fx.spawn_confetti(
+                    panel, [_GOLD, _WIN_GREEN, _GOLD_LIGHT, (214, 184, 112)],
+                    count=40, delay_ms=120)
+                if not self._game_over_pending:
+                    fx.spawn_banner('BATTLE WON', _GOLD, duration_ms=1200)
+                fx.spawn_shake(amplitude=4, duration_ms=220)
+
         self.make_dialogue_box(msg, actions=actions, icon='victory', title="Victory!", images=images)
         self._dialogue_callback = self._on_victory_dialogue
 
@@ -2076,6 +2148,15 @@ class BattleScreen(SubScreen):
         large_icon = settings.DIALOGUE_BOX_LARGE_ICON_DICT.get('defeat')
         if large_icon:
             images.append(large_icon)
+
+        # Battle-lost payoff (duel only; visual — the dialogue plays the stinger)
+        if not is_conquer:
+            fx = self._fx_layer()
+            if fx is not None:
+                fx.spawn_banner('BATTLE LOST', _LOSS_RED, duration_ms=1100)
+                fx.spawn_rect_pulse(self._rounds_panel_rect(), _LOSS_RED,
+                                    duration_ms=620, scale=1.05)
+                fx.spawn_shake(amplitude=5, duration_ms=200)
 
         self.make_dialogue_box(msg, actions=['ok'], icon='defeat', title="Defeat", images=images)
         self._dialogue_callback = self._on_defeat_acknowledged
@@ -2120,6 +2201,12 @@ class BattleScreen(SubScreen):
 
         defender_id = result.get('defender_player_id')
         self._returnable_cards = result.get('returnable_cards', [])
+
+        # Neutral payoff (duel only; visual — the dialogue plays the stinger)
+        if not is_conquer:
+            fx = self._fx_layer()
+            if fx is not None:
+                fx.spawn_banner('DRAW', (210, 200, 170), duration_ms=1000)
 
         large_icon = settings.DIALOGUE_BOX_LARGE_ICON_DICT.get('draw')
         images = [large_icon] if large_icon else []
@@ -2852,6 +2939,8 @@ class BattleScreen(SubScreen):
         if parent and hasattr(parent, '_game_poller') and parent._game_poller:
             if parent._game_poller.has_result():
                 _ = parent._game_poller.result
+                if hasattr(parent._game_poller, 'invalidate_cache'):
+                    parent._game_poller.invalidate_cache()
 
         # Sync modifier tracking so stale poll data doesn't look "new"
         if parent and hasattr(parent, '_previous_battle_modifiers'):
@@ -2961,6 +3050,8 @@ class BattleScreen(SubScreen):
             title="Gamble",
         )
         self._dialogue_callback = self._on_gamble_confirmed
+        from utils import sound
+        sound.play('reveal_hold', volume=0.6)  # devil's-bargain arm cue
 
     def _on_gamble_confirmed(self, response):
         """Handle the gamble confirmation dialogue response."""
@@ -2987,6 +3078,8 @@ class BattleScreen(SubScreen):
             self.make_dialogue_box(msg, actions=['ok'], icon='info', title="Gamble Failed")
             return
 
+        self._mark_parent_duel_coach_seen('battle_move_actions')
+
         # Mark gamble as used this round
         self._gambled_this_round = True
 
@@ -2997,6 +3090,14 @@ class BattleScreen(SubScreen):
 
         # Build result dialogue cards (icon + name with suit icon)
         images = [self._render_gamble_result_card(nm) for nm in new_moves]
+
+        # Gamble payoff (duel only via _fx_layer; visual)
+        fx = self._fx_layer()
+        if fx is not None:
+            fx.spawn_burst(self._battle_panel_rect(), _GOLD,
+                           secondary=_GOLD_LIGHT, count=20, upward_bias=0.5)
+        from utils import sound
+        sound.play('card_slide')
 
         self.make_dialogue_box(
             "You drew:",
@@ -3055,11 +3156,21 @@ class BattleScreen(SubScreen):
             self.make_dialogue_box(msg, actions=['ok'], icon='info', title="Combine Failed")
             return
 
+        self._mark_parent_duel_coach_seen('battle_move_actions')
+
         # Remove the two source daggers, add the combined Double Dagger
         removed_ids = set(result.get('removed_ids', []))
         self.player_moves = [m for m in self.player_moves if m['id'] not in removed_ids]
         combined_move = result.get('combined_move', {})
         self.player_moves.append(combined_move)
+
+        # Forge payoff (duel only via _fx_layer; visual)
+        fx = self._fx_layer()
+        if fx is not None:
+            fx.spawn_burst(self._battle_panel_rect(), (255, 168, 56),
+                           secondary=_GOLD_LIGHT, count=18, upward_bias=0.5)
+        from utils import sound
+        sound.play('figure_place')
 
         # Show result
         icon_surf = self._render_move_icon_surface(combined_move)
@@ -3159,6 +3270,77 @@ class BattleScreen(SubScreen):
             settings.ROUNDS_PANEL_W,
             settings.ROUNDS_PANEL_H,
         )
+
+    def _round_slot_rect(self, side, round_index):
+        """Screen rect of a rounds-panel slot (same math as _draw_rounds_panel)."""
+        rounds_rect = self._rounds_panel_rect()
+        col_cx = (rounds_rect.centerx - settings.ROUNDS_COL_DELTA_X
+                  + round_index * settings.ROUNDS_COL_DELTA_X)
+        sw = settings.ROUNDS_SLOT_SIZE
+        slot_y = (settings.ROUNDS_PLAYER_SLOT_Y if side == 'player'
+                  else settings.ROUNDS_OPPONENT_SLOT_Y)
+        cy = self._sy(slot_y) + sw // 2
+        return pygame.Rect(col_cx - sw // 2, cy - sw // 2, sw, sw)
+
+    def _pump_slot_reveal_events(self):
+        """Feed the slot animator and fire per-event effects/sounds.
+
+        Duel-only (caller gates on mode); every effect call is fail-soft and
+        draw-only, so a missing fx layer just means silent pops.
+        """
+        events = self._slot_animator.note_slots(
+            self.player_played, self.opponent_played)
+        if not events:
+            return
+        from utils import sound
+        fx = self._fx_layer()
+        for event in events:
+            if event[0] == 'slot':
+                _, side, _r = event
+                sound.play('card_place', volume=0.9 if side == 'player' else 0.7)
+            elif event[0] == 'round_complete':
+                _, r = event
+                sound.play('tally_tick')
+                if fx is None:
+                    continue
+                p_rect = self._round_slot_rect('player', r)
+                o_rect = self._round_slot_rect('opponent', r)
+                fx.spawn_rect_pulse(p_rect, _GOLD, duration_ms=520)
+                fx.spawn_rect_pulse(o_rect, _GOLD, duration_ms=520)
+                try:
+                    diff = self._get_round_diff(r)
+                except Exception:
+                    diff = None
+                if isinstance(diff, (int, float)) and diff:
+                    mid = pygame.Rect(0, 0, p_rect.w, 24)
+                    mid.center = (p_rect.centerx,
+                                  (p_rect.centery + o_rect.centery) // 2)
+                    color = _WIN_GREEN if diff > 0 else _LOSS_RED
+                    fx.spawn_floating_text_at_rect(mid, f'{int(diff):+d}', color)
+                    if abs(diff) >= 5:
+                        fx.spawn_shake(amplitude=3, duration_ms=140)
+
+    def duel_action_block_reason(self):
+        """Reason string while user actions must wait for the reveal, else ''.
+
+        Only user-initiated action starters check this; the update-loop
+        safety nets (auto-finish / auto-skip) are deliberately not gated.
+        The animator is time-bounded, so this can never wedge the screen.
+        """
+        if getattr(self.game, 'mode', 'duel') == 'conquer':
+            return ''
+        if self._slot_animator.is_active():
+            return 'Revealing round…'
+        return ''
+
+    def _notify_action_blocked(self, reason):
+        """Light feedback for an action rejected mid-reveal (no dialogue)."""
+        from utils import sound
+        sound.play('error', volume=0.5)
+        fx = self._fx_layer()
+        if fx is not None:
+            fx.spawn_floating_text_at_rect(
+                self._rounds_panel_rect(), reason, (240, 200, 140))
 
     def _battle_panel_icon_center(self, slot):
         panel = self._battle_panel_rect()
@@ -3940,6 +4122,18 @@ class BattleScreen(SubScreen):
         sw = settings.ROUNDS_SLOT_SIZE
         slot_cy = cy + sw // 2
 
+        # Reveal pop: a newly-arrived move settles in with a small bounce.
+        # Draw-only — hit rects are registered at the resting position, and
+        # slot_anim is None for settled slots (and always in conquer, where
+        # the animator is never fed). getattr: partially-constructed screens
+        # (tests) may not have the animator.
+        animator = getattr(self, '_slot_animator', None)
+        anim_t = (animator.slot_anim('player' if is_player else 'opponent',
+                                     r_index)
+                  if animator is not None else None)
+        if anim_t is not None:
+            slot_cy += int((1.0 - ease_out_back(anim_t)) * sw * 0.35)
+
         if played_move:
             # Skipped round — draw empty diamond slot (no battle move icon)
             if played_move.get('_skipped'):
@@ -4468,8 +4662,30 @@ class BattleScreen(SubScreen):
                 text = "Waiting..."
                 color = settings.TURN_OPPONENT_COLOR
 
+            # Edge-detect turn flips for a slide/fade-in beat (duel only;
+            # pure draw + one low-volume cue on the rising edge to player).
+            is_duel = getattr(self.game, 'mode', 'duel') != 'conquer'
+            if is_duel and self.is_player_turn != self._turn_indicator_prev:
+                became_player_turn = (self.is_player_turn
+                                      and self._turn_indicator_prev is False)
+                self._turn_indicator_prev = self.is_player_turn
+                self._turn_indicator_anim_started = pygame.time.get_ticks()
+                if became_player_turn:
+                    from utils import sound
+                    sound.play('your_turn', volume=0.5)
+            elif not is_duel:
+                self._turn_indicator_prev = self.is_player_turn
+
             turn_surf = self.font_turn.render(text, True, color)
-            self.window.blit(turn_surf, turn_surf.get_rect(centerx=cx, top=ty))
+            dy = 0
+            if is_duel and self._turn_indicator_anim_started:
+                t = ((pygame.time.get_ticks() - self._turn_indicator_anim_started)
+                     / 300.0)
+                if t < 1.0:
+                    t = max(0.0, t)
+                    turn_surf.set_alpha(int(70 + 185 * t))
+                    dy = int((1.0 - ease_out_back(t)) * 10)
+            self.window.blit(turn_surf, turn_surf.get_rect(centerx=cx, top=ty + dy))
 
     # ──────────── Shared Helpers ───────────────────────────────
 

@@ -243,8 +243,15 @@ class FigureDetailBox:
                         button.disabled = True
                         button.disabled_reason = 'blitzkrieg'
                 
+                # Royal Decree: only castle figures can advance (has precedence
+                # over the village-only modifiers below).
+                if 'Royal Decree' in modifier_types:
+                    figure_field = getattr(self.figure.family, 'field', None) if hasattr(self.figure, 'family') else None
+                    if figure_field != 'castle':
+                        button.disabled = True
+                        button.disabled_reason = 'royal_decree'
                 # Peasant War / Civil War: only village figures can advance
-                if 'Peasant War' in modifier_types or 'Civil War' in modifier_types:
+                elif 'Peasant War' in modifier_types or 'Civil War' in modifier_types:
                     figure_field = getattr(self.figure.family, 'field', None) if hasattr(self.figure, 'family') else None
                     if figure_field != 'village':
                         button.disabled = True
@@ -252,9 +259,11 @@ class FigureDetailBox:
                             button.disabled_reason = 'peasant_war'
                         else:
                             button.disabled_reason = 'civil_war'
-                
+
                 # Civil War second pick: must match the color of the first figure
-                if 'Civil War' in modifier_types and not button.disabled:
+                # (suppressed while Royal Decree forces castle-only battles)
+                if ('Civil War' in modifier_types and not button.disabled
+                        and 'Royal Decree' not in modifier_types):
                     if hasattr(self.game, 'civil_war_awaiting_second') and self.game.civil_war_awaiting_second:
                         required_color = getattr(self.game, 'civil_war_required_color', None)
                         figure_color = getattr(self.figure.family, 'color', None) if hasattr(self.figure, 'family') else None

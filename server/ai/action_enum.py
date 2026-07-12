@@ -28,6 +28,21 @@ def _has_active_infinite_hammer(game_dict, ai_player):
     return False
 
 
+def _battle_required_field_from_dict(game_dict):
+    """'castle' / 'village' / None from the serialized battle modifiers."""
+    modifiers = game_dict.get('battle_modifier') if isinstance(game_dict.get('battle_modifier'), list) else []
+    from game_service.figure_rule_helpers import battle_required_field
+    return battle_required_field(modifiers)
+
+
+def _civil_war_pick_flow_active(game_dict):
+    """Civil War two-pick flow — suppressed by Royal Decree (castle-only)."""
+    modifiers = game_dict.get('battle_modifier') if isinstance(game_dict.get('battle_modifier'), list) else []
+    if _battle_required_field_from_dict(game_dict) == 'castle':
+        return False
+    return any(m.get('type') == 'Civil War' for m in modifiers)
+
+
 def _modifier_caster_id(modifier):
     """Best-effort caster ID extraction from battle modifier metadata."""
     for key in ('caster_id', 'caster_player_id', 'player_id'):
@@ -72,8 +87,8 @@ def _enum_forced_counter_advance(game_dict, ai_player, action_id):
 
     modifiers = game_dict.get('battle_modifier') if isinstance(game_dict.get('battle_modifier'), list) else []
     has_blitzkrieg = any(m.get('type') == 'Blitzkrieg' for m in modifiers)
-    has_peasant_war = any(m.get('type') == 'Peasant War' for m in modifiers)
-    has_civil_war = any(m.get('type') == 'Civil War' for m in modifiers)
+    required_field = _battle_required_field_from_dict(game_dict)
+    has_civil_war = _civil_war_pick_flow_active(game_dict)
 
     # Blitzkrieg and unblockable advances cannot be counter-advanced.
     if has_blitzkrieg:
@@ -121,8 +136,8 @@ def _enum_forced_counter_advance(game_dict, ai_player, action_id):
         if fig_id in resting_ids:
             continue
 
-        # Peasant/Civil War allow only village defenders.
-        if (has_peasant_war or has_civil_war) and fig.get('field') != 'village':
+        # Royal Decree allows only castle, Peasant/Civil War only village defenders.
+        if required_field and fig.get('field') != required_field:
             continue
         if required_color and fig.get('color') != required_color:
             continue
@@ -180,17 +195,15 @@ def _selectable_defender_targets_if_ai_passes(game_dict, ai_player):
     targets = [f for f in ai_player.get('figures', [])
                if not f.get('cannot_be_targeted') and not f.get('cannot_defend')]
 
-    modifiers = game_dict.get('battle_modifier') if isinstance(game_dict.get('battle_modifier'), list) else []
-    has_peasant_war = any(m.get('type') == 'Peasant War' for m in modifiers)
-    has_civil_war = any(m.get('type') == 'Civil War' for m in modifiers)
+    required_field = _battle_required_field_from_dict(game_dict)
+    has_civil_war = _civil_war_pick_flow_active(game_dict)
 
-    if has_peasant_war:
-        targets = [f for f in targets if f.get('field') == 'village']
+    if required_field:
+        targets = [f for f in targets if f.get('field') == required_field]
 
     if has_civil_war:
         advancing_fig = _find_figure_by_id(game_dict, game_dict.get('advancing_figure_id'))
         required_color = advancing_fig.get('color') if advancing_fig else None
-        targets = [f for f in targets if f.get('field') == 'village']
         if required_color:
             targets = [f for f in targets if f.get('color') == required_color]
 
@@ -208,17 +221,14 @@ def _selectable_defender_targets_if_ai_passes(game_dict, ai_player):
     return targets
 
 
-def _defender_matches_battle_modifier(fig, *, has_peasant_war=False,
+def _defender_matches_battle_modifier(fig, *, required_field=None,
                                       has_civil_war=False,
                                       civil_war_color=None):
     """Return True when a serialized defender candidate satisfies battle modifiers."""
-    if has_peasant_war and fig.get('field') != 'village':
+    if required_field and fig.get('field') != required_field:
         return False
-    if has_civil_war:
-        if fig.get('field') != 'village':
-            return False
-        if civil_war_color and fig.get('color') != civil_war_color:
-            return False
+    if has_civil_war and civil_war_color and fig.get('color') != civil_war_color:
+        return False
     return True
 
 
@@ -329,8 +339,7 @@ def detect_phase(game_dict: dict, ai_player_id: int) -> str:
         # Battle is in progress but it's not the AI's battle turn — wait
         return None
 
-    modifiers = game_dict.get('battle_modifier') if isinstance(game_dict.get('battle_modifier'), list) else []
-    has_civil_war = any(m.get('type') == 'Civil War' for m in modifiers)
+    has_civil_war = _civil_war_pick_flow_active(game_dict)
     if (game_dict.get('mode') == 'conquer' and has_civil_war and
             game_dict.get('advancing_figure_id') and
             not game_dict.get('advancing_figure_id_2') and
@@ -563,7 +572,8 @@ def _enum_normal_turn(game_dict, ai_player, opponent):
         # Check battle modifier restrictions on advance
         modifiers = game_dict.get('battle_modifier') if isinstance(game_dict.get('battle_modifier'), list) else []
         has_peasant_war = any(m.get('type') == 'Peasant War' for m in modifiers)
-        has_civil_war = any(m.get('type') == 'Civil War' for m in modifiers)
+        required_field = _battle_required_field_from_dict(game_dict)
+        has_civil_war = _civil_war_pick_flow_active(game_dict)
         # Compute which figures are in deficit (cannot advance)
         from ai.game_state import compute_resource_totals as _crt
         _eff_prod, _tot_req = _crt(ai_player.get('figures', []))
@@ -576,8 +586,8 @@ def _enum_normal_turn(game_dict, ai_player, opponent):
                 continue
             if fig_id in resting:
                 continue
-            # Peasant War / Civil War: only village figures can advance
-            if (has_peasant_war or has_civil_war) and fig.get('field') != 'village':
+            # Royal Decree: castle only; Peasant/Civil War: village only
+            if required_field and fig.get('field') != required_field:
                 continue
             # Skip figures in resource deficit (server rejects advance)
             fig_reqs = fig.get('requires') or {}
@@ -592,7 +602,9 @@ def _enum_normal_turn(game_dict, ai_player, opponent):
             field = fig.get('field', '?')
             checkmate_warn = " ⚠️ CHECKMATE RISK" if fig.get('checkmate') else ""
             modifier_note = ""
-            if has_peasant_war:
+            if required_field == 'castle':
+                modifier_note = " [ROYAL DECREE: castle only]"
+            elif has_peasant_war:
                 modifier_note = " [PEASANT WAR: village only]"
             elif has_civil_war:
                 modifier_note = " [CIVIL WAR: village only]"
@@ -717,7 +729,8 @@ def _enum_select_defender(game_dict, ai_player, opponent):
     # Check battle modifier restrictions on defender selection
     modifiers = game_dict.get('battle_modifier') if isinstance(game_dict.get('battle_modifier'), list) else []
     has_peasant_war = any(m.get('type') == 'Peasant War' for m in modifiers)
-    has_civil_war = any(m.get('type') == 'Civil War' for m in modifiers)
+    required_field = _battle_required_field_from_dict(game_dict)
+    has_civil_war = _civil_war_pick_flow_active(game_dict)
 
     # Civil War first defender selection is village-only.  Same-color is
     # enforced only for the optional second defender after the first is chosen.
@@ -734,7 +747,7 @@ def _enum_select_defender(game_dict, ai_player, opponent):
             continue
         if not _defender_matches_battle_modifier(
                 fig,
-                has_peasant_war=has_peasant_war,
+                required_field=required_field,
                 has_civil_war=has_civil_war,
                 civil_war_color=civil_war_color):
             continue
@@ -788,7 +801,9 @@ def _enum_select_defender(game_dict, ai_player, opponent):
 
     if not actions:
         modifier_note = ""
-        if has_peasant_war:
+        if required_field == 'castle':
+            modifier_note = " under Royal Decree"
+        elif has_peasant_war:
             modifier_note = " under Peasant War"
         elif has_civil_war:
             modifier_note = " under Civil War"

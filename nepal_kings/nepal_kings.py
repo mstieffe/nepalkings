@@ -91,8 +91,30 @@ class Client:
         ]
         total_weight = sum(w for *_, w in screen_steps)
 
+        # On web the branded HTML loader (web/index.html) stays on top of the
+        # canvas through this boot phase; bridge our fraction into its bar so
+        # the user sees one continuous fill instead of a second bar at 0%.
+        _web_embed = None
+        if _sys.platform == 'emscripten':
+            try:
+                import embed as _web_embed  # noqa: F401
+            except Exception:
+                _web_embed = None
+
+        def _web_loader(fraction):
+            if _web_embed is None:
+                return
+            try:
+                _web_embed.js(
+                    "window.nk_set_progress&&window.nk_set_progress(%s)"
+                    % min(1.0, max(0.0, float(fraction)))
+                )
+            except Exception:
+                pass
+
         def draw_progress(fraction, label):
             """Draw the progress bar.  fraction is 0.0 – 1.0."""
+            _web_loader(fraction)
             surf = pygame.display.get_surface()
             surf.blit(bg, (0, 0))
             # Title
@@ -117,6 +139,9 @@ class Client:
             pygame.display.flip()
             # Keep the window responsive
             pygame.event.pump()
+
+        self._web_embed = _web_embed
+        self._web_loader_ready_notified = _web_embed is None
 
         if os.environ.get('NK_PERF_FIXTURE') == 'conquer_battle':
             self._init_perf_conquer_fixture(draw_progress)
@@ -162,6 +187,16 @@ class Client:
             draw_progress(frac_end, label)
 
         draw_progress(1.0, 'Ready')
+
+    def _notify_web_loader_ready(self):
+        if self._web_loader_ready_notified:
+            return
+        try:
+            self._web_embed.js(
+                "window.nk_loader_done&&window.nk_loader_done()")
+        except Exception:
+            return
+        self._web_loader_ready_notified = True
 
     def _create_screen(self, key):
         spec = self._screen_factories.get(key)
@@ -384,6 +419,7 @@ class Client:
 
                 self.state.update()
                 pygame.display.update()
+                self._notify_web_loader_ready()
                 self.clock.tick(60)
                 await asyncio.sleep(0)
                 continue
@@ -401,6 +437,7 @@ class Client:
                 self.state.update()
             with self.perf.section('display_update'):
                 pygame.display.update()
+            self._notify_web_loader_ready()
             self.perf.frame_end()
             self.clock.tick(60)
             await asyncio.sleep(0)

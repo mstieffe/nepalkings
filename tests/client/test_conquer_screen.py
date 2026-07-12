@@ -1,10 +1,39 @@
 # Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
 # See LICENSE file in the project root for full license information.
 """Unit tests for ConquerScreen logic (Phase 11)."""
+import os
+from pathlib import Path
 import pygame
 import pytest
+import subprocess
+import sys
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
+
+
+APP_DIR = Path(__file__).resolve().parents[2] / 'nepal_kings'
+
+
+def _run_mobile_geometry_check(code):
+    env = os.environ.copy()
+    env.update({
+        'SDL_VIDEODRIVER': 'dummy',
+        'SDL_AUDIODRIVER': 'dummy',
+        'NK_SCREEN_WIDTH': '854',
+        'NK_SCREEN_HEIGHT': '480',
+        'NK_IS_MOBILE': '1',
+        'NK_UI_SCALE': '1.6',
+    })
+    result = subprocess.run(
+        [sys.executable, '-c', code],
+        cwd=APP_DIR,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def _make_state():
@@ -98,6 +127,20 @@ class TestConquerScreenInit:
         assert screen._land_id == 42
         sync_load.assert_not_called()
         async_load.assert_called_once()
+
+    def test_on_enter_clears_web_start_battle_requests(self):
+        from game.screens.conquer_screen import ConquerScreen
+        state = _make_state()
+        screen = ConquerScreen(state)
+        screen._start_battle_rid = 'start-rid'
+        screen._start_battle_fetch_game_rid = 'fetch-rid'
+        screen._start_battle_fetch_game_id = 99
+
+        screen.on_enter()
+
+        assert screen._start_battle_rid is None
+        assert screen._start_battle_fetch_game_rid is None
+        assert screen._start_battle_fetch_game_id is None
 
 
 class TestBattleReadiness:
@@ -259,9 +302,9 @@ class TestConquerCoachCopy:
         assert step['id'] == 'conquer_config_to_battle'
         assert step['title'] == 'Your Attack Is Ready'
         assert 'guided tour ends here' not in step['body']
-        assert 'pre-built this attack' in step['body']
-        assert 'prelude draws cards' in step['body']
-        assert 'only looted cards are gone' in step['body']
+        assert 'Here is your attack' in step['body']
+        assert 'prelude spell' in step['body']
+        assert 'only looted cards' not in step['body']
         assert step['button_label'] == 'Got it'
 
 
@@ -348,59 +391,93 @@ class TestPreludeSpellToggle:
             button=1,
             pos=screen._prelude_x_rect.center,
         )
-        screen.handle_events([event])
-        assert screen._pending_prelude_clear is True
+        # Removals are free draft edits — the spell clears immediately,
+        # without a confirmation dialog.
+        with patch.object(screen, '_server_clear_prelude_spell') as mock_clear:
+            screen.handle_events([event])
+            mock_clear.assert_called_once()
+        assert screen.dialogue_box is None
 
 
-class TestConquerConfirmData:
+class TestConquerLootRiskTutorial:
 
-    def test_battle_confirmation_lists_all_committed_cards_as_loot_risk(self):
+    def test_start_battle_shows_one_time_loot_tutorial_before_start(self):
         from game.screens.conquer_screen import ConquerScreen
         import pygame
         state = _make_state()
+        # Second conquest (first battle already finished): the loot lesson shows.
+        state.user_dict = {'onboarding': {
+            'menu_hints_seen': [],
+            'completed_steps': ['finish_first_conquer_battle'],
+        }}
         screen = ConquerScreen(state)
-        screen._land = {
-            'tier': 2,
-            'kingdom_bonuses': {'loot_chance': 0.10},
-        }
+        screen._land_id = 42
         screen._config = {
-            'figures': [{
-                'id': 1,
-                'name': 'Attacker',
-                'card_details': [{'suit': 'Hearts', 'rank': '7'}],
-            }],
-            'battle_moves': [{
-                'id': 2,
-                'card_id': 20,
-                'round_index': 0,
-                'suit': 'Spades',
-                'rank': 'Q',
-            }],
-            'battle_modifier': {'type': 'Stronghold'},
-            'modifier_card_details': [{'suit': 'Clubs', 'rank': '3'}],
-            'prelude_spell_name': 'Poison',
-            'prelude_spell_card_details': [{'suit': 'Diamonds', 'rank': '8'}],
+            'figures': [{'id': 1, 'has_deficit': False}],
+            'battle_moves': [{'id': 1}, {'id': 2}, {'id': 3}],
         }
+        screen._cooldown_remaining = 0
+        screen._cooldown_synced_at_ms = 1000
+        seen = []
+        screen._mark_menu_coach_seen = seen.append
 
-        class _FakeCardImg:
-            def __init__(self, window, suit, rank):
-                self.front_img = pygame.Surface((70, 100), pygame.SRCALPHA)
+        with patch.object(screen, '_start_battle') as mock_start:
+            screen._on_battle_click()
+            assert screen._loot_risk_tutorial_dialogue is not None
+            mock_start.assert_not_called()
 
-        with patch('game.components.cards.card_img.CardImg', _FakeCardImg):
-            msg, image_groups, after_msg = screen._build_confirm_data()
+            win = screen._loot_risk_tutorial_dialogue
+            win._created_at = pygame.time.get_ticks() - 1000
+            event = pygame.event.Event(
+                pygame.MOUSEBUTTONUP, button=1, pos=win._btn_next.rect.center)
+            screen.handle_events([event])
 
-        assert 'committed to this conquer battle' in msg
-        assert [group['key'] for group in image_groups] == ['loot_risk']
-        group = image_groups[0]
-        assert group['icon'] == 'lock'
-        assert group['badge_icon'] == 'lock'
-        assert len(group['items']) == 4
-        assert 'Locked now:' in group['description']
-        assert 'Loot risk:' in group['description']
-        assert 'defender loots 3 of these 4 cards' in group['description']
-        assert 'Tier 2 quota' in group['description']
-        assert 'Defensive Looting adds a 10% extra roll' in group['description']
-        assert 'does not consume cards by itself' in after_msg
+        assert seen == ['loot_risk_intro']
+        mock_start.assert_called_once_with(use_map=False)
+        assert screen._loot_risk_tutorial_dialogue is None
+
+    def test_first_tutorial_conquest_defers_loot_tutorial(self):
+        # First guided conquest (no land won yet): the battle is risk-free, so
+        # the loot lesson is deferred — Start Battle runs immediately.
+        from game.screens.conquer_screen import ConquerScreen
+        state = _make_state()
+        state.user_dict = {'onboarding': {
+            'menu_hints_seen': [],
+            'completed_steps': [],
+        }}
+        screen = ConquerScreen(state)
+        screen._land_id = 42
+        screen._config = {
+            'figures': [{'id': 1, 'has_deficit': False}],
+            'battle_moves': [{'id': 1}, {'id': 2}, {'id': 3}],
+        }
+        screen._cooldown_remaining = 0
+        screen._cooldown_synced_at_ms = 1000
+
+        with patch.object(screen, '_start_battle') as mock_start:
+            screen._on_battle_click()
+
+        assert screen._loot_risk_tutorial_dialogue is None
+        mock_start.assert_called_once_with(use_map=False)
+
+    def test_start_battle_skips_loot_tutorial_once_seen(self):
+        from game.screens.conquer_screen import ConquerScreen
+        state = _make_state()
+        state.user_dict = {'onboarding': {'menu_hints_seen': ['loot_risk_intro']}}
+        screen = ConquerScreen(state)
+        screen._land_id = 42
+        screen._config = {
+            'figures': [{'id': 1, 'has_deficit': False}],
+            'battle_moves': [{'id': 1}, {'id': 2}, {'id': 3}],
+        }
+        screen._cooldown_remaining = 0
+        screen._cooldown_synced_at_ms = 1000
+
+        with patch.object(screen, '_start_battle') as mock_start:
+            screen._on_battle_click()
+
+        assert screen._loot_risk_tutorial_dialogue is None
+        mock_start.assert_called_once_with(use_map=False)
 
     def test_battle_button_label_shows_cooldown_and_map(self, monkeypatch):
         from game.screens.conquer_screen import ConquerScreen
@@ -417,7 +494,7 @@ class TestConquerConfirmData:
 
         assert screen._battle_button_label() == 'Cooldown 2m 05s'
 
-    def test_cooldown_click_offers_map_before_battle_confirm(self, monkeypatch):
+    def test_cooldown_click_offers_map_before_starting_battle(self, monkeypatch):
         from game.screens.conquer_screen import ConquerScreen
         state = _make_state()
         screen = ConquerScreen(state)
@@ -433,21 +510,128 @@ class TestConquerConfirmData:
         screen._on_battle_click()
 
         assert screen._pending_map_confirm is True
-        assert screen._pending_battle_confirm is False
 
-    def test_use_map_response_opens_battle_confirm(self):
+    def test_use_map_response_starts_battle_without_old_confirm(self):
         from game.screens.conquer_screen import ConquerScreen
         state = _make_state()
         screen = ConquerScreen(state)
         state.action = {'status': 'use map'}
         screen._pending_map_confirm = True
 
-        with patch.object(screen, '_open_battle_confirm') as mock_confirm, \
-                patch.object(screen, '_start_battle') as mock_start:
+        with patch.object(screen, '_start_battle') as mock_start:
             screen.handle_events([])
 
-        mock_confirm.assert_called_once_with(use_map=True)
-        mock_start.assert_not_called()
+        mock_start.assert_called_once_with(use_map=True)
+
+    def test_web_start_battle_uses_async_handoff(self, monkeypatch):
+        from game.screens import conquer_screen as module
+
+        state = _make_state()
+        state.user_dict = {'maps': 2}
+        screen = module.ConquerScreen(state)
+        screen._land_id = 1942
+        screen._cooldown_remaining = 0
+        screen._cooldown_synced_at_ms = 1000
+        monkeypatch.setattr(module._sys, 'platform', 'emscripten')
+        monkeypatch.setattr(module.pygame.time, 'get_ticks', lambda: 1000)
+
+        posted = {}
+
+        def _fake_start_post_json(url, payload):
+            posted['url'] = url
+            posted['payload'] = payload
+            return 7
+
+        def _unexpected_sync_post(*_args, **_kwargs):
+            raise AssertionError('web start battle must not use sync POST')
+
+        monkeypatch.setattr(
+            module.requests, 'start_async_post_json', _fake_start_post_json,
+            raising=False)
+        monkeypatch.setattr(module.requests, 'post', _unexpected_sync_post)
+
+        screen._start_battle(use_map=True)
+
+        assert posted['url'].endswith('/kingdom/conquer/start_battle')
+        assert posted['payload'] == {'land_id': 1942, 'use_map': True}
+        assert screen._start_battle_rid == 7
+        assert screen._loading is True
+        assert screen._loading_message == 'Starting conquer battle...'
+
+    def test_web_start_battle_fetches_game_before_transition(self, monkeypatch):
+        from game.screens import conquer_screen as module
+
+        state = _make_state()
+        state.user_dict = {'maps': 2}
+        screen = module.ConquerScreen(state)
+        screen._land_id = 1942
+        screen._start_battle_rid = 7
+        screen._loading = True
+        monkeypatch.setattr(module._sys, 'platform', 'emscripten')
+
+        class _Response:
+            def __init__(self, status_code, data):
+                self.status_code = status_code
+                self._data = data
+                self.text = ''
+
+            def json(self):
+                return self._data
+
+        def _fake_check_async(rid):
+            if rid == 7:
+                return _Response(200, {
+                    'game_id': 84,
+                    'map_consumed': True,
+                    'maps': 1,
+                })
+            if rid == 8:
+                return _Response(200, {
+                    'game': {'game_id': 84, 'mode': 'conquer'},
+                })
+            raise AssertionError(f'unexpected async rid {rid}')
+
+        fetched = {}
+
+        def _fake_start_get(url, params):
+            fetched['url'] = url
+            fetched['params'] = params
+            return 8
+
+        monkeypatch.setattr(module.requests, 'check_async', _fake_check_async,
+                            raising=False)
+        monkeypatch.setattr(module.requests, 'start_async_get', _fake_start_get,
+                            raising=False)
+
+        created = {}
+
+        def _fake_game(game_dict, user_dict, lightweight=False):
+            created['lightweight'] = lightweight
+            return SimpleNamespace(
+                game_id=game_dict['game_id'], mode=game_dict['mode'])
+
+        monkeypatch.setattr(
+            module, 'Game',
+            _fake_game)
+
+        screen._drain_start_battle_web()
+
+        assert state.game_id == 84
+        assert state.user_dict['maps'] == 1
+        assert screen._maps_available == 1
+        assert fetched == {
+            'url': module.settings.SERVER_URL + '/games/get_game',
+            'params': {'game_id': 84},
+        }
+        assert screen._start_battle_fetch_game_rid == 8
+        assert screen._loading_message == 'Loading conquer battle...'
+
+        screen._drain_start_battle_web()
+
+        assert state.game.game_id == 84
+        assert created['lightweight'] is True
+        assert state.screen == 'conquer_game'
+        assert screen._loading is False
 
 
 class TestConquerScreenLayout:
@@ -464,7 +648,7 @@ class TestConquerScreenLayout:
         assert abs(rect.centerx - settings.SCREEN_WIDTH // 2) <= 1
         assert abs(rect.centery - settings.SCREEN_HEIGHT // 2) <= 1
 
-    def test_config_figures_hide_duel_only_checkmate_text(self):
+    def test_config_figures_show_live_conquer_checkmate_rule(self):
         from game.screens.conquer_screen import ConquerScreen
         state = _make_state()
         screen = ConquerScreen(state)
@@ -479,9 +663,9 @@ class TestConquerScreenLayout:
             'checkmate': True,
         }, {'Djungle Maharaja': family})
 
-        assert fig.checkmate is False
-        assert 'checkmate' not in fig.description.lower()
-        assert 'checkmate' not in fig.family.description.lower()
+        assert fig.checkmate is True
+        assert 'checkmate' in fig.description.lower()
+        assert 'checkmate' in fig.family.description.lower()
 
     def test_config_figures_hide_instant_advance_in_conquer(self):
         from game.screens.conquer_screen import ConquerScreen
@@ -532,6 +716,65 @@ class TestConquerScreenLayout:
 
         assert screen._battle_plan_rect.contains(screen._move_slots_rect)
         assert screen._prelude_panel_rect.contains(screen._prelude_spell_rect)
+
+    def test_mobile_right_panel_controls_do_not_overlap_on_iphone_se(self):
+        _run_mobile_geometry_check(r'''
+from types import SimpleNamespace
+from unittest.mock import MagicMock
+import pygame
+pygame.mouse.set_cursor = lambda *args, **kwargs: None
+pygame.init()
+pygame.display.set_mode((854, 480))
+from config import settings
+from game.screens.conquer_screen import ConquerScreen
+
+state = SimpleNamespace(
+    screen='conquer',
+    conquer_land_id=42,
+    game=MagicMock(),
+    set_msg=MagicMock(),
+    action={},
+)
+screen = ConquerScreen(state)
+screen._land_id = 42
+screen._config = {
+    'figures': [],
+    'battle_moves': [],
+    'prelude_spell_name': None,
+}
+screen._build_layout()
+
+assert screen._battle_plan_rect.bottom < screen._prelude_panel_rect.top
+assert screen._prelude_panel_rect.bottom <= screen._btn_battle.top
+
+for panel, child in (
+    (screen._battle_plan_rect, screen._move_slots_rect),
+    (screen._prelude_panel_rect, screen._prelude_spell_rect),
+):
+    assert panel.contains(child), (tuple(panel), tuple(child))
+
+for control in (
+    screen._btn_buy_move,
+    screen._info_button_rects['battle_plan'],
+):
+    assert not control.colliderect(screen._move_slots_rect), (
+        tuple(control), tuple(screen._move_slots_rect))
+
+caption_x = screen._prelude_spell_rect.right + int(0.012 * settings.SCREEN_WIDTH)
+caption_right = screen._prelude_panel_rect.right - int(0.010 * settings.SCREEN_WIDTH)
+caption_w = max(0, caption_right - caption_x)
+assert screen._res_font.size('No prelude spell')[0] <= caption_w
+
+records = []
+screen._draw_section_panel = (
+    lambda rect, title, *, description=None, icon_rect=None, title_pos=None:
+        records.append((title, description))
+)
+screen._draw_info_buttons = lambda: None
+screen._draw_right_panels()
+assert records == [('Battle Plan', None), ('Prelude Spell', None)]
+pygame.quit()
+''')
 
     def test_right_panel_info_buttons_exist_inside_sections(self):
         from game.screens.conquer_screen import ConquerScreen
@@ -662,3 +905,285 @@ class TestConquerRemoveClickPriority:
 
             mock_return.assert_called_once_with(20)
             mock_detail.assert_not_called()
+
+
+class TestNativeStartBattleAsync:
+    """The native 'To Battle!' flow must not block the main thread."""
+
+    def test_native_start_battle_is_async(self, monkeypatch):
+        from game.screens import conquer_screen as module
+
+        state = _make_state()
+        state.user_dict = {'maps': 2}
+        screen = module.ConquerScreen(state)
+        screen._land_id = 1942
+        screen._cooldown_remaining = 0
+        screen._cooldown_synced_at_ms = 1000
+
+        def _unexpected_sync_post(*_args, **_kwargs):
+            raise AssertionError('native start battle must not block the main thread')
+
+        monkeypatch.setattr(module.requests, 'post', _unexpected_sync_post)
+
+        started = {}
+
+        class _FakePoller:
+            def __init__(self, func, *args, **kwargs):
+                started['func'] = func
+                self.busy = False
+
+            def poll(self, args=()):
+                started['args'] = args
+
+            def has_result(self):
+                return False
+
+        monkeypatch.setattr(module, 'BackgroundPoller', _FakePoller)
+
+        screen._start_battle(use_map=True)
+
+        assert started['func'] == screen._start_battle_task
+        assert started['args'] == (1942, True)
+        assert screen._loading is True
+        assert screen._loading_message == 'Starting conquer battle...'
+
+    def test_native_drain_transitions_on_game_id(self, monkeypatch):
+        from game.screens import conquer_screen as module
+
+        state = _make_state()
+        state.user_dict = {'maps': 2}
+        screen = module.ConquerScreen(state)
+        screen._land_id = 1942
+        screen._loading = True
+
+        class _DonePoller:
+            busy = False
+
+            def has_result(self):
+                return True
+
+            @property
+            def result(self):
+                return {
+                    'data': {'game_id': 84, 'map_consumed': True, 'maps': 1},
+                    'game_dict': {'id': 84},
+                }
+
+        screen._start_battle_poller = _DonePoller()
+
+        fake_game = MagicMock()
+        monkeypatch.setattr(module, 'Game', lambda *a, **k: fake_game)
+        monkeypatch.setattr(module, 'gameplay_screen_for', lambda game: 'conquer_game')
+
+        screen._drain_start_battle_native()
+
+        assert screen._loading is False
+        assert state.game_id == 84
+        assert state.user_dict['maps'] == 1
+        assert state.game is fake_game
+        assert state.screen == 'conquer_game'
+        assert screen._start_battle_poller is None
+
+    def test_native_drain_error_surfaces_error(self):
+        from game.screens.conquer_screen import ConquerScreen
+
+        state = _make_state()
+        screen = ConquerScreen(state)
+        screen._loading = True
+
+        class _ErrPoller:
+            busy = False
+
+            def has_result(self):
+                return True
+
+            @property
+            def result(self):
+                return {'error': 'Connection error'}
+
+        screen._start_battle_poller = _ErrPoller()
+        screen._drain_start_battle_native()
+
+        assert screen._loading is False
+        assert screen._error == 'Connection error'
+
+
+class TestConquerConfigPolish:
+
+    def test_error_retry_click_reloads_config(self):
+        from game.screens import conquer_screen as module
+        import pygame
+        state = _make_state()
+        state.action = {}
+        screen = module.ConquerScreen(state)
+        screen._land_id = 42
+        screen._error = 'Connection error'
+        sw = module.settings.SCREEN_WIDTH
+        sh = module.settings.SCREEN_HEIGHT
+        screen._btn_retry = pygame.Rect(sw // 2 - 40, sh // 2, 80, 40)
+
+        event = pygame.event.Event(
+            pygame.MOUSEBUTTONUP, button=1, pos=screen._btn_retry.center)
+        with patch.object(screen, '_start_config_load') as mock_load:
+            screen.handle_events([event])
+        assert screen._error is None
+        mock_load.assert_called_once()
+
+    def test_empty_move_slot_click_opens_battle_shop(self):
+        from game.screens.conquer_screen import ConquerScreen
+        import pygame
+        state = _make_state()
+        state.action = {}
+        screen = ConquerScreen(state)
+        screen._land_id = 42
+        screen._config = {
+            'figures': [],
+            'battle_moves': [],
+            'prelude_spell_name': None,
+        }
+        screen._build_layout()
+        screen._draw_battle_move_slots()
+        assert set(screen._empty_move_slot_rects) == {0, 1, 2}
+
+        event = pygame.event.Event(
+            pygame.MOUSEBUTTONUP, button=1,
+            pos=screen._empty_move_slot_rects[0].center)
+        with patch.object(screen, '_open_battle_shop') as mock_open:
+            screen.handle_events([event])
+            mock_open.assert_called_once()
+
+    def test_close_subscreen_uses_async_loader(self):
+        from game.screens.conquer_screen import ConquerScreen
+        state = _make_state()
+        screen = ConquerScreen(state)
+        screen._land_id = 42
+        screen._active_subscreen = 'battle_shop'
+        screen._subscreen_obj = MagicMock()
+
+        with patch.object(screen, '_start_config_load') as async_load, \
+                patch.object(screen, '_load_config') as sync_load:
+            screen._close_subscreen()
+
+        async_load.assert_called_once()
+        sync_load.assert_not_called()
+        assert screen._active_subscreen is None
+
+
+class TestEntranceAnimations:
+    """Draw-only slide-in animations for newly appearing config slots."""
+
+    def _bare_screen(self):
+        from game.screens.conquer_screen import ConquerScreen
+        screen = object.__new__(ConquerScreen)
+        screen._entrance_anims = {}
+        screen._entrance_prev_sig = None
+        screen._config = {
+            'figures': [{'id': 7}],
+            'battle_moves': [{'round_index': 0, 'family_name': 'Dagger'}],
+            'prelude_spell_name': 'Poison',
+        }
+        return screen
+
+    def test_new_config_registers_entrance_cascade(self, monkeypatch):
+        monkeypatch.setattr('pygame.time.get_ticks', lambda: 5_000)
+        screen = self._bare_screen()
+        screen._sync_entrance_animations()
+        assert ('fig', '7') in screen._entrance_anims
+        assert ('move', 0) in screen._entrance_anims
+        assert ('prelude',) in screen._entrance_anims
+        # Cascade order: figures → moves → prelude.
+        assert screen._entrance_anims[('fig', '7')]['index'] == 0
+        assert screen._entrance_anims[('move', 0)]['index'] == 1
+        assert screen._entrance_anims[('prelude',)]['index'] == 2
+        # Same signature again: nothing new, nothing restarted.
+        screen._entrance_anims.clear()
+        screen._sync_entrance_animations()
+        assert screen._entrance_anims == {}
+
+    def test_config_change_animates_only_new_slot(self, monkeypatch):
+        monkeypatch.setattr('pygame.time.get_ticks', lambda: 5_000)
+        screen = self._bare_screen()
+        screen._sync_entrance_animations()
+        screen._entrance_anims.clear()
+        screen._config['figures'].append({'id': 9})
+        screen._sync_entrance_animations()
+        assert list(screen._entrance_anims) == [('fig', '9')]
+
+    def test_entrance_offset_lifecycle(self, monkeypatch):
+        from game.screens.conquer_screen import ConquerScreen
+        screen = self._bare_screen()
+        screen._entrance_anims[('move', 0)] = {'started_at': 1_000, 'index': 1}
+        stagger = ConquerScreen.ENTRANCE_STAGGER_MS
+        slide = ConquerScreen.ENTRANCE_SLIDE_PX
+
+        # Before this slot's staggered start: parked below its resting spot.
+        monkeypatch.setattr('pygame.time.get_ticks', lambda: 1_000)
+        assert screen._entrance_offset(('move', 0)) == (0, slide)
+
+        # Mid-flight: partially risen (offset strictly between 0 and slide,
+        # allowing the ease_out_back overshoot to dip slightly above rest).
+        monkeypatch.setattr('pygame.time.get_ticks',
+                            lambda: 1_000 + stagger + 95)
+        dx, dy = screen._entrance_offset(('move', 0))
+        assert dx == 0
+        assert dy != 0
+        assert dy < slide
+
+        # Settled: no offset, record pruned.
+        monkeypatch.setattr('pygame.time.get_ticks',
+                            lambda: 1_000 + stagger + ConquerScreen.ENTRANCE_MS + 1)
+        assert screen._entrance_offset(('move', 0)) == (0, 0)
+        assert ('move', 0) not in screen._entrance_anims
+        # Unknown keys are always settled.
+        assert screen._entrance_offset(('move', 99)) == (0, 0)
+
+    def test_icon_entrance_draw_restores_logical_position(self, monkeypatch):
+        screen = self._bare_screen()
+        screen._entrance_anims[('fig', '7')] = {'started_at': 1_000, 'index': 0}
+        calls = []
+        icon = SimpleNamespace(
+            draw=lambda x, y: calls.append(('draw', x, y)),
+            set_position=lambda x, y: calls.append(('set_position', x, y)))
+
+        # Mid-entrance: the draw is offset but the logical position (used by
+        # hover / detail-open hit tests) is restored to the resting spot.
+        monkeypatch.setattr('pygame.time.get_ticks', lambda: 1_095)
+        screen._draw_icon_with_entrance(icon, 100, 200, 7)
+        assert calls[0][0] == 'draw'
+        assert calls[0][2] != 200        # visually offset
+        assert calls[-1] == ('set_position', 100, 200)
+
+        # Settled: plain draw, no restore needed.
+        calls.clear()
+        monkeypatch.setattr('pygame.time.get_ticks', lambda: 60_000)
+        screen._draw_icon_with_entrance(icon, 100, 200, 7)
+        assert calls == [('draw', 100, 200)]
+
+    def test_move_slot_x_button_suppressed_during_entrance(self, monkeypatch):
+        import game.screens.conquer_screen as module
+        state = _make_state()
+        state.action = {}
+        screen = module.ConquerScreen(state)
+        screen._land_id = 42
+        screen._config = {
+            'figures': [],
+            'battle_moves': [
+                {'round_index': 0, 'family_name': 'Dagger',
+                 'suit': 'Hearts', 'value': 3},
+            ],
+            'prelude_spell_name': None,
+        }
+        screen._build_layout()
+        monkeypatch.setattr('pygame.time.get_ticks', lambda: 50_000)
+        screen._sync_entrance_animations()
+        assert ('move', 0) in screen._entrance_anims
+        # Force the "always show X" (touch) branch so visibility is purely
+        # driven by the entrance gate.
+        monkeypatch.setattr(module.settings, 'TOUCH_TARGET_MIN', 48)
+
+        screen._draw_battle_move_slots()          # mid-entrance
+        assert 0 not in screen._move_remove_rects
+
+        monkeypatch.setattr('pygame.time.get_ticks', lambda: 60_000)
+        screen._draw_battle_move_slots()          # settled
+        assert 0 in screen._move_remove_rects

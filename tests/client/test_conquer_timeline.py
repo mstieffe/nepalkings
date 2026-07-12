@@ -114,6 +114,33 @@ def test_attacker_step_active_when_advancing_figure_pending():
     assert not by_kind['defender'].active
 
 
+def test_stale_defender_flags_without_attacker_do_not_block_attacker_step():
+    from game.screens.conquer_flow import (
+        derive_conquer_objective,
+        derive_conquer_timeline,
+    )
+
+    game = _make_game(
+        turn=True,
+        advancing_figure_id=None,
+        advancing_player_id=None,
+        defending_figure_id=None,
+        pending_defender_selection=True,
+        pending_conquer_own_defender_selection=True,
+        civil_war_awaiting_second=True,
+        civil_war_defender_second=True,
+    )
+
+    objective = derive_conquer_objective(game, _make_state(game), None, None)
+    steps = derive_conquer_timeline(game, _make_state(game), None, None)
+
+    by_kind = {s.kind: s for s in steps}
+    assert objective.phase == 'advance'
+    assert by_kind['attacker'].active
+    assert by_kind['attacker'].primary_action == 'select_advance'
+    assert not by_kind['defender'].active
+
+
 def test_no_prelude_steps_show_empty_frames_when_attacker_can_act():
     from game.screens.conquer_flow import derive_conquer_timeline
 
@@ -1109,6 +1136,9 @@ def test_compact_info_box_does_not_draw_countdown_over_button(monkeypatch):
     assert screen._conquer_objective_action_rects.get('next') is not None
     assert draws == []
 
+    # A battle-round beat advances on game state, not on a timer, so no
+    # countdown is drawn for it at all — even when a stale timer entry
+    # exists for its kind.
     screen._conquer_objective_action_rects = {}
     round_step = TimelineStep(
         kind='battle_round_2_opponent',
@@ -1123,7 +1153,7 @@ def test_compact_info_box_does_not_draw_countdown_over_button(monkeypatch):
         'battle_round_2_opponent': pygame.time.get_ticks()
     }
     panel._draw_compact_info_box(screen, rect, round_step, border=(0, 0, 0))
-    assert len(draws) == 1
+    assert draws == []
 
 
 def test_opponent_defender_chosen_by_you_requires_explicit_player_pick():
@@ -1826,3 +1856,329 @@ class TestBattleShopSnapBack:
         cls._enforce_battle_shop_during_moves(screen)
 
         assert screen.state.subscreen == 'battle_shop'
+
+
+def test_fit_timeline_bubbles_never_overflows_info_box():
+    """Crowded mobile timelines must keep the bubble row inside the timeline
+    width so it never bleeds into (and gets covered by) the info box.
+
+    Regression: the bubble width used to be floored at 54px even when the row
+    did not fit, so the last bubble overlapped the info box on the right.
+    """
+    from game.components.conquer_timeline_panel import (
+        ConquerTimelinePanel, _BUBBLE_GAP)
+
+    # 8 visible steps with the narrow timeline left after a 320px info box on a
+    # ~854px mobile canvas — the scenario that produced the overlap.
+    indices = list(range(8))
+    timeline_w = 490
+
+    kept, bubble_w = ConquerTimelinePanel._fit_timeline_bubbles(
+        indices, timeline_w)
+
+    assert kept, 'at least one bubble must remain'
+    span = len(kept) * bubble_w + _BUBBLE_GAP * (len(kept) - 1)
+    assert span <= timeline_w, (span, timeline_w)
+    # The most recent steps (incl. the active one beside the info box) are kept.
+    assert kept[-1] == indices[-1]
+    assert kept == indices[-len(kept):]
+
+
+def test_fit_timeline_bubbles_keeps_all_when_they_fit():
+    from game.components.conquer_timeline_panel import (
+        ConquerTimelinePanel, _BUBBLE_GAP, _BUBBLE_MAX_W)
+
+    indices = list(range(4))
+    timeline_w = 1200  # plenty of room on desktop
+
+    kept, bubble_w = ConquerTimelinePanel._fit_timeline_bubbles(
+        indices, timeline_w)
+
+    assert kept == indices  # nothing dropped
+    assert bubble_w <= _BUBBLE_MAX_W
+    span = len(kept) * bubble_w + _BUBBLE_GAP * (len(kept) - 1)
+    assert span <= timeline_w
+
+
+def test_countdown_ratio_only_for_held_beats_and_never_seeds_timers():
+    from game.components.conquer_timeline_panel import ConquerTimelinePanel
+    from game.screens.conquer_flow import TimelineStep
+
+    panel = ConquerTimelinePanel.__new__(ConquerTimelinePanel)
+    timers = {}
+    screen = SimpleNamespace(_conquer_timeline_step_started_at=timers)
+
+    held = TimelineStep(
+        kind='prelude_own', title='Your Prelude', active=True,
+        interactive=False, primary_action='next')
+    waiting = TimelineStep(
+        kind='defender', title='Defending Figure', active=True,
+        interactive=False, primary_action=None)
+    battle_round = TimelineStep(
+        kind='battle_round_1_opponent', title='R1 Opp', active=True,
+        interactive=False, primary_action=None)
+
+    # State-advancing steps show no countdown, and reading the ratio must
+    # never seed a timer — a seeded entry would pre-expire the later hold
+    # beat of the same step kind (skipping e.g. the defender reveal beat).
+    assert panel._step_countdown_ratio(screen, waiting) is None
+    assert panel._step_countdown_ratio(screen, battle_round) is None
+    assert timers == {}
+
+    # Held beats read only the gate-seeded timer.
+    assert panel._step_countdown_ratio(screen, held) is None
+    assert timers == {}
+    timers['prelude_own'] = pygame.time.get_ticks()
+    ratio = panel._step_countdown_ratio(screen, held)
+    assert ratio is not None and 0.0 <= ratio <= 1.0
+
+
+def test_waiting_defender_phase_does_not_skip_later_defender_hold_beat():
+    from game.components.conquer_timeline_panel import ConquerTimelinePanel
+    from game.screens.conquer_flow import derive_conquer_timeline
+
+    panel = ConquerTimelinePanel.__new__(ConquerTimelinePanel)
+    screen = SimpleNamespace(
+        _conquer_acknowledged_step_kinds={'overview', 'attacker'},
+        _conquer_timeline_step_started_at={},
+    )
+
+    # Phase 1: own advance is out, defender response pending. The defender
+    # step is active but state-driven — drawing its info box (countdown
+    # lookup) must leave the timers untouched.
+    game = _make_game(
+        turn=False,
+        advancing_figure_id=10,
+        advancing_player_id=1,
+    )
+    steps = panel._apply_sequence_gates(
+        screen, derive_conquer_timeline(game, _make_state(game), None, None))
+    by_kind = {s.kind: s for s in steps}
+    assert by_kind['defender'].active
+    assert not by_kind['defender'].interactive
+    assert panel._step_countdown_ratio(screen, by_kind['defender']) is None
+    assert 'defender' not in screen._conquer_timeline_step_started_at
+
+    # Phase 2: the defender is locked in. The resolved beat must be promoted
+    # as a fresh hold (active, Next, full countdown) — not instantly
+    # acknowledged because of a stale timer from phase 1.
+    game = _make_game(
+        turn=False,
+        advancing_figure_id=10,
+        advancing_player_id=1,
+        defending_figure_id=20,
+    )
+    field = SimpleNamespace(
+        figures=[
+            _make_figure(10, 'Raider', player_id=1),
+            _make_figure(20, 'Wall', player_id=2),
+        ],
+        icon_cache={},
+    )
+    steps = panel._apply_sequence_gates(
+        screen, derive_conquer_timeline(game, _make_state(game), field, None))
+    by_kind = {s.kind: s for s in steps}
+    assert by_kind['defender'].active
+    assert by_kind['defender'].primary_action == 'next'
+    ratio = panel._step_countdown_ratio(screen, by_kind['defender'])
+    assert ratio is not None and ratio > 0.5
+
+
+def test_single_option_hold_shows_next_button_and_countdown():
+    from game.components.conquer_timeline_panel import ConquerTimelinePanel
+    from game.screens.conquer_flow import TimelineStep
+
+    panel = ConquerTimelinePanel(pygame.Surface((900, 200)))
+    rect = pygame.Rect(0, 0, 420, 150)
+    step = TimelineStep(
+        kind='defender', title='Defending Figure', active=True,
+        interactive=True, primary_action='select_defender',
+        info_headline='Pick the defender',
+        info_body='Only one legal choice.')
+
+    # Without a single-option hold, interactive steps have no buttons.
+    screen = SimpleNamespace(
+        _conquer_pending_confirmation=None,
+        _conquer_objective_action_rects={},
+    )
+    assert panel._draw_active_buttons(screen, rect, step) == []
+    assert screen._conquer_objective_action_rects.get('next') is None
+    assert panel._step_countdown_ratio(screen, step) is None
+
+    # With a pending auto-pick hold the impending auto-advance is visible
+    # (countdown) and skippable (Next button wired to the shared action).
+    screen = SimpleNamespace(
+        _conquer_pending_confirmation=None,
+        _conquer_objective_action_rects={},
+        conquer_single_option_hold_ratio=lambda: 0.75,
+    )
+    buttons = panel._draw_active_buttons(screen, rect, step)
+    assert len(buttons) == 1
+    assert screen._conquer_objective_action_rects.get('next') is not None
+    assert panel._step_countdown_ratio(screen, step) == 0.75
+
+
+def test_conquer_single_option_hold_ratio_reads_pending_state():
+    from game.components.conquer_timeline_panel import AUTO_ADVANCE_MS
+    from game.screens.conquer_game_screen import ConquerGameScreen
+
+    screen = ConquerGameScreen.__new__(ConquerGameScreen)
+    screen._auto_single_option_pending = None
+    assert ConquerGameScreen.conquer_single_option_hold_ratio(screen) is None
+
+    now = pygame.time.get_ticks()
+    screen._auto_single_option_pending = (
+        ('defender', 20), now - AUTO_ADVANCE_MS // 2)
+    ratio = ConquerGameScreen.conquer_single_option_hold_ratio(screen)
+    assert ratio is not None and 0.4 <= ratio <= 0.6
+
+
+def test_timeline_overflow_draws_plus_chip_for_dropped_bubbles(monkeypatch):
+    from game.components.conquer_timeline_panel import ConquerTimelinePanel
+    from game.screens.conquer_flow import TimelineStep
+
+    panel = ConquerTimelinePanel(pygame.Surface((520, 140)))
+    many = [
+        TimelineStep(kind=f'battle_round_{i}_player', title=f'R{i}',
+                     completed=True)
+        for i in range(1, 13)
+    ]
+    many[-1].active = True
+    panel.derive_display_steps = lambda _screen: many
+
+    chip_calls = []
+    bubble_rects = []
+    monkeypatch.setattr(
+        panel, '_draw_overflow_chip',
+        lambda rect, hidden: chip_calls.append((rect.copy(), tuple(hidden))))
+    monkeypatch.setattr(
+        panel, '_draw_bubble',
+        lambda _screen, rect, _step, _active: bubble_rects.append(rect.copy()))
+    monkeypatch.setattr(panel, '_draw_info_box',
+                        lambda *_args, **_kwargs: None)
+
+    panel.draw_within(SimpleNamespace(), pygame.Rect(0, 0, 520, 120))
+
+    assert chip_calls, 'expected a +N overflow chip when bubbles are dropped'
+    chip_rect, hidden = chip_calls[0]
+    assert bubble_rects
+    assert len(hidden) + len(bubble_rects) == len(many)
+    # The oldest steps hide behind the chip; the chip sits left of the row.
+    assert hidden == tuple(many[:len(hidden)])
+    assert all(chip_rect.right <= rect.left for rect in bubble_rects)
+
+
+def test_collapsed_strip_overflow_draws_plus_chip(monkeypatch):
+    from game.components.conquer_timeline_panel import ConquerTimelinePanel
+    from game.screens.conquer_flow import TimelineStep
+
+    panel = ConquerTimelinePanel(pygame.Surface((300, 60)))
+    many = [
+        TimelineStep(kind=f'k{i}', title=f'Step {i}', completed=True)
+        for i in range(20)
+    ]
+    panel.derive_display_steps = lambda _screen: many
+
+    chip_calls = []
+    icon_rects = []
+    monkeypatch.setattr(
+        panel, '_draw_overflow_chip',
+        lambda rect, hidden: chip_calls.append((rect.copy(), tuple(hidden))))
+    monkeypatch.setattr(
+        panel, '_draw_step_icon',
+        lambda _screen, rect, _step: icon_rects.append(rect.copy()))
+
+    rect = pygame.Rect(0, 0, 220, 40)
+    panel.draw_collapsed_strip(SimpleNamespace(), rect)
+
+    assert chip_calls, 'expected a +N overflow chip on the truncated strip'
+    chip_rect, hidden = chip_calls[0]
+    assert icon_rects
+    assert len(hidden) + len(icon_rects) == len(many)
+    assert hidden == tuple(many[:len(hidden)])
+    assert chip_rect.left >= rect.left
+    assert all(icon_rect.right <= rect.right for icon_rect in icon_rects)
+
+
+class _RenderSpyFont:
+    """Wrap a pygame Font, recording every text passed to ``render``.
+
+    pygame's C Font.render is read-only and can't be monkeypatched, so tests
+    swap in this delegating wrapper to observe which strings get drawn.
+    """
+
+    def __init__(self, font, sink):
+        self._font = font
+        self._sink = sink
+
+    def render(self, text, *args, **kwargs):
+        self._sink.append(text)
+        return self._font.render(text, *args, **kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self._font, name)
+
+
+def _field_select_step():
+    from game.screens.conquer_flow import TimelineStep
+    return TimelineStep(
+        kind='attacker',
+        title='Attacking Figure',
+        owner='you',
+        active=True,
+        interactive=True,
+        primary_action='select_advance',
+        info_headline='Choose your attacker',
+        info_body='Select one of your legal figures on the field to advance.',
+        tone='action',
+    )
+
+
+def _info_box_screen():
+    return SimpleNamespace(
+        _conquer_pending_confirmation=None,
+        _conquer_objective_action_rects={},
+        _conquer_timeline_info_text_rect=None,
+        _conquer_timeline_info_rect=None,
+        _conquer_timeline_step_started_at={},
+    )
+
+
+def test_compact_info_box_suppresses_misplaced_field_select_hint():
+    """The compact mobile info box must not render the 'Use the field to
+    select.' hint: it has no bottom button strip, so the hint used to be
+    right-aligned and overlapped/clipped against the headline. The body
+    already instructs the player to select on the field.
+    """
+    from game.components.conquer_timeline_panel import ConquerTimelinePanel
+
+    panel = ConquerTimelinePanel(pygame.Surface((900, 180)))
+    rect = pygame.Rect(20, 20, 320, 70)  # short row -> compact layout
+    screen = _info_box_screen()
+    step = _field_select_step()
+
+    rendered = []
+    panel.info_body_font = _RenderSpyFont(panel.info_body_font, rendered)
+    assert panel._use_compact_info_layout(rect)
+    panel._draw_compact_info_box(screen, rect, step, border=(255, 211, 116))
+
+    assert 'Use the field to select.' not in rendered
+    # No phantom button rect leaks into the action rects for a selection step.
+    assert 'next' not in screen._conquer_objective_action_rects
+
+
+def test_full_info_box_keeps_field_select_hint():
+    """The wide (desktop) info box still shows the field-select hint."""
+    from game.components.conquer_timeline_panel import ConquerTimelinePanel
+
+    panel = ConquerTimelinePanel(pygame.Surface((1200, 400)))
+    rect = pygame.Rect(40, 40, 500, 150)  # tall + wide -> full layout
+    screen = _info_box_screen()
+    step = _field_select_step()
+
+    rendered = []
+    panel.info_body_font = _RenderSpyFont(panel.info_body_font, rendered)
+    assert not panel._use_compact_info_layout(rect)
+    panel._draw_info_box(screen, rect, step, active_idx=0, steps=[step])
+
+    assert 'Use the field to select.' in rendered

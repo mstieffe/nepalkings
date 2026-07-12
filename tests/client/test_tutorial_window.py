@@ -102,6 +102,87 @@ def test_window_ignores_clicks_within_200ms():
     assert win.update([_click(win._btn_next.rect)]) is None
 
 
+def _scrollable_window():
+    from config import settings
+    from game.components.tutorial_window import TutorialWindowDialogue
+    if not pygame.display.get_init():
+        pygame.display.init()
+    surf = pygame.display.set_mode((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+    if not pygame.font.get_init():
+        pygame.font.init()
+    pages = [{'title': 'Scroll Test', 'layout': 'text_only',
+              'lines': [f'line {i}' for i in range(60)]}]
+    win = TutorialWindowDialogue(surf, pages, title='T')
+    win._created_at = pygame.time.get_ticks() - 1000
+    win.draw()
+    return win
+
+
+def _evt(kind, **kw):
+    return pygame.event.Event(kind, **kw)
+
+
+def test_scrollbar_thumb_drag_follows_cursor():
+    win = _scrollable_window()
+    assert win._max_scroll > 0
+    track = win._scroll_track_rect
+    assert track is not None
+
+    # Grab the thumb and drag DOWN → scroll increases (view goes down).
+    win._scroll = 0.0
+    win.draw()
+    y0 = win._scroll_thumb_top + 2
+    win.update([_evt(pygame.MOUSEBUTTONDOWN, button=1, pos=(track.centerx, y0)),
+                _evt(pygame.MOUSEMOTION, pos=(track.centerx, y0 + 90))])
+    assert win._scroll > 0
+    down_scroll = win._scroll
+    win.update([_evt(pygame.MOUSEBUTTONUP, button=1, pos=(track.centerx, y0 + 90))])
+
+    # Grab the thumb and drag UP → scroll decreases.
+    win.draw()
+    y1 = win._scroll_thumb_top + 2
+    win.update([_evt(pygame.MOUSEBUTTONDOWN, button=1, pos=(track.centerx, y1)),
+                _evt(pygame.MOUSEMOTION, pos=(track.centerx, y1 - 150))])
+    assert win._scroll < down_scroll
+    win.update([_evt(pygame.MOUSEBUTTONUP, button=1, pos=(track.centerx, y1 - 150))])
+
+
+def test_content_grab_scroll_still_works():
+    win = _scrollable_window()
+    win._scroll = 0.0
+    win.draw()
+    cx, cy = win.rect.centerx, win.rect.centery
+    # Touch-style: drag content UP → scroll increases.
+    win.update([_evt(pygame.MOUSEBUTTONDOWN, button=1, pos=(cx, cy)),
+                _evt(pygame.MOUSEMOTION, pos=(cx, cy - 60))])
+    assert win._scroll > 0
+
+
+def test_tiny_overflow_is_not_scrolled_but_large_overflow_is():
+    _display()
+    from config import settings
+    from game.components.tutorial_window import TutorialWindowDialogue
+
+    surf = pygame.Surface((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+    win = TutorialWindowDialogue(surf, [{'title': 'T', 'lines': ['x']}],
+                                 title='Welcome')
+    _, avail_h = win._content_region()
+
+    def _rows(height):
+        return lambda page: [
+            (pygame.Surface((10, height), pygame.SRCALPHA), 'text', 0)]
+
+    # A sliver of overflow must not produce a (near-empty) scrollbar.
+    win._page_rows = _rows(avail_h + 6)
+    win.draw()
+    assert win._max_scroll == 0
+
+    # A genuine overflow still scrolls.
+    win._page_rows = _rows(avail_h + 240)
+    win.draw()
+    assert win._max_scroll > 0
+
+
 def test_diagrams_return_surfaces_and_cache():
     _display()
     from game.components import tutorial_diagrams
@@ -257,7 +338,19 @@ def test_kingdom_and_offdef_diagrams_build():
                td.conquer_start_image, td.duel_start_image,
                td.duel_shared_card_pool_image, td.duel_loop_diagram,
                td.duel_build_battle_diagram, td.shared_card_pool_diagram,
-               td.battle_matchup_diagram, td.starter_tactics_diagram):
+               td.battle_matchup_diagram, td.starter_tactics_diagram,
+               td.tactics_actions_diagram, td.loot_risk_diagram):
         surf = fn()
         assert isinstance(surf, pygame.Surface)
         assert fn() is surf  # cached
+
+
+def test_starter_roulette_keeps_four_suit_presentation_contract():
+    from game.components.tutorial_window import _ALL_SUITS
+    from game.tutorial_content import starter_present_pages
+
+    assert _ALL_SUITS == ('Hearts', 'Diamonds', 'Clubs', 'Spades')
+    page = starter_present_pages()[0]
+    text = ' '.join([page.get('image_caption', ''), *(page.get('lines') or [])])
+    assert 'four suits' in text
+    assert 'Hearts' not in text and 'Diamonds' not in text

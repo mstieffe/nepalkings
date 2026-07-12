@@ -35,6 +35,8 @@ def remove_challenge():
 @challenges.route('/create_challenge', methods=['POST'])
 @require_token
 def create_challenge():
+    instant_game = None
+    challenge_id = None
     try:
         challenger = request.form.get('challenger')
         opponent = request.form.get('opponent')
@@ -88,9 +90,19 @@ def create_challenge():
               vs_ai=bool(opponent_user.is_ai), stake=stake, game_limit=game_limit)
         db.session.commit()
 
-        # Auto-accept if the opponent is an AI player (with a short delay)
+        challenge_id = challenge.id
+
+        # Auto-accept if the opponent is an AI player. The accept runs
+        # inline so the response can carry the created game and the client
+        # can enter it immediately instead of polling for the acceptance.
         if opponent_user.is_ai:
-            _schedule_ai_accept(challenge.id, current_app._get_current_object())
+            try:
+                instant_game = _ai_accept_challenge(
+                    challenge_id, current_app._get_current_object())
+            except Exception:
+                logger.exception('Inline AI accept failed; falling back to async accept')
+            if instant_game is None:
+                _schedule_ai_accept(challenge_id, current_app._get_current_object())
         else:
             # Tell offline human opponents they have been challenged
             try:
@@ -104,53 +116,76 @@ def create_challenge():
         logger.exception('Failed to create challenge')
         return jsonify({'success': False, 'message': 'Failed to create challenge'}), 400
 
-    return jsonify({'success': True, 'message': 'Challenge sent'})
+    payload = {'success': True, 'message': 'Challenge sent'}
+    if instant_game is not None:
+        payload['message'] = 'Challenge accepted'
+        payload['game'] = instant_game
+        payload['challenge_id'] = challenge_id
+    return jsonify(payload)
+
+
+def _ai_accept_challenge(challenge_id, app):
+    """Accept an open AI challenge and create its game.
+
+    Returns the serialized game dict, or None if the accept failed.
+    """
+    challenge = db.session.get(Challenge, challenge_id)
+    if not challenge or challenge.status.value != 'open':
+        logger.info(f"AI accept skipped: challenge {challenge_id} no longer open")
+        return None
+
+    from routes.games import create_game as _route_create_game
+    from ai import get_ai_auth_headers
+    ai_headers = get_ai_auth_headers(challenge.challenged_id)
+    auth_header = ai_headers.get('Authorization', '')
+
+    with app.test_request_context(
+        '/games/create_game',
+        method='POST',
+        data={'challenge_id': str(challenge_id)},
+        content_type='application/x-www-form-urlencoded',
+        headers={'Authorization': auth_header}
+    ):
+        game_response = _route_create_game()
+        if isinstance(game_response, tuple):
+            resp_obj, _status_code = game_response
+        else:
+            resp_obj = game_response
+
+        game_data = resp_obj.get_json()
+
+    if game_data.get('success') and 'game' in game_data:
+        game_id = game_data['game']['id']
+        logger.info(f"AI accepted challenge {challenge_id} → game {game_id}")
+        if settings.AI_ENABLED:
+            from ai.ai_worker import trigger_ai_if_needed
+            trigger_ai_if_needed(game_id, app=app)
+        # The inner route serialized the game for the AI viewer; re-serialize
+        # for the human challenger so their hand stays visible and the AI's
+        # stays hidden.
+        from models import Game
+        from routes.serialization import serialize_game_for_viewer
+        game_obj = db.session.get(Game, game_id)
+        if game_obj is not None:
+            return serialize_game_for_viewer(game_obj, challenge.challenger_id)
+        return None
+    logger.error(f"AI accept failed: {game_data.get('message')}")
+    return None
 
 
 def _schedule_ai_accept(challenge_id, app):
-    """Auto-accept a challenge from an AI opponent after a short delay."""
+    """Fallback: auto-accept an AI challenge on a background thread."""
     import threading
 
     def _do_accept():
         import time
-        time.sleep(2)  # Small delay so it feels natural
+        time.sleep(2)
         with app.app_context():
-            from routes.games import create_game as _route_create_game
-            import logging
-            logger = logging.getLogger('nepalkings.ai')
-
-            challenge = db.session.get(Challenge, challenge_id)
-            if not challenge or challenge.status.value != 'open':
-                logger.info(f"AI auto-accept skipped: challenge {challenge_id} no longer open")
-                return
-
-            # Get AI auth token for the challenged (AI) user
-            from ai import get_ai_auth_headers
-            ai_headers = get_ai_auth_headers(challenge.challenged_id)
-            auth_header = ai_headers.get('Authorization', '')
-
-            with app.test_request_context(
-                '/games/create_game',
-                method='POST',
-                data={'challenge_id': str(challenge_id)},
-                content_type='application/x-www-form-urlencoded',
-                headers={'Authorization': auth_header}
-            ):
-                game_response = _route_create_game()
-                if isinstance(game_response, tuple):
-                    resp_obj, status_code = game_response
-                else:
-                    resp_obj = game_response
-
-                game_data = resp_obj.get_json()
-
-                if game_data.get('success') and 'game' in game_data:
-                    logger.info(f"AI auto-accepted challenge {challenge_id} → game {game_data['game']['id']}")
-                    if settings.AI_ENABLED:
-                        from ai.ai_worker import trigger_ai_if_needed
-                        trigger_ai_if_needed(game_data['game']['id'], app=app)
-                else:
-                    logger.error(f"AI auto-accept failed: {game_data.get('message')}")
+            try:
+                _ai_accept_challenge(challenge_id, app)
+            except Exception:
+                logging.getLogger('nepalkings.ai').exception(
+                    f'AI auto-accept failed for challenge {challenge_id}')
 
     threading.Thread(target=_do_accept, daemon=True).start()
 

@@ -28,6 +28,12 @@ import pygame
 from config import settings
 from game.components.battle_moves.battle_move_icon_renderer import draw_battle_move_icon
 from game.components.conquer_layout import compute_conquer_layout
+from game.components.conquer_reveal_sequencer import (
+    STAGE_FLIP,
+    STAGE_HOLD,
+    draw_face_down_card,
+)
+from game.components.easing import ease_out_quad
 
 
 _BG_RGBA = (38, 29, 22, 218)
@@ -95,10 +101,40 @@ class ConquerRoundLedger:
         self._hover_popover_rect: Optional[pygame.Rect] = None
         self._revealed_round_keys: Dict[int, Tuple[Any, Any]] = {}
         self._round_reveal_animations: Dict[int, Dict[str, int]] = {}
+        # Last count-up value shown by the revealing diff pill; drives the
+        # per-increment tally tick emitted to the parent screen.
+        self._tally_last_shown: Optional[int] = None
 
     # ------------------------------------------------------------------ data
     def _game(self):
         return getattr(self._parent.state, 'game', None)
+
+    def _played_per_round_pair(self):
+        """(you_slots, opp_slots) — 3-slot arrays indexed by round.
+
+        Prefers the parent screen's gated lane helper so the ledger sees
+        exactly what the reveal sequencer allows (including synthetic
+        Skip slots merged from ``battle_skipped_rounds``). Falls back to
+        the ledger's own legacy readers for lightweight test parents.
+        """
+        getter = getattr(self._parent, '_conquer_lane_played_tactics', None)
+        if callable(getter):
+            try:
+                you_per, opp_per = getter()
+                return list(you_per), list(opp_per)
+            except Exception:
+                pass
+        return self._player_played_per_round(), self._opp_played_per_round()
+
+    def _reveal_stage(self, round_idx):
+        """Active reveal-stage dict for ``round_idx`` (or ``None``)."""
+        getter = getattr(self._parent, 'conquer_round_reveal_stage', None)
+        if not callable(getter):
+            return None
+        try:
+            return getter(round_idx)
+        except Exception:
+            return None
 
     def _player_played_per_round(self) -> List[Optional[Dict[str, Any]]]:
         """3-slot array of this player's played moves indexed by round."""
@@ -211,6 +247,13 @@ class ConquerRoundLedger:
     def _is_block(move) -> bool:
         return bool(move) and isinstance(move, dict) and move.get('family_name') == 'Block'
 
+    def _final_round_stakes_active(self) -> bool:
+        """True while the parent's contested-final-round flag applies."""
+        if not bool(getattr(self._parent, '_final_round_contested', False)):
+            return False
+        game = self._game()
+        return not (game and getattr(game, 'last_battle_result', None))
+
     def _ghost_preview(self, you_per) -> Optional[Tuple[int, Dict[str, Any]]]:
         game = self._game()
         if not game or getattr(game, 'last_battle_result', None):
@@ -248,6 +291,32 @@ class ConquerRoundLedger:
             (self._round_diff(y, o) if y and o else 0)
             for y, o in zip(you_per, opp_per)
         )
+
+    def current_total_diff(self) -> int:
+        """Public: cumulative gated total (figure diff + revealed rounds)."""
+        you_per, opp_per = self._played_per_round_pair()
+        return self._total_diff(you_per, opp_per)
+
+    def _reveal_total_adjustment(self, you_per, opp_per) -> int:
+        """Display-only offset syncing the total with the tally count-up.
+
+        Once a revealing round passes the FLIP midpoint its opponent slot
+        is un-gated, so the raw total jumps to the final value before the
+        diff pill finishes counting. Subtracting the un-tallied share of
+        that round's diff makes the total glide up in lockstep instead.
+        """
+        for idx in range(min(3, len(you_per), len(opp_per))):
+            stage = self._reveal_stage(idx)
+            if not stage or not stage.get('opp_visible'):
+                continue
+            you = you_per[idx]
+            opp = opp_per[idx]
+            if you is None or opp is None:
+                continue
+            diff = self._round_diff(you, opp)
+            factor = max(0.0, min(1.0, float(stage.get('diff_factor') or 0.0)))
+            return -int(round(diff * (1.0 - factor)))
+        return 0
 
     def _ghost_total_diff(self, you_per, opp_per, ghost_preview) -> int:
         total = self._total_diff(you_per, opp_per)
@@ -318,6 +387,13 @@ class ConquerRoundLedger:
         now = pygame.time.get_ticks()
         for idx, (you, opp) in enumerate(zip(you_per, opp_per)):
             if you is None or opp is None:
+                self._revealed_round_keys.pop(idx, None)
+                self._round_reveal_animations.pop(idx, None)
+                continue
+            # While the reveal sequencer is choreographing this round, hold
+            # the gold sweep back — it plays as the closing flourish once
+            # the staged reveal completes.
+            if self._reveal_stage(idx) is not None:
                 self._revealed_round_keys.pop(idx, None)
                 self._round_reveal_animations.pop(idx, None)
                 continue
@@ -396,8 +472,7 @@ class ConquerRoundLedger:
         self.window.blit(bg, outer.topleft)
         pygame.draw.rect(self.window, _BORDER_RGBA, outer, 2, border_radius=8)
 
-        you_per = self._player_played_per_round()
-        opp_per = self._opp_played_per_round()
+        you_per, opp_per = self._played_per_round_pair()
         ghost_preview = self._ghost_preview(you_per)
         self._update_round_reveal_animations(you_per, opp_per)
         cur_round = int(getattr(self._game(), 'battle_round', 0) or 0)
@@ -406,7 +481,8 @@ class ConquerRoundLedger:
             ghost_move = ghost_preview[1] if ghost_preview and ghost_preview[0] == i else None
             self._draw_round_card(pygame.Rect(*rect_tuple), i, you_per[i],
                                   opp_per[i], cur_round, ghost_move=ghost_move,
-                                  reveal_animation=self._round_reveal_animations.get(i))
+                                  reveal_animation=self._round_reveal_animations.get(i),
+                                  reveal_stage=self._reveal_stage(i))
         self._draw_total_card(pygame.Rect(*ledger.total_card_rect),
                               pygame.Rect(*ledger.total_circle_rect),
                               you_per, opp_per, ghost_preview=ghost_preview)
@@ -415,14 +491,23 @@ class ConquerRoundLedger:
     # -- round card
     def _draw_round_card(self, rect: pygame.Rect, idx: int,
                          you, opp, cur_round: int, ghost_move=None,
-                         reveal_animation=None):
+                         reveal_animation=None, reveal_stage=None):
         is_active = cur_round == idx if cur_round in (0, 1, 2) else False
+        is_revealing = reveal_stage is not None
         bg = pygame.Surface(rect.size, pygame.SRCALPHA)
         bg.fill(_CARD_BG_RGBA)
         self.window.blit(bg, rect.topleft)
         # Reveal glow drawn behind chips so the move icons stay legible.
         self._draw_round_reveal_animation(rect, idx, reveal_animation)
-        border = (210, 168, 72) if is_active else _BORDER_RGBA
+        if is_revealing or (is_active and idx == 2
+                            and self._final_round_stakes_active()):
+            # Pulsing gold frame: the round under reveal, or a contested
+            # final round (the "all hangs on this" stakes treatment).
+            phase = (pygame.time.get_ticks() % 640) / 640.0
+            pulse = 1.0 - abs(0.5 - phase) * 2.0
+            border = (200 + int(50 * pulse), 168 + int(48 * pulse), 72)
+        else:
+            border = (210, 168, 72) if is_active else _BORDER_RGBA
         pygame.draw.rect(self.window, border, rect, 2, border_radius=6)
 
         title_font = settings.get_font(max(10, int(settings.FS_TINY * 0.95)), bold=True)
@@ -442,16 +527,126 @@ class ConquerRoundLedger:
         is_ghost = bool(ghost_move is not None and you is None)
         # Block nullifies the other side: when one player plays Block, the
         # opponent's chip is shown with a red strike overlay to communicate
-        # that the tactic was negated.
-        you_blocked = self._is_block(opp) and not self._is_block(display_you) and display_you is not None
-        opp_blocked = self._is_block(display_you) and not self._is_block(opp) and opp is not None
+        # that the tactic was negated.  Strike overlays wait until the
+        # staged reveal has fully landed.
+        you_blocked = (not is_revealing and self._is_block(opp)
+                       and not self._is_block(display_you) and display_you is not None)
+        opp_blocked = (not is_revealing and self._is_block(display_you)
+                       and not self._is_block(opp) and opp is not None)
         self._draw_player_chip(you_rect, display_you, is_player_self=True,
                                ghost=is_ghost, blocked=you_blocked)
-        self._draw_player_chip(opp_rect, opp, is_player_self=False,
-                               blocked=opp_blocked)
-        self._draw_diff_pill(diff_rect, you, opp,
-                             played=(you is not None and opp is not None),
-                             ghost_move=ghost_move)
+        if is_revealing:
+            self._draw_opp_chip_revealing(opp_rect, opp, reveal_stage)
+            self._draw_diff_pill_revealing(diff_rect, you, opp, reveal_stage)
+        else:
+            self._draw_player_chip(opp_rect, opp, is_player_self=False,
+                                   blocked=opp_blocked)
+            self._draw_diff_pill(diff_rect, you, opp,
+                                 played=(you is not None and opp is not None),
+                                 ghost_move=ghost_move)
+
+    # -- staged reveal (choreographed by ConquerRevealSequencer)
+    def _draw_opp_chip_revealing(self, rect: pygame.Rect, opp, reveal_stage):
+        """Opponent chip during the staged reveal.
+
+        HOLD / early FLIP: face-down card. FLIP: horizontal squash flip
+        into the real chip. TALLY / IMPACT: the real chip.
+        """
+        stage = reveal_stage.get('stage')
+        progress = float(reveal_stage.get('progress') or 0.0)
+        opp_visible = bool(reveal_stage.get('opp_visible')) and opp is not None
+
+        card_rect = rect.inflate(-max(2, rect.width // 5), -2)
+        if stage in (STAGE_HOLD, STAGE_FLIP) and not opp_visible:
+            scale_x = 1.0
+            if stage == STAGE_FLIP:
+                # First flip half: squash the face-down card to its spine.
+                scale_x = max(0.06, 1.0 - progress * 2.0)
+            self._draw_squashed(card_rect, scale_x,
+                                lambda r: draw_face_down_card(self.window, r))
+            return
+        if opp is None:
+            # Defensive: identity not yet available — keep the card back.
+            draw_face_down_card(self.window, card_rect)
+            return
+        if stage == STAGE_FLIP:
+            # Second flip half: the real chip grows from the spine.
+            scale_x = max(0.06, (progress - 0.5) * 2.0)
+            self._draw_squashed(
+                rect, scale_x,
+                lambda r: self._draw_player_chip(r, opp, is_player_self=False))
+            return
+        self._draw_player_chip(rect, opp, is_player_self=False)
+
+    def _draw_squashed(self, rect: pygame.Rect, scale_x: float, draw_fn):
+        """Render ``draw_fn(rect)`` then horizontally squash the result.
+
+        Draws into place, captures the pixels, clears the area, and
+        re-blits the captured chip scaled to ``scale_x`` — a cheap card
+        flip that reuses the exact production chip renderer.
+        """
+        scale_x = max(0.02, min(1.0, float(scale_x)))
+        clipped = rect.clip(self.window.get_rect())
+        if clipped.width <= 1 or clipped.height <= 1:
+            return
+        draw_fn(rect)
+        if scale_x >= 0.999:
+            return
+        try:
+            snap = self.window.subsurface(clipped).copy()
+        except Exception:
+            return
+        pygame.draw.rect(self.window, (28, 22, 16), clipped, 0, border_radius=4)
+        new_w = max(1, int(clipped.width * scale_x))
+        try:
+            squashed = pygame.transform.smoothscale(snap, (new_w, clipped.height))
+        except Exception:
+            return
+        self.window.blit(squashed, squashed.get_rect(center=clipped.center))
+
+    def _draw_diff_pill_revealing(self, rect: pygame.Rect, you, opp, reveal_stage):
+        """Diff pill during the staged reveal: 'vs' → count-up → final."""
+        stage = reveal_stage.get('stage')
+        if stage in (STAGE_HOLD, STAGE_FLIP) or opp is None or you is None:
+            self._tally_last_shown = None
+            font = settings.get_font(max(13, int(settings.FS_SMALL * 1.0)), bold=True)
+            ts = font.render('vs', True, _TEXT_MUTED)
+            self.window.blit(ts, ts.get_rect(center=rect.center))
+            return
+        diff = self._round_diff(you, opp)
+        factor = max(0.0, min(1.0, float(reveal_stage.get('diff_factor') or 0.0)))
+        shown = int(round(diff * factor))
+        # One tick per count-up increment; sound policy lives in the parent
+        # so lightweight test parents stay silent.
+        prev = self._tally_last_shown
+        if shown != 0 and (prev is None or abs(shown) > abs(prev)):
+            hook = getattr(self._parent, '_on_conquer_tally_tick', None)
+            if callable(hook):
+                try:
+                    hook(shown, diff)
+                except Exception:
+                    pass
+        self._tally_last_shown = shown
+        if diff > 0:
+            direction, col = 'up', _WIN_GREEN
+        elif diff < 0:
+            direction, col = 'down', _LOSE_RED
+        else:
+            direction, col = 'eq', _TIE_GREY
+        pill = rect.inflate(-rect.width // 4, -rect.height // 3)
+        pygame.draw.rect(self.window, (10, 8, 6), pill, 0, border_radius=8)
+        pygame.draw.rect(self.window, col, pill, 2, border_radius=8)
+        font = settings.get_font(max(13, int(settings.FS_SMALL * 1.0)), bold=True)
+        num_surf = font.render(f'{abs(shown)}', True, col)
+        glyph_size = max(6, min(pill.height - 6, font.get_height() - 2))
+        gap = 2
+        total_w = glyph_size + gap + num_surf.get_width()
+        glyph_cx = pill.centerx - total_w // 2 + glyph_size // 2
+        _draw_diff_glyph(self.window, (glyph_cx, pill.centery), glyph_size,
+                         direction, col)
+        num_rect = num_surf.get_rect(
+            midleft=(glyph_cx + glyph_size // 2 + gap, pill.centery))
+        self.window.blit(num_surf, num_rect)
 
     def _draw_round_reveal_animation(self, rect: pygame.Rect, idx: int,
                                      animation):
@@ -465,7 +660,7 @@ class ConquerRoundLedger:
             self._round_reveal_animations.pop(idx, None)
             return
         progress = max(0.0, min(1.0, elapsed / duration))
-        eased = 1 - (1 - progress) * (1 - progress)
+        eased = ease_out_quad(progress)
         alpha = max(0, int(160 * (1.0 - progress)))
         if alpha <= 0:
             return
@@ -631,21 +826,26 @@ class ConquerRoundLedger:
         played_count = sum(1 for y, o in zip(you_per, opp_per) if y and o)
         game = self._game()
         last_result = getattr(game, 'last_battle_result', None) if game else None
+        # While a reveal's tally counts up, glide the displayed total in
+        # lockstep with the diff pill (display only; ghost math untouched).
+        reveal_adjust = (0 if last_result
+                         else self._reveal_total_adjustment(you_per, opp_per))
+        display_total = total_diff + reveal_adjust
 
         if last_result:
             col, label = self._resolved_total_status(last_result, total_diff)
         else:
             if ghost_preview:
                 col = _GHOST_BLUE
-                label = f'{total_diff:+d}'
+                label = f'{display_total:+d}'
             else:
-                if total_diff > 0:
+                if display_total > 0:
                     col = _WIN_GREEN
-                elif total_diff < 0:
+                elif display_total < 0:
                     col = _LOSE_RED
                 else:
                     col = _TIE_GREY
-                label = f'{total_diff:+d}' if played_count else '–'
+                label = f'{display_total:+d}' if played_count else '–'
 
         # Circle -- enlarged + gold halo so the battle-total reading
         # dominates the ledger band. The circle is anchored below the
@@ -669,10 +869,14 @@ class ConquerRoundLedger:
         pygame.draw.circle(self.window, col, (cx, cy), radius, 4)
         if ghost_preview:
             pygame.draw.circle(self.window, _GHOST_BLUE, (cx, cy), max(1, radius - 8), 1)
+        if reveal_adjust != 0:
+            # Momentum ring: which way the total is moving while it glides.
+            trend_col = _WIN_GREEN if reveal_adjust < 0 else _LOSE_RED
+            pygame.draw.circle(self.window, trend_col, (cx, cy),
+                               max(1, radius - 6), 2)
         value_size = max(14, min(int(radius * 1.05), int(settings.FS_SMALL * 1.55)))
         font = settings.get_font(value_size, bold=True)
         ts = font.render(label, True, col)
-        self.window.blit(ts, ts.get_rect(center=(cx, cy)))
         self.window.blit(ts, ts.get_rect(center=(cx, cy)))
         # Hover hint
         if last_result:

@@ -35,10 +35,10 @@ Image.MAX_IMAGE_PIXELS = 200_000_000
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 # Directories never needed by the runtime — drop them from the bundle.
+# Greyscale icon/frame directories are runtime assets used by figure, battle
+# move, spell, and tutorial screens, so they must be optimized but retained.
 SKIP_DIRS = {'_legacy', 'figures_old', 'old_cards', 'app_icon',
-             '_button', 'figures_greyscale', 'icons_greyscale',
-             'icons_small_greyscale', 'frames_greyscale',
-             'frames_hidden_greyscale'}
+             '_button'}
 
 # Longest-side pixel budget per path substring (first match wins,
 # most-specific first). Tuned for a <=1280x720 canvas with light retina

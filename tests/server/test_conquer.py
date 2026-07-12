@@ -166,6 +166,64 @@ class TestConquerBuildFigure:
                          })
         assert rv.status_code == 400
 
+    def test_maharaja_requires_mk_and_uses_server_attributes(
+            self, client, db, two_users, auth_headers_user1):
+        u1, u2 = two_users
+        land = _add_land(db, owner_id=u2.id)
+        mk = _add_collection_card(db, u1.id, 'Hearts', 'MK', 4)
+
+        rv = client.post('/kingdom/conquer/build_figure',
+                         headers=auth_headers_user1,
+                         json={
+                             'land_id': land.id,
+                             'family_name': 'Djungle Maharaja',
+                             'name': 'Fake name',
+                             'suit': 'Hearts',
+                             'color': 'defensive',
+                             'field': 'village',
+                             'card_ids': [mk.id],
+                             'card_roles': ['key'],
+                             'produces': {'gold': 999},
+                             'requires': {'warrior_red': 99},
+                             'checkmate': False,
+                             'cannot_be_blocked': True,
+                         })
+
+        assert rv.status_code == 200
+        fig = rv.get_json()['config']['figures'][0]
+        assert fig['family_name'] == 'Djungle Maharaja'
+        assert fig['name'] == 'Djungle Maharaja'
+        assert fig['field'] == 'castle'
+        assert fig['color'] == 'offensive'
+        assert fig['card_specs'] == [
+            {'rank': 'MK', 'suit': 'Hearts', 'value': 4},
+        ]
+        assert fig['produces'] == {'villager_red': 3, 'warrior_red': 2}
+        assert fig['requires'] == {}
+        assert fig['checkmate'] is True
+        assert fig['cannot_be_blocked'] is False
+
+    def test_maharaja_rejects_ordinary_king_card(
+            self, client, db, two_users, auth_headers_user1):
+        u1, u2 = two_users
+        land = _add_land(db, owner_id=u2.id)
+        king = _add_collection_card(db, u1.id, 'Hearts', 'K', 4)
+
+        rv = client.post('/kingdom/conquer/build_figure',
+                         headers=auth_headers_user1,
+                         json={
+                             'land_id': land.id,
+                             'family_name': 'Djungle Maharaja',
+                             'suit': 'Hearts',
+                             'field': 'castle',
+                             'card_ids': [king.id],
+                             'card_roles': ['key'],
+                         })
+
+        assert rv.status_code == 400
+        assert 'Maharaja card' in rv.get_json()['message']
+        assert king.locked is False
+
     def test_rejects_missing_fields(self, client, db, two_users, auth_headers_user1):
         rv = client.post('/kingdom/conquer/build_figure',
                          headers=auth_headers_user1,

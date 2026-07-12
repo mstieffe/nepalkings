@@ -456,6 +456,11 @@ def heartbeat():
         if not user:
             return jsonify({'success': False, 'message': 'User not found'}), 404
         user.last_active = _utcnow()
+        try:
+            from onboarding_service import ensure_daily_quest
+            ensure_daily_quest(user, commit=False)
+        except Exception:
+            logger.exception("Failed to refresh daily quest during heartbeat")
         db.session.commit()
         return jsonify({'success': True})
     except Exception as e:

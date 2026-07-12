@@ -644,6 +644,14 @@ def generate_ai_defence_template_for_land(land: Any) -> dict[str, Any]:
     return _fallback_template(tier)
 
 
+def get_ai_defence_name_for_land(land: Any) -> str:
+    """Return the generated defence display name without building the template."""
+    tier = max(1, int(getattr(land, 'tier', 1) or 1))
+    rng = random.Random(_template_seed(land))
+    primary_suit = _normalize_suit(getattr(land, 'suit_bonus_suit', None), rng)
+    return f'{primary_suit} {AI_DEFENCE_TIER_NAMES.get(tier, "Defenders")}'
+
+
 def get_ai_defence_template_for_land(land: Any) -> dict[str, Any]:
     """Public accessor for AI land defence templates.
 

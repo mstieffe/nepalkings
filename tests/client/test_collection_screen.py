@@ -132,18 +132,162 @@ class TestCollectionStats:
             ('Hearts', 'A'): 2,
             ('Spades', '7'): 1,
             ('Clubs', '2'): 3,
+            ('Diamonds', 'MK'): 1,
         }
         locked = {
             ('Hearts', 'A'): 1,
             ('Clubs', '2'): 2,
         }
         stats = _collection_stats(cards, locked)
-        assert stats['owned_total'] == 6
-        assert stats['unique_owned'] == 3
-        assert stats['unique_total'] == 52
-        assert stats['missing_total'] == 49
+        assert stats['owned_total'] == 7
+        assert stats['unique_owned'] == 4
+        assert stats['unique_total'] == 56
+        assert stats['missing_total'] == 52
         assert stats['locked_total'] == 3
-        assert stats['available_total'] == 3
+        assert stats['available_total'] == 4
+
+
+class TestBoosterImpactAnnotations:
+    """Booster reveals should explain how copy stock actually changed."""
+
+    def test_duplicate_draws_advance_owned_and_free_counts_in_order(self):
+        from game.screens.collection_screen import _annotate_booster_impact
+
+        drawn = [
+            {'suit': 'Hearts', 'rank': 'A', 'tier': 2},
+            {'suit': 'Hearts', 'rank': 'A', 'tier': 2},
+            {'suit': 'Spades', 'rank': 'K', 'tier': 3},
+        ]
+        annotated = _annotate_booster_impact(
+            drawn,
+            {('Hearts', 'A'): 2},
+            {('Hearts', 'A'): 1},
+        )
+
+        assert annotated[0]['_impact_new_type'] is False
+        assert annotated[0]['_impact_owned_before'] == 2
+        assert annotated[0]['_impact_owned_after'] == 3
+        assert annotated[0]['_impact_free_after'] == 2
+        assert annotated[1]['_impact_owned_before'] == 3
+        assert annotated[1]['_impact_owned_after'] == 4
+        assert annotated[1]['_impact_free_after'] == 3
+        assert annotated[2]['_impact_new_type'] is True
+        assert annotated[2]['_impact_owned_after'] == 1
+        assert '_impact_new_type' not in drawn[0]
+
+
+class TestCollectionVisibilityFilter:
+    """Verify the collection grid defaults to free cards only."""
+
+    def test_free_card_count_ignores_locked_copies(self):
+        from game.screens.collection_screen import _free_card_count
+
+        cards = {('Hearts', 'A'): 3}
+        locked = {('Hearts', 'A'): 2}
+
+        assert _free_card_count(cards, locked, 'Hearts', 'A') == 1
+        assert _free_card_count(cards, locked, 'Spades', 'A') == 0
+
+    def test_default_view_keeps_slots_and_darkens_fully_locked_cards(self):
+        from game.screens.collection_screen import (
+            _collection_card_display_state,
+            _collection_card_visible,
+            _owned_card_fully_locked,
+        )
+
+        cards = {
+            ('Hearts', 'A'): 3,
+            ('Clubs', 'K'): 1,
+        }
+        locked = {
+            ('Hearts', 'A'): 2,
+            ('Clubs', 'K'): 1,
+        }
+
+        assert _collection_card_visible(cards, locked, 'Hearts', 'A') is True
+        assert _collection_card_visible(cards, locked, 'Clubs', 'K') is True
+        assert _collection_card_visible(cards, locked, 'Spades', 'Q') is True
+        assert _collection_card_display_state(
+            cards, locked, 'Hearts', 'A') == 'owned'
+        assert _collection_card_display_state(
+            cards, locked, 'Clubs', 'K') == 'locked_placeholder'
+        assert _collection_card_display_state(
+            cards, locked, 'Spades', 'Q') == 'missing'
+        assert _collection_card_display_state(
+            cards, locked, 'Clubs', 'K', show_locked=True) == 'owned'
+        assert _owned_card_fully_locked(cards, locked, 'Spades', 'Q') is False
+        assert _owned_card_fully_locked(cards, locked, 'Clubs', 'K') is True
+
+    def test_show_locked_visibility_includes_owned_locked_cards(self):
+        from game.screens.collection_screen import _collection_card_visible
+
+        cards = {('Clubs', 'K'): 1}
+        locked = {('Clubs', 'K'): 1}
+
+        assert _collection_card_visible(
+            cards, locked, 'Clubs', 'K', show_locked=True) is True
+        assert _collection_card_visible(
+            cards, locked, 'Spades', 'Q', show_locked=True) is True
+
+    def test_card_positions_stay_stable_across_locked_visibility_toggle(self):
+        import pygame
+        from game.screens.collection_screen import CollectionScreen
+
+        screen = object.__new__(CollectionScreen)
+        screen._panel_rect = pygame.Rect(0, 0, 1000, 600)
+        screen._main_ranks = ['A', 'K']
+        screen._side_ranks = ['2']
+        screen._cards = {
+            ('Hearts', 'A'): 2,
+            ('Clubs', 'K'): 1,
+            ('Spades', '2'): 3,
+        }
+        screen._locked = {
+            ('Clubs', 'K'): 1,
+            ('Spades', '2'): 1,
+        }
+        screen._show_locked_cards = False
+
+        positions = screen._compute_card_positions()
+        keys = {(suit, rank) for _x, _y, suit, rank, _section in positions}
+
+        assert ('Hearts', 'A') in keys
+        assert ('Spades', '2') in keys
+        assert ('Diamonds', 'K') in keys
+        assert ('Clubs', 'K') in keys
+        assert len(screen._card_rects) == 12
+
+        screen._show_locked_cards = True
+        positions = screen._compute_card_positions()
+        keys = {(suit, rank) for _x, _y, suit, rank, _section in positions}
+
+        assert ('Clubs', 'K') in keys
+        assert len(screen._card_rects) == 12
+
+    def test_empty_collection_still_lays_out_full_catalogue(self):
+        import pygame
+        from config import settings
+        from game.screens.collection_screen import CollectionScreen, _collection_sort_key
+
+        screen = object.__new__(CollectionScreen)
+        screen._panel_rect = pygame.Rect(0, 0, 2000, 1000)
+        screen._main_ranks = sorted(
+            settings.RANKS_MAIN_CARDS,
+            key=lambda r: _collection_sort_key(r, 'main'),
+        )
+        screen._side_ranks = sorted(
+            settings.RANKS_SIDE_CARDS,
+            key=lambda r: _collection_sort_key(r, 'side'),
+        )
+        screen._cards = {}
+        screen._locked = {}
+        screen._show_locked_cards = False
+
+        positions = screen._compute_card_positions()
+
+        assert len(positions) == len(settings.SUITS) * (
+            len(settings.RANKS_MAIN_CARDS) + len(settings.RANKS_SIDE_CARDS))
+        assert len(screen._card_rects) == len(positions)
 
 
 def test_collection_basics_window_splits_rarity_and_recipe_pages():
@@ -158,6 +302,7 @@ def test_collection_basics_window_splits_rarity_and_recipe_pages():
 
     screen = object.__new__(CollectionScreen)
     screen.window = None
+    screen._data_loaded = True
     screen._collection_basics_dialogue = None
     screen._menu_coach_allowed_common = lambda: True
     screen._onboarding_completed_steps = lambda: set()
@@ -175,13 +320,14 @@ def test_collection_basics_window_splits_rarity_and_recipe_pages():
     assert dialogue is not None
     assert len(dialogue.pages) == 2
     first, second = dialogue.pages
-    assert first['title'] == 'Key And Number Cards'
+    assert first['title'] == 'Key and number cards'
+    assert 'orange is Uncommon' in ' '.join(first['lines'])
     assert first['image']() is td.card_rarity_code_diagram()
-    assert 'card rarity' in ' '.join(first['lines'])
-    assert second['title'] == 'Cards Become Actions'
+    assert 'rarity' in ' '.join(first['lines'])
+    assert second['title'] == 'Cards become actions'
     assert second['image']() is td.card_recipe_examples()
     assert 'single card' in ' '.join(second['lines'])
-    assert 'card recipe' in ' '.join(second['lines'])
+    assert 'recipe' in ' '.join(second['lines'])
 
 
 class TestCollectionSettings:
@@ -334,7 +480,7 @@ title_y = (
 title_font = settings.get_font(settings.COLLECTION_PACK_PANEL_TITLE_FONT_SIZE, bold=True)
 detail_font = settings.get_font(settings.COLLECTION_PACK_PANEL_DETAIL_FONT_SIZE)
 title_surf = title_font.render('Main Pack', True, settings.COLLECTION_PACK_PANEL_TITLE_CLR)
-owned_surf = detail_font.render('Owned: 999', True, settings.COLLECTION_PACK_PANEL_TEXT_CLR)
+owned_surf = detail_font.render('×999', True, settings.COLLECTION_PACK_PANEL_TEXT_CLR)
 gap = max(4, int(0.006 * settings.SCREEN_WIDTH))
 max_row_w = pack_rect.right - settings.COLLECTION_PACK_PANEL_PAD_X - title_x
 assert title_surf.get_width() + gap + owned_surf.get_width() <= max_row_w
@@ -487,6 +633,37 @@ class TestBoosterRevealLayout:
         assert overlay._celebration_progress(1) is not None
         assert overlay._celebration_progress(2) is not None
 
+    def test_reveal_summary_reports_new_types_and_usable_copies(self):
+        import pygame
+        from config import settings
+        from game.components.booster_reveal import BoosterRevealOverlay
+
+        window = pygame.display.get_surface() or pygame.display.set_mode(
+            (settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+        overlay = BoosterRevealOverlay(window, [
+            {'suit': 'Hearts', 'rank': '7', 'tier': 1,
+             '_impact_new_type': True, '_impact_owned_after': 1},
+            {'suit': 'Clubs', 'rank': 'J', 'tier': 2,
+             '_impact_new_type': False, '_impact_owned_after': 4},
+            {'suit': 'Spades', 'rank': 'K', 'tier': 3,
+             '_impact_new_type': True, '_impact_owned_after': 1},
+        ])
+
+        assert overlay._impact_summary_text() == (
+            '3 free copies added  ·  2 new card types')
+
+    def test_duplicate_reveals_have_no_redundant_plus_one_badge(self):
+        from game.components.booster_reveal import _impact_badge_label
+
+        assert _impact_badge_label({
+            '_impact_new_type': True,
+            '_impact_owned_after': 1,
+        }) == 'NEW'
+        assert _impact_badge_label({
+            '_impact_new_type': False,
+            '_impact_owned_after': 4,
+        }) == ''
+
 
 class TestCollectionService:
     """Verify collection_service module structure."""
@@ -499,6 +676,228 @@ class TestCollectionService:
         assert hasattr(collection_service, 'buy_booster_side')
         assert hasattr(collection_service, 'open_booster')
         assert hasattr(collection_service, 'open_booster_side')
+        assert hasattr(collection_service, 'craft_maharaja')
+
+    def test_craft_maharaja_posts_suit_payload(self, monkeypatch):
+        from utils import collection_service
+
+        captured = {}
+
+        class _Resp:
+            def json(self):
+                return {'success': True,
+                        'card': {'suit': 'Hearts', 'rank': 'MK', 'value': 4},
+                        'consumed': 13}
+
+        def _fake_post(url, json=None, timeout=None, **kwargs):
+            captured['url'] = url
+            captured['json'] = json
+            return _Resp()
+
+        monkeypatch.setattr(collection_service.requests, 'post', _fake_post)
+
+        result = collection_service.craft_maharaja('Hearts')
+
+        assert captured['json'] == {'suit': 'Hearts'}
+        assert captured['url'].endswith('/collection/craft_maharaja')
+        assert result['success'] is True
+        assert result['card']['rank'] == 'MK'
+
+
+class TestMaharajaCraft:
+    """Verify the crafted Maharaja ('MK') collection logic."""
+
+    def test_main_ranks_lead_with_maharaja(self):
+        from config import settings
+        from game.screens.collection_screen import _ordered_main_ranks
+        ranks = _ordered_main_ranks()
+        assert ranks[0] == settings.RANK_MAHARAJA
+        assert set(ranks[1:]) == set(settings.RANKS_MAIN_CARDS)
+
+    def test_craft_progress_ready_when_all_free(self):
+        from config import settings
+        from game.screens.collection_screen import _maharaja_craft_progress
+        cards = {('Hearts', r): 1 for r in settings.RANKS}
+        ready, total, missing = _maharaja_craft_progress(cards, {}, 'Hearts')
+        assert (ready, total, missing) == (13, 13, [])
+
+    def test_craft_progress_not_ready_when_rank_fully_locked(self):
+        from config import settings
+        from game.screens.collection_screen import _maharaja_craft_progress
+        cards = {('Hearts', r): 1 for r in settings.RANKS}
+        locked = {('Hearts', 'A'): 1}  # the only copy is locked → not ready
+        ready, total, missing = _maharaja_craft_progress(cards, locked, 'Hearts')
+        assert ready == 12
+        assert total == 13
+        assert 'A' in missing
+
+    def test_maharaja_never_sellable(self):
+        from game.screens.collection_screen import _sell_price
+        assert _sell_price('MK') == 0
+        assert _sell_price('MK', 5) == 0
+
+    def test_maharaja_gets_dedicated_tier_label(self):
+        from config import settings
+        from game.screens.collection_screen import _tier_label, _card_pack_type
+        assert _tier_label('MK') == settings.COLLECTION_MAHARAJA_LABEL
+        assert _tier_label('MK') != 'Common'
+        assert _card_pack_type('MK') == 'main'
+
+    def test_maharaja_craftable_tracks_free_copies(self):
+        from config import settings
+        from game.screens.collection_screen import CollectionScreen
+
+        screen = object.__new__(CollectionScreen)
+        screen._cards = {('Hearts', r): 1 for r in settings.RANKS}
+        screen._locked = {}
+        assert screen._maharaja_craftable('Hearts') is True
+
+        # Locking the only copy of one rank turns the highlight off again.
+        screen._locked = {('Hearts', 'A'): 1}
+        assert screen._maharaja_craftable('Hearts') is False
+
+    def test_craft_ready_pill_draws_on_card_bottom(self):
+        import pygame
+        from config import settings
+        from game.screens.collection_screen import CollectionScreen
+
+        window = pygame.display.get_surface() or pygame.display.set_mode(
+            (settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+        screen = object.__new__(CollectionScreen)
+        screen.window = window
+        screen._badge_font = settings.get_font(
+            settings.COLLECTION_BADGE_FONT_SIZE, bold=True)
+
+        card_rect = pygame.Rect(100, 100, settings.COLLECTION_CARD_W,
+                                settings.COLLECTION_CARD_H)
+        blits = []
+        real_blit = window.blit
+        screen.window = type('W', (), {
+            'blit': lambda _self, surf, dest, *a, **kw: blits.append(
+                (surf, dest)) or real_blit(surf, dest, *a, **kw)})()
+
+        screen._draw_maharaja_craft_ready_pill(card_rect)
+
+        assert len(blits) == 1
+        pill, dest = blits[0]
+        pill_rect = pill.get_rect(topleft=(dest.x, dest.y))
+        assert card_rect.contains(pill_rect)
+        assert pill_rect.centerx == card_rect.centerx
+
+    def test_craft_reveal_overlay_uses_craft_headline(self):
+        import pygame
+        from config import settings
+        from game.components.booster_reveal import BoosterRevealOverlay
+
+        window = pygame.display.get_surface() or pygame.display.set_mode(
+            (settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+        overlay = BoosterRevealOverlay(
+            window,
+            [{'suit': 'Hearts', 'rank': 'MK', 'value': 4, 'tier': 3}],
+            pack_type='main',
+            title='Hearts Maharaja Crafted!')
+
+        captured = []
+        real_font = overlay._title_font
+
+        class _CaptureFont:
+            def render(self, text, *args, **kwargs):
+                captured.append(text)
+                return real_font.render(text, *args, **kwargs)
+
+        overlay._title_font = _CaptureFont()
+        overlay.draw()
+
+        assert captured == ['Hearts Maharaja Crafted!']
+
+    def test_reveal_overlay_defaults_to_pack_headline(self):
+        import pygame
+        from config import settings
+        from game.components.booster_reveal import BoosterRevealOverlay
+
+        window = pygame.display.get_surface() or pygame.display.set_mode(
+            (settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+        overlay = BoosterRevealOverlay(window, [
+            {'suit': 'Hearts', 'rank': '7', 'value': 7, 'tier': 1},
+        ])
+
+        captured = []
+        real_font = overlay._title_font
+
+        class _CaptureFont:
+            def render(self, text, *args, **kwargs):
+                captured.append(text)
+                return real_font.render(text, *args, **kwargs)
+
+        overlay._title_font = _CaptureFont()
+        overlay.draw()
+
+        assert captured == ['Main Booster Pack']
+
+
+def test_maharaja_click_routes_to_craft_not_sell_or_trade():
+    import pygame
+    from config import settings
+    from game.screens.collection_screen import CollectionScreen
+    from game.components.cards.card_img import CardImg
+
+    window = pygame.display.get_surface() or pygame.display.set_mode(
+        (settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+    screen = object.__new__(CollectionScreen)
+    screen.window = window
+    screen._cards = {('Hearts', r): 1 for r in settings.RANKS}
+    screen._locked = {}
+    screen._card_imgs = {
+        ('Hearts', 'MK'): CardImg(window, 'Hearts', 'MK', 60, 90)}
+    screen._profile_dialogue = None
+    screen._profile_card = None
+    screen._profile_pinned_tooltip = None
+    screen._craft_dialogue = None
+    screen._craft_suit = None
+
+    # A click on an MK cell normally routes through _open_profile_dialogue.
+    screen._open_profile_dialogue('Hearts', 'MK')
+
+    # It must open the craft dialogue — never the sell/convert profile.
+    assert screen._profile_dialogue is None
+    assert screen._craft_dialogue is not None
+    assert screen._craft_suit == 'Hearts'
+    actions = [button.text for button in screen._craft_dialogue.buttons]
+    assert actions == ['Craft', 'cancel']
+    action_names = {a.lower() for a in actions}
+    assert 'sell copies' not in action_names
+    assert 'convert' not in action_names
+    # All 13 ranks free → the craft button is enabled.
+    craft_btn = next(b for b in screen._craft_dialogue.buttons
+                     if b.text.lower() == 'craft')
+    assert craft_btn.disabled is False
+
+
+def test_maharaja_craft_button_disabled_when_not_ready():
+    import pygame
+    from config import settings
+    from game.screens.collection_screen import CollectionScreen
+    from game.components.cards.card_img import CardImg
+
+    window = pygame.display.get_surface() or pygame.display.set_mode(
+        (settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+    screen = object.__new__(CollectionScreen)
+    screen.window = window
+    screen._cards = {('Spades', r): 1 for r in settings.RANKS}
+    screen._locked = {('Spades', 'K'): 1}  # one rank fully locked
+    screen._card_imgs = {
+        ('Spades', 'MK'): CardImg(window, 'Spades', 'MK', 60, 90)}
+    screen._profile_dialogue = None
+    screen._profile_card = None
+    screen._profile_pinned_tooltip = None
+    screen._craft_dialogue = None
+    screen._craft_suit = None
+
+    screen._open_craft_dialogue('Spades')
+
+    craft_btn = next(b for b in screen._craft_dialogue.buttons
+                     if b.text.lower() == 'craft')
+    assert craft_btn.disabled is True
 
 
 def test_open_booster_confirmation_offers_open_all_for_multiple_packs():
@@ -543,6 +942,41 @@ def test_open_all_status_starts_bulk_booster_request():
     assert calls == [('open', 'main', 5)]
 
 
+def test_card_profile_keeps_card_art_and_contextual_copy_actions(monkeypatch):
+    import pygame
+    from config import settings
+    from game.screens.collection_screen import CollectionScreen
+    from utils import card_uses
+
+    window = pygame.display.get_surface() or pygame.display.set_mode(
+        (settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+    screen = object.__new__(CollectionScreen)
+    screen.window = window
+    screen._cards = {('Hearts', 'A'): 3}
+    screen._locked = {('Hearts', 'A'): 1}
+    screen._card_imgs = {
+        ('Hearts', 'A'): SimpleNamespace(
+            front_img=pygame.Surface((60, 90), pygame.SRCALPHA))
+    }
+    monkeypatch.setattr(card_uses, 'get_card_uses', lambda _suit, _rank: {
+        'figures': [], 'spells': [], 'battle_moves': [],
+    })
+
+    screen._open_profile_dialogue('Hearts', 'A')
+
+    dialogue = screen._profile_dialogue
+    assert dialogue.title == 'Hearts A'
+    assert [button.text for button in dialogue.buttons] == [
+        'Sell copies', 'Convert', 'Close']
+    assert dialogue._lead_items
+    assert all(button.disabled is False for button in dialogue.buttons)
+    assert all(group['icon'] is not None for group in dialogue.image_groups)
+    assert all(group['badge_icon'] is None for group in dialogue.image_groups)
+    assert '3 owned' in dialogue.message
+    assert '2 free' in dialogue.message
+    assert '1 in use' in dialogue.message
+
+
 class TestCollectionCoach:
     """Verify post-duel collection tour step selection."""
 
@@ -571,17 +1005,9 @@ class TestCollectionCoach:
 
     def test_coach_routes_open_pack_then_kingdom_then_loop(self):
         screen = self._screen()
-        step = screen._current_collection_coach_step()
-        assert step['id'] == 'collection_starter_cards'
-        assert step['action'] == 'next'
-        assert step['button_label'] == 'Got it'
-        # The full card->figure lesson lives in the collection-basics window;
-        # this card is a brief in-collection reinforcement.
-        assert 'combine into figures' in step['body']
-
-        # Collection-first journey: open a starter pack BEFORE the first
-        # conquest.
-        screen.state.user_dict['onboarding']['menu_hints_seen'].append('collection_starter_cards')
+        # Collection-first journey: the basics window teaches cards, then the
+        # coach points straight at opening a starter pack (the redundant
+        # 'collection_starter_cards' reinforcement card was removed).
         step = screen._current_collection_coach_step()
         assert step['id'] == 'collection_open_main_booster'
 

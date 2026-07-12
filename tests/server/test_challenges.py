@@ -127,6 +127,53 @@ class TestCreateChallenge:
         assert resp.status_code == 401
 
 
+class TestInstantAIAccept:
+    def _ai_user(self, db):
+        from ai import init_ai_users
+        import server_settings as settings
+        from models import User
+        init_ai_users()
+        return User.query.filter_by(
+            username=settings.AI_USERNAMES[0], is_ai=True).first()
+
+    def test_ai_challenge_returns_game_inline(self, client, db, two_users, auth_headers_user1):
+        """Challenging an AI opponent accepts inline and returns the game."""
+        from models import Challenge, ChallengeStatus
+        u1, _ = two_users
+        ai_user = self._ai_user(db)
+        resp = _make_challenge(client, auth_headers_user1, u1.username, ai_user.username)
+        data = resp.get_json()
+        assert resp.status_code == 200
+        assert data['success'] is True
+        assert 'game' in data
+        assert data['challenge_id'] is not None
+        challenge = db.session.get(Challenge, data['challenge_id'])
+        assert challenge.status.value == ChallengeStatus.ACCEPTED.value
+        assert challenge.game_id == data['game']['id']
+
+    def test_ai_challenge_game_is_serialized_for_challenger(
+        self, client, db, two_users, auth_headers_user1
+    ):
+        """The inline game must be the challenger's view: own hand visible,
+        the AI's hand redacted."""
+        u1, _ = two_users
+        ai_user = self._ai_user(db)
+        resp = _make_challenge(client, auth_headers_user1, u1.username, ai_user.username)
+        game = resp.get_json()['game']
+        players = {p['user_id']: p for p in game['players']}
+        own_hand = players[u1.id]['main_hand']
+        ai_hand = players[ai_user.id]['main_hand']
+        assert own_hand and all(c['rank'] is not None for c in own_hand)
+        assert ai_hand and all(c['rank'] is None for c in ai_hand)
+
+    def test_human_challenge_has_no_inline_game(self, client, two_users, auth_headers_user1):
+        u1, u2 = two_users
+        resp = _make_challenge(client, auth_headers_user1, u1.username, u2.username)
+        data = resp.get_json()
+        assert data['success'] is True
+        assert 'game' not in data
+
+
 class TestRemoveChallenge:
     def _create(self, client, db, two_users, auth_headers_user1):
         from models import Challenge, ChallengeStatus

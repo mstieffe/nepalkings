@@ -44,12 +44,11 @@ def test_duel_tutorial_intro_pages_explain_core_loop():
         images.append(page.get('image')())
     text = ' '.join(parts)
 
-    assert 'heart' in text.lower()
-    assert 'chess-like' in text
-    assert 'building phases' in text
-    assert 'battle phases' in text
-    assert 'same pool of cards' in text
-    assert 'agreed point goal' in text
+    assert 'full depth' in text
+    assert 'point goal' in text
+    assert 'building phase' in text
+    assert 'battle phase' in text
+    assert 'shared deck' in text
     assert all(isinstance(image, pygame.Surface) for image in images)
 
 

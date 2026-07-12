@@ -692,6 +692,14 @@ class BattleShopScreen(SubScreen):
             )
 
         if result.get('success'):
+            from utils import sound
+            sound.play('card_place')
+            sound.play('coin', volume=0.6)
+            fx = self._fx_layer()
+            if fx is not None:
+                fx.spawn_burst(pygame.Rect(self.confirm_button.rect),
+                               (238, 206, 130), secondary=(255, 245, 200),
+                               count=16, upward_bias=0.6)
             if result.get('game'):
                 self.game.update_from_dict(result['game'])
             self._load_bought_moves()
@@ -717,6 +725,14 @@ class BattleShopScreen(SubScreen):
                 title="Battle Move Bought",
             )
             self._spawn_buy_floater(move)
+            callback = getattr(self, '_on_move_bought', None)
+            if callable(callback):
+                callback()
+            if self.mode == 'duel':
+                parent = getattr(self.state, 'parent_screen', None)
+                marker = getattr(parent, '_mark_duel_coach_seen', None)
+                if callable(marker):
+                    marker('battle_shop_select_moves')
         else:
             self.make_dialogue_box(
                 message=f"Failed: {result.get('message', 'Unknown error')}",
@@ -990,6 +1006,8 @@ class BattleShopScreen(SubScreen):
             )
 
         if result.get('success'):
+            from utils import sound
+            sound.play('card_slide')
             if result.get('game'):
                 self.game.update_from_dict(result['game'])
             self._load_bought_moves()
@@ -1038,6 +1056,10 @@ class BattleShopScreen(SubScreen):
 
         if result.get('success'):
             self._battle_moves_confirmed = True
+            parent = getattr(self.state, 'parent_screen', None)
+            marker = getattr(parent, '_mark_duel_coach_seen', None)
+            if callable(marker):
+                marker('battle_shop_ready')
             if result.get('game'):
                 self.game.update_from_dict(result['game'])
 

@@ -28,8 +28,8 @@ _PAD_Y = 0.010
 _TITLE_BAR_H = 0.040
 _BUBBLE_MIN_W = 96
 _BUBBLE_MAX_W = 150
-_BUBBLE_GAP = 14
-_INFO_MIN_W = 320
+_BUBBLE_GAP = 8 if settings.TOUCH_TARGET_MIN > 0 else 14
+_INFO_MIN_W = 292 if settings.TOUCH_TARGET_MIN > 0 else 320
 _INFO_PAD = 12
 _FIGURE_FRAME_FILL = 0.84
 _INFO_VISUAL_KINDS = {'spell', 'figure', 'tactic'}
@@ -40,6 +40,7 @@ _INFO_VISUAL_TEXT_MIN_W = 128
 _INFO_VISUAL_ICON_MIN = 52
 _INFO_VISUAL_ICON_MAX = 112
 _COUNTDOWN_SIZE = 22
+_OVERFLOW_CHIP_W = 30
 
 # Auto-advance hold for non-interactive steps (ms).
 AUTO_ADVANCE_MS = 4000
@@ -98,6 +99,7 @@ class ConquerTimelinePanel:
         self._step_hover = None
         self._spell_hover = None
         self._figure_hover = None
+        self._overflow_hover = None
         self._card_back_cache = {}
         # Spell-replay coupling: lags the server's ``conquer_resolution_step`` by
         # one when a spell-driven step is currently being animated/active so the
@@ -196,6 +198,7 @@ class ConquerTimelinePanel:
         self._step_hover = None
         self._spell_hover = None
         self._figure_hover = None
+        self._overflow_hover = None
 
         steps = self.derive_display_steps(screen)
         active_idx = self._active_index(steps)
@@ -218,20 +221,13 @@ class ConquerTimelinePanel:
         # Only completed or active steps are rendered.  Pending future
         # steps are hidden until they become reachable.
         visible_indices = [i for i, s in enumerate(steps) if s.completed or s.active]
-        n_visible = len(visible_indices)
 
         avail_w = settings.SCREEN_WIDTH - 2 * pad_x
         info_w = max(_INFO_MIN_W, int(avail_w * 0.35)) if info_visible else 0
         timeline_w = avail_w - info_w - (_BUBBLE_GAP if info_visible else 0)
-        bubble_room = (
-            timeline_w - _BUBBLE_GAP * (max(1, n_visible) - 1)
-        ) // max(1, n_visible)
-        compact_min_w = 68 if n_visible >= 8 else _BUBBLE_MIN_W
-        bubble_w = max(54, min(_BUBBLE_MAX_W, bubble_room))
-        if bubble_w < compact_min_w:
-            needed = compact_min_w * n_visible + _BUBBLE_GAP * max(0, n_visible - 1)
-            if needed <= timeline_w:
-                bubble_w = compact_min_w
+        visible_indices, bubble_w, hidden_steps, chip_w = (
+            self._fit_bubbles_with_overflow(
+                steps, visible_indices, timeline_w))
 
         line_y = body_top + body_h // 2
 
@@ -240,6 +236,10 @@ class ConquerTimelinePanel:
         # between adjacent visible bubbles only — never across a bubble).
         bubble_rects = []
         x = pad_x
+        if hidden_steps:
+            chip_rect = pygame.Rect(x, body_top, chip_w, body_h)
+            self._draw_overflow_chip(chip_rect, hidden_steps)
+            x = chip_rect.right + _BUBBLE_GAP
         for idx in visible_indices:
             step = steps[idx]
             rect = pygame.Rect(x, body_top, bubble_w, body_h)
@@ -278,6 +278,7 @@ class ConquerTimelinePanel:
         self._step_hover = None
         self._spell_hover = None
         self._figure_hover = None
+        self._overflow_hover = None
 
         if rect.width <= 32 or rect.height <= 24:
             return
@@ -303,8 +304,7 @@ class ConquerTimelinePanel:
         info_visible = info_step is not None
 
         visible_indices = [i for i, s in enumerate(steps) if s.completed or s.active]
-        n_visible = len(visible_indices)
-        if n_visible == 0:
+        if len(visible_indices) == 0:
             return
 
         content_width = max(0, rect.width - max(0, int(right_reserve)))
@@ -316,20 +316,18 @@ class ConquerTimelinePanel:
             info_w = 0
             info_visible = False
         timeline_w = avail_w - info_w - (_BUBBLE_GAP if info_visible else 0)
-        bubble_room = (
-            timeline_w - _BUBBLE_GAP * (max(1, n_visible) - 1)
-        ) // max(1, n_visible)
-        compact_min_w = 68 if n_visible >= 8 else _BUBBLE_MIN_W
-        bubble_w = max(54, min(_BUBBLE_MAX_W, bubble_room))
-        if bubble_w < compact_min_w:
-            needed = compact_min_w * n_visible + _BUBBLE_GAP * max(0, n_visible - 1)
-            if needed <= timeline_w:
-                bubble_w = compact_min_w
+        visible_indices, bubble_w, hidden_steps, chip_w = (
+            self._fit_bubbles_with_overflow(
+                steps, visible_indices, timeline_w))
 
         line_y = body_top + body_h // 2
 
         bubble_rects = []
         x = rect.left + pad_x
+        if hidden_steps:
+            chip_rect = pygame.Rect(x, body_top, chip_w, body_h)
+            self._draw_overflow_chip(chip_rect, hidden_steps)
+            x = chip_rect.right + _BUBBLE_GAP
         for idx in visible_indices:
             step = steps[idx]
             bubble_rect = pygame.Rect(x, body_top, bubble_w, body_h)
@@ -358,6 +356,7 @@ class ConquerTimelinePanel:
         self._step_hover = None
         self._spell_hover = None
         self._figure_hover = None
+        self._overflow_hover = None
         steps = [
             step for step in self.derive_display_steps(screen)
             if step.completed or step.active
@@ -367,20 +366,35 @@ class ConquerTimelinePanel:
 
         gap = max(5, min(8, rect.height // 9))
         icon_size = min(42, max(20, rect.height - 10))
+        hidden_steps = ()
+        chip_w = 0
         needed = len(steps) * icon_size + max(0, len(steps) - 1) * gap
         if needed > rect.width:
             min_icon_size = 14
             max_icons = max(1, (rect.width + gap) // (min_icon_size + gap))
             if len(steps) > max_icons:
+                # Oldest icons are dropped; a '+N' chip keeps them reviewable.
+                chip_w = max(12, min(24, rect.height - 2))
+                body_w = max(min_icon_size, rect.width - chip_w - gap)
+                max_icons = max(1, (body_w + gap) // (min_icon_size + gap))
+                hidden_steps = tuple(steps[:max(0, len(steps) - max_icons)])
                 steps = steps[-max_icons:]
+            body_w = rect.width - (chip_w + gap if chip_w else 0)
             icon_size = max(
                 min_icon_size,
-                (rect.width - gap * max(0, len(steps) - 1)) // len(steps),
+                (body_w - gap * max(0, len(steps) - 1)) // len(steps),
             )
-            needed = len(steps) * icon_size + max(0, len(steps) - 1) * gap
+            needed = (len(steps) * icon_size + max(0, len(steps) - 1) * gap
+                      + (chip_w + gap if chip_w else 0))
         x = rect.left + max(0, (rect.width - needed) // 2)
         y = rect.centery - icon_size // 2
         line_y = rect.centery
+
+        if hidden_steps:
+            chip_rect = pygame.Rect(
+                x, rect.centery - chip_w // 2, chip_w, chip_w)
+            self._draw_overflow_chip(chip_rect, hidden_steps)
+            x = chip_rect.right + gap
 
         for idx, step in enumerate(steps):
             icon_rect = pygame.Rect(x, y, icon_size, icon_size)
@@ -708,6 +722,72 @@ class ConquerTimelinePanel:
             if step.active:
                 return idx
         return None
+
+    @staticmethod
+    def _fit_timeline_bubbles(visible_indices, timeline_w):
+        """Pick the bubble width and the indices to draw so the bubble row
+        always fits inside ``timeline_w``.
+
+        The previous logic floored the bubble width at 54px even when the row
+        did not fit, so on crowded mobile timelines the last bubbles overflowed
+        into (and were covered by) the info box on the right. Here the width is
+        clamped to the room actually available, and when even a hard minimum
+        will not fit, the oldest bubbles are dropped (keeping the most recent,
+        which include the active step shown next to the info box).
+        """
+        indices = list(visible_indices)
+        n = len(indices)
+        if n <= 0 or timeline_w <= 0:
+            return indices, 0
+        hard_min = 46
+        # Drop oldest bubbles that cannot fit even at the hard-minimum width.
+        max_fit = max(1, (timeline_w + _BUBBLE_GAP) // (hard_min + _BUBBLE_GAP))
+        if n > max_fit:
+            indices = indices[-max_fit:]
+            n = len(indices)
+        bubble_room = (timeline_w - _BUBBLE_GAP * (n - 1)) // n
+        compact_min_w = 68 if n >= 8 else _BUBBLE_MIN_W
+        bubble_w = max(hard_min, min(_BUBBLE_MAX_W, bubble_room))
+        if bubble_w < compact_min_w:
+            needed = compact_min_w * n + _BUBBLE_GAP * (n - 1)
+            if needed <= timeline_w:
+                bubble_w = compact_min_w
+        # Never exceed the room available, so the row can't bleed into the
+        # info box on its right.
+        bubble_w = min(bubble_w, max(hard_min, bubble_room))
+        return indices, bubble_w
+
+    def _fit_bubbles_with_overflow(self, steps, visible_indices, timeline_w):
+        """Fit the bubble row; when older bubbles must be dropped, carve out
+        room for a '+N' overflow chip on the left so the drop is visible.
+
+        Returns ``(visible_indices, bubble_w, hidden_steps, chip_w)`` where
+        ``hidden_steps`` are the dropped (oldest-first) steps.
+        """
+        fitted, bubble_w = self._fit_timeline_bubbles(
+            visible_indices, timeline_w)
+        if len(fitted) >= len(visible_indices):
+            return fitted, bubble_w, (), 0
+        chip_w = _OVERFLOW_CHIP_W
+        reduced_w = max(0, timeline_w - chip_w - _BUBBLE_GAP)
+        fitted, bubble_w = self._fit_timeline_bubbles(
+            visible_indices, reduced_w)
+        hidden = tuple(
+            steps[i]
+            for i in visible_indices[:len(visible_indices) - len(fitted)]
+        )
+        return fitted, bubble_w, hidden, chip_w
+
+    def _draw_overflow_chip(self, rect, hidden_steps):
+        """'+N' chip standing in for dropped older bubbles; hovering it
+        lists the hidden steps so early beats stay reviewable."""
+        pygame.draw.rect(self.window, (26, 23, 19), rect, border_radius=6)
+        pygame.draw.rect(self.window, (110, 92, 60), rect, 1, border_radius=6)
+        label = self.owner_font.render(
+            f'+{len(hidden_steps)}', True, (210, 196, 156))
+        self.window.blit(label, label.get_rect(center=rect.center))
+        if rect.collidepoint(pygame.mouse.get_pos()):
+            self._overflow_hover = (tuple(hidden_steps), rect)
 
     # ----------------------------------------------------- bubble rendering
 
@@ -1097,7 +1177,7 @@ class ConquerTimelinePanel:
         headline = step.info_headline or step.title
         assets = tuple(getattr(step, 'info_assets', ()) or ())
         countdown_ratio = self._step_countdown_ratio(screen, step)
-        show_countdown = countdown_ratio is not None and not step.interactive
+        show_countdown = countdown_ratio is not None
         visual_assets, supporting_assets = self._split_info_assets(assets)
         if not visual_assets:
             visual_assets = self._step_visual_assets(step)
@@ -1180,13 +1260,13 @@ class ConquerTimelinePanel:
     def _draw_compact_info_box(self, screen, rect, step, border):
         """Short mobile timeline rows use a side-by-side text/action layout."""
         button_rects = self._draw_active_buttons(
-            screen, rect, step, align_right=True)
+            screen, rect, step, align_right=True, draw_interactive_hint=False)
         text_right = rect.right - _INFO_PAD
         if button_rects:
             text_right = min(r.left for r in button_rects) - 10
 
         countdown_ratio = self._step_countdown_ratio(screen, step)
-        show_countdown = countdown_ratio is not None and not step.interactive
+        show_countdown = countdown_ratio is not None
         if show_countdown and not button_rects:
             text_right = min(text_right, rect.right - _INFO_PAD - _COUNTDOWN_SIZE - 12)
 
@@ -1208,8 +1288,7 @@ class ConquerTimelinePanel:
         screen._conquer_timeline_info_text_rect = text_rect.copy()
 
         if text_w <= 0 or text_h <= 0:
-            countdown_ratio = self._step_countdown_ratio(screen, step)
-            if countdown_ratio is not None and not step.interactive and not button_rects:
+            if show_countdown and not button_rects:
                 self._draw_countdown(rect, countdown_ratio)
             return
 
@@ -1650,19 +1729,44 @@ class ConquerTimelinePanel:
         surf = self.sidenote_font.render(rendered_text, True, (236, 224, 190))
         self.window.blit(surf, surf.get_rect(center=rect.center))
 
+    @staticmethod
+    def _single_option_hold_ratio(screen):
+        """Remaining-time ratio of the screen's single-option auto-pick hold.
+
+        ``None`` when the screen has no such hold running (or is a minimal
+        test double without the helper).
+        """
+        ratio_fn = getattr(screen, 'conquer_single_option_hold_ratio', None)
+        if not callable(ratio_fn):
+            return None
+        try:
+            return ratio_fn()
+        except Exception:
+            return None
+
     def _step_countdown_ratio(self, screen, step):
-        """Return remaining-time ratio in [0, 1] for non-interactive auto-advance."""
+        """Return remaining-time ratio in [0, 1] for auto-advancing steps.
+
+        Only two step states actually advance on a timer: gate-held beats
+        (``primary_action == 'next'``) and interactive selections with a
+        single legal option (which the screen auto-picks after a hold).
+        Every other step advances on game state, so a countdown there would
+        imply a timeout that never fires.  Read-only on the timers dict:
+        seeding belongs to ``_apply_sequence_gates`` — writing here would
+        pre-expire the hold of a step kind that was briefly active in a
+        non-hold state (e.g. ``defender`` while waiting for the response).
+        """
         if step.interactive:
+            return self._single_option_hold_ratio(screen)
+        if step.primary_action != 'next':
             return None
         timers = getattr(screen, '_conquer_timeline_step_started_at', None)
         if timers is None:
             return None
-        now = pygame.time.get_ticks()
         started = timers.get(step.kind)
         if started is None:
-            timers[step.kind] = now
-            started = now
-        elapsed = now - started
+            return None
+        elapsed = pygame.time.get_ticks() - started
         return max(0.0, min(1.0, 1.0 - elapsed / float(AUTO_ADVANCE_MS)))
 
     def _draw_countdown(self, rect, ratio):
@@ -1691,12 +1795,15 @@ class ConquerTimelinePanel:
         if pending and step.kind in ('attacker', 'defender'):
             return btn_w * 2 + 10
         if step.interactive:
+            if self._single_option_hold_ratio(screen) is not None:
+                return btn_w
             return 0
         if step.primary_action == 'next':
             return btn_w
         return 0
 
-    def _draw_active_buttons(self, screen, rect, step, *, align_right=False):
+    def _draw_active_buttons(self, screen, rect, step, *, align_right=False,
+                             draw_interactive_hint=True):
         pending = getattr(screen, '_conquer_pending_confirmation', None)
         btn_h = self._active_button_height()
         btn_w = max(96, int(rect.width * 0.30))
@@ -1718,12 +1825,26 @@ class ConquerTimelinePanel:
             return [confirm_rect, cancel_rect]
 
         if step.interactive:
-            # Selection-based interaction (target on field) — no buttons,
-            # just a hint.
-            hint = self.info_body_font.render(
-                'Use the field to select.',
-                True, (200, 195, 175))
-            self.window.blit(hint, (x_left, btn_y + 4))
+            # Single-option selections auto-pick after a hold; surface a Next
+            # button so the impending auto-advance is visible and skippable
+            # (the shared 'next' action pre-empts it via
+            # ``_fire_pending_single_option``).
+            if self._single_option_hold_ratio(screen) is not None:
+                next_rect = pygame.Rect(x_left, btn_y, btn_w, btn_h)
+                self._draw_rect_button(next_rect, 'Next', (86, 106, 134))
+                screen._conquer_objective_action_rects['next'] = next_rect
+                return [next_rect]
+            # Selection-based interaction (target on field) — no buttons, just a
+            # hint pinned to the bottom-left of the (wide) info box. The compact
+            # mobile layout has no bottom strip and its body already instructs
+            # the player to select on the field, so it opts out via
+            # ``draw_interactive_hint=False`` to avoid an overlapping, clipped
+            # hint crammed against the headline.
+            if draw_interactive_hint:
+                hint = self.info_body_font.render(
+                    'Use the field to select.',
+                    True, (200, 195, 175))
+                self.window.blit(hint, (rect.left + _INFO_PAD, btn_y + 4))
             return []
 
         # Next skips the countdown of a held sequence beat. It only does
@@ -1747,6 +1868,18 @@ class ConquerTimelinePanel:
         if self._step_hover:
             step, anchor = self._step_hover
             self._draw_step_info_tooltip(screen, step, anchor)
+            return
+        if self._overflow_hover:
+            hidden_steps, anchor = self._overflow_hover
+            lines = [(f'{len(hidden_steps)} earlier steps', (255, 235, 170))]
+            for hidden in hidden_steps[:8]:
+                title = hidden.title or hidden.kind
+                if hidden.sidenote:
+                    title = f'{title} — {hidden.sidenote}'
+                lines.append((title, (210, 200, 175)))
+            if len(hidden_steps) > 8:
+                lines.append(('…', (170, 160, 140)))
+            self._render_tooltip_lines(lines, anchor)
             return
         if self._spell_hover:
             self._draw_spell_tooltip(*self._spell_hover)

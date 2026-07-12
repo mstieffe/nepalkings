@@ -9,6 +9,9 @@ from config import settings
 from game.components.cards.card_img import CardImg
 
 _SW, _SH = settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT
+# True on mobile web, where the canvas is CSS-downscaled and text/buttons sized
+# off the raw screen height end up too small to read or tap.
+_IS_MOBILE = getattr(settings, 'TOUCH_TARGET_MIN', 0) > 0
 
 # Card dimensions for the reveal overlay
 _CARD_W = int(0.10 * _SW)
@@ -24,10 +27,11 @@ _REVEAL_ALL_STAGGER_MS = 95
 _UNCOMMON_CELEBRATION_MS = 760
 _RARE_CELEBRATION_MS = 1120
 
-# Close button
-_CLOSE_W = int(0.12 * _SW)
-_CLOSE_H = int(0.045 * _SH)
-_NAV_W = int(0.095 * _SW)
+# Close / nav buttons. On mobile they are widened and given a touch-friendly
+# height floor so the labels stay readable and tappable after CSS downscaling.
+_CLOSE_W = int((0.20 if _IS_MOBILE else 0.12) * _SW)
+_CLOSE_H = max(int(0.05 * _SH), getattr(settings, 'TOUCH_TARGET_MIN', 0))
+_NAV_W = int((0.15 if _IS_MOBILE else 0.095) * _SW)
 
 _RAW_IMAGE_CACHE = {}
 _SCALED_IMAGE_CACHE = {}
@@ -85,6 +89,13 @@ def _card_tier(card, pack_type='main'):
             or 1)
 
 
+def _impact_badge_label(card):
+    """Only genuinely new card types need a reveal badge."""
+    if not isinstance(card, dict) or '_impact_owned_after' not in card:
+        return ''
+    return 'NEW' if card.get('_impact_new_type') else ''
+
+
 class BoosterRevealOverlay:
     """Full-screen overlay showing face-down booster cards.
 
@@ -92,16 +103,19 @@ class BoosterRevealOverlay:
     cards to reveal them. Once all cards are revealed a Close button appears.
     """
 
-    def __init__(self, window, drawn_cards, pack_type='main'):
+    def __init__(self, window, drawn_cards, pack_type='main', title=None):
         """
         Args:
             window: pygame display surface
             drawn_cards: list of dicts [{suit, rank, value, tier}, ...]
             pack_type: 'main' or 'side', used to infer tiers for legacy responses
+            title: optional header override for non-pack reveals (e.g. crafts);
+                defaults to the pack-type label
         """
         self.window = window
         self._cards = list(drawn_cards or [])
         self._pack_type = pack_type
+        self._title_override = title
         self._tiers = [_card_tier(c, pack_type) for c in self._cards]
 
         # State per card slot: 'hidden' | 'revealing' | 'revealed'
@@ -112,11 +126,13 @@ class BoosterRevealOverlay:
         self._overlay = pygame.Surface((_SW, _SH), pygame.SRCALPHA)
         self._overlay.fill((0, 0, 0, 180))
 
-        # Title / label fonts
-        self._title_font = settings.get_font(int(0.028 * _SH), bold=True)
-        self._subtitle_font = settings.get_font(int(0.018 * _SH))
-        self._close_font = settings.get_font(int(0.022 * _SH))
-        self._label_font = settings.get_font(max(12, int(0.014 * _SH)))
+        # Title / label fonts. Sized off the shared FS_* groups (which inflate on
+        # mobile) rather than raw screen height, so text stays legible on phones.
+        self._title_font = settings.get_font(settings.FS_SUBTITLE, bold=True)
+        self._subtitle_font = settings.get_font(settings.FS_SMALL)
+        self._close_font = settings.get_font(settings.FS_BUTTON)
+        self._label_font = settings.get_font(settings.FS_SMALL)
+        self._impact_font = settings.get_font(settings.FS_TINY, bold=True)
 
         self._bulk = len(self._cards) > _CARDS_PER_PACK
         self._configure_layout()
@@ -178,6 +194,18 @@ class BoosterRevealOverlay:
 
     def _has_hidden_cards(self):
         return any(s == 'hidden' for s in self._states)
+
+    def _impact_summary_text(self):
+        annotated = [c for c in self._cards if '_impact_owned_after' in c]
+        if not annotated:
+            return f'All {len(self._cards)} cards added to your collection'
+        new_types = sum(1 for c in annotated if c.get('_impact_new_type'))
+        copies = len(annotated)
+        copy_label = 'free copy' if copies == 1 else 'free copies'
+        if new_types:
+            type_label = 'new card type' if new_types == 1 else 'new card types'
+            return f'{copies} {copy_label} added  ·  {new_types} {type_label}'
+        return f'{copies} {copy_label} added to your usable stock'
 
     def _configure_layout(self):
         n = len(self._cards)
@@ -261,29 +289,37 @@ class BoosterRevealOverlay:
         self.window.blit(self._overlay, (0, 0))
 
         # Title
-        base_label = 'Side Booster Pack' if self._pack_type == 'side' else 'Main Booster Pack'
-        pack_count = max(1, math.ceil(len(self._cards) / _CARDS_PER_PACK))
-        if pack_count > 1:
-            pack_label = f'{pack_count} {base_label}s'
+        if self._title_override:
+            pack_label = self._title_override
         else:
-            pack_label = base_label
+            base_label = 'Side Booster Pack' if self._pack_type == 'side' else 'Main Booster Pack'
+            pack_count = max(1, math.ceil(len(self._cards) / _CARDS_PER_PACK))
+            if pack_count > 1:
+                pack_label = f'{pack_count} {base_label}s'
+            else:
+                pack_label = base_label
         title = self._title_font.render(pack_label, True, (250, 221, 0))
-        tx = (_SW - title.get_width()) // 2
-        ty = self._card_y - int(0.074 * _SH)
-        self.window.blit(title, (tx, ty))
         subtitle_text = 'Click each card to reveal its face'
         if self._bulk:
             subtitle_text = 'Click cards to reveal them, or reveal all'
         if self.all_revealed:
-            subtitle_text = f'All {len(self._cards)} cards added to your collection'
+            subtitle_text = self._impact_summary_text()
         subtitle = self._subtitle_font.render(subtitle_text, True, (220, 210, 180))
-        self.window.blit(subtitle, subtitle.get_rect(center=(_SW // 2, ty + int(0.040 * _SH))))
+        header_surfs = [title, subtitle]
         if self._page_count > 1:
-            page = self._subtitle_font.render(
+            header_surfs.append(self._subtitle_font.render(
                 f'Page {self._page_index + 1}/{self._page_count}',
-                True, (190, 180, 150))
-            self.window.blit(page, page.get_rect(
-                center=(_SW // 2, ty + int(0.066 * _SH))))
+                True, (190, 180, 150)))
+        # Stack the header by actual font heights and seat it just above the
+        # cards, so larger (mobile) fonts never overlap or collide with the grid.
+        line_gap = int(0.008 * _SH)
+        header_h = (sum(s.get_height() for s in header_surfs)
+                    + line_gap * (len(header_surfs) - 1))
+        y = max(int(0.012 * _SH),
+                self._card_y - int(0.024 * _SH) - header_h)
+        for surf in header_surfs:
+            self.window.blit(surf, surf.get_rect(midtop=(_SW // 2, y)))
+            y += surf.get_height() + line_gap
 
         mouse_pos = pygame.mouse.get_pos()
 
@@ -366,7 +402,38 @@ class BoosterRevealOverlay:
             self.window.blit(self._front_imgs[i], slot.topleft)
 
         self._draw_special_celebration(i, slot)
+        self._draw_impact_badge(i, slot)
         self._draw_card_labels(i, slot)
+
+    def _draw_impact_badge(self, i, slot):
+        card = self._cards[i]
+        # Duplicate draws already show the resulting owned count below the
+        # card. Reserve the reveal badge for genuinely new card types.
+        text = _impact_badge_label(card)
+        if not text:
+            return
+        text_clr = (45, 33, 5)
+        bg_clr = (250, 221, 0, 242)
+        text_surf = self._impact_font.render(text, True, text_clr)
+        pad_x = max(4, int(0.006 * _SW))
+        pad_y = max(2, int(0.003 * _SH))
+        pill = pygame.Surface(
+            (text_surf.get_width() + pad_x * 2,
+             text_surf.get_height() + pad_y * 2),
+            pygame.SRCALPHA,
+        )
+        pygame.draw.rect(pill, bg_clr, pill.get_rect(), border_radius=5)
+        pygame.draw.rect(
+            pill,
+            (255, 244, 180, 220),
+            pill.get_rect(), 1, border_radius=5,
+        )
+        pill_pos = (slot.right - pill.get_width() - 3, slot.y + 3)
+        self.window.blit(pill, pill_pos)
+        self.window.blit(text_surf, (
+            pill_pos[0] + pad_x,
+            pill_pos[1] + pad_y,
+        ))
 
     @staticmethod
     def _celebration_duration_for_tier(tier):
@@ -454,9 +521,10 @@ class BoosterRevealOverlay:
 
     def _draw_card_labels(self, i, slot):
         c = self._cards[i]
-
-        label = self._close_font.render(
-            f"{c['suit']} {c['rank']}", True, (230, 220, 190))
+        label_text = f"{c['suit']} {c['rank']}"
+        if '_impact_owned_after' in c:
+            label_text += f"  ·  ×{c['_impact_owned_after']}"
+        label = self._label_font.render(label_text, True, (230, 220, 190))
         self.window.blit(label, label.get_rect(center=(slot.centerx, slot.bottom + int(0.012 * _SH))))
 
     def _draw_tier_glow(self, slot, tier, pulse=False):

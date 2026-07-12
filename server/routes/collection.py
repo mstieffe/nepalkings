@@ -416,3 +416,77 @@ def convert_card():
         'ratio': ratio,
         'gold': user.gold,
     })
+
+
+# ── POST /collection/craft_maharaja ─────────────────────────────────────────
+
+MAHARAJA_RANK = 'MK'
+MAHARAJA_VALUE = 4
+MAHARAJA_CRAFT_RANKS = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A']
+
+
+@collection.route('/craft_maharaja', methods=['POST'])
+@require_token
+def craft_maharaja():
+    """Craft a Maharaja card for one suit from one free copy of every rank.
+
+    Consumes exactly one unlocked copy of each of the 13 ranks (2..A) in the
+    given suit and produces one 'MK' card. All-or-nothing: if any rank is
+    missing a free copy, nothing is consumed.
+    """
+    data = request.get_json(silent=True) or {}
+    suit = data.get('suit', '').strip() if isinstance(data.get('suit'), str) else ''
+
+    if not suit:
+        return jsonify({'success': False, 'message': 'Missing suit'}), 400
+    if suit not in SUITS:
+        return jsonify({'success': False, 'message': f'Invalid suit: {suit}'}), 400
+
+    user = db.session.get(User, g.user_id)
+    if not user:
+        return jsonify({'success': False, 'message': 'User not found'}), 404
+
+    # Select candidate IDs first, then claim all thirteen with one conditional
+    # DELETE.  The row-count check makes concurrent craft/build requests
+    # all-or-nothing: a card locked or consumed after this read causes a
+    # rollback instead of producing an unearned Maharaja.
+    to_consume_ids = []
+    missing = []
+    for rank in MAHARAJA_CRAFT_RANKS:
+        card_id = db.session.query(CollectionCard.id).filter_by(
+            user_id=user.id, suit=suit, rank=rank, locked=False
+        ).limit(1).scalar()
+        if card_id is None:
+            missing.append(rank)
+        else:
+            to_consume_ids.append(card_id)
+
+    if missing:
+        return jsonify({
+            'success': False,
+            'message': f'Missing free {suit} cards for rank(s): {", ".join(missing)}',
+        }), 400
+
+    deleted = CollectionCard.query.filter(
+        CollectionCard.id.in_(to_consume_ids),
+        CollectionCard.user_id == user.id,
+        CollectionCard.suit == suit,
+        CollectionCard.locked.is_(False),
+    ).delete(synchronize_session=False)
+    if deleted != len(MAHARAJA_CRAFT_RANKS):
+        db.session.rollback()
+        return jsonify({
+            'success': False,
+            'message': 'Cards changed while crafting. Refresh and try again.',
+        }), 409
+
+    db.session.add(CollectionCard(
+        user_id=user.id, suit=suit, rank=MAHARAJA_RANK, value=MAHARAJA_VALUE))
+    track('maharaja_crafted', user_id=user.id, suit=suit)
+    db.session.commit()
+
+    return jsonify({
+        'success': True,
+        'card': {'suit': suit, 'rank': MAHARAJA_RANK, 'value': MAHARAJA_VALUE},
+        'consumed': len(MAHARAJA_CRAFT_RANKS),
+    })

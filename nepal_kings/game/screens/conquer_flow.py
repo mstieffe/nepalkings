@@ -247,8 +247,13 @@ def derive_conquer_objective(game: Any, state: Any = None,
             tone='action',
         )
 
+    advancing_id = _get(game, 'advancing_figure_id')
+    defending_id = _get(game, 'defending_figure_id')
+    player_id = _get(game, 'player_id')
+    advancing_player_id = _get(game, 'advancing_player_id')
+
     if (_get(game, 'pending_forced_advance', False)
-            and not _get(game, 'advancing_figure_id')):
+            and not advancing_id):
         return ConquerObjective(
             phase='advance',
             headline='Choose your battle figure',
@@ -258,7 +263,7 @@ def derive_conquer_objective(game: Any, state: Any = None,
             tone='action',
         )
 
-    if _get(game, 'civil_war_awaiting_second', False):
+    if _get(game, 'civil_war_awaiting_second', False) and advancing_id:
         return ConquerObjective(
             phase='advance',
             headline='Civil War: optional second attacker',
@@ -268,7 +273,7 @@ def derive_conquer_objective(game: Any, state: Any = None,
             tone='action',
         )
 
-    if _get(game, 'civil_war_defender_second', False):
+    if _get(game, 'civil_war_defender_second', False) and advancing_id:
         own_mode = bool(_get(field_screen, 'conquer_own_defender_mode', False))
         return ConquerObjective(
             phase='defender',
@@ -282,9 +287,12 @@ def derive_conquer_objective(game: Any, state: Any = None,
         )
 
     if (_get(game, 'pending_defender_selection', False)
+            and advancing_id
             and _get(game, 'turn', False)):
         restriction = ''
-        if _has_modifier(game, 'Peasant War'):
+        if _has_modifier(game, 'Royal Decree'):
+            restriction = ' Royal Decree: castle figures only.'
+        elif _has_modifier(game, 'Peasant War'):
             restriction = ' Peasant War: village figures only.'
         elif _has_modifier(game, 'Civil War'):
             restriction = ' Civil War: village figures only.'
@@ -297,7 +305,7 @@ def derive_conquer_objective(game: Any, state: Any = None,
             tone='action',
         )
 
-    if _get(game, 'pending_conquer_own_defender_selection', False):
+    if _get(game, 'pending_conquer_own_defender_selection', False) and advancing_id:
         return ConquerObjective(
             phase='defender',
             headline='Invader Swap: choose your defender',
@@ -306,11 +314,6 @@ def derive_conquer_objective(game: Any, state: Any = None,
             primary_action='select_own_defender',
             tone='action',
         )
-
-    advancing_id = _get(game, 'advancing_figure_id')
-    defending_id = _get(game, 'defending_figure_id')
-    player_id = _get(game, 'player_id')
-    advancing_player_id = _get(game, 'advancing_player_id')
 
     if advancing_id and advancing_player_id == player_id and not _get(game, 'turn', False) and not defending_id:
         return ConquerObjective(
@@ -1057,25 +1060,38 @@ def _format_number(value: Any) -> Optional[str]:
     return f'{number:.1f}'
 
 
+def _effective_land_bonus(game: Any) -> Tuple[Any, Any]:
+    """(suit, value) of the land bonus with Landslide inversion applied."""
+    getter = getattr(game, 'effective_land_bonus', None)
+    if callable(getter):
+        try:
+            return getter()
+        except Exception:
+            pass
+    return _get(game, 'land_suit_bonus_suit'), _get(game, 'land_suit_bonus_value')
+
+
 def _land_info_assets(game: Any, opponent_name: str) -> Tuple[dict, ...]:
     assets: List[dict] = []
     gold_rate = _format_number(_get(game, 'land_gold_rate'))
-    suit = _get(game, 'land_suit_bonus_suit')
-    bonus = _format_number(_get(game, 'land_suit_bonus_value'))
+    suit, raw_bonus = _effective_land_bonus(game)
+    bonus = _format_number(raw_bonus)
 
     if gold_rate is not None:
         assets.append(_resource_asset('Gold/hr', gold_rate, 'good'))
     if suit:
-        bonus_text = f'+{bonus}' if bonus else ''
-        assets.append(_resource_asset('Suit bonus', f'{bonus_text} {suit}'.strip(), 'good'))
+        inverted = isinstance(raw_bonus, (int, float)) and raw_bonus < 0
+        bonus_text = (f'+{bonus}' if bonus and not inverted else (bonus or ''))
+        assets.append(_resource_asset(
+            'Suit bonus', f'{bonus_text} {suit}'.strip(),
+            'bad' if inverted else 'good'))
     assets.append(_resource_asset('Defender', opponent_name, 'warning'))
     return tuple(assets)
 
 
 def _land_overview_text(game: Any) -> Tuple[str, str]:
     tier = _get(game, 'land_tier')
-    suit = _get(game, 'land_suit_bonus_suit')
-    bonus = _get(game, 'land_suit_bonus_value')
+    suit, bonus = _effective_land_bonus(game)
     gold_rate = _format_number(_get(game, 'land_gold_rate'))
     opponent = _opponent_name(game)
     title = f'Tier {tier} Land' if tier else 'Conquer Battle'
@@ -1083,8 +1099,11 @@ def _land_overview_text(game: Any) -> Tuple[str, str]:
     if gold_rate is not None:
         parts.append(f'It produces {gold_rate} gold/hour.')
     if suit:
-        b = f' (+{bonus})' if bonus else ''
-        parts.append(f'Suit bonus: {suit}{b}.')
+        if isinstance(bonus, (int, float)) and bonus < 0:
+            parts.append(f'Suit bonus: {suit} ({bonus}, inverted by Landslide).')
+        else:
+            b = f' (+{_format_number(bonus)})' if bonus else ''
+            parts.append(f'Suit bonus: {suit}{b}.')
     return title, ' '.join(parts)
 
 
@@ -1126,8 +1145,8 @@ def derive_conquer_timeline(game: Any, state: Any = None,
         icon_kind='land',
         icon_payload={
             'tier': _get(game, 'land_tier'),
-            'suit': _get(game, 'land_suit_bonus_suit'),
-            'bonus': _get(game, 'land_suit_bonus_value'),
+            'suit': _effective_land_bonus(game)[0],
+            'bonus': _effective_land_bonus(game)[1],
         },
         completed=True,
         info_headline=title,
@@ -1222,14 +1241,25 @@ def derive_conquer_timeline(game: Any, state: Any = None,
         bool(_get(field_screen, '_pending_advance_figure'))
         if field_screen is not None else False
     )
-    attacker_second_active = bool(_get(game, 'civil_war_awaiting_second', False))
+    pending_defender_select_turn = bool(
+        advancing_id
+        and _get(game, 'pending_defender_selection', False)
+        and _get(game, 'turn', False)
+    )
+    pending_own_defender_select = bool(
+        advancing_id
+        and _get(game, 'pending_conquer_own_defender_selection', False)
+    )
+    attacker_second_active = bool(
+        advancing_id and _get(game, 'civil_war_awaiting_second', False)
+    )
     attacker_select_active = bool(
         _get(game, 'pending_forced_advance', False) and not advancing_id
     ) or bool(
         _get(game, 'turn', False)
         and not advancing_id
-        and not _get(game, 'pending_defender_selection', False)
-        and not _get(game, 'pending_conquer_own_defender_selection', False)
+        and not pending_defender_select_turn
+        and not pending_own_defender_select
         and not _get(game, 'battle_moves_phase', False)
     ) or attacker_second_active or attacker_pending_advance_local
     attacker_done = bool(advancing_id) and not attacker_second_active
@@ -1339,10 +1369,12 @@ def derive_conquer_timeline(game: Any, state: Any = None,
         steps.append(counter_step)
 
     # 5) Defender --------------------------------------------------------
-    defender_second_active = bool(_get(game, 'civil_war_defender_second', False))
+    defender_second_active = bool(
+        advancing_id and _get(game, 'civil_war_defender_second', False)
+    )
     defender_select_active = bool(
-        (_get(game, 'pending_defender_selection', False) and _get(game, 'turn', False))
-        or _get(game, 'pending_conquer_own_defender_selection', False)
+        pending_defender_select_turn
+        or pending_own_defender_select
         or defender_second_active
     )
     defender_pending_local = (
@@ -1379,7 +1411,7 @@ def derive_conquer_timeline(game: Any, state: Any = None,
     )
     defender_response_active = defender_response_for_you or defender_response_waiting
     invader_swap = bool(
-        _get(game, 'pending_conquer_own_defender_selection', False)
+        pending_own_defender_select
         or (defender_second_active and own_is_attacker is False)
     )
     defender_owner = ''
@@ -1387,7 +1419,7 @@ def derive_conquer_timeline(game: Any, state: Any = None,
         defender_owner = 'you'
     elif defender_done:
         defender_owner = opp_name if own_is_attacker else 'you'
-    elif _get(game, 'pending_defender_selection', False) and _get(game, 'turn', False):
+    elif pending_defender_select_turn:
         defender_owner = opp_name
     elif defender_response_for_you:
         defender_owner = 'you'

@@ -56,6 +56,30 @@ FIGURE_RECIPES = [
         'produces_fn': lambda suit, num: {'villager_red': 2, 'warrior_red': 1},
         'requires': {},
     },
+    {
+        'name': 'Himalaya Maharaja',
+        'family_name': 'Himalaya Maharaja',
+        'field': 'castle',
+        'color': 'defensive',
+        'suits': SUITS_BLACK,
+        'key_ranks': [('MK', 'main')],
+        'needs_number_card': False,
+        'produces_fn': lambda suit, num: {'villager_black': 3, 'warrior_black': 2},
+        'requires': {},
+        'special_flags': {'checkmate': True},
+    },
+    {
+        'name': 'Djungle Maharaja',
+        'family_name': 'Djungle Maharaja',
+        'field': 'castle',
+        'color': 'offensive',
+        'suits': SUITS_RED,
+        'key_ranks': [('MK', 'main')],
+        'needs_number_card': False,
+        'produces_fn': lambda suit, num: {'villager_red': 3, 'warrior_red': 2},
+        'requires': {},
+        'special_flags': {'checkmate': True},
+    },
 
     # ── VILLAGE — Farms ──
     {

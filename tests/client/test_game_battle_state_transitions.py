@@ -4,6 +4,10 @@
 
 import logging
 
+import pygame
+
+pygame.display.set_mode((1, 1))
+
 
 def _mk_game_dict(player_id=113, opponent_id=114):
     return {
@@ -66,6 +70,23 @@ def _mk_user_dict():
 
 
 class TestGameBattleStateTransitions:
+    def test_lightweight_game_seeds_figures_from_player_payload(self):
+        from game.core.game import Game
+
+        data = _mk_game_dict()
+        data['players'][0]['figures'] = [
+            {'id': 501, 'name': 'Gorkha Soldier', 'cards': []},
+        ]
+        data['players'][1]['figures'] = [
+            {'id': 601, 'name': 'Hidden Defender', 'cards': []},
+        ]
+
+        game = Game(data, _mk_user_dict(), lightweight=True)
+
+        assert game.cached_figures_data[113][0]['id'] == 501
+        assert game.cached_figures_data[114][0]['id'] == 601
+        assert game._figures_data_version == 1
+
     def test_apply_server_data_does_not_bump_figure_version_for_equal_payload(self):
         from game.core.game import Game
 
@@ -212,6 +233,120 @@ class TestGameBattleStateTransitions:
         game._apply_game_dict(confirmed)
 
         assert game.auto_proceed_to_battle is True
+
+    def test_update_from_dict_enters_defender_pick_after_conquer_counter_spell(self):
+        from game.core.game import Game
+
+        initial = _mk_game_dict()
+        initial['mode'] = 'conquer'
+        game = Game(initial, _mk_user_dict(), lightweight=True)
+        game.pending_defender_selection = False
+        game.defender_selection_dialogue_shown = False
+
+        post_counter = _mk_game_dict()
+        post_counter['mode'] = 'conquer'
+        post_counter['advancing_figure_id'] = 501
+        post_counter['advancing_player_id'] = 113
+        post_counter['defending_figure_id'] = None
+        post_counter['turn_player_id'] = 113
+        post_counter['battle_confirmed'] = False
+        post_counter['battle_decisions'] = None
+
+        game.update_from_dict(post_counter)
+
+        assert game.pending_defender_selection is True
+
+    def test_update_from_dict_clears_stale_conquer_defender_flags_without_advance(self):
+        from game.core.game import Game
+
+        initial = _mk_game_dict()
+        initial['mode'] = 'conquer'
+        initial['advancing_figure_id'] = 501
+        initial['advancing_player_id'] = 113
+        game = Game(initial, _mk_user_dict(), lightweight=True)
+        game.pending_defender_selection = True
+        game.defender_selection_dialogue_shown = True
+        game.pending_waiting_for_defender_pick = True
+        game.waiting_for_defender_pick_shown = True
+        game.pending_conquer_own_defender_selection = True
+        game.conquer_own_defender_selection_shown = True
+        game.civil_war_awaiting_second = True
+        game.civil_war_defender_second = True
+        game.civil_war_required_color = 'offensive'
+        game.pending_battle_ready = True
+        game.battle_ready_shown = True
+
+        post_spell = _mk_game_dict()
+        post_spell['mode'] = 'conquer'
+        post_spell['advancing_figure_id'] = None
+        post_spell['advancing_player_id'] = None
+        post_spell['defending_figure_id'] = None
+        post_spell['turn_player_id'] = 113
+        post_spell['battle_confirmed'] = False
+        post_spell['battle_decisions'] = None
+
+        game.update_from_dict(post_spell)
+
+        assert game.pending_defender_selection is False
+        assert game.defender_selection_dialogue_shown is False
+        assert game.pending_waiting_for_defender_pick is False
+        assert game.waiting_for_defender_pick_shown is False
+        assert game.pending_conquer_own_defender_selection is False
+        assert game.conquer_own_defender_selection_shown is False
+        assert game.civil_war_awaiting_second is False
+        assert game.civil_war_defender_second is False
+        assert game.civil_war_required_color is None
+        assert game.pending_battle_ready is False
+        assert game.battle_ready_shown is False
+
+    def test_conquer_game_start_pending_clears_without_summary(self):
+        from game.core.game import Game
+
+        initial = _mk_game_dict()
+        initial['mode'] = 'conquer'
+        game = Game(initial, _mk_user_dict(), lightweight=True)
+        game._game_start_pending = True
+        game.game_start_notification_checked = True
+
+        game._apply_start_turn_response({'success': True})
+
+        assert game._game_start_pending is False
+        assert game.pending_opponent_turn_summary is None
+
+    def test_conquer_game_start_pending_waits_for_queued_summary(self):
+        from game.core.game import Game
+
+        initial = _mk_game_dict()
+        initial['mode'] = 'conquer'
+        game = Game(initial, _mk_user_dict(), lightweight=True)
+        game._game_start_pending = True
+        summary = {
+            'action': 'game_start',
+            'mode': 'conquer',
+            'opponent_name': '[AI] Defender',
+        }
+
+        game._apply_start_turn_response({
+            'success': True,
+            'opponent_turn_summary': summary,
+        })
+
+        assert game._game_start_pending is True
+        assert game.pending_opponent_turn_summary is summary
+
+    def test_game_start_notification_helper_starts_once(self):
+        from game.core.game import Game
+
+        game = Game(_mk_game_dict(), _mk_user_dict(), lightweight=True)
+        calls = []
+        game._start_turn_async = lambda: calls.append('start')
+
+        assert game.start_game_start_notification_if_needed() is True
+        assert game.start_game_start_notification_if_needed() is False
+
+        assert calls == ['start']
+        assert game.game_start_notification_checked is True
+        assert game._game_start_pending is True
 
     def test_suppress_turn_summary_only_when_turn_is_ours(self):
         """After fold, suppress_next_turn_summary should be True only for the

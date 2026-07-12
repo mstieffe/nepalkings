@@ -44,6 +44,23 @@ class TestCreateGame:
         assert created_game['id'] is not None
         assert created_game['state'] == 'open'
 
+    def test_challenged_player_can_accept_received_challenge(
+        self, client, db, two_users_with_challenge, auth_headers_user2
+    ):
+        from models import ChallengeStatus
+        _, _, challenge = two_users_with_challenge
+
+        resp = client.post('/games/create_game', data={
+            'challenge_id': str(challenge.id),
+        }, headers=auth_headers_user2)
+        data = resp.get_json()
+
+        assert resp.status_code == 200
+        assert data['success'] is True, data.get('message')
+        db.session.refresh(challenge)
+        assert challenge.status.value == ChallengeStatus.ACCEPTED.value
+        assert challenge.game_id == data['game']['id']
+
     def test_create_game_initializes_deck(self, app, db, created_game):
         from models import MainCard, SideCard
         game_id = created_game['id']

@@ -213,9 +213,8 @@ class TestGameScreenDialogueFlow:
             subscreen='battle_shop',
             user_dict={'onboarding': {
                 'duel_hints_seen': [
-                    'field', 'build', 'cast_spell', 'change_cards', 'battle_shop',
-                    'battle', 'scoreboard', 'turn_indicator', 'ceasefire_indicator',
-                    'role_indicator', 'resource_panel',
+                    'field', 'build', 'cast_spell', 'change_cards',
+                    'game_status', 'resource_panel',
                 ],
                 'completed_steps': [],
             }},
@@ -268,7 +267,7 @@ class TestGameScreenDialogueFlow:
             game=game,
             subscreen='field',
             user_dict={'onboarding': {
-                'duel_hints_seen': ['field', 'build', 'cast_spell'],
+                'duel_hints_seen': ['field', 'build'],
                 'completed_steps': [],
             }},
         )
@@ -297,10 +296,11 @@ class TestGameScreenDialogueFlow:
 
         step = GameScreen._current_duel_coach_step(game_screen)
 
-        assert step['id'] == 'change_cards'
+        assert step['id'] == 'cast_spell'
         assert step['separate_highlights'] is True
-        assert GameScreen._duel_highlight_rects(game_screen, step) == [main_change, side_change]
-        assert GameScreen._duel_target_bounds(game_screen, step) == main_change.union(side_change)
+        assert main_change in GameScreen._duel_highlight_rects(game_screen, step)
+        assert side_change in GameScreen._duel_highlight_rects(game_screen, step)
+        assert step['completes'] == ('cast_spell', 'change_cards')
 
     def test_first_battle_screen_coach_explains_move_and_scoring_panels(self):
         import pygame
@@ -332,10 +332,8 @@ class TestGameScreenDialogueFlow:
             _sy=lambda value: value,
         )
         seen_before_battle = [
-            'field', 'build', 'cast_spell', 'change_cards', 'battle_shop',
-            'battle', 'scoreboard', 'turn_indicator', 'ceasefire_indicator',
-            'role_indicator', 'resource_panel', 'battle_shop_select_moves',
-            'battle_shop_ready',
+            'field', 'build', 'cast_spell', 'change_cards', 'game_status',
+            'resource_panel', 'battle_shop_select_moves', 'battle_shop_ready',
         ]
         game_screen.state = SimpleNamespace(
             game=game,
@@ -368,21 +366,18 @@ class TestGameScreenDialogueFlow:
         assert step['id'] == 'battle_move_panel'
         assert step['rects'] == [battle_panel]
 
+        # The action lesson waits for a detail box; the score lesson waits for
+        # an actual battle action instead of jumping ahead.
         game_screen.state.user_dict['onboarding']['duel_hints_seen'].append('battle_move_panel')
+        assert GameScreen._current_duel_coach_step(game_screen) is None
+        game_screen.state.user_dict['onboarding']['duel_hints_seen'].append('battle_move_actions')
         step = GameScreen._current_duel_coach_step(game_screen)
-        assert step['id'] == 'battle_figure_diff'
-        assert len(step['rects']) == 1
-        assert step['rects'][0].colliderect(figures_panel)
-
-        game_screen.state.user_dict['onboarding']['duel_hints_seen'].append('battle_figure_diff')
-        step = GameScreen._current_duel_coach_step(game_screen)
-        assert step['id'] == 'battle_rounds_panel'
-        assert step['rects'] == [rounds_panel]
-
-        game_screen.state.user_dict['onboarding']['duel_hints_seen'].append('battle_rounds_panel')
-        step = GameScreen._current_duel_coach_step(game_screen)
-        assert step['id'] == 'battle_total_diff'
-        assert len(step['rects']) == 1
+        assert step['id'] == 'battle_score'
+        assert step['separate_highlights'] is True
+        # Combines the figure-difference, rounds, and total rects.
+        assert len(step['rects']) == 3
+        assert any(rect.colliderect(figures_panel) for rect in step['rects'])
+        assert rounds_panel in step['rects']
 
     def test_duel_coach_next_button_consumes_press_release(self):
         import pygame
@@ -405,6 +400,139 @@ class TestGameScreenDialogueFlow:
         assert GameScreen._handle_duel_coach_events(game_screen, [up]) is True
         assert marked == ['battle_move_panel']
         assert opened == [None]
+
+    def test_duel_skip_is_local_and_does_not_pause_global_guidance(self):
+        import pygame
+
+        GameScreen = _game_screen_class()
+        screen = GameScreen.__new__(GameScreen)
+        skipped = []
+        screen._duel_coach_step = {'id': 'field'}
+        screen._duel_coach_buttons = [
+            (pygame.Rect(10, 10, 150, 32), ('skip_tutorial', 'field'))]
+        screen._skip_duel_coach = lambda: skipped.append('duel')
+        screen._pause_onboarding_tutorial = lambda: skipped.append('global')
+
+        down = pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=(20, 20))
+        up = pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=(20, 20))
+        assert GameScreen._handle_duel_coach_events(screen, [down]) is True
+        assert GameScreen._handle_duel_coach_events(screen, [up]) is True
+        assert skipped == ['duel']
+
+    def test_action_duel_coach_passes_target_click_through(self):
+        import pygame
+
+        GameScreen = _game_screen_class()
+        screen = GameScreen.__new__(GameScreen)
+        target = pygame.Rect(40, 40, 80, 40)
+        screen._duel_coach_step = {
+            'id': 'build', 'action': 'click', 'rect': target}
+        screen._duel_coach_buttons = []
+
+        down = pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=(60, 60))
+        up = pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=(60, 60))
+        assert GameScreen._handle_duel_coach_events(screen, [down]) is False
+        assert GameScreen._handle_duel_coach_events(screen, [up]) is False
+
+    def test_action_duel_coach_allows_updates_only_over_its_target(self, monkeypatch):
+        import pygame
+
+        GameScreen = _game_screen_class()
+        screen = GameScreen.__new__(GameScreen)
+        target = pygame.Rect(40, 40, 80, 40)
+        step = {'id': 'build', 'action': 'click', 'rect': target}
+
+        monkeypatch.setattr(pygame.mouse, 'get_pos', lambda: (60, 60))
+        assert GameScreen._duel_coach_blocks_updates(screen, step) is False
+
+        monkeypatch.setattr(pygame.mouse, 'get_pos', lambda: (10, 10))
+        assert GameScreen._duel_coach_blocks_updates(screen, step) is True
+
+    def test_build_duel_coach_draws_build_cta(self, monkeypatch):
+        import importlib
+        import pygame
+
+        game_screen_module = importlib.import_module('game.screens.game_screen')
+        GameScreen = game_screen_module.GameScreen
+        screen = GameScreen.__new__(GameScreen)
+        target = pygame.Rect(40, 40, 80, 40)
+        screen._duel_coach_font = SimpleNamespace(
+            size=lambda text: (len(text) * 8, 16))
+        screen._duel_coach_title_font = object()
+        screen.window = object()
+        screen._current_duel_coach_step = lambda: {
+            'id': 'build',
+            'action': 'click',
+            'button_label': 'Build',
+            'coach_subscreen': 'build_figure',
+            'title': 'Build your first figure',
+            'body': 'Choose a glowing recipe.',
+            'rect': target,
+        }
+        captured = []
+        screen._draw_duel_coach_button = (
+            lambda rect, label, action, muted=False:
+            captured.append((label, action, muted)))
+
+        monkeypatch.setattr(
+            game_screen_module,
+            'draw_coach_panel',
+            lambda *args, **kwargs: (pygame.Rect(200, 100, 360, 150), 30),
+        )
+
+        GameScreen._draw_duel_coach(screen)
+
+        assert ('Build', ('open_subscreen', 'build_figure'), False) in captured
+        assert any(label == 'Skip Duel lesson' for label, _action, _muted in captured)
+
+    def test_build_duel_coach_cta_opens_builder_without_completing_step(self):
+        import pygame
+
+        GameScreen = _game_screen_class()
+        screen = GameScreen.__new__(GameScreen)
+        cta = pygame.Rect(10, 10, 80, 32)
+        screen._duel_coach_step = {'id': 'build', 'action': 'click'}
+        screen._duel_coach_buttons = [
+            (cta, ('open_subscreen', 'build_figure'))]
+        screen._duel_coach_pressed_button_action = None
+        screen.subscreens = {'field': object(), 'build_figure': object()}
+        screen.state = SimpleNamespace(subscreen='field')
+        completed = []
+        screen._mark_duel_coaches_seen = lambda step_ids: completed.extend(step_ids)
+
+        down = pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=(20, 20))
+        up = pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=(20, 20))
+
+        assert GameScreen._handle_duel_coach_events(screen, [down]) is True
+        assert GameScreen._handle_duel_coach_events(screen, [up]) is True
+        assert screen.state.subscreen == 'build_figure'
+        assert completed == []
+
+    def test_build_duel_coach_target_tap_opens_builder_reliably(self):
+        import pygame
+
+        GameScreen = _game_screen_class()
+        screen = GameScreen.__new__(GameScreen)
+        target = pygame.Rect(40, 40, 80, 40)
+        screen._duel_coach_step = {
+            'id': 'build',
+            'action': 'click',
+            'coach_subscreen': 'build_figure',
+            'rect': target,
+        }
+        screen._duel_coach_buttons = []
+        screen._duel_coach_pressed_button_action = None
+        screen.subscreens = {'field': object(), 'build_figure': object()}
+        screen.state = SimpleNamespace(subscreen='field')
+
+        down = pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=(60, 60))
+        up = pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=(60, 60))
+
+        # The press can still reach the highlighted control for visual/haptic
+        # feedback; release performs the navigation even for a one-frame tap.
+        assert GameScreen._handle_duel_coach_events(screen, [down]) is False
+        assert GameScreen._handle_duel_coach_events(screen, [up]) is True
+        assert screen.state.subscreen == 'build_figure'
 
     def test_ceasefire_active_notification_is_suppressed_during_duel_coach(self):
         import pygame
@@ -479,9 +607,7 @@ class TestGameScreenDialogueFlow:
             subscreen='field',
             user_dict={'onboarding': {
                 'duel_hints_seen': [
-                    'field', 'build', 'cast_spell', 'change_cards', 'battle_shop',
-                    'battle', 'scoreboard', 'turn_indicator', 'ceasefire_indicator',
-                    'role_indicator',
+                    'field', 'build', 'cast_spell', 'change_cards', 'game_status',
                 ],
                 'completed_steps': [],
             }},
@@ -507,9 +633,7 @@ class TestGameScreenDialogueFlow:
 
         step = GameScreen._current_duel_coach_step(game_screen)
 
-        assert step['id'] == 'resource_panel'
-        assert 'Now start playing!' in step['body']
-        assert step['button_label'] == 'Play'
+        assert step is None
 
     def test_acknowledgement_advances_to_next_queued_dialogue(self):
         GameScreen = _game_screen_class()
@@ -945,8 +1069,18 @@ class TestGameScreenDialogueFlow:
         GameScreen.check_battle_ready(game_screen)
 
         assert submitted_decisions == []
-        assert game_screen.state.game.pending_battle_ready is False
+        # pending_battle_ready must stay latched: once the automated invader's
+        # decision lands in battle_decisions, polls can no longer re-set it,
+        # so clearing it here would stall the game before the battle starts.
+        assert game_screen.state.game.pending_battle_ready is True
         assert game_screen.state.game.battle_ready_shown is False
+
+        # Next tick: invader decision arrives — the latched flag lets the
+        # defender submit its own decision.
+        game_screen.state.game.battle_decisions = {'20': 'battle'}
+        GameScreen.check_battle_ready(game_screen)
+        assert submitted_decisions == ['battle']
+        assert game_screen.state.game.pending_battle_ready is False
 
     def test_conquer_defender_submits_after_invader_battle_decision(self):
         GameScreen = _game_screen_class()
@@ -1201,3 +1335,126 @@ class TestGameScreenVictoryReviewRouting:
         GameScreen._on_game_over_acknowledged(game_screen)
 
         assert game_screen.state.screen == 'kingdom'
+
+
+class TestDuelShellEffects:
+    """Duel shell polish moments: game-over payoff + your-turn banner.
+
+    Test oracle:
+    - Duel victory spawns VICTORY banner + confetti particles + shake.
+    - Duel defeat spawns DEFEAT banner (no VICTORY).
+    - Conquer game-over leaves the fx layer untouched (conquer runs its own
+      payoff choreography).
+    - "Your turn" summaries spawn exactly one YOUR TURN banner in duel and
+      none in conquer; the dialogue payload is queued either way.
+    """
+
+    def _fx_layer(self):
+        import pygame
+        from game.components.conquer_effects import EffectsLayer
+
+        return EffectsLayer(pygame.Surface((320, 200)), lambda _id: None)
+
+    def _game_over_screen(self):
+        import pygame
+
+        GameScreen = _game_screen_class()
+        game_screen = GameScreen.__new__(GameScreen)
+        game_screen.window = pygame.Surface((320, 200))
+        game_screen._fx = self._fx_layer()
+        game_screen.state = SimpleNamespace(
+            game=SimpleNamespace(
+                mode='duel',
+                player_id=10,
+                game_over=False,
+                game_over_shown=False,
+                pending_game_over=None,
+            )
+        )
+        notifications = []
+        game_screen.queue_or_show_notification = notifications.append
+        return GameScreen, game_screen, notifications
+
+    @staticmethod
+    def _game_over_info(winner_pid):
+        return {
+            'winner_player_id': winner_pid,
+            'loser_player_id': 20 if winner_pid == 10 else 10,
+            'winner_username': 'Winner',
+            'loser_username': 'Loser',
+            'winner_score': 50,
+            'loser_score': 30,
+            'stake': 45,
+            'game_limit': 45,
+            'reason': 'stake',
+            'rounds_played': 6,
+            'stats': {},
+        }
+
+    def test_duel_victory_spawns_confetti_banner_and_shake(self):
+        GameScreen, game_screen, notifications = self._game_over_screen()
+
+        GameScreen._show_game_over_dialogue(game_screen, self._game_over_info(10))
+
+        banners = [b['text'] for b in game_screen._fx._banners]
+        assert 'VICTORY' in banners
+        assert game_screen._fx._particles  # confetti flakes queued
+        assert game_screen._fx._shakes
+        assert notifications and notifications[0]['type'] == 'game_over'
+
+    def test_duel_defeat_spawns_defeat_banner(self):
+        GameScreen, game_screen, _notifications = self._game_over_screen()
+
+        GameScreen._show_game_over_dialogue(game_screen, self._game_over_info(20))
+
+        banners = [b['text'] for b in game_screen._fx._banners]
+        assert 'DEFEAT' in banners
+        assert 'VICTORY' not in banners
+
+    def test_conquer_game_over_leaves_fx_untouched(self):
+        GameScreen, game_screen, notifications = self._game_over_screen()
+        game_screen.state.game.mode = 'conquer'
+        game_screen.state.game.land_tier = 2
+        game_screen._is_current_player_conquer_attacker = lambda info: True
+
+        GameScreen._show_game_over_dialogue(game_screen, self._game_over_info(10))
+
+        assert game_screen._fx.any_active() is False
+        assert notifications  # conquer result dialogue still queued
+
+    def _turn_summary_screen(self, mode):
+        GameScreen = _game_screen_class()
+        game_screen = GameScreen.__new__(GameScreen)
+        game_screen.subscreens = {}
+        game_screen._fx = self._fx_layer()
+        game_screen.state = SimpleNamespace(
+            game=SimpleNamespace(
+                mode=mode,
+                pending_opponent_turn_summary={
+                    'opponent_name': 'Rival',
+                    'action': None,
+                },
+                game_over=False,
+                pending_game_over=False,
+            )
+        )
+        notifications = []
+        game_screen.queue_or_show_notification = notifications.append
+        return GameScreen, game_screen, notifications
+
+    def test_your_turn_banner_fires_once_for_duel_summary(self):
+        GameScreen, game_screen, notifications = self._turn_summary_screen('duel')
+
+        GameScreen.check_opponent_turn_notification(game_screen)
+
+        banners = [b['text'] for b in game_screen._fx._banners]
+        assert banners == ['YOUR TURN']
+        assert notifications and notifications[0]['title'] == 'Your Turn'
+
+    def test_your_turn_banner_gated_off_in_conquer(self):
+        GameScreen, game_screen, notifications = self._turn_summary_screen('conquer')
+
+        GameScreen.check_opponent_turn_notification(game_screen)
+
+        assert game_screen._fx._banners == []
+        assert notifications and notifications[0]['title'] == 'Your Turn'

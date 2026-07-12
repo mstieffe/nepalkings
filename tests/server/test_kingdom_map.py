@@ -248,6 +248,42 @@ class TestKingdomMap:
         assert row['kingdom_shield_reason'] == 'core_protection'
         assert row['kingdom_shield_remaining'] == -1
 
+    def test_map_read_does_not_generate_full_ai_templates(self, client, monkeypatch,
+                                                          auth_headers_user1):
+        """Map serialization needs AI names, not full AI battle loadouts."""
+        from ai.defence import generator
+
+        def _fail_full_template_generation(_land):
+            raise AssertionError('map serialization should not generate full AI templates')
+
+        monkeypatch.setattr(
+            generator,
+            'generate_ai_defence_template_for_land',
+            _fail_full_template_generation,
+        )
+
+        rv = client.get('/kingdom/map', headers=auth_headers_user1)
+
+        assert rv.status_code == 200
+
+    def test_map_read_does_not_run_global_reconciliation(self, client, monkeypatch,
+                                                         auth_headers_user1):
+        """The map endpoint must stay a cheap read path for production clients."""
+        import kingdom_service
+
+        def _fail_global_reconcile(*_args, **_kwargs):
+            raise AssertionError('global reconciliation should not run on map read')
+
+        monkeypatch.setattr(
+            kingdom_service,
+            'reconcile_all_kingdoms',
+            _fail_global_reconcile,
+        )
+
+        rv = client.get('/kingdom/map', headers=auth_headers_user1)
+
+        assert rv.status_code == 200
+
     def test_requires_auth(self, client):
         """Endpoint requires authentication."""
         rv = client.get('/kingdom/map')

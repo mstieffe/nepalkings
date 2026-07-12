@@ -55,10 +55,10 @@ echo "🖼️  Optimizing images ${QUANTIZE_FLAG:+(quantize on)}..."
 "$PYTHON" scripts/assets/optimize_web_pngs.py "$APP/img" $QUANTIZE_FLAG
 
 # ── 3. Build with pygbag ─────────────────────────────────────────────
-# --disable-sound-format-error: our SFX are tiny 16-bit PCM WAVs, which
-# browsers decode fine via SDL; pygbag's OGG preference is just a warning.
+# The web client loads OGG SFX companions. Leave pygbag's audio-format guard
+# enabled so missing OGG files fail the build instead of going silent in Chrome.
 echo "🛠️  Running pygbag..."
-"$PYTHON" -m pygbag --build --disable-sound-format-error "$APP"
+"$PYTHON" -m pygbag --build "$APP"
 
 # ── 4. Apply the custom branded index.html ───────────────────────────
 if [ -f nepal_kings/web/index.html ]; then

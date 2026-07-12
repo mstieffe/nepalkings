@@ -61,7 +61,9 @@ class CollectionCardSource(CardSource):
 
     def get_cards(self):
         free = [c for c in self._cards if c.id not in self._locked]
-        main = [c for c in free if c.rank in settings.RANKS_MAIN_CARDS]
+        main = [c for c in free
+                if c.rank in settings.RANKS_MAIN_CARDS
+                or c.rank == settings.RANK_MAHARAJA]
         side = [c for c in free if c.rank in settings.RANKS_SIDE_CARDS]
         return main, side
 

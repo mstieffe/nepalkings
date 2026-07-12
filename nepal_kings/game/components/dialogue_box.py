@@ -46,8 +46,18 @@ class _DlgButton:
         self.active = False
         self.disabled = False
 
-    def collide(self):
-        return self.rect.collidepoint(pygame.mouse.get_pos())
+    def hit_rect(self):
+        if getattr(settings, 'TOUCH_TARGET_MIN', 0) <= 0:
+            return self.rect
+        min_w = max(self.rect.w, getattr(settings, 'TOUCH_COMPACT_MIN', 0) or 0)
+        min_h = max(self.rect.h, getattr(settings, 'TOUCH_TARGET_MIN', 0) or 0)
+        hit = self.rect.inflate(max(0, min_w - self.rect.w),
+                                max(0, min_h - self.rect.h))
+        hit.clamp_ip(pygame.Rect(0, 0, settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+        return hit
+
+    def collide(self, pos=None):
+        return self.hit_rect().collidepoint(pos or pygame.mouse.get_pos())
 
     def update(self):
         if self.disabled:
@@ -152,9 +162,19 @@ class DialogueBox:
         # Process images
         self._group_max_w = settings.DIALOGUE_BOX_WIDTH - int(0.060 * _SW)
         self.image_groups = self.process_image_groups(image_groups)
-        self.ordered_items = [] if self.image_groups else self.process_images()
+        processed_images = self.process_images()
+        # A profile can pair one prominent lead image with grouped content.
+        # Historically images were silently discarded whenever groups existed.
+        self._lead_items = processed_images if self.image_groups else []
+        self.ordered_items = [] if self.image_groups else processed_images
         has_surfaces = any(t == 'surface' for t, _ in self.ordered_items)
         has_drawables = any(t == 'drawable' for t, _ in self.ordered_items)
+        lead_heights = [
+            item.get_height() if kind == 'surface'
+            else settings.DIALOGUE_BOX_DRAWABLE_OBJECT_HEIGHT
+            for kind, item in self._lead_items
+        ]
+        self.lead_height = max(lead_heights, default=0)
 
         # Metrics
         _line_h = self.font.get_height() + int(0.004 * _SH)
@@ -163,7 +183,8 @@ class DialogueBox:
 
         self.title_height = (self.title_font.get_height() + int(0.016 * _SH)) if self.title else 0
         self._sep_extra = int(0.018 * _SH) if self.title else 0  # space for separator line
-        self.text_height = len(self.lines) * _line_h
+        self.message_text_height = len(self.lines) * _line_h
+        self.text_height = max(self.message_text_height, self.lead_height)
         self.after_text_height = len(self.after_lines) * _line_h if self.after_lines else 0
         self.img_height = settings.DIALOGUE_BOX_IMG_HEIGHT if has_surfaces else 0
         self.drawable_object_height = settings.DIALOGUE_BOX_DRAWABLE_OBJECT_HEIGHT if has_drawables else 0
@@ -279,7 +300,11 @@ class DialogueBox:
                 continue
 
             icon_name = raw_group.get('icon')
-            badge_name = raw_group.get('badge_icon') or icon_name
+            # Omitting badge_icon keeps the historical header-icon fallback.
+            # Passing it explicitly as None lets a caller keep the subsection
+            # header icon without repeating it over every content tile.
+            badge_name = (raw_group.get('badge_icon')
+                          if 'badge_icon' in raw_group else icon_name)
             title = raw_group.get('title', 'Cards')
             item_unit = raw_group.get('item_unit', 'card')
             color = raw_group.get('color') or self._default_group_color(icon_name)
@@ -467,15 +492,42 @@ class DialogueBox:
                              (sep_x1, current_y), (sep_x2, current_y), 1)
             current_y += int(0.018 * _SH)
 
-        # Message lines
+        # Message lines. When grouped content supplies a lead image (the
+        # Collection card profile), keep the image and stock copy side-by-side.
+        message_center_x = self.rect.centerx
+        message_top = current_y
+        if self._lead_items:
+            item_gap = int(0.008 * _SW)
+            item_widths = [
+                item.get_width() if kind == 'surface'
+                else settings.DIALOGUE_BOX_DRAWABLE_OBJECT_HEIGHT
+                for kind, item in self._lead_items
+            ]
+            lead_w = sum(item_widths) + max(0, len(item_widths) - 1) * item_gap
+            lead_x = self.rect.x + int(0.045 * _SW)
+            draw_x = lead_x
+            for (kind, item), item_w in zip(self._lead_items, item_widths):
+                if kind == 'surface':
+                    draw_y = current_y + (self.text_height - item.get_height()) // 2
+                    self.window.blit(item, (draw_x, draw_y))
+                else:
+                    size = settings.DIALOGUE_BOX_DRAWABLE_OBJECT_HEIGHT
+                    draw_y = current_y + (self.text_height - size) // 2
+                    item.draw_icon(draw_x, draw_y, size, size)
+                draw_x += item_w + item_gap
+            text_left = lead_x + lead_w + int(0.020 * _SW)
+            text_right = self.rect.right - int(0.035 * _SW)
+            message_center_x = (text_left + text_right) // 2
+            message_top = current_y + max(
+                0, (self.text_height - self.message_text_height) // 2)
+
         for i, line_surf in enumerate(self.lines_surfaces):
-            ly = current_y + i * self._line_h
+            ly = message_top + i * self._line_h
             self.window.blit(line_surf,
-                             line_surf.get_rect(center=(self.rect.centerx, ly)))
+                             line_surf.get_rect(center=(message_center_x, ly)))
 
         # Images / drawables position
-        image_y = (current_y + len(self.lines_surfaces) * self._line_h +
-                   self.img_spacing)
+        image_y = current_y + self.text_height + self.img_spacing
 
         if self.image_groups:
             self._draw_image_groups(image_y)
@@ -694,7 +746,7 @@ class DialogueBox:
         for event in events:
             if event.type == pygame.MOUSEBUTTONUP and getattr(event, 'button', 0) == 1:
                 for button in self.buttons:
-                    if button.collide():
+                    if button.collide(getattr(event, 'pos', None)):
                         from utils import sound
                         sound.play('ui_click')
                         return button.text.lower()

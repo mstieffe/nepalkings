@@ -110,3 +110,31 @@ class TestRouteHooks:
         rows = _events('booster_opened')
         assert len(rows) == 1
         assert rows[0].props == {'kind': 'main'}
+
+    def test_tutorial_tip_events_are_idempotent(self, client, app):
+        _register(client, 'tutorial_events')
+        login = client.post('/auth/login', data={
+            'username': 'tutorial_events', 'password': 'pass1234'}).get_json()
+        headers = {'Authorization': f"Bearer {login['token']}"}
+        payload = {
+            'tip_keys': ['duel:field', 'duel:game_status'],
+            'event': 'lesson_dismissed',
+        }
+        assert client.post(
+            '/onboarding/mark_tip', headers=headers, json=payload).status_code == 200
+        assert client.post(
+            '/onboarding/mark_tip', headers=headers, json=payload).status_code == 200
+
+        completed = _events('tutorial_step_completed')
+        dismissed = _events('tutorial_lesson_dismissed')
+        assert [row.props['step_id'] for row in completed] == ['field', 'game_status']
+        assert len(dismissed) == 1
+        assert dismissed[0].props['step_ids'] == ['duel:field', 'duel:game_status']
+
+    def test_tutorial_resume_tracks(self, client, app):
+        _register(client, 'tutorial_resume')
+        login = client.post('/auth/login', data={
+            'username': 'tutorial_resume', 'password': 'pass1234'}).get_json()
+        headers = {'Authorization': f"Bearer {login['token']}"}
+        assert client.post('/onboarding/resume', headers=headers).status_code == 200
+        assert len(_events('tutorial_resumed')) == 1

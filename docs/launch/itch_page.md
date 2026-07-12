@@ -28,8 +28,8 @@ screenshots before publishing.
 
 ## Short description (one line, max ~120 chars)
 
-A free tactical card game: build your kingdom, conquer AI-held lands battle
-by battle, and duel other rulers for the crown.
+Build your kingdom, conquer defended lands, and duel AI or human rivals for
+the crown.
 
 ## Long description
 
@@ -37,22 +37,23 @@ by battle, and duel other rulers for the crown.
 rulers — right in your browser, free.
 
 Your starter army is ready for a first conquest, and booster packs grow the
-collection you will customize later. March on the map: each land is defended
-by the AI, and taking it is a short, sharp battle of figures, bonuses, and
-tactics. Win, and the land — and its production — is yours. Lose, and you
-regroup and try again. Your kingdom grows one conquest at a time.
+collection you will customize later. March on the map: lands can be defended
+by the AI or by another ruler's saved defence, and taking one is a short,
+sharp battle of figures, bonuses, and tactics. Win, and the land — and its
+production — is yours. Lose, and you regroup and try again. Your kingdom grows
+one conquest at a time.
 
-When you want a sterner test, step into a **duel**: a head-to-head clash some
-players call *the chess of cards*. Roles split into attacker and defender, you
-build your field across a Build Phase, then commit to the Battle Phase where
-points are won and roles can flip. Pick the length that fits your time —
-**Quick (7)**, **Standard (21)**, or **Epic (35)** points — against the AI or
-another player.
+When you want a sterner test, step into a **duel**: a full head-to-head match
+against the AI or another player, with both sides drawing from a shared deck.
+Roles split into attacker and defender, you build your field across repeated
+Build Phases, then commit to Battle Phases where points are won and roles can
+flip. Pick the point target that fits your time; Quick (7), Standard (21), and
+Epic (35) are only presets.
 
 **Why you might like it**
 
-- **Plays great solo.** The whole conquest loop runs against a built-in AI
-  opponent — no waiting for other players.
+- **Plays great solo.** AI-defended lands let you conquer and grow without
+  waiting for other players.
 - **Real depth.** Suit rock-paper-scissors, figure recipes, battle tactics,
   and a half-dozen special battle types reward learning the system.
 - **Your kingdom, your way.** Conquer, defend, collect production, and unlock

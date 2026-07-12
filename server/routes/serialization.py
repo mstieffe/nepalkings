@@ -183,6 +183,15 @@ def serialize_game_for_viewer(game, viewer_user_id):
         for spell in data.get('active_spells', [])
     ]
 
+    # All Seeing Eye gamble previews are private to their owning player —
+    # never revealed to the opponent, not even with All Seeing Eye.
+    previews = data.get('battle_gamble_previews') or {}
+    data['battle_gamble_previews'] = (
+        {str(viewer_player_id): previews[str(viewer_player_id)]}
+        if viewer_player_id is not None and str(viewer_player_id) in previews
+        else {}
+    )
+
     # AI seed is useful internally for deterministic planning, not for clients.
     data['ai_seed'] = None
     return data

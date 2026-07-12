@@ -312,6 +312,60 @@ class TestConquerStartBattle:
             atk_player = db.session.get(Player, game.invader_player_id)
             assert atk_player.user_id == user.id
 
+    def test_start_battle_preserves_maharaja_card_identity(self, app, db):
+        with app.app_context():
+            user = _make_user(db)
+            land = _make_land(db, tier=1)
+            cfg = _make_conquer_config(db, user, land)
+            cfg_fig = cfg.figures[0]
+            mk = CollectionCard(
+                user_id=user.id,
+                suit='Hearts',
+                rank='MK',
+                value=4,
+                locked=True,
+                lock_type='conquer_figure',
+            )
+            db.session.add(mk)
+            db.session.flush()
+            cfg_fig.family_name = 'Djungle Maharaja'
+            cfg_fig.name = 'Djungle Maharaja'
+            cfg_fig.suit = 'Hearts'
+            cfg_fig.color = 'offensive'
+            cfg_fig.field = 'castle'
+            cfg_fig.card_ids = [mk.id]
+            cfg_fig.card_roles = ['key']
+            cfg_fig.produces = {'villager_red': 3, 'warrior_red': 2}
+            cfg_fig.checkmate = True
+            db.session.commit()
+
+            client = app.test_client()
+            resp = client.post(
+                '/kingdom/conquer/start_battle',
+                json={'land_id': land.id},
+                headers=_auth_headers(app, user),
+            )
+
+            assert resp.status_code == 200
+            data = resp.get_json()
+            runtime_figure = Figure.query.filter_by(
+                game_id=data['game_id'],
+                source_config_figure_id=cfg_fig.id,
+            ).one()
+            assoc = CardToFigure.query.filter_by(
+                figure_id=runtime_figure.id,
+                role='key',
+            ).one()
+            runtime_card = db.session.get(MainCard, assoc.card_id)
+            assert runtime_card.serialize()['rank'] == 'MK'
+            serialized_figure = next(
+                fig for player in data['game']['players']
+                if player['id'] == runtime_figure.player_id
+                for fig in player['figures']
+                if fig['id'] == runtime_figure.id
+            )
+            assert serialized_figure['cards'][0]['rank'] == 'MK'
+
     def test_start_battle_creates_figures(self, app, db):
         """Figures from conquer config and AI template are created in the game."""
         with app.app_context():
@@ -782,7 +836,10 @@ class TestConquerStartBattle:
             # Keep this test focused on template move creation. Some preludes
             # (Dump Cards / Forced Deal) intentionally recycle hand cards and
             # purge their BattleMove rows, which would invalidate this assert.
-            move_mutating_preludes = {'Dump Cards', 'Forced Deal'}
+            move_mutating_preludes = {
+                'Dump Cards', 'Forced Deal', 'Royal Decree',
+                'Draw 2 MainCards', 'Draw 4 MainCards',
+            }
             template = None
             for seed in range(500):
                 land.ai_template_index = seed
@@ -822,7 +879,10 @@ class TestConquerStartBattle:
             land = _make_land(db, tier=3)
             from ai.defence.generator import get_ai_defence_template_for_land
 
-            move_mutating_preludes = {'Dump Cards', 'Forced Deal'}
+            move_mutating_preludes = {
+                'Dump Cards', 'Forced Deal', 'Royal Decree',
+                'Draw 2 MainCards', 'Draw 4 MainCards',
+            }
             template = None
             for seed in range(500):
                 land.ai_template_index = seed

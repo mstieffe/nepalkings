@@ -292,6 +292,11 @@ class HexMap:
         self.hovered_tile = None
         self.selected_tile = None
 
+        # Map scan mode ('terrain' = the default rich view; other modes wash
+        # each tile with a data-driven colour so the map is playful to scan).
+        self.map_mode = 'terrain'
+        self._gold_range = None
+
         # Build tiles
         self.tiles = []
         self._tile_by_coord = {}
@@ -685,6 +690,25 @@ class HexMap:
 
     def handle_event(self, event):
         """Process a single pygame event. Returns clicked HexTile or None."""
+        # SDL exposes two-finger pinch as MULTIGESTURE on supported mobile
+        # browsers. Mouse/touch emulation remains the fallback.
+        multi_gesture = getattr(pygame, 'MULTIGESTURE', None)
+        if multi_gesture is not None and event.type == multi_gesture:
+            fingers = int(getattr(event, 'num_fingers', 0) or 0)
+            pinch = float(getattr(event, 'pinched', 0.0) or 0.0)
+            if fingers >= 2 and abs(pinch) > 0.0001:
+                raw_x = getattr(event, 'x', 0.5)
+                raw_y = getattr(event, 'y', 0.5)
+                nx = max(0.0, min(1.0, float(
+                    0.5 if raw_x is None else raw_x)))
+                ny = max(0.0, min(1.0, float(
+                    0.5 if raw_y is None else raw_y)))
+                sx = self.viewport_rect.x + nx * self.viewport_rect.w
+                sy = self.viewport_rect.y + ny * self.viewport_rect.h
+                delta = max(-0.30, min(0.30, pinch * 12.0))
+                self._zoom_at_screen_pos(sx, sy, delta)
+            return None
+
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             if not self._in_viewport(event.pos):
                 return None
@@ -833,6 +857,71 @@ class HexMap:
         self._draw_hex_border(tile, corners)
         self._draw_hex_details(tile, scx, scy, sz)
 
+    # ── Map scan modes ─────────────────────────────────────────────
+
+    def set_map_mode(self, mode):
+        """Switch the map scan mode ('terrain'/'ownership'/'gold'/'vulnerable')."""
+        self.map_mode = mode or 'terrain'
+
+    def _ensure_gold_range(self):
+        """Cache (min, max) gold rate across tiles for the gold heatmap."""
+        if self._gold_range is None:
+            rates = [t.gold_rate for t in self.tiles] if self.tiles else [0.0]
+            lo, hi = min(rates), max(rates)
+            self._gold_range = (lo, hi if hi > lo else lo + 1.0)
+        return self._gold_range
+
+    def _mode_overlay_color(self, tile):
+        """Return an (r, g, b, a) wash for the active scan mode, or None.
+
+        ``terrain`` (default) returns None so the rich suit/tier art shows
+        through unchanged; the other modes tint every tile by one dimension
+        so the whole map can be scanned at a glance.
+        """
+        mode = getattr(self, 'map_mode', 'terrain')
+        if mode == 'terrain':
+            return None
+        if mode == 'ownership':
+            if tile.is_mine:
+                return (70, 200, 120, 120)
+            if tile.owner:
+                return (210, 90, 80, 120)
+            return (120, 132, 150, 95)
+        if mode == 'gold':
+            lo, hi = self._ensure_gold_range()
+            t = (tile.gold_rate - lo) / (hi - lo) if hi > lo else 0.0
+            t = max(0.0, min(1.0, t))
+            # dark slate → bright gold
+            return (int(58 + t * 197), int(50 + t * 168), int(74 - t * 44), 152)
+        if mode == 'vulnerable':
+            if tile.is_mine:
+                return (60, 90, 150, 70)
+            shield = getattr(tile, 'kingdom_shield_remaining', 0) or 0
+            reason = getattr(tile, 'kingdom_shield_reason', None)
+            cooldown = getattr(tile, 'conquer_cooldown_remaining', 0) or 0
+            if reason == 'core_protection' or shield != 0:
+                return (200, 70, 70, 135)
+            if cooldown > 0:
+                return (210, 162, 72, 130)
+            return (70, 205, 110, 140)
+        return None
+
+    def _draw_mode_wash(self, tile, corners):
+        """Blit the active scan-mode colour over a tile (under hover)."""
+        mode_clr = self._mode_overlay_color(tile)
+        if mode_clr is None:
+            return
+        xs = [p[0] for p in corners]
+        ys = [p[1] for p in corners]
+        min_x = int(min(xs)) - 1
+        min_y = int(min(ys)) - 1
+        ow = int(max(xs)) - min_x + 2
+        oh = int(max(ys)) - min_y + 2
+        ovl = pygame.Surface((ow, oh), pygame.SRCALPHA)
+        local = [(p[0] - min_x, p[1] - min_y) for p in corners]
+        pygame.draw.polygon(ovl, mode_clr, local)
+        self.window.blit(ovl, (min_x, min_y))
+
     def _draw_hex_base(self, tile, corners, scx, scy, sz):
         """Draw glow, fill, and owned-land surface cosmetics."""
         # Fill colour follows suit-bonus colour; tier controls intensity.
@@ -933,6 +1022,10 @@ class HexMap:
                                              (int(scx) - sz_int, int(scy) - sz_int))
                         except Exception:
                             pass
+
+        # Map scan-mode wash (ownership / gold / vulnerable) painted over the
+        # base art, but under the hover highlight so hovering still reads.
+        self._draw_mode_wash(tile, corners)
 
         # Warm-white hover wash painted on top of fill + surface skin so the
         # highlight reads clearly even through opaque cosmetics (parchment,
@@ -1573,13 +1666,12 @@ class HexMap:
         vp = self.viewport_rect
         # Scale badge font proportionally to the hex size so the badge
         # remains legible at all zoom levels (zoomed in and zoomed out).
-        scaled_font_size = max(
-            10,
-            min(
-                int(settings.HEX_LABEL_FONT_SIZE * 2.0),
-                int(settings.HEX_LABEL_FONT_SIZE * sz / settings.HEX_SIZE),
-            ),
+        badge_scale = max(
+            0.76,
+            min(1.22, (sz / max(1, settings.HEX_SIZE)) * 0.72),
         )
+        scaled_font_size = max(
+            9, int(settings.HEX_LABEL_FONT_SIZE * badge_scale))
         font = settings.get_font(scaled_font_size)
         subtitle_font = settings.get_font(
             max(8, int(scaled_font_size * 0.68)), bold=True)
@@ -1592,6 +1684,7 @@ class HexMap:
         cluster_icon_sz = max(20, int(sz * 1.05))
         shimmer_phase = badge_cosmetics.shimmer_phase_for(
             pygame.time.get_ticks())
+        placed_badge_rects = []
 
         for badge_data in self._kingdom_badges():
             cx_w, cy_w = badge_data['center_x'], badge_data['center_y']
@@ -1634,13 +1727,17 @@ class HexMap:
             if kingdom_rank in (1, 2, 3):
                 ico = self._render_crown_icon(
                     'kingdom', kingdom_rank,
-                    max(14, int(badge_surf.get_height() * 1.05)))
+                    max(12, int(badge_surf.get_height() * 0.58)))
                 if ico is not None:
                     crown_icons.append(ico)
-            if lands_rank in (1, 2, 3):
+            # At overview zoom one compact medal is enough.  Revealing the
+            # secondary realm medal only at close zoom prevents ranking art
+            # from obscuring the actual land shapes.
+            if (lands_rank in (1, 2, 3)
+                    and (self.zoom >= 2.0 or not crown_icons)):
                 ico = self._render_crown_icon(
                     'lands', lands_rank,
-                    max(14, int(badge_surf.get_height() * 1.05)))
+                    max(12, int(badge_surf.get_height() * 0.58)))
                 if ico is not None:
                     crown_icons.append(ico)
 
@@ -1659,6 +1756,25 @@ class HexMap:
             base_label_y = scy + offset_y + cluster_icon_sz * 0.55 + gap_px
             label_y = base_label_y + (crown_row_h + crown_row_gap) / 2
             br = badge_surf.get_rect(center=(int(scx), int(label_y)))
+
+            # Dense neighbouring kingdoms often put long names on almost the
+            # same baseline.  Try nearby vertical lanes before accepting an
+            # overlap; the identity sigil remains anchored to the cluster so
+            # the shifted nameplate still has a clear visual owner.
+            base_br = br.copy()
+            lane_step = max(target_h + 4, int(sz * 0.42))
+            candidates = [0, -lane_step, lane_step,
+                          -2 * lane_step, 2 * lane_step]
+            for dy in candidates:
+                candidate = base_br.move(0, dy)
+                if candidate.top < vp.top + 4 or candidate.bottom > vp.bottom - 4:
+                    continue
+                collision_rect = candidate.inflate(6, 4)
+                if not any(collision_rect.colliderect(other)
+                           for other in placed_badge_rects):
+                    br = candidate
+                    break
+            placed_badge_rects.append(br.inflate(6, 4))
 
             shadow_dx, shadow_dy = settings.HEX_GROUP_BADGE_SHADOW_OFFSET
             shadow_radius = max(2, int(3 * self.zoom))
@@ -2158,19 +2274,48 @@ class HexMap:
         self._mm_x = mm_x
         self._mm_y = mm_y
 
-    def focus_land(self, land_id):
-        """Select and centre the map on a land id. Returns the tile if found."""
+    def land_screen_rect(self, land_id):
+        """Return the on-screen bounding Rect of a land's hex, or None.
+
+        Returns None when the land is unknown or its centre currently sits
+        outside the map viewport, so callers (e.g. tutorial coaching) can fall
+        back to a viewport-wide anchor when the land is panned off-screen.
+        """
+        for tile in self.tiles:
+            if tile.land_id != land_id:
+                continue
+            cx, cy = self.world_to_screen(tile.cx, tile.cy)
+            if not self.viewport_rect.collidepoint(cx, cy):
+                return None
+            half_w = self._size * self.zoom
+            half_h = (math.sqrt(3) / 2) * self._size * self.zoom
+            return pygame.Rect(int(cx - half_w), int(cy - half_h),
+                               int(half_w * 2), int(half_h * 2))
+        return None
+
+    def focus_land(self, land_id, *, screen_offset_y=0):
+        """Select and centre the map on a land id. Returns the tile if found.
+
+        ``screen_offset_y`` shifts the tile that many pixels *above* the
+        viewport centre — used to keep a selected hex visible above the
+        anchored land inspector sheet.
+        """
         for tile in self.tiles:
             if tile.land_id == land_id:
                 self.selected_tile = tile
                 self.camera_x = tile.cx - self.viewport_rect.w / (2 * self.zoom)
-                self.camera_y = tile.cy - self.viewport_rect.h / (2 * self.zoom)
+                self.camera_y = tile.cy - (
+                    self.viewport_rect.h / 2 - screen_offset_y) / self.zoom
                 self._clamp_camera()
                 return tile
         return None
 
-    def focus_lands(self, land_ids):
-        """Centre the camera on a set of land IDs. Returns selected tile or None."""
+    def focus_lands(self, land_ids, *, fit=False, max_zoom=1.5, padding_px=None):
+        """Centre the camera on a set of land IDs and optionally zoom to fit.
+
+        ``fit`` is used for explicit navigation (kingdom chip, leaderboard,
+        recenter).  Ordinary refreshes leave camera state untouched.
+        """
         if not land_ids:
             return None
 
@@ -2182,8 +2327,33 @@ class HexMap:
         if not targets:
             return None
 
-        center_x = sum(tile.cx for tile in targets) / len(targets)
-        center_y = sum(tile.cy for tile in targets) / len(targets)
+        if fit:
+            padding = (padding_px if padding_px is not None
+                       else max(20, int(0.06 * min(
+                           self.viewport_rect.w, self.viewport_rect.h))))
+            min_x = min(tile.cx for tile in targets) - self._size
+            max_x = max(tile.cx for tile in targets) + self._size
+            half_h = self._size * math.sqrt(3) / 2
+            min_y = min(tile.cy for tile in targets) - half_h
+            max_y = max(tile.cy for tile in targets) + half_h
+            target_w = max(1.0, max_x - min_x)
+            target_h = max(1.0, max_y - min_y)
+            usable_w = max(1.0, self.viewport_rect.w - padding * 2)
+            usable_h = max(1.0, self.viewport_rect.h - padding * 2)
+            fit_zoom = min(usable_w / target_w, usable_h / target_h)
+            zoom_cap = (settings.HEX_MAP_ZOOM_MAX if max_zoom is None
+                        else min(settings.HEX_MAP_ZOOM_MAX, float(max_zoom)))
+            self.zoom = max(
+                settings.HEX_MAP_ZOOM_MIN,
+                min(zoom_cap, fit_zoom),
+            )
+
+        if fit:
+            center_x = (min_x + max_x) / 2
+            center_y = (min_y + max_y) / 2
+        else:
+            center_x = sum(tile.cx for tile in targets) / len(targets)
+            center_y = sum(tile.cy for tile in targets) / len(targets)
         self.camera_x = center_x - self.viewport_rect.w / (2 * self.zoom)
         self.camera_y = center_y - self.viewport_rect.h / (2 * self.zoom)
         self._clamp_camera()
@@ -2345,3 +2515,4 @@ class HexMap:
         self.camera_x, self.camera_y, self.zoom = old_cam
         self.selected_tile = None
         self.hovered_tile = None
+        self._gold_range = None

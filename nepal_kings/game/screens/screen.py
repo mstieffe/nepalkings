@@ -75,6 +75,8 @@ class Screen:
 
     def make_dialogue_box(self, message, actions=None, title=""):
         """Create a dialogue box with specified message and actions."""
+        from utils import sound
+        sound.play_for_dialogue(title)
         self.dialogue_box = DialogueBox(self.window, message, actions=actions, title=title)
 
     def reset_action(self):

@@ -13,7 +13,12 @@ from game.screens._menu_base import (
 from game.screens.build_figure_screen import BuildFigureScreen
 from game.screens.battle_shop_screen import BattleShopScreen
 from game.screens.prelude_spell_screen import PreludeSpellScreen
-from game.screens.conquer_loot_summary import build_loot_risk_description
+from game.screens.loot_risk_tutorial import (
+    draw_loot_risk_tutorial,
+    handle_loot_risk_tutorial_events,
+    loot_risk_tutorial_seen,
+    open_loot_risk_tutorial,
+)
 from game.core.card_source import CollectionCardSource
 from game.core.figure_buffs import apply_buffs_allies_to_icon_map
 from game.core.kingdom_game_proxy import KingdomGameProxy
@@ -36,9 +41,25 @@ from game.components.battle_moves.battle_move_icon_renderer import draw_battle_m
 from game.components.battle_moves.battle_move_detail_box import BattleMoveDetailBox
 from game.components.spells.spell_manager import SpellManager
 from game.components.dialogue_box import DialogueBox
+from game.components import info_popup
+from game.components.config_screen_common import (
+    DIVIDER,
+    ERROR_TEXT,
+    SLOT_HOVER_GLOW,
+    draw_close_x_button,
+    draw_empty_slot,
+    draw_hover_tooltip,
+    draw_panel as _draw_panel,
+    draw_remove_x,
+    draw_section_panel,
+    fit_text,
+    mobile_collide as _mobile_collide,
+    open_dialogue,
+)
 from game.components.loading_indicator import draw_loading_indicator
 from config import settings
 from utils import http_compat as requests
+from utils import sound
 from utils.background_poller import BackgroundPoller
 from utils import collection_service
 import logging
@@ -56,37 +77,10 @@ _BOX_BOTTOM = int(0.92 * _SH)
 _BOX_H      = _BOX_BOTTOM - _BOX_Y
 
 
-def _draw_panel(window, rect, corner_r=None):
-    r = corner_r or settings.SUB_SCREEN_PANEL_CORNER_R
-    surf = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
-    pygame.draw.rect(surf, settings.SUB_SCREEN_PANEL_BG_CLR, surf.get_rect(), border_radius=r)
-    window.blit(surf, rect.topleft)
-    pygame.draw.rect(window, settings.SUB_SCREEN_PANEL_BORDER_CLR, rect,
-                     settings.SUB_SCREEN_PANEL_BORDER_W, border_radius=r)
-
-
-def _mobile_hit_rect(rect, min_w=None, min_h=None):
-    """Return a touch-friendly hit rect while leaving visuals unchanged."""
-    if rect is None or settings.TOUCH_TARGET_MIN <= 0:
-        return rect
-    min_w = min_w or settings.TOUCH_TARGET_MIN
-    min_h = min_h or settings.TOUCH_TARGET_MIN
-    grow_w = max(0, min_w - rect.w)
-    grow_h = max(0, min_h - rect.h)
-    hit = rect.inflate(grow_w, grow_h)
-    hit.clamp_ip(pygame.Rect(0, 0, _SW, _SH))
-    return hit
-
-
-def _mobile_collide(rect, pos, min_w=None, min_h=None):
-    hit = _mobile_hit_rect(rect, min_w=min_w, min_h=min_h)
-    return bool(hit and hit.collidepoint(pos))
-
-
 def _strip_duel_only_skill_description(text):
     return strip_duel_only_skill_description(
         text,
-        hide_checkmate=True,
+        hide_checkmate=False,
         hide_instant_charge=True,
     )
 
@@ -94,28 +88,15 @@ def _strip_duel_only_skill_description(text):
 def _display_family_without_duel_only_skills(family):
     return filter_family_for_display(
         family,
-        hide_checkmate=True,
+        hide_checkmate=False,
         hide_instant_charge=True,
     )
 
 
-_SPELL_CARD_COST = {
-    'Draw 2 MainCards': ('8', 1, None),
-    'Fill up to 10':    ('10', 1, None),
-    'Dump Cards':       ('7', 4, None),
-    'Forced Deal':      ('4', 2, None),
-    'Poison':           ('3', 2, 'black'),
-    'Health Boost':     ('3', 2, 'red'),
-    'All Seeing Eye':   ('9', 2, None),
-    'Explosion':        ('6', 4, None),
-    'Peasant War':      ('J', 2, None),
-    'Civil War':        ('5', 2, None),
-    'Blitzkrieg':       ('Q', 2, None),
-}
-
 _DEFENCE_PRELUDE_SPELLS = [
-    'Dump Cards', 'Forced Deal', 'Poison', 'Health Boost',
-    'Explosion', 'Peasant War', 'Civil War',
+    'Draw 2 MainCards', 'Draw 4 MainCards', 'Dump Cards', 'Forced Deal',
+    'Poison', 'Health Boost', 'All Seeing Eye', 'Explosion', 'Copy Figure',
+    'Peasant War', 'Civil War', 'Royal Decree', 'Landslide',
 ]
 
 _DEFENCE_COUNTER_SPELLS = [
@@ -154,6 +135,14 @@ _RIGHT_SECTION_INFO = {
         'message': (
             'Choose the final response your defence will use during battle: either a battle figure or a counter spell. '
             'Exactly one response is required so the defender has a clear last-round plan.'
+        ),
+    },
+    'auto_gamble': {
+        'title': 'Auto-Gamble',
+        'message': (
+            'Your defence fights automatically when attacked. With Auto-Gamble ON, '
+            'the defender redraws (gambles) any battle move whose power is below the '
+            'threshold before playing it — a chance at a stronger card, at the risk of a weaker one.'
         ),
     },
 }
@@ -224,9 +213,8 @@ class DefenceScreen(MenuScreenMixin, Screen):
         self._btn_auto_gamble_inc = None
         self._auto_gamble_threshold_rect = None
         self._btn_close_rect = None
+        self._btn_retry = None            # "Retry" button rect (error state only)
         self._res_rect = None
-        self._res_castle_rect = None
-        self._res_village_rect = None
         self._field_title_pos = None
         self._moves_title_pos = None
         self._prelude_spell_rect = None   # Rect for prelude spell icon slot
@@ -242,15 +230,9 @@ class DefenceScreen(MenuScreenMixin, Screen):
         self._active_info_popup_rect = None
         self._layout_built = False
         self._hovered_slot = -1
-        self._pending_prelude_spell = None
-        self._pending_prelude_clear = False
-        self._prelude_spell_choices = []
-        self._prelude_spell_choice_idx = 0
-        self._pending_counter_spell = None
-        self._pending_counter_clear = False
-        self._counter_spell_choices = []
-        self._counter_spell_choice_idx = 0
-        self._pending_save_confirm = False
+        self._pending_tooltip = None      # (anchor_rect, text) for edit-icon hover
+        self._loot_risk_tutorial_dialogue = None
+        self._loot_risk_tutorial_action = None
         self._pending_leave_confirm = False
         self._pending_nav = None
         self._draft_dirty = False
@@ -258,6 +240,9 @@ class DefenceScreen(MenuScreenMixin, Screen):
         self._selecting_battle_fig = False  # True when prompting user to pick a figure
         self._pending_civil_war_battle_fig_1 = None
         self._selecting_spell_target = None  # 'prelude' or 'counter' while choosing Health Boost target
+        # Only prompt for a missing Health Boost target right after the
+        # player picked the spell — never when the screen merely (re)loads.
+        self._prompt_spell_target_on_next_load = False
 
         # ── Figure display (eagerly loaded) ─────────────────────────
         self._figure_manager = FigureManager()
@@ -267,6 +252,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
         self._figure_detail_box = None
         self._move_detail_box = None
         self._move_remove_rects = {}   # round_index → Rect for X buttons
+        self._empty_move_slot_rects = {}  # round_index → Rect for empty slots
 
         # ── Slot caches for draw_battle_move_icon ───────────────────
         self._slot_glow_cache = {}
@@ -352,9 +338,13 @@ class DefenceScreen(MenuScreenMixin, Screen):
         self._layout_built = False
         self._hovered_slot = -1
         self._selecting_spell_target = None
+        self._prompt_spell_target_on_next_load = False
+        self._btn_retry = None
+        self._pending_tooltip = None
         self._active_info_key = None
         self._active_info_popup_rect = None
-        self._pending_save_confirm = False
+        self._loot_risk_tutorial_dialogue = None
+        self._loot_risk_tutorial_action = None
         self._pending_leave_confirm = False
         self._pending_nav = None
         self._draft_dirty = False
@@ -515,8 +505,6 @@ class DefenceScreen(MenuScreenMixin, Screen):
             isz, isz,
         )
 
-        btn_h = int(0.045 * _SH)
-
         # Right column: battle plan, prelude spell, defender response.
         right_x = _BOX_X + pad + 3 * (field_w + pad)
         self._right_x = right_x
@@ -538,7 +526,10 @@ class DefenceScreen(MenuScreenMixin, Screen):
             )
         else:
             header_h = self._label_font.get_height() + self._res_font.get_height() + int(0.015 * _SH)
-        ag_btn_h = max(22, int(0.050 * _SH)) if mobile_ui else int(0.035 * _SH)
+        ag_btn_h = (
+            max(settings.TOUCH_COMPACT_MIN, int(0.050 * _SH))
+            if mobile_ui else int(0.035 * _SH)
+        )
         battle_controls_gap = int(0.018 * _SH)
         fsz = self._mod_frame_size
 
@@ -701,6 +692,16 @@ class DefenceScreen(MenuScreenMixin, Screen):
                 ag_btn_h,
             )
 
+        # Auto-gamble "(i)" — desktop only; the mobile header row is packed
+        # right up against the Battle Plan info button already.
+        if not mobile_ui:
+            ag_info_size = max(int(0.022 * _SH), 18, settings.TOUCH_ICON_MIN)
+            ag_info_x = self._btn_auto_gamble_inc.right + int(0.010 * _SW)
+            ag_info_y = ag_ctrl_y + (ag_btn_h - ag_info_size) // 2
+            if ag_info_x + ag_info_size <= self._battle_plan_rect.right - panel_pad:
+                self._info_button_rects['auto_gamble'] = pygame.Rect(
+                    ag_info_x, ag_info_y, ag_info_size, ag_info_size)
+
         if mobile_ui:
             min_slot_y = self._btn_auto_gamble.bottom + max(2, int(0.004 * _SH))
             max_slot_y = self._battle_plan_rect.bottom - panel_pad_y - slot_row_h
@@ -724,7 +725,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
             isz, isz,
         )
 
-        # ── Counter Action panel (battle figure OR counter spell + edit button) ──
+        # ── Defender Response panel (battle figure OR counter spell + edit button) ──
         counter_header_y = self._counter_panel_rect.y + int(0.010 * _SH)
         self._final_section_y = self._counter_panel_rect.y + header_h
         final_x = self._counter_panel_rect.x + panel_pad
@@ -743,7 +744,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
             self._counter_panel_rect.right - final_x - fsz,
         )
         self._counter_spell_rect = pygame.Rect(final_x + spell_gap, self._final_section_y, fsz, fsz)
-        # Edit icon next to "Counter Action" label
+        # Edit icon next to "Defender Response" label
         counter_title_surf = self._small_font.render('Defender Response', True, (0, 0, 0))
         counter_title_w = counter_title_surf.get_width()
         self._counter_title_pos = (self._counter_panel_rect.x + panel_pad, counter_header_y)
@@ -760,15 +761,11 @@ class DefenceScreen(MenuScreenMixin, Screen):
         res_w = village_r.right - castle_r.x
         res_h = max(1, _BOX_BOTTOM - _BOX_PAD - res_top)
         self._res_rect = pygame.Rect(castle_r.x, res_top, res_w, res_h)
-        self._res_castle_rect = None
-        self._res_village_rect = None
 
         # ── Divider positions (computed from layout) ────────────────
         self._divider_v_x = right_x - pad // 2
         self._divider_v_top = content_top
         self._divider_v_bottom = _BOX_BOTTOM - _BOX_PAD
-        self._divider_h1_y = None
-        self._divider_h2_y = None
 
         # X close button (top-right of box)
         _xsz = max(int(0.028 * _SH), settings.TOUCH_COMPACT_MIN)
@@ -877,7 +874,9 @@ class DefenceScreen(MenuScreenMixin, Screen):
         self._land = data.get('land')
         self._collection_cards = (result.get('collection_data') or {}).get('cards', [])
         self._rebuild_figure_objects()
-        self._maybe_prompt_missing_spell_target()
+        if self._prompt_spell_target_on_next_load:
+            self._prompt_spell_target_on_next_load = False
+            self._maybe_prompt_missing_spell_target()
         self._loading = False
         logger.debug(f'Defence config loaded for land {self._land_id}')
 
@@ -903,7 +902,9 @@ class DefenceScreen(MenuScreenMixin, Screen):
             self._loading = False
             self._rebuild_figure_objects()
             self._refresh_collection()
-            self._maybe_prompt_missing_spell_target()
+            if self._prompt_spell_target_on_next_load:
+                self._prompt_spell_target_on_next_load = False
+                self._maybe_prompt_missing_spell_target()
             logger.debug(f'Defence config loaded for land {self._land_id}')
         except Exception as e:
             self._error = 'Connection error'
@@ -940,6 +941,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
                 self._rebuild_figure_objects()
                 self._refresh_collection()
                 self.state.set_msg('Defence saved')
+                sound.play('figure_place')
                 return True
             problems = data.get('problems') or [data.get('message', 'Could not save defence')]
             self._show_problem_dialogue('Cannot Save Defence', problems)
@@ -976,12 +978,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
 
     def _show_problem_dialogue(self, title, problems):
         msg = '\n'.join(f'• {p}' for p in (problems or ['Unknown problem']))
-        self.dialogue_box = DialogueBox(
-            self.window,
-            msg,
-            actions=['OK'],
-            title=title,
-        )
+        open_dialogue(self, msg, ['OK'], title)
 
     def _complete_pending_navigation(self):
         target = self._pending_nav or 'kingdom'
@@ -1015,6 +1012,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
                 self._apply_config(data['config'])
                 self._rebuild_figure_objects()
                 self._maybe_prompt_missing_spell_target()
+                sound.play('card_slide')
             else:
                 logger.warning(f'Remove figure failed: {data.get("message")}')
         except Exception as e:
@@ -1030,6 +1028,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
             data = resp.json()
             if data.get('success'):
                 self._apply_config(data['config'])
+                sound.play('card_slide')
             else:
                 logger.warning(f'Return move failed: {data.get("message")}')
         except Exception as e:
@@ -1067,6 +1066,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
             if data.get('success'):
                 self._apply_config(data['config'])
                 self._refresh_collection()
+                sound.play('card_slide')
         except Exception as e:
             logger.error(f'Clear prelude spell error: {e}')
 
@@ -1082,6 +1082,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
             data = resp.json()
             if data.get('success'):
                 self._apply_config(data['config'])
+                sound.play('figure_place', volume=0.8)
             else:
                 msg = data.get('message') or 'Could not select battle figure'
                 self.state.set_msg(msg)
@@ -1099,6 +1100,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
             data = resp.json()
             if data.get('success'):
                 self._apply_config(data['config'])
+                sound.play('card_slide')
         except Exception as e:
             logger.error(f'Clear battle figure error: {e}')
 
@@ -1139,6 +1141,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
             if data.get('success'):
                 self._apply_config(data['config'])
                 self._refresh_collection()
+                sound.play('card_slide')
         except Exception as e:
             logger.error(f'Clear counter spell error: {e}')
 
@@ -1214,33 +1217,6 @@ class DefenceScreen(MenuScreenMixin, Screen):
         except Exception as e:
             logger.error(f'Collection fetch error: {e}')
             self._collection_cards = []
-
-    def _has_cards_for(self, req_key, reqs_dict=None):
-        """Check if player has enough free cards for a requirement."""
-        reqs = (reqs_dict or _SPELL_CARD_COST).get(req_key)
-        if not reqs:
-            return False
-        rank, count, color = reqs
-        cards = self._collection_cards or []
-        red_free = sum(c.get('free', 0) for c in cards
-                       if c.get('rank') == rank and c.get('suit') in _RED_SUITS)
-        black_free = sum(c.get('free', 0) for c in cards
-                         if c.get('rank') == rank and c.get('suit') in _BLACK_SUITS)
-        if color == 'red':
-            return red_free >= count
-        elif color == 'black':
-            return black_free >= count
-        else:
-            return red_free >= count or black_free >= count
-
-    def _card_req_label(self, req_key, reqs_dict=None):
-        """Return a human-readable label for card requirements."""
-        reqs = (reqs_dict or _SPELL_CARD_COST).get(req_key)
-        if not reqs:
-            return ''
-        rank, count, color = reqs
-        color_str = f' ({color})' if color else ''
-        return f'{count}\u00d7 rank {rank}{color_str}'
 
     # ── Figure conversion ──────────────────────────────────────────
 
@@ -1354,11 +1330,12 @@ class DefenceScreen(MenuScreenMixin, Screen):
             instant_charge=getattr(matched, 'instant_charge', False) if matched else False,
             cannot_be_blocked=cfg_fig.get('cannot_be_blocked', False),
             cannot_be_targeted=getattr(matched, 'cannot_be_targeted', False) if matched else False,
+            checkmate=cfg_fig.get('checkmate', False),
             override_base_power=getattr(matched, 'override_base_power', None) if matched else None,
         )
         return filter_figure_for_display(
             figure,
-            hide_checkmate=True,
+            hide_checkmate=False,
             hide_instant_charge=True,
         )
 
@@ -1411,7 +1388,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
                                         specs_y + (specs_surf.get_height() - suit_icon.get_height()) // 2))
 
         loot_effects = [e for e in (land.get('kingdom_skill_effects') or []) if 'loot chance' in e]
-        if loot_effects:
+        if loot_effects and settings.TOUCH_TARGET_MIN <= 0:
             tiny_font = getattr(self, '_tiny_font', self._res_font)
             effect_text = self._fit_text(loot_effects[0], tiny_font, int(_BOX_W * 0.72))
             effect_surf = tiny_font.render(effect_text, True, settings.KINGDOM_CONFIG_HIGHLIGHT)
@@ -1419,165 +1396,56 @@ class DefenceScreen(MenuScreenMixin, Screen):
                                                                top=specs_y + specs_surf.get_height() + 3))
 
     def _info_button_rect(self, panel_rect):
-        size = max(int(0.022 * _SH), 18, settings.TOUCH_ICON_MIN)
-        margin_x = int(0.008 * _SW)
-        margin_y = int(0.010 * _SH)
-        return pygame.Rect(
-            panel_rect.right - margin_x - size,
-            panel_rect.y + margin_y,
-            size,
-            size,
-        )
+        return info_popup.info_button_rect(panel_rect)
 
     def _draw_info_button(self, rect, active=False):
-        if not rect:
-            return
-        mx, my = pygame.mouse.get_pos()
-        hovered = rect.collidepoint(mx, my)
-        center = rect.center
-        radius = rect.w // 2
-        fill = (80, 70, 45, 235) if active else ((70, 62, 42, 225) if hovered else (45, 40, 32, 210))
-        border = (230, 210, 140) if active or hovered else (150, 135, 95)
-        text_clr = (255, 240, 185) if active or hovered else (195, 180, 130)
-        pygame.draw.circle(self.window, fill, center, radius)
-        pygame.draw.circle(self.window, border, center, radius, 1)
-        font = settings.get_font(max(int(rect.h * 0.72), 9), bold=True)
-        txt = font.render('i', True, text_clr)
-        self.window.blit(txt, txt.get_rect(center=center))
+        info_popup.draw_info_button(self.window, rect, active=active)
 
     def _wrap_info_text(self, text, font, max_width):
-        lines = []
-        for paragraph in str(text).split('\n'):
-            words = paragraph.split()
-            current = ''
-            for word in words:
-                candidate = f'{current} {word}'.strip()
-                if current and font.size(candidate)[0] > max_width:
-                    lines.append(current)
-                    current = word
-                else:
-                    current = candidate
-            if current:
-                lines.append(current)
-        return lines
+        return info_popup.wrap_info_text(text, font, max_width)
 
     def _draw_info_popup(self):
         info = _RIGHT_SECTION_INFO.get(self._active_info_key)
         anchor = self._info_button_rects.get(self._active_info_key) if self._active_info_key else None
-        if not info or not anchor:
-            self._active_info_popup_rect = None
-            return
-
-        pad = int(0.010 * _SW)
-        gap = int(0.006 * _SH)
-        popup_w = min(int(0.30 * _SW), max(int(0.20 * _SW), self._battle_plan_rect.w - 2 * pad))
-        text_w = popup_w - 2 * pad
-        title_font = self._small_font
-        body_font = self._res_font
-        title = info['title']
-        lines = self._wrap_info_text(info['message'], body_font, text_w)
-        line_gap = 3
-        popup_h = (
-            pad
-            + title_font.get_height()
-            + int(0.006 * _SH)
-            + len(lines) * body_font.get_height()
-            + max(0, len(lines) - 1) * line_gap
-            + pad
+        self._active_info_popup_rect = info_popup.draw_info_popup(
+            self.window, info, anchor,
+            box_rect=pygame.Rect(_BOX_X, _BOX_Y, _BOX_W, _BOX_H),
+            box_pad=_BOX_PAD,
+            max_panel_w=self._battle_plan_rect.w,
+            title_font=self._small_font,
+            body_font=self._res_font,
         )
-        x = min(anchor.right - popup_w, _BOX_X + _BOX_W - _BOX_PAD - popup_w)
-        x = max(_BOX_X + _BOX_PAD, x)
-        y = anchor.bottom + gap
-        if y + popup_h > _BOX_BOTTOM - _BOX_PAD:
-            y = anchor.top - popup_h - gap
-        y = max(_BOX_Y + _BOX_PAD, y)
-        popup_rect = pygame.Rect(int(x), int(y), int(popup_w), int(popup_h))
-        self._active_info_popup_rect = popup_rect
-
-        surf = pygame.Surface((popup_rect.w, popup_rect.h), pygame.SRCALPHA)
-        pygame.draw.rect(surf, (26, 22, 16, 242), surf.get_rect(), border_radius=6)
-        self.window.blit(surf, popup_rect.topleft)
-        pygame.draw.rect(self.window, (210, 185, 115), popup_rect, 1, border_radius=6)
-
-        cx = popup_rect.x + pad
-        cy = popup_rect.y + pad
-        title_surf = title_font.render(title, True, (235, 215, 145))
-        self.window.blit(title_surf, (cx, cy))
-        cy += title_surf.get_height() + int(0.006 * _SH)
-        for line in lines:
-            line_surf = body_font.render(line, True, (195, 180, 140))
-            self.window.blit(line_surf, (cx, cy))
-            cy += body_font.get_height() + line_gap
 
     def _draw_info_buttons(self):
         for key, rect in self._info_button_rects.items():
             self._draw_info_button(rect, active=(key == self._active_info_key))
 
     def _handle_info_button_event(self, event):
-        if event.type != MOUSEBUTTONUP or event.button != 1:
+        consumed, new_key, hit_button = info_popup.handle_info_event(
+            event, self._info_button_rects, self._active_info_key,
+            self._active_info_popup_rect, collide=_mobile_collide)
+        if not consumed:
             return False
-        pos = event.pos
-        for key, rect in self._info_button_rects.items():
-            if _mobile_collide(rect, pos, settings.TOUCH_COMPACT_MIN, settings.TOUCH_COMPACT_MIN):
-                self._active_info_key = None if self._active_info_key == key else key
-                return True
-        if self._active_info_key:
-            popup = self._active_info_popup_rect
-            if popup and popup.collidepoint(pos):
-                return True
-            self._active_info_key = None
+        if hit_button:
+            sound.play('ui_click', volume=0.6)
+        self._active_info_key = new_key
+        if new_key is None:
             self._active_info_popup_rect = None
-            return True
-        return False
+        return True
 
     def _draw_section_panel(self, rect, title, *, description=None,
                             icon_rect=None, title_pos=None):
         """Draw a quiet section card with one title row and optional edit icon."""
-        if not rect:
-            return
-        surf = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
-        pygame.draw.rect(surf, (28, 24, 20, 120), surf.get_rect(), border_radius=5)
-        self.window.blit(surf, rect.topleft)
-        pygame.draw.rect(self.window, (110, 95, 72), rect, 1, border_radius=5)
-
-        x = title_pos[0] if title_pos else rect.x + int(0.010 * _SW)
-        y = title_pos[1] if title_pos else rect.y + int(0.010 * _SH)
         font = self._label_font if title == 'Battle Plan' else self._small_font
-        title_surf = font.render(title, True, (200, 185, 150))
-        self.window.blit(title_surf, (x, y))
-        if description:
-            desc_surf = self._res_font.render(description, True, (160, 145, 120))
-            self.window.blit(desc_surf, (x, y + title_surf.get_height() + 2))
-
-        if icon_rect:
-            isz = self._edit_icon_size
-            mx, my = pygame.mouse.get_pos()
-            hovered = icon_rect.collidepoint(mx, my)
-            if hovered:
-                glow = pygame.Surface((isz + 4, isz + 4), pygame.SRCALPHA)
-                glow.fill((255, 255, 200, 40))
-                self.window.blit(glow, (icon_rect.x - 2, icon_rect.y - 2))
-            self.window.blit(self._edit_icon, icon_rect.topleft)
+        draw_section_panel(
+            self.window, rect, title,
+            title_font=font, desc_font=self._res_font,
+            edit_icon=self._edit_icon,
+            description=description, icon_rect=icon_rect, title_pos=title_pos)
 
     def _fit_text(self, text, font, max_width):
         """Trim text with an ellipsis so captions stay inside their panel."""
-        text = str(text)
-        if max_width <= 0:
-            return ''
-        if font.size(text)[0] <= max_width:
-            return text
-        ellipsis = '…'
-        if font.size(ellipsis)[0] > max_width:
-            return ''
-        lo = 0
-        hi = len(text)
-        while lo < hi:
-            mid = (lo + hi + 1) // 2
-            if font.size(text[:mid] + ellipsis)[0] <= max_width:
-                lo = mid
-            else:
-                hi = mid - 1
-        return text[:lo] + ellipsis
+        return fit_text(text, font, max_width)
 
     def _draw_caption_lines(self, lines, x, y, max_width, *, line_gap=2):
         """Draw fitted caption lines and return the bottom y position."""
@@ -1708,8 +1576,8 @@ class DefenceScreen(MenuScreenMixin, Screen):
             return {
                 'id': 'defence_final_response',
                 'rect': self._counter_panel_rect,
-                'title': 'Final Response',
-                'body': 'Pick a final response: a battle figure that fights, or a counter spell that disrupts.',
+                'title': 'Defender Response',
+                'body': 'Pick your defender response: a battle figure that fights back, or a counter spell that disrupts.',
                 'action': 'next',
                 'max_lines': 4,
             }
@@ -1750,11 +1618,17 @@ class DefenceScreen(MenuScreenMixin, Screen):
             return
 
         if self._error:
-            txt = self._label_font.render(self._error, True, (200, 80, 80))
+            txt = self._label_font.render(self._error, True, ERROR_TEXT)
             self.window.blit(txt, txt.get_rect(center=(_SW // 2, _SH // 2)))
+            btn_w = int(0.12 * _SW)
+            btn_h = max(int(0.05 * _SH), settings.TOUCH_TARGET_MIN)
+            self._btn_retry = pygame.Rect(
+                _SW // 2 - btn_w // 2, _SH // 2 + int(0.05 * _SH), btn_w, btn_h)
+            self._draw_button(self._btn_retry, 'Retry', (100, 140, 90))
             self._draw_close_x_button()
             self._draw_menu_overlay()
             return
+        self._btn_retry = None
 
         if not self._config:
             self._draw_menu_overlay()
@@ -1797,9 +1671,8 @@ class DefenceScreen(MenuScreenMixin, Screen):
             self._draw_button(self._btn_skip, 'Skip for now', (140, 120, 70))
 
         # ── Divider lines ───────────────────────────────────────────
-        div_clr = (90, 80, 60)
         # Vertical divider between left (field/resources) and right (battle) columns
-        pygame.draw.line(self.window, div_clr,
+        pygame.draw.line(self.window, DIVIDER,
                          (self._divider_v_x, self._divider_v_top),
                          (self._divider_v_x, self._divider_v_bottom), 1)
 
@@ -1849,8 +1722,28 @@ class DefenceScreen(MenuScreenMixin, Screen):
 
         self._draw_info_popup()
 
+        # Desktop hover tooltips for the small edit (pencil) icons
+        self._pending_tooltip = None
+        if (settings.TOUCH_TARGET_MIN <= 0 and not self.dialogue_box
+                and not self._figure_detail_box and not self._move_detail_box
+                and not self._selecting_battle_fig and not self._selecting_spell_target):
+            mpos = pygame.mouse.get_pos()
+            for icon_rect, tip in (
+                (self._btn_build, 'Build a figure'),
+                (self._btn_buy_move, 'Buy battle moves'),
+                (self._btn_prelude_edit, 'Choose a spell'),
+                (self._btn_counter_edit, 'Pick your response'),
+            ):
+                if icon_rect and icon_rect.collidepoint(mpos):
+                    self._pending_tooltip = (icon_rect, tip)
+                    break
+        if self._pending_tooltip:
+            draw_hover_tooltip(self.window, self._pending_tooltip[0],
+                               self._pending_tooltip[1], self._res_font)
+
         self._draw_menu_coach(self._current_defence_coach_step())
         self._draw_menu_overlay()
+        draw_loot_risk_tutorial(self)
 
     def _field_slot_background(self, field_name, rect):
         slot_path = settings.SLOT_ICON_IMG_PATH_DICT.get(field_name)
@@ -1924,6 +1817,8 @@ class DefenceScreen(MenuScreenMixin, Screen):
             bottom_margin = 0.34 * settings.FIGURE_ICON_HEIGHT + caption_h
 
             title_space = 24
+            if settings.TOUCH_TARGET_MIN > 0:
+                title_space = max(title_space, int(0.068 * _SH))
             first_center = rect.top + title_space + top_margin
             last_center = rect.top + rect.height - bottom_margin
 
@@ -1984,14 +1879,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
                 xbtn = pygame.Rect(int(fr_left + frame_w - _xbs - 2), int(fr_top + 2), _xbs, _xbs)
                 x_hovered = xbtn.collidepoint(mouse_pos)
                 if settings.TOUCH_TARGET_MIN > 0 or frame_rect.collidepoint(mouse_pos) or x_hovered:
-                    bg = (180, 60, 60) if x_hovered else (120, 40, 40)
-                    bdr = (220, 120, 120) if x_hovered else (160, 80, 80)
-                    tc = (255, 255, 255) if x_hovered else (200, 180, 180)
-                    pygame.draw.rect(self.window, bg, xbtn, border_radius=3)
-                    pygame.draw.rect(self.window, bdr, xbtn, 1, border_radius=3)
-                    xf = settings.get_font(max(int(xbtn.h * 1.3), 8), bold=True)
-                    xt = xf.render('\u00d7', True, tc)
-                    self.window.blit(xt, xt.get_rect(center=xbtn.center))
+                    draw_remove_x(self.window, xbtn, x_hovered)
                     cfg_fig['_remove_rect'] = xbtn
                 else:
                     cfg_fig['_remove_rect'] = None
@@ -2025,6 +1913,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
         move_by_round = {m['round_index']: m for m in moves}
         self._hovered_slot = -1
         self._move_remove_rects = {}
+        self._empty_move_slot_rects = {}
 
         sw = self._move_slot_size
         slot_spacing = int(sw * 2.0)
@@ -2059,23 +1948,24 @@ class DefenceScreen(MenuScreenMixin, Screen):
                 xrect = pygame.Rect(cx + int(sw * 0.35), cy - int(sw * 0.65), xsz, xsz)
                 x_hovered = xrect.collidepoint(mouse_pos)
                 if settings.TOUCH_TARGET_MIN > 0 or is_hovered or x_hovered:
-                    bg = (180, 60, 60) if x_hovered else (120, 40, 40)
-                    bdr = (220, 120, 120) if x_hovered else (160, 80, 80)
-                    tc = (255, 255, 255) if x_hovered else (200, 180, 180)
-                    pygame.draw.rect(self.window, bg, xrect, border_radius=3)
-                    pygame.draw.rect(self.window, bdr, xrect, 1, border_radius=3)
-                    xf = settings.get_font(max(int(xsz * 1.3), 8), bold=True)
-                    xt = xf.render('\u00d7', True, tc)
-                    self.window.blit(xt, xt.get_rect(center=xrect.center))
+                    draw_remove_x(self.window, xrect, x_hovered)
                     self._move_remove_rects[i] = xrect
 
                 rlbl = self._small_font.render(f'R{i + 1}', True, (160, 140, 120))
                 self.window.blit(rlbl, rlbl.get_rect(centerx=cx, top=cy + int(sw * 0.55)))
             else:
+                # Empty slot \u2014 clickable to open the Battle Shop
                 dr = self._slot_diamond.get_rect(center=(cx, cy))
+                hovered = dr.collidepoint(mouse_pos)
+                if hovered:
+                    glow = pygame.Surface((dr.w + 6, dr.h + 6), pygame.SRCALPHA)
+                    glow.fill(SLOT_HOVER_GLOW)
+                    self.window.blit(glow, (dr.x - 3, dr.y - 3))
                 self.window.blit(self._slot_diamond, dr.topleft)
-                rlbl = self._small_font.render(f'R{i + 1}', True, (100, 100, 100))
+                rlbl = self._small_font.render(
+                    f'R{i + 1}', True, (150, 135, 110) if hovered else (100, 100, 100))
                 self.window.blit(rlbl, rlbl.get_rect(centerx=cx, top=cy + int(sw * 0.55)))
+                self._empty_move_slot_rects[i] = dr
 
     def _figure_by_id(self, figure_id):
         return next((
@@ -2208,22 +2098,12 @@ class DefenceScreen(MenuScreenMixin, Screen):
                 x_hovered = xrect.collidepoint(mx_mouse, my_mouse)
                 if settings.TOUCH_TARGET_MIN > 0 or rect.collidepoint(mx_mouse, my_mouse) or x_hovered:
                     self._prelude_x_rect = xrect
-                    bg = (180, 60, 60) if x_hovered else (120, 40, 40)
-                    bdr = (220, 120, 120) if x_hovered else (160, 80, 80)
-                    tc = (255, 255, 255) if x_hovered else (200, 180, 180)
-                    pygame.draw.rect(self.window, bg, xrect, border_radius=3)
-                    pygame.draw.rect(self.window, bdr, xrect, 1, border_radius=3)
-                    xf = settings.get_font(max(int(_xbs * 1.3), 8), bold=True)
-                    xt = xf.render('\u00d7', True, tc)
-                    self.window.blit(xt, xt.get_rect(center=xrect.center))
+                    draw_remove_x(self.window, xrect, x_hovered)
                 else:
                     self._prelude_x_rect = None
         else:
             self._prelude_x_rect = None
-            empty_surf = pygame.Surface((fsz, fsz), pygame.SRCALPHA)
-            pygame.draw.rect(empty_surf, (50, 45, 35, 180), empty_surf.get_rect(), border_radius=6)
-            pygame.draw.rect(empty_surf, (100, 90, 70), empty_surf.get_rect(), 1, border_radius=6)
-            self.window.blit(empty_surf, rect.topleft)
+            draw_empty_slot(self.window, rect)
             lines = [
                 ('No prelude spell', self._res_font, (140, 130, 110)),
                 ('Optional', self._res_font, (110, 105, 95)),
@@ -2317,22 +2197,12 @@ class DefenceScreen(MenuScreenMixin, Screen):
                 x_hovered = xrect.collidepoint(mx_mouse, my_mouse)
                 if settings.TOUCH_TARGET_MIN > 0 or cs_rect.collidepoint(mx_mouse, my_mouse) or x_hovered:
                     self._counter_x_rect = xrect
-                    bg = (180, 60, 60) if x_hovered else (120, 40, 40)
-                    bdr = (220, 120, 120) if x_hovered else (160, 80, 80)
-                    tc = (255, 255, 255) if x_hovered else (200, 180, 180)
-                    pygame.draw.rect(self.window, bg, xrect, border_radius=3)
-                    pygame.draw.rect(self.window, bdr, xrect, 1, border_radius=3)
-                    xf = settings.get_font(max(int(_xbs * 1.3), 8), bold=True)
-                    xt = xf.render('\u00d7', True, tc)
-                    self.window.blit(xt, xt.get_rect(center=xrect.center))
+                    draw_remove_x(self.window, xrect, x_hovered)
                 else:
                     self._counter_x_rect = None
         else:
             self._counter_x_rect = None
-            empty_surf = pygame.Surface((fsz, fsz), pygame.SRCALPHA)
-            pygame.draw.rect(empty_surf, (50, 45, 35, 180), empty_surf.get_rect(), border_radius=6)
-            pygame.draw.rect(empty_surf, (100, 90, 70), empty_surf.get_rect(), 1, border_radius=6)
-            self.window.blit(empty_surf, cs_rect.topleft)
+            draw_empty_slot(self.window, cs_rect)
             empty_label = (
                 'No counter'
                 if settings.TOUCH_TARGET_MIN > 0
@@ -2390,14 +2260,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
             x_hovered = xrect.collidepoint(mx, my_mouse)
             if settings.TOUCH_TARGET_MIN > 0 or rect.collidepoint(mx, my_mouse) or x_hovered:
                 setattr(self, x_attr, xrect)
-                bg = (180, 60, 60) if x_hovered else (120, 40, 40)
-                bdr = (220, 120, 120) if x_hovered else (160, 80, 80)
-                tc = (255, 255, 255) if x_hovered else (200, 180, 180)
-                pygame.draw.rect(self.window, bg, xrect, border_radius=3)
-                pygame.draw.rect(self.window, bdr, xrect, 1, border_radius=3)
-                xf = settings.get_font(max(int(_xbs * 1.3), 8), bold=True)
-                xt = xf.render('\u00d7', True, tc)
-                self.window.blit(xt, xt.get_rect(center=xrect.center))
+                draw_remove_x(self.window, xrect, x_hovered)
             else:
                 setattr(self, x_attr, None)
         else:
@@ -2460,72 +2323,9 @@ class DefenceScreen(MenuScreenMixin, Screen):
             self.window, self._res_rect, self._calc_resources(),
             self._resource_icons, self._res_font)
 
-    def _build_confirm_data(self):
-        """Build confirmation data: message text, grouped cards, and after-message."""
-        from game.components.cards.card_img import CardImg
-
-        at_risk_cards = []
-        at_risk_card_specs = []
-
-        def add_card(target, suit, rank):
-            if suit and rank:
-                ci = CardImg(self.window, suit, rank)
-                target.append(ci.front_img)
-                at_risk_card_specs.append({'suit': suit, 'rank': rank})
-
-        # Every committed card is locked and at loot risk; conquer no longer
-        # consumes non-looted cards when a land falls.
-        for fig in self._config.get('figures', []):
-            for cd in fig.get('card_details', []):
-                add_card(at_risk_cards, cd.get('suit', ''), cd.get('rank', ''))
-
-        for mv in self._config.get('battle_moves', []):
-            if mv.get('card_id'):
-                add_card(at_risk_cards, mv.get('suit', ''), mv.get('rank', ''))
-
-        for cd in self._config.get('modifier_card_details') or []:
-            add_card(at_risk_cards, cd.get('suit', ''), cd.get('rank', ''))
-        for cd in self._config.get('spell_card_details') or []:
-            add_card(at_risk_cards, cd.get('suit', ''), cd.get('rank', ''))
-
-        prelude_details = self._config.get('prelude_spell_card_details') or []
-        if prelude_details:
-            for cd in prelude_details:
-                add_card(at_risk_cards, cd.get('suit', ''), cd.get('rank', ''))
-
-        counter_details = self._config.get('counter_spell_card_details') or []
-        if counter_details:
-            for cd in counter_details:
-                add_card(at_risk_cards, cd.get('suit', ''), cd.get('rank', ''))
-
-        image_groups = []
-        if at_risk_cards:
-            image_groups.append({
-                'key': 'loot_risk',
-                'title': 'Committed cards',
-                'description': build_loot_risk_description(
-                    self._land or {}, at_risk_card_specs, mode='defence'),
-                'icon': 'lock',
-                'badge_icon': 'lock',
-                'items': at_risk_cards,
-            })
-
-        msg = 'Review the cards committed to this defence.'
-        if not image_groups:
-            msg = 'No cards are used in this configuration.'
-
-        after_msg_parts = []
-        if at_risk_cards:
-            after_msg_parts.append(
-                'Saving the defence does not consume cards by itself. Only cards selected as loot after the land falls are lost.'
-            )
-        after_msg = ' '.join(after_msg_parts) if after_msg_parts else None
-
-        return msg, image_groups, after_msg
-
     def _on_save_click(self):
         """Handle click on Save Defence / Confirm Defence button."""
-        confirm_title = 'Confirm Defence' if self._victory_review_mode else 'Save Defence'
+        sound.play('ui_click', volume=0.8)
         cannot_title = 'Cannot Confirm Defence' if self._victory_review_mode else 'Cannot Save Defence'
         if not self._is_defence_ready():
             problems = self._get_defence_problems()
@@ -2542,16 +2342,27 @@ class DefenceScreen(MenuScreenMixin, Screen):
                 validation.get('problems') or [validation.get('message', 'Configuration is incomplete')],
             )
             return
-        msg, image_groups, after_msg = self._build_confirm_data()
-        self._pending_save_confirm = True
-        self.dialogue_box = DialogueBox(
-            self.window,
-            msg,
-            actions=['Confirm', 'Cancel'],
-            title=confirm_title,
-            image_groups=image_groups,
-            message_after_images=after_msg,
-        )
+        self._save_defence_with_loot_tutorial()
+
+    def _save_defence_with_loot_tutorial(self):
+        if loot_risk_tutorial_seen(self):
+            self._save_ready_defence()
+            return
+        open_loot_risk_tutorial(self, {'kind': 'save_defence'})
+
+    def _save_ready_defence(self):
+        self._pending_nav = self._pending_nav or 'kingdom'
+        if self._server_save_draft():
+            if self._victory_review_mode:
+                self._server_acknowledge_victory_review()
+                self._victory_review_mode = False
+                self._victory_review_game_id = None
+                self._pending_victory_ack = True
+            self._complete_pending_navigation()
+
+    def _resume_loot_risk_tutorial_action(self, action):
+        if isinstance(action, dict) and action.get('kind') == 'save_defence':
+            self._save_ready_defence()
 
     def _on_skip_click(self):
         """Victory Review: leave without finalising the defence.
@@ -2581,12 +2392,12 @@ class DefenceScreen(MenuScreenMixin, Screen):
             self.state.set_msg('Defence is already empty')
             return
         self._pending_clear_all_confirm = True
-        self.dialogue_box = DialogueBox(
-            self.window,
+        open_dialogue(
+            self,
             ("Return every figure on this land to your collection?\n\n"
              "This land will be left undefended until you configure it."),
-            actions=['Clear All', 'Cancel'],
-            title='Leave this land undefended?',
+            ['Clear All', 'Cancel'],
+            'Leave this land undefended?',
             icon='warning',
         )
 
@@ -2765,6 +2576,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
         c = tuple(min(v + 30, 255) for v in color) if hovered else color
         pygame.draw.rect(self.window, c, rect, border_radius=4)
         pygame.draw.rect(self.window, (200, 180, 140), rect, 1, border_radius=4)
+        text = self._fit_text(text, self._btn_font, rect.w - 10)
         txt = self._btn_font.render(text, True, (255, 255, 255))
         self.window.blit(txt, txt.get_rect(center=rect.center))
 
@@ -2774,7 +2586,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
             return
         txt = self._label_font.render(title, True, (200, 185, 150))
         self.window.blit(txt, title_pos)
-        if description:
+        if description and settings.TOUCH_TARGET_MIN <= 0:
             desc_surf = self._res_font.render(description, True, (160, 145, 120))
             self.window.blit(desc_surf, (title_pos[0], title_pos[1] + txt.get_height() + 2))
         # Draw icon with hover highlight
@@ -2792,22 +2604,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
         if not self._btn_close_rect:
             if not self._layout_built:
                 self._build_layout()
-        r = self._btn_close_rect
-        mouse_pos = pygame.mouse.get_pos()
-        hovered = r.collidepoint(mouse_pos)
-
-        bg_clr = (80, 50, 25, 220) if hovered else (55, 35, 18, 200)
-        border_clr = (180, 160, 120) if hovered else (120, 100, 70)
-        txt_clr = (255, 240, 200) if hovered else (200, 180, 140)
-
-        surf = pygame.Surface((r.w, r.h), pygame.SRCALPHA)
-        pygame.draw.rect(surf, bg_clr, surf.get_rect(), border_radius=4)
-        pygame.draw.rect(surf, border_clr, surf.get_rect(), 1, border_radius=4)
-        self.window.blit(surf, r.topleft)
-
-        _xfont = settings.get_font(int(settings.FONT_SIZE * 0.85), bold=True)
-        txt = _xfont.render('\u00d7', True, txt_clr)
-        self.window.blit(txt, txt.get_rect(center=r.center))
+        draw_close_x_button(self.window, self._btn_close_rect)
 
     # ── Helpers ─────────────────────────────────────────────────────
 
@@ -2835,7 +2632,8 @@ class DefenceScreen(MenuScreenMixin, Screen):
                     rank=c['rank'], suit=c['suit'],
                     value=settings.RANK_TO_VALUE.get(c['rank'], 0),
                     id=c.get('id', hash((c['suit'], c['rank'], i))),
-                    type='main' if c['rank'] in settings.RANKS_MAIN_CARDS else 'side_card',
+                    type='main' if (c['rank'] in settings.RANKS_MAIN_CARDS
+                                    or c['rank'] == settings.RANK_MAHARAJA) else 'side_card',
                 ))
 
         locked_ids = set()
@@ -2954,8 +2752,11 @@ class DefenceScreen(MenuScreenMixin, Screen):
         self._active_subscreen = None
         self._subscreen_obj = None
         self._game_proxy = None
-        # Refresh config from server to get authoritative state
-        self._load_config()
+        # The player may have just picked Health Boost — prompt for its
+        # target once the refreshed config arrives.
+        self._prompt_spell_target_on_next_load = True
+        # Refresh config from server (async — keeps the event loop responsive)
+        self._start_config_load()
 
     def _leave_screen(self):
         """Go back to kingdom without deleting the saved active defence."""
@@ -2973,15 +2774,16 @@ class DefenceScreen(MenuScreenMixin, Screen):
         if not self._pending_nav:
             self._pending_nav = 'kingdom'
         if not self._has_unsaved_changes():
+            sound.play('ui_back')
             self._complete_pending_navigation()
             return
         self._pending_leave_confirm = True
-        self.dialogue_box = DialogueBox(
-            self.window,
+        open_dialogue(
+            self,
             'You have unsaved defence changes.\n'
             'Save them, discard only this draft, or stay here.',
-            actions=['Save & Leave', 'Discard Changes', 'Stay'],
-            title='Unsaved Defence Changes',
+            ['Save & Leave', 'Discard Changes', 'Stay'],
+            'Unsaved Defence Changes',
         )
 
     # ── Readiness check ─────────────────────────────────────────────
@@ -3095,64 +2897,6 @@ class DefenceScreen(MenuScreenMixin, Screen):
 
         return problems
 
-    # ── Prelude spell cycling (auto-defender) ─────────────────────
-
-    def _cycle_prelude_spell(self):
-        """Cycle through prelude spells for auto-defender."""
-        current = self._config.get('prelude_spell_name')
-        spells = list(_DEFENCE_PRELUDE_SPELLS)
-        if not current:
-            for s in spells:
-                if self._has_cards_for(s):
-                    self._server_set_prelude_spell(s)
-                    return
-        else:
-            try:
-                idx = spells.index(current)
-            except ValueError:
-                idx = -1
-            # Try next spells
-            for i in range(1, len(spells) + 1):
-                next_idx = idx + i
-                if next_idx >= len(spells):
-                    self._server_clear_prelude_spell()
-                    return
-                if self._has_cards_for(spells[next_idx]):
-                    self._server_clear_prelude_spell()
-                    self._server_set_prelude_spell(spells[next_idx])
-                    return
-            self._server_clear_prelude_spell()
-
-    # ── Counter spell cycling (auto-defender) ──────────────────────
-
-    def _cycle_counter_spell(self):
-        """Cycle through counter spells for auto-defender."""
-        current = self._config.get('counter_spell_name')
-        spells = list(_DEFENCE_COUNTER_SPELLS)
-        if not current:
-            for s in spells:
-                if self._has_cards_for(s):
-                    # Clear battle figure first (mutually exclusive)
-                    if self._config.get('battle_figure_id'):
-                        self._server_clear_battle_figure()
-                    self._server_set_counter_spell(s)
-                    return
-        else:
-            try:
-                idx = spells.index(current)
-            except ValueError:
-                idx = -1
-            for i in range(1, len(spells) + 1):
-                next_idx = idx + i
-                if next_idx >= len(spells):
-                    self._server_clear_counter_spell()
-                    return
-                if self._has_cards_for(spells[next_idx]):
-                    self._server_clear_counter_spell()
-                    self._server_set_counter_spell(spells[next_idx])
-                    return
-            self._server_clear_counter_spell()
-
     # ── Update / events ─────────────────────────────────────────────
 
     def _handle_icon_events(self, event):
@@ -3210,21 +2954,8 @@ class DefenceScreen(MenuScreenMixin, Screen):
     def handle_events(self, events):
         super().handle_events(events)
 
-        # Handle save / prelude / counter spell confirmation dialogue responses
+        # Handle prelude / counter spell confirmation dialogue responses
         response = self.state.action.get('status')
-        if response and self._pending_save_confirm:
-            self._pending_save_confirm = False
-            self.reset_action()
-            if response == 'confirm':
-                self._pending_nav = self._pending_nav or 'kingdom'
-                if self._server_save_draft():
-                    if self._victory_review_mode:
-                        self._server_acknowledge_victory_review()
-                        self._victory_review_mode = False
-                        self._victory_review_game_id = None
-                        self._pending_victory_ack = True
-                    self._complete_pending_navigation()
-            return
         if response and self._pending_clear_all_confirm:
             self._pending_clear_all_confirm = False
             self.reset_action()
@@ -3250,32 +2981,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
             else:
                 self._pending_nav = None
             return
-        if response and self._pending_prelude_spell:
-            self._pending_prelude_spell = None
-            self.reset_action()
-            return
-        if response and self._pending_prelude_clear:
-            self._pending_prelude_clear = False
-            self.reset_action()
-            if response == 'confirm':
-                self._server_clear_prelude_spell()
-            return
-        if response and self._pending_counter_spell:
-            self._pending_counter_spell = None
-            self.reset_action()
-            return
-        if response and self._pending_counter_clear:
-            self._pending_counter_clear = False
-            self.reset_action()
-            if response == 'confirm':
-                self._server_clear_counter_spell()
-            return
         if response in ('ok', 'cancel'):
-            self._pending_prelude_spell = None
-            self._pending_prelude_clear = False
-            self._pending_counter_spell = None
-            self._pending_counter_clear = False
-            self._pending_save_confirm = False
             self._pending_leave_confirm = False
             self._pending_nav = None
             self._selecting_spell_target = None
@@ -3283,6 +2989,12 @@ class DefenceScreen(MenuScreenMixin, Screen):
             return
 
         if self.dialogue_box:
+            return
+
+        loot_tutorial_action = handle_loot_risk_tutorial_events(self, events)
+        if loot_tutorial_action is not None:
+            if isinstance(loot_tutorial_action, dict):
+                self._resume_loot_risk_tutorial_action(loot_tutorial_action)
             return
 
         # Tutorial coach captures input while a card is showing.
@@ -3409,21 +3121,25 @@ class DefenceScreen(MenuScreenMixin, Screen):
                     self._try_leave_screen()
                     return
 
+                # Retry button (error state)
+                if self._error and self._btn_retry and _mobile_collide(self._btn_retry, pos):
+                    sound.play('ui_click')
+                    self._error = None
+                    self._btn_retry = None
+                    if not self._config:
+                        self._start_config_load()
+                    return
+
                 if not self._config:
                     continue
 
                 # Remove buttons must win over icon/detail clicks.
+                # Removals are free draft edits (cards unlock server-side),
+                # so they fire immediately — same as figure/move removal.
                 if _mobile_collide(self._prelude_x_rect, pos,
                                    settings.TOUCH_COMPACT_MIN, settings.TOUCH_COMPACT_MIN):
-                    current_spell = self._config.get('prelude_spell_name')
-                    if current_spell:
-                        self._pending_prelude_clear = True
-                        self.dialogue_box = DialogueBox(
-                            self.window,
-                            f'Remove {current_spell} prelude spell?',
-                            actions=['Confirm', 'Cancel'],
-                            title='Clear Prelude Spell',
-                        )
+                    if self._config.get('prelude_spell_name'):
+                        self._server_clear_prelude_spell()
                     continue
 
                 if (_mobile_collide(self._battle_figure_x_rect, pos,
@@ -3436,15 +3152,8 @@ class DefenceScreen(MenuScreenMixin, Screen):
 
                 if _mobile_collide(self._counter_x_rect, pos,
                                    settings.TOUCH_COMPACT_MIN, settings.TOUCH_COMPACT_MIN):
-                    current_spell = self._config.get('counter_spell_name')
-                    if current_spell:
-                        self._pending_counter_clear = True
-                        self.dialogue_box = DialogueBox(
-                            self.window,
-                            f'Remove {current_spell} counter spell?',
-                            actions=['Confirm', 'Cancel'],
-                            title='Clear Counter Spell',
-                        )
+                    if self._config.get('counter_spell_name'):
+                        self._server_clear_counter_spell()
                     continue
 
                 figure_removed = False
@@ -3488,21 +3197,32 @@ class DefenceScreen(MenuScreenMixin, Screen):
                 # Build Figure button
                 if _mobile_collide(self._btn_build, pos,
                                    settings.TOUCH_COMPACT_MIN, settings.TOUCH_COMPACT_MIN):
+                    sound.play('ui_click')
                     self._open_build_figure()
                     continue
 
                 # Buy Move button
                 if _mobile_collide(self._btn_buy_move, pos,
                                    settings.TOUCH_COMPACT_MIN, settings.TOUCH_COMPACT_MIN):
+                    sound.play('ui_click')
+                    self._open_battle_shop()
+                    continue
+
+                # Empty battle-move slot click → open the Battle Shop
+                if any(_mobile_collide(r, pos)
+                       for r in self._empty_move_slot_rects.values()):
+                    sound.play('ui_click')
                     self._open_battle_shop()
                     continue
 
                 # Prelude spell: edit button opens spell picker; Health Boost slot picks target
                 if _mobile_collide(self._btn_prelude_edit, pos,
                                    settings.TOUCH_COMPACT_MIN, settings.TOUCH_COMPACT_MIN):
+                    sound.play('ui_click')
                     self._open_prelude_spell_screen()
                     continue
                 if _mobile_collide(self._prelude_spell_rect, pos):
+                    sound.play('ui_click')
                     if self._config.get('prelude_spell_name') == 'Health Boost':
                         self._begin_spell_target_selection('prelude')
                     else:
@@ -3526,17 +3246,20 @@ class DefenceScreen(MenuScreenMixin, Screen):
                         figs = self._config.get('figures', [])
                         valid = [f for f in figs if self._battle_figure_is_selectable(f.get('id'))]
                         if valid:
+                            sound.play('ui_click')
                             self._begin_battle_figure_selection()
                         else:
                             self.state.set_msg('No valid figures available')
                     continue
 
-                # Counter action: edit button opens picker; Health Boost slot picks target
+                # Defender response: edit button opens picker; Health Boost slot picks target
                 if _mobile_collide(self._btn_counter_edit, pos,
                                    settings.TOUCH_COMPACT_MIN, settings.TOUCH_COMPACT_MIN):
+                    sound.play('ui_click')
                     self._open_counter_spell_screen()
                     continue
                 if _mobile_collide(self._counter_spell_rect, pos):
+                    sound.play('ui_click')
                     if self._config.get('counter_spell_name') == 'Health Boost':
                         self._begin_spell_target_selection('counter')
                     else:
@@ -3547,6 +3270,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
                 # changes make them overlap with the auto-gamble toggle rect.
                 if _mobile_collide(self._btn_auto_gamble_dec, pos,
                                    settings.TOUCH_COMPACT_MIN, settings.TOUCH_COMPACT_MIN):
+                    sound.play('ui_click', volume=0.7)
                     current = self._get_auto_gamble_threshold()
                     target = max(_AUTO_GAMBLE_THRESHOLD_MIN, current - 1)
                     if target != current:
@@ -3557,6 +3281,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
 
                 if _mobile_collide(self._btn_auto_gamble_inc, pos,
                                    settings.TOUCH_COMPACT_MIN, settings.TOUCH_COMPACT_MIN):
+                    sound.play('ui_click', volume=0.7)
                     current = self._get_auto_gamble_threshold()
                     target = min(_AUTO_GAMBLE_THRESHOLD_MAX, current + 1)
                     if target != current:
@@ -3567,6 +3292,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
 
                 # Auto-gamble toggle
                 if _mobile_collide(self._btn_auto_gamble, pos):
+                    sound.play('ui_click', volume=0.7)
                     current = self._config.get('auto_gamble', False)
                     self._server_set_auto_gamble(not current)
                     continue

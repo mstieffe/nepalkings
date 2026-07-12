@@ -526,7 +526,7 @@ class GameMenuScreen(MenuScreenMixin, Screen):
                     'id': 'open_starter_pack',
                     'rect': self.button_collection.rect,
                     'title': 'Open Your Booster Packs',
-                    'body': 'Open your Collection and crack a booster pack to grow your card collection before your first conquest.',
+                    'body': 'Your gift is waiting in the Collection. Tap it and open your first booster pack.',
                     'action': 'click',
                     'mark_on_click': True,
                     'max_lines': 4,
@@ -538,7 +538,7 @@ class GameMenuScreen(MenuScreenMixin, Screen):
                     'id': 'post_boosters_kingdom',
                     'rect': self.button_kingdom.rect,
                     'title': 'Conquer Your First Land',
-                    'body': 'Open your Kingdom and conquer the marked land. Your starter attack is already prepared.',
+                    'body': 'Your first attack is prepared. Open your Kingdom and take the marked land.',
                     'action': 'click',
                     'mark_on_click': True,
                     'max_lines': 4,
@@ -551,8 +551,8 @@ class GameMenuScreen(MenuScreenMixin, Screen):
                 return {
                     'id': 'return_to_kingdom_loop',
                     'rect': self.button_kingdom.rect,
-                    'title': 'Back To Your Kingdom',
-                    'body': 'Return to your Kingdom to close the conquer tutorial with your first land.',
+                    'title': 'Finish the kingdom tour',
+                    'body': 'Head back to your Kingdom to see your first land and finish the final guided step.',
                     'action': 'click',
                     'mark_on_click': True,
                     'max_lines': 4,
@@ -570,33 +570,15 @@ class GameMenuScreen(MenuScreenMixin, Screen):
         onboarding = self._onboarding()
         if onboarding.get('welcome_pending'):
             return None
-        seen = self._menu_coach_seen()
 
         # Lead with the actionable journey the welcome promised: open a pack,
-        # conquer a land, then let the first-land card close the tour.
-        journey = self._current_journey_coach_step()
-        if journey is not None:
-            return journey
-
-        # Once the journey is underway, point at the guide for reward tracking.
-        guide_walkthrough_pending = (
-            not self._first_session_tutorial_complete()
-            and 'guide_first_duel_reward' not in seen
-        )
-        if 'guide' not in seen or guide_walkthrough_pending:
-            return {
-                'id': 'guide',
-                'rect': self._icon_guide.rect,
-                'title': 'Guide',
-                'body': 'Open the guide any time to track your checklist and reward goals.',
-                'max_lines': 4,
-            }
-        return None
+        # conquer a land, then let the first-land card close the tour. The guide
+        # icon is intentionally not coach-pointed: that card interrupted the flow
+        # without adding value, so the menu shows no further coaching here.
+        return self._current_journey_coach_step()
 
     def _after_menu_coach_next(self, step_id):
-        if step_id == 'guide':
-            self._open_onboarding_guide()
-        elif step_id == 'guide_first_duel_reward':
+        if step_id == 'guide_first_duel_reward':
             self._onboarding_guide_open = False
 
     # ── Welcome present reveal ─────────────────────────────────────
@@ -607,29 +589,16 @@ class GameMenuScreen(MenuScreenMixin, Screen):
     def _build_welcome_stage(self, stage, username):
         """Build the dialogue for one welcome stage (or None)."""
         from game.components.tutorial_window import TutorialWindowDialogue
-        from game.components import tutorial_diagrams as td
+        from game.tutorial_content import welcome_pages
         if stage == 0:
             return TutorialWindowDialogue(
                 self.window,
-                [
-                    {
-                        'title': 'Your Path to the Crown',
-                        'layout': 'image_top',
-                        'image': lambda: td.conquer_start_image(int(0.26 * _SH)),
-                        'image_frame': False,
-                        'image_caption': '',
-                        'lines': [
-                            f'Welcome, {username}!',
-                            'You want to become the greatest king of Nepal?',
-                            'Turn your cards into figures and spells, play your moves wisely,',
-                            'and grow your kingdom until the crown is yours.',
-                        ],
-                    },
-                ],
+                welcome_pages(username, screen_height=_SH),
                 title='Welcome to Nepal Kings',
             )
         if stage == 1:
             from game.components.rewards_reveal_dialogue import RewardsRevealDialogueBox
+            from game.tutorial_content import welcome_gift_lines
             present = (self._onboarding() or {}).get('starter_present') or {}
             # The gift is credited only when these boxes are opened, so the
             # account balance is still 0 here — reveal the starter DEFAULTS.
@@ -644,11 +613,7 @@ class GameMenuScreen(MenuScreenMixin, Screen):
                 self.window,
                 'Your Welcome Gift',
                 'welcome',
-                [
-                    'The basis of your kingdom is your card collection.',
-                    'Open booster packs to expand your collection.',
-                    'Claim your welcome gift to begin:',
-                ],
+                welcome_gift_lines(),
                 items,
                 footer_when_done='Added to your collection!',
                 hint_text='Click each box to reveal your gift.',

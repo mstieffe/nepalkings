@@ -189,7 +189,9 @@ def test_preassembly_skipped_when_starter_cards_missing(client, app, db):
     assert cfg.get('figures', []) == []  # no partial build
 
 
-def test_kingdom_map_marks_recommended_first_conquest_land(client, app, db):
+def test_kingdom_map_marks_recommended_first_conquest_land(client, app, db, monkeypatch):
+    import importlib
+
     token = _register(client, 'preasm_map')
     land = _tier1_unowned_land(db)
     land.owner_user_id = None
@@ -197,6 +199,13 @@ def test_kingdom_map_marks_recommended_first_conquest_land(client, app, db):
     land.conquer_cooldown_until = None
     land.suit_bonus_suit = 'Clubs'
     db.session.commit()
+
+    def _fail_template_lookup(_land):
+        raise AssertionError('first-conquest map recommendation should not generate AI templates')
+
+    kingdom_routes = importlib.import_module('routes.kingdom')
+    monkeypatch.setattr(kingdom_routes, 'get_ai_defence_template_for_land',
+                        _fail_template_lookup)
 
     resp = client.get('/kingdom/map', headers=_headers(token))
     assert resp.status_code == 200

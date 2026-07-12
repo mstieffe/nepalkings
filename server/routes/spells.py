@@ -164,7 +164,17 @@ def cast_spell():
     # Validate required fields
     if not all([player_id, game_id, spell_name, spell_type, spell_family_name, suit]):
         return jsonify({'success': False, 'message': 'Missing required fields'}), 400
-    
+
+    # Conquer-only spell families are configured as conquer/defence preludes
+    # and can never be cast through this route.
+    from routes.games import CONQUER_ONLY_SPELLS
+    if spell_name in CONQUER_ONLY_SPELLS or spell_family_name in CONQUER_ONLY_SPELLS:
+        return jsonify({
+            'success': False,
+            'message': f'{spell_name} can only be used as a conquer or defence prelude spell',
+            'reason': 'conquer_only_spell',
+        }), 400
+
     # Get game and player
     game = db.session.get(Game, game_id)
     player = db.session.get(Player, player_id)
@@ -944,6 +954,215 @@ def _execute_destroyed_conquer_replay_enchantment(spell, game):
     }
 
 
+def _execute_dump_cards_effect(spell_effect, game, caster):
+    """Both players dump their hands and redraw 5 main + 4 side cards.
+
+    Shared by the Dump Cards greed spell and Royal Decree (which combines
+    this fresh-hand effect with its castle-only battle modifier).
+    """
+    try:
+        opponent = next((p for p in game.players if p.id != caster.id), None)
+        if not opponent:
+            spell_effect['effect'] = 'No opponent found'
+            spell_effect['error'] = 'No opponent'
+            return
+
+        # Return all cards to deck for both players
+        caster_main_cards = MainCard.query.filter_by(
+            player_id=caster.id,
+            in_deck=False,
+            part_of_figure=False
+        ).all()
+        caster_side_cards = SideCard.query.filter_by(
+            player_id=caster.id,
+            in_deck=False,
+            part_of_figure=False
+        ).all()
+        opponent_main_cards = MainCard.query.filter_by(
+            player_id=opponent.id,
+            in_deck=False,
+            part_of_figure=False
+        ).all()
+        opponent_side_cards = SideCard.query.filter_by(
+            player_id=opponent.id,
+            in_deck=False,
+            part_of_figure=False
+        ).all()
+
+        # Count dumped cards
+        caster_dumped = len(caster_main_cards) + len(caster_side_cards)
+        opponent_dumped = len(opponent_main_cards) + len(opponent_side_cards)
+        caster_dumped_cards = ([c.serialize() for c in caster_main_cards]
+                               + [c.serialize() for c in caster_side_cards])
+        opponent_dumped_cards = ([c.serialize() for c in opponent_main_cards]
+                                 + [c.serialize() for c in opponent_side_cards])
+
+        all_cards_to_dump = (caster_main_cards + caster_side_cards
+                             + opponent_main_cards + opponent_side_cards)
+        if all_cards_to_dump:
+            # Drop any pre-bought BattleMove rows whose cards are being
+            # recycled into the deck — otherwise the battle shop would keep
+            # showing moves whose underlying cards are gone.
+            for card in all_cards_to_dump:
+                if not getattr(card, 'part_of_battle_move', False):
+                    continue
+                ct = 'side' if isinstance(card, SideCard) else 'main'
+                _purge_spell_move_state_referencing_card(game, card.id, ct)
+                card.part_of_battle_move = False
+            DeckManager.return_cards_to_deck(all_cards_to_dump)
+
+        # Deal new cards to both players (5 main, 4 side)
+        caster_new_main = DeckManager.draw_cards_from_deck(game, caster, 5, 'main')
+        caster_new_side = DeckManager.draw_cards_from_deck(game, caster, 4, 'side')
+        opponent_new_main = DeckManager.draw_cards_from_deck(game, opponent, 5, 'main')
+        opponent_new_side = DeckManager.draw_cards_from_deck(game, opponent, 4, 'side')
+        _auto_convert_spell_battle_moves(
+            spell_effect,
+            'battle_moves_added',
+            game,
+            caster,
+            caster_new_main,
+            reason='dump_cards_spell',
+        )
+        _auto_convert_spell_battle_moves(
+            spell_effect,
+            'opponent_battle_moves_added',
+            game,
+            opponent,
+            opponent_new_main,
+            reason='dump_cards_spell_opponent',
+        )
+
+        spell_effect['effect'] = 'Both players dumped all cards and drew 5 main + 4 side cards'
+        spell_effect['caster_dumped'] = caster_dumped
+        spell_effect['opponent_dumped'] = opponent_dumped
+        spell_effect['caster_dumped_cards'] = caster_dumped_cards
+        spell_effect['opponent_dumped_cards'] = opponent_dumped_cards
+        spell_effect['cards_drawn'] = len(caster_new_main) + len(caster_new_side)
+
+        spell_effect['drawn_cards'] = []
+        for card in caster_new_main:
+            card_data = card.serialize()
+            card_data['type'] = 'main'
+            spell_effect['drawn_cards'].append(card_data)
+        for card in caster_new_side:
+            card_data = card.serialize()
+            card_data['type'] = 'side'
+            spell_effect['drawn_cards'].append(card_data)
+        spell_effect['opponent_drawn_cards'] = []
+        for card in opponent_new_main:
+            card_data = card.serialize()
+            card_data['type'] = 'main'
+            spell_effect['opponent_drawn_cards'].append(card_data)
+        for card in opponent_new_side:
+            card_data = card.serialize()
+            card_data['type'] = 'side'
+            spell_effect['opponent_drawn_cards'].append(card_data)
+    except Exception:
+        db.session.rollback()
+        logger.exception('Failed to dump cards')
+        spell_effect['effect'] = 'Failed to dump cards'
+        spell_effect['error'] = True
+
+
+def _execute_copy_figure_effect(spell_effect, spell, game, caster):
+    """Clone an opponent figure as a runtime-only battle figure for the caster.
+
+    The copy keeps the source's battle-relevant identity (family/name, field,
+    suit, color, card composition, gameplay skills) but is never checkmate,
+    never maps back to a config figure, and — as a pure battle clone — has no
+    resource requirements or production.
+    """
+    target_figure = (db.session.get(Figure, spell.target_figure_id)
+                     if spell.target_figure_id else None)
+    if not target_figure:
+        spell_effect['effect'] = 'Target figure not found'
+        spell_effect['error'] = 'Invalid target'
+        return
+    from game_service.figure_rule_helpers import figure_has_family_skill
+    if figure_has_family_skill(target_figure, 'cannot_be_targeted'):
+        spell_effect['effect'] = f'{target_figure.name} cannot be targeted'
+        spell_effect['error'] = 'Invalid target'
+        return
+
+    try:
+        source_snapshot = target_figure.serialize()
+        copied = Figure(
+            player_id=caster.id,
+            game_id=game.id,
+            family_name=target_figure.family_name,
+            field=target_figure.field,
+            color=target_figure.color,
+            name=target_figure.name,
+            suit=target_figure.suit,
+            description=target_figure.description,
+            upgrade_family_name=target_figure.upgrade_family_name,
+            produces={},
+            requires={},
+            checkmate=False,
+            cannot_be_blocked=bool(target_figure.cannot_be_blocked),
+            rest_after_attack=bool(target_figure.rest_after_attack),
+            source_config_figure_id=None,
+            is_clone=True,
+        )
+        db.session.add(copied)
+        db.session.flush()
+
+        # Clone the card composition with synthetic game-scoped cards so the
+        # copy's base power matches the source exactly.
+        for assoc in CardToFigure.query.filter_by(figure_id=target_figure.id).all():
+            if assoc.card_type == 'main':
+                src_card = db.session.get(MainCard, assoc.card_id)
+                card_cls = MainCard
+            else:
+                src_card = db.session.get(SideCard, assoc.card_id)
+                card_cls = SideCard
+            if not src_card:
+                continue
+            clone_card = card_cls(
+                rank=src_card.rank,
+                suit=src_card.suit,
+                value=src_card.value,
+                game_id=game.id,
+                player_id=caster.id,
+                in_deck=False,
+                part_of_figure=True,
+                part_of_battle_move=False,
+            )
+            db.session.add(clone_card)
+            db.session.flush()
+            db.session.add(CardToFigure(
+                figure_id=copied.id,
+                card_id=clone_card.id,
+                card_type=assoc.card_type,
+                role=assoc.role,
+            ))
+        db.session.flush()
+
+        spell.effect_data = {
+            'spell_icon': 'copy.png',
+            'source_figure_id': target_figure.id,
+            'copied_figure_id': copied.id,
+            'source_figure_snapshot': source_snapshot,
+            'copied_figure_snapshot': copied.serialize(),
+        }
+        # The copy persists as a normal figure; the spell record itself is
+        # a resolved instant, not an ongoing enchantment.
+        spell.is_active = False
+
+        spell_effect['effect'] = f'Copied {target_figure.name}'
+        spell_effect['spell_icon'] = 'copy.png'
+        spell_effect['source_figure_id'] = target_figure.id
+        spell_effect['copied_figure_id'] = copied.id
+        spell_effect['source_figure_snapshot'] = source_snapshot
+        spell_effect['copied_figure_snapshot'] = spell.effect_data['copied_figure_snapshot']
+    except Exception:
+        db.session.rollback()
+        logger.exception('Copy Figure failed')
+        spell_effect['effect'] = 'Failed to copy figure'
+        spell_effect['error'] = True
+
+
 def _execute_spell_impl(spell: ActiveSpell, game: Game, caster: Player):
     """
     Execute a spell's effect based on its type.
@@ -1059,118 +1278,33 @@ def _execute_spell_impl(spell: ActiveSpell, game: Game, caster: Player):
                 spell_effect['error'] = True
         
         elif spell.spell_name == 'Dump Cards':
+            _execute_dump_cards_effect(spell_effect, game, caster)
+
+        elif spell.spell_name == 'Draw 4 MainCards':
             try:
-                # Get both players
-                opponent = None
-                for player in game.players:
-                    if player.id != caster.id:
-                        opponent = player
-                        break
-                
-                if not opponent:
-                    spell_effect['effect'] = 'No opponent found'
-                    spell_effect['error'] = 'No opponent'
-                else:
-                    # Return all cards to deck for both players
-                    caster_main_cards = MainCard.query.filter_by(
-                        player_id=caster.id,
-                        in_deck=False,
-                        part_of_figure=False
-                    ).all()
-                    
-                    caster_side_cards = SideCard.query.filter_by(
-                        player_id=caster.id,
-                        in_deck=False,
-                        part_of_figure=False
-                    ).all()
-                    
-                    opponent_main_cards = MainCard.query.filter_by(
-                        player_id=opponent.id,
-                        in_deck=False,
-                        part_of_figure=False
-                    ).all()
-                    
-                    opponent_side_cards = SideCard.query.filter_by(
-                        player_id=opponent.id,
-                        in_deck=False,
-                        part_of_figure=False
-                    ).all()
-                    
-                    # Count dumped cards
-                    caster_dumped = len(caster_main_cards) + len(caster_side_cards)
-                    opponent_dumped = len(opponent_main_cards) + len(opponent_side_cards)
-                    caster_dumped_cards = [c.serialize() for c in caster_main_cards] + [c.serialize() for c in caster_side_cards]
-                    opponent_dumped_cards = [c.serialize() for c in opponent_main_cards] + [c.serialize() for c in opponent_side_cards]
-                    
-                    # Return all cards to deck
-                    all_cards_to_dump = caster_main_cards + caster_side_cards + opponent_main_cards + opponent_side_cards
-                    if all_cards_to_dump:
-                        # Drop any pre-bought BattleMove rows whose cards are
-                        # being recycled into the deck — otherwise the battle
-                        # shop would keep showing moves whose underlying cards
-                        # are gone.
-                        for card in all_cards_to_dump:
-                            if not getattr(card, 'part_of_battle_move', False):
-                                continue
-                            ct = 'side' if isinstance(card, SideCard) else 'main'
-                            _purge_spell_move_state_referencing_card(game, card.id, ct)
-                            card.part_of_battle_move = False
-                        DeckManager.return_cards_to_deck(all_cards_to_dump)
-                    
-                    # Deal new cards to both players (5 main, 4 side)
-                    caster_new_main = DeckManager.draw_cards_from_deck(game, caster, 5, 'main')
-                    caster_new_side = DeckManager.draw_cards_from_deck(game, caster, 4, 'side')
-                    opponent_new_main = DeckManager.draw_cards_from_deck(game, opponent, 5, 'main')
-                    opponent_new_side = DeckManager.draw_cards_from_deck(game, opponent, 4, 'side')
-                    _auto_convert_spell_battle_moves(
-                        spell_effect,
-                        'battle_moves_added',
-                        game,
-                        caster,
-                        caster_new_main,
-                        reason='dump_cards_spell',
-                    )
-                    _auto_convert_spell_battle_moves(
-                        spell_effect,
-                        'opponent_battle_moves_added',
-                        game,
-                        opponent,
-                        opponent_new_main,
-                        reason='dump_cards_spell_opponent',
-                    )
-                    
-                    spell_effect['effect'] = f'Both players dumped all cards and drew 5 main + 4 side cards'
-                    spell_effect['caster_dumped'] = caster_dumped
-                    spell_effect['opponent_dumped'] = opponent_dumped
-                    spell_effect['caster_dumped_cards'] = caster_dumped_cards
-                    spell_effect['opponent_dumped_cards'] = opponent_dumped_cards
-                    spell_effect['cards_drawn'] = len(caster_new_main) + len(caster_new_side)
-                    
-                    # Add caster's new cards
-                    spell_effect['drawn_cards'] = []
-                    for card in caster_new_main:
-                        card_data = card.serialize()
-                        card_data['type'] = 'main'
-                        spell_effect['drawn_cards'].append(card_data)
-                    for card in caster_new_side:
-                        card_data = card.serialize()
-                        card_data['type'] = 'side'
-                        spell_effect['drawn_cards'].append(card_data)
-                    spell_effect['opponent_drawn_cards'] = []
-                    for card in opponent_new_main:
-                        card_data = card.serialize()
-                        card_data['type'] = 'main'
-                        spell_effect['opponent_drawn_cards'].append(card_data)
-                    for card in opponent_new_side:
-                        card_data = card.serialize()
-                        card_data['type'] = 'side'
-                        spell_effect['opponent_drawn_cards'].append(card_data)
+                drawn_cards = DeckManager.draw_cards_from_deck(game, caster, 4, 'main', force=True)
+                spell_effect['effect'] = f'Drew {len(drawn_cards)} main cards'
+                spell_effect['cards_drawn'] = len(drawn_cards)
+                spell_effect['card_type'] = 'main'
+                _auto_convert_spell_battle_moves(
+                    spell_effect,
+                    'battle_moves_added',
+                    game,
+                    caster,
+                    drawn_cards,
+                    reason='draw_main_spell',
+                )
+                spell_effect['drawn_cards'] = []
+                for card in drawn_cards:
+                    card_data = card.serialize()
+                    card_data['type'] = 'main'
+                    spell_effect['drawn_cards'].append(card_data)
             except Exception as e:
                 db.session.rollback()
-                logger.exception('Failed to dump cards')
-                spell_effect['effect'] = 'Failed to dump cards'
+                logger.exception('Failed to draw main cards')
+                spell_effect['effect'] = 'Failed to draw cards'
                 spell_effect['error'] = True
-        
+
         elif 'Forced Deal' in spell.spell_name:
             # Exchange 2 random cards with opponent
             try:
@@ -1312,7 +1446,14 @@ def _execute_spell_impl(spell: ActiveSpell, game: Game, caster: Player):
             }
             spell.is_active = True
             spell_effect['spell_icon'] = 'infinite_hammer.png'
-            
+
+        elif 'Copy Figure' in spell.spell_name:
+            # Copy Figure bypasses the generic enchantment targeting below:
+            # checkmate figures ARE legal copy sources (the copy itself is
+            # never checkmate) and the effect mutates the field instead of
+            # attaching a power modifier.
+            _execute_copy_figure_effect(spell_effect, spell, game, caster)
+
         elif spell.target_figure_id:
             spell_effect['target_figure_id'] = spell.target_figure_id
             
@@ -1554,9 +1695,21 @@ def _execute_spell_impl(spell: ActiveSpell, game: Game, caster: Player):
     elif spell.spell_type == 'tactics':
         # Battle modification spells (stackable - battle_modifier is a list)
         spell_effect['effect'] = 'Battle modifier set'
-        
+
+        # Royal Decree: the castle-only battle modifier is registered by the
+        # prelude creation path; the spell effect itself is the Dump-Cards
+        # fresh-hand refresh for both players.
+        if spell.spell_name == 'Royal Decree':
+            _execute_dump_cards_effect(spell_effect, game, caster)
+            if not spell_effect.get('error'):
+                spell_effect['effect'] = (
+                    'Royal Decree: castle figures only — both players '
+                    'dumped their hands and drew fresh cards'
+                )
+                spell_effect['spell_icon'] = 'kings_war.png'
+
         # Handle Ceasefire specifically
-        if spell.spell_name == 'Ceasefire':
+        elif spell.spell_name == 'Ceasefire':
             try:
                 # Give both players 3 additional turns
                 invader_player = db.session.get(Player, game.invader_player_id)

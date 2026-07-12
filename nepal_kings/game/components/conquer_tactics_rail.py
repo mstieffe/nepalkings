@@ -105,6 +105,10 @@ class ConquerTacticsRail:
         # Coin-flip animation state for gambled tactic. (#8c)
         # ``{'move_id': int, 'started_at': ms, 'duration': ms}`` or None.
         self._gamble_anim: Optional[Dict[str, Any]] = None
+        # Two-step gamble confirm (devil's-bargain ritual): first click
+        # arms the button, second click within ``GAMBLE_CONFIRM_MS``
+        # fires. ``{'move_id': int, 'until_ms': int}`` or None.
+        self._gamble_armed: Optional[Dict[str, Any]] = None
         # Drag-and-drop combine state. (#8b)
         self._drag_origin_id: Optional[int] = None
         self._drag_pos: Optional[tuple] = None
@@ -182,6 +186,76 @@ class ConquerTacticsRail:
         return str(turn_player_id) == str(getattr(game, 'player_id', None))
 
     GAMBLE_PER_BATTLE_LIMIT = 3
+    GAMBLE_CONFIRM_MS = 2600
+
+    @staticmethod
+    def _gamble_counts_state(game) -> tuple:
+        """Return ``(used_count, used_rounds)`` from ``battle_gamble_counts``."""
+        counts = getattr(game, 'battle_gamble_counts', None) or {}
+        my_id = getattr(game, 'player_id', None)
+        state = counts.get(str(my_id), 0)
+        used_count = 0
+        used_rounds: list = []
+        if isinstance(state, dict):
+            try:
+                used_count = int(state.get('count', 0) or 0)
+            except (TypeError, ValueError):
+                used_count = 0
+            for r in state.get('rounds', []) or []:
+                try:
+                    used_rounds.append(int(r))
+                except (TypeError, ValueError):
+                    continue
+        else:
+            try:
+                used_count = int(state or 0)
+            except (TypeError, ValueError):
+                used_count = 0
+        return used_count, used_rounds
+
+    def _gamble_armed_for(self, move_id) -> bool:
+        armed = self._gamble_armed
+        if not armed:
+            return False
+        if pygame.time.get_ticks() >= int(armed.get('until_ms') or 0):
+            self._gamble_armed = None
+            return False
+        try:
+            return int(armed.get('move_id') or -1) == int(move_id or -2)
+        except (TypeError, ValueError):
+            return False
+
+    _SPEC_SUIT_CHARS = {'Hearts': '♥', 'Diamonds': '♦',
+                        'Clubs': '♣', 'Spades': '♠'}
+
+    @classmethod
+    def _gamble_spec_label(cls, spec) -> str:
+        """Short 'K♥ Call King' label for a previewed replacement tactic."""
+        if not isinstance(spec, dict):
+            return '?'
+        suit_char = cls._SPEC_SUIT_CHARS.get(spec.get('suit'), '?')
+        name = spec.get('family_name') or 'Dagger'
+        return f"{spec.get('rank')}{suit_char} {name}"
+
+    def _gamble_preview_specs(self, move_id=None):
+        """Pinned All Seeing Eye forecast for the CURRENT round, or None.
+
+        The forecast is per round, not per tactic — ``move_id`` is ignored
+        (kept for call-site compatibility): gambling any tactic yields the
+        same two cards.
+        """
+        game = getattr(self._parent.state, 'game', None)
+        previews = getattr(game, 'battle_gamble_previews', None) or {}
+        entry = previews.get(str(getattr(game, 'player_id', None)))
+        if not isinstance(entry, dict):
+            return None
+        try:
+            if int(entry.get('round', -1)) != int(getattr(game, 'battle_round', 0) or 0):
+                return None
+        except (TypeError, ValueError):
+            return None
+        specs = entry.get('specs') or []
+        return specs if len(specs) == 2 else None
 
     def _gamble_block_reason(self) -> str:
         """Return human-readable reason gambling is blocked, '' if allowed.
@@ -325,6 +399,36 @@ class ConquerTacticsRail:
         sa, sb = a.get('suit'), b.get('suit')
         return (sa in red and sb in red) or (sa in black and sb in black)
 
+    def _eligible_combine_partners(
+            self, move: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+        """Available same-colour single Daggers that can join ``move``."""
+        move = move or self._selected_move()
+        if move is None or not self._is_single_dagger(move):
+            return []
+        partners: List[Dict[str, Any]] = []
+        for candidate in self._hand_moves():
+            if self._is_ghost_move(candidate):
+                continue
+            if self._can_combine(move, candidate):
+                partners.append(candidate)
+        return partners
+
+    def _best_combine_partner(
+            self, move: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+        """Strongest currently available partner for one-tap Combine."""
+        partners = self._eligible_combine_partners(move)
+        if not partners:
+            return None
+
+        def key(candidate: Dict[str, Any]) -> tuple:
+            try:
+                move_id = int(candidate.get('id') or 0)
+            except (TypeError, ValueError):
+                move_id = 0
+            return (self._power(candidate), move_id)
+
+        return max(partners, key=key)
+
     @staticmethod
     def _is_double_dagger(move: Dict[str, Any]) -> bool:
         return move.get('family_name') in ('Dagger', 'Double Dagger') and bool(move.get('card_id_b'))
@@ -392,6 +496,7 @@ class ConquerTacticsRail:
         self._combine_partner_id = None
         self._combine_pending = False
         self._pending_action = None
+        self._gamble_armed = None
 
     def preview_move(self) -> Optional[Dict[str, Any]]:
         if not self._is_my_battle_turn() or self._hovered_id is None:
@@ -883,15 +988,23 @@ class ConquerTacticsRail:
         if key in disabled_reasons:
             self.set_result_banner(disabled_reasons[key], ttl_ms=1800)
             return
-        # Block all actions while a played-tactic flight animation is in
-        # progress.  Without this the player can fire a second mutating
-        # request before the first one's animation finishes — racing
-        # cache state and the server's per-game lock.
+        # Block all actions while a played-tactic flight animation or a
+        # round-reveal sequence is in progress.  Without this the player
+        # can fire a second mutating request before the first one's
+        # animation finishes — racing cache state and the server's
+        # per-game lock.
         try:
-            flight_check = getattr(self._parent, 'is_tactic_flight_active', None)
-            if callable(flight_check) and flight_check():
-                self.set_result_banner('Tactic in flight…', ttl_ms=900)
-                return
+            reason_getter = getattr(self._parent, 'conquer_action_block_reason', None)
+            if callable(reason_getter):
+                reason = reason_getter()
+                if reason:
+                    self.set_result_banner(reason, ttl_ms=900)
+                    return
+            else:
+                flight_check = getattr(self._parent, 'is_tactic_flight_active', None)
+                if callable(flight_check) and flight_check():
+                    self.set_result_banner('Tactic in flight…', ttl_ms=900)
+                    return
         except Exception:
             pass
         sel = self._selected_move()
@@ -911,7 +1024,51 @@ class ConquerTacticsRail:
                 self._pending_action = {'action': ACTION_PLAY, 'move': sel}
             return
         if key == ACTION_GAMBLE:
-            # Gambling is a tactics-hand mutation, not a battle-turn action.
+            # Devil's bargain: first click arms, second click (within the
+            # confirm window) commits. Gambling is a tactics-hand mutation,
+            # not a battle-turn action.
+            sel_id = sel.get('id')
+            if not self._gamble_armed_for(sel_id):
+                now = pygame.time.get_ticks()
+                try:
+                    self._gamble_armed = {
+                        'move_id': int(sel_id or 0),
+                        'until_ms': now + self.GAMBLE_CONFIRM_MS,
+                    }
+                except Exception:
+                    self._gamble_armed = None
+                    return
+                game = getattr(self._parent.state, 'game', None)
+                used, _rounds = self._gamble_counts_state(game)
+                name = sel.get('family_name') or 'tactic'
+                # All Seeing Eye: reveal exactly what the gamble would yield.
+                # The server pins the previewed specs, so gambling this
+                # tactic delivers precisely these two replacements.
+                specs = self._gamble_preview_specs(sel_id)
+                if specs is None and game is not None:
+                    ase_check = getattr(game, 'has_active_all_seeing_eye', None)
+                    if callable(ase_check) and ase_check():
+                        fetch = getattr(self._parent,
+                                        'request_conquer_gamble_preview', None)
+                        if callable(fetch):
+                            specs = fetch(sel_id)
+                if specs:
+                    # The overlay panel shows the actual cards; the banner
+                    # just narrates what is happening.
+                    self.set_result_banner(
+                        'The Eye reveals your gamble — click Gamble again '
+                        'to take these cards.',
+                        color=(130, 190, 255), ttl_ms=self.GAMBLE_CONFIRM_MS)
+                elif used >= self.GAMBLE_PER_BATTLE_LIMIT - 1:
+                    self.set_result_banner(
+                        f'LAST gamble — burn {name} for 2 random? Click again.',
+                        color=(255, 170, 96), ttl_ms=self.GAMBLE_CONFIRM_MS)
+                else:
+                    self.set_result_banner(
+                        f'Burn {name} for 2 random tactics? Click again.',
+                        color=(250, 226, 130), ttl_ms=self.GAMBLE_CONFIRM_MS)
+                return
+            self._gamble_armed = None
             self._pending_action = {'action': ACTION_GAMBLE, 'move': sel}
             # Kick off the coin-flip animation on the source cell. (#8c)
             try:
@@ -929,6 +1086,8 @@ class ConquerTacticsRail:
             return
         if key == ACTION_COMBINE:
             partner = self._combine_partner_move()
+            if partner is None or not self._can_combine(sel, partner):
+                partner = self._best_combine_partner(sel)
             if partner is not None and self._can_combine(sel, partner):
                 self._pending_action = {
                     'action': ACTION_COMBINE,
@@ -938,7 +1097,8 @@ class ConquerTacticsRail:
                 self._combine_pending = False
                 self._combine_partner_id = None
             else:
-                self._combine_pending = True
+                self.set_result_banner('No matching Dagger', ttl_ms=1600)
+                self._combine_pending = False
                 self._combine_partner_id = None
 
     # ------------------------------------------------------------------ draw
@@ -946,6 +1106,9 @@ class ConquerTacticsRail:
         if rail_rect.collidepoint(pygame.mouse.get_pos()):
             return None
         if self._drag_active or self._drag_origin_id is not None:
+            return None
+        if self._gamble_armed is not None:
+            # Armed-confirm state renders a live countdown affordance.
             return None
         if self._gamble_anim:
             started = int(self._gamble_anim.get('started_at', 0) or 0)
@@ -1053,8 +1216,14 @@ class ConquerTacticsRail:
         norm_action_specs = self._normalized_action_specs()
         action_h = self._preferred_action_tray_height(action_tray_rect.width)
         if action_h > action_tray_rect.height:
-            min_visible_cells = 1 if self._action_tray_uses_column_layout(
-                action_tray_rect.width, norm_action_specs) else 3
+            if self._action_tray_uses_column_layout(
+                    action_tray_rect.width, norm_action_specs):
+                min_visible_cells = 1
+            elif self._action_tray_uses_stacked_layout(
+                    action_tray_rect.width, norm_action_specs):
+                min_visible_cells = 2
+            else:
+                min_visible_cells = 3
             min_list_h = min_visible_cells * rail.cell_height
             hand_slack = max(0, hand_list_rect.height - min_list_h)
             grow = min(action_h - action_tray_rect.height, hand_slack)
@@ -1071,6 +1240,10 @@ class ConquerTacticsRail:
                              rail.cells_visible)
         self._draw_selected_detail(selected_detail_rect)
         self._draw_action_tray(action_tray_rect)
+        # The All Seeing Eye gamble preview takes over the whole hand +
+        # detail region so the two forecast cards have room to be legible.
+        self._draw_gamble_preview_overlay(
+            hand_list_rect.union(selected_detail_rect))
         self.window.set_clip(previous_clip)
 
         if cache_key is not None:
@@ -1083,6 +1256,109 @@ class ConquerTacticsRail:
         else:
             self._cached_render_surface = None
             self._cached_render_key = None
+
+    @staticmethod
+    def _draw_eye_glyph(window, cx, cy, w, color):
+        """Draw a small all-seeing-eye glyph (almond + iris + pupil)."""
+        h = max(3, int(w * 0.55))
+        rect = pygame.Rect(0, 0, w, h)
+        rect.center = (int(cx), int(cy))
+        pygame.draw.ellipse(window, color, rect, max(1, w // 14))
+        iris_r = max(2, int(h * 0.42))
+        pygame.draw.circle(window, color, (int(cx), int(cy)), iris_r,
+                           max(1, w // 18))
+        pygame.draw.circle(window, color, (int(cx), int(cy)),
+                           max(1, iris_r // 2))
+
+    def _draw_gamble_preview_overlay(self, rect: pygame.Rect) -> None:
+        """All Seeing Eye: a clean forecast panel showing the two pinned
+        replacement tactics as real card faces while the Gamble confirm is
+        armed.  Occupies the hand+detail region so the cards read clearly.
+        """
+        armed = self._gamble_armed
+        if not armed or rect is None or rect.height < 60 or rect.width < 60:
+            return
+        if pygame.time.get_ticks() >= int(armed.get('until_ms') or 0):
+            return
+        specs = list(self._gamble_preview_specs(armed.get('move_id')) or [])[:2]
+        if not specs:
+            return
+
+        accent = (130, 190, 255)
+        # ── Panel backing ───────────────────────────────────────────
+        panel = rect.inflate(-8, -8)
+        bg = pygame.Surface(panel.size, pygame.SRCALPHA)
+        bg.fill((12, 20, 32, 248))
+        self.window.blit(bg, panel.topleft)
+        pygame.draw.rect(self.window, accent, panel, 2, border_radius=10)
+        inner = panel.inflate(-16, -14)
+
+        title_font = settings.get_font(max(10, int(settings.FS_TINY * 0.95)), bold=True)
+        sub_font = settings.get_font(max(9, int(settings.FS_TINY * 0.8)))
+        label_font = settings.get_font(max(9, int(settings.FS_TINY * 0.78)), bold=True)
+
+        # ── Header: eye glyph + title + subtitle ────────────────────
+        y = inner.y
+        eye_w = max(12, int(inner.width * 0.16))
+        self._draw_eye_glyph(self.window, inner.centerx,
+                             y + eye_w * 0.30, eye_w, accent)
+        y += int(eye_w * 0.30) + max(4, eye_w // 3)
+        title = title_font.render('ALL-SEEING EYE', True, (196, 224, 255))
+        self.window.blit(title, (inner.centerx - title.get_width() // 2, y))
+        y += title.get_height() + 1
+        sub = sub_font.render('Your gamble will draw:', True, (150, 178, 210))
+        self.window.blit(sub, (inner.centerx - sub.get_width() // 2, y))
+        y += sub.get_height() + 6
+
+        # ── Footer call-to-action (reserve space first) ─────────────
+        cta_text = 'Click Gamble again ▸'
+        cta = label_font.render(cta_text, True, (14, 22, 34))
+        cta_pill = pygame.Rect(0, 0, cta.get_width() + 20, cta.get_height() + 8)
+        cta_pill.centerx = inner.centerx
+        cta_pill.bottom = inner.bottom
+
+        # ── Cards region (between header and CTA) ───────────────────
+        cards_top = y
+        cards_bottom = cta_pill.top - 8
+        avail_h = max(20, cards_bottom - cards_top)
+        label_h = label_font.get_height() + 3
+        gap = 10
+        # Fit two cards side by side within width and height.
+        card_h = min(avail_h - label_h, int((inner.width - gap) / 2 * 1.42))
+        card_h = max(24, card_h)
+        card_w = max(16, int(card_h / 1.42))
+        if card_w * 2 + gap > inner.width:
+            card_w = max(14, (inner.width - gap) // 2)
+            card_h = int(card_w * 1.42)
+        total_w = card_w * 2 + gap
+        x = inner.centerx - total_w // 2
+        card_y = cards_top + max(0, (avail_h - label_h - card_h) // 2)
+        for spec in specs:
+            card_rect = pygame.Rect(x, card_y, card_w, card_h)
+            surf = None
+            try:
+                from game.components.cards.card_img import CardImg
+                surf = CardImg(self.window, spec.get('suit'), spec.get('rank'),
+                               width=card_w, height=card_h).front_img
+            except Exception:
+                surf = None
+            if surf is not None:
+                self.window.blit(surf, card_rect.topleft)
+            else:
+                pygame.draw.rect(self.window, (44, 62, 84), card_rect,
+                                 border_radius=4)
+            pygame.draw.rect(self.window, accent, card_rect, 2, border_radius=4)
+            name = self._fit_text(str(spec.get('family_name') or 'Dagger'),
+                                  label_font, card_w + gap)
+            label = label_font.render(name, True, (206, 226, 250))
+            self.window.blit(label, (card_rect.centerx - label.get_width() // 2,
+                                     card_rect.bottom + 2))
+            x += card_w + gap
+
+        # ── Draw the CTA pill on top ────────────────────────────────
+        pygame.draw.rect(self.window, accent, cta_pill, border_radius=cta_pill.height // 2)
+        self.window.blit(cta, (cta_pill.centerx - cta.get_width() // 2,
+                               cta_pill.centery - cta.get_height() // 2))
 
     def _measure_top_strip_height(self, width: int) -> int:
         """Compute the pixel height required to render the top strip.
@@ -1135,45 +1411,89 @@ class ConquerTacticsRail:
             self.window.blit(surf, (rect.x + 8, y))
             y += font.get_height() + 1
         y += 2
-        # Muted grey when the player has already gambled this round.
-        line2_color = (140, 132, 116) if gamble_state == 'used' else _TEXT_SECONDARY
+        # Muted grey when the player has already gambled this round; warm
+        # ember for the final remaining gamble.
+        if gamble_state == 'used':
+            line2_color = (140, 132, 116)
+        elif gamble_state == 'last':
+            line2_color = (255, 170, 96)
+        else:
+            line2_color = _TEXT_SECONDARY
         for line in self._wrap_text(line2, sub, avail):
             if y + sub.get_height() > rect.bottom:
                 break
             surf = sub.render(line, True, line2_color)
             self.window.blit(surf, (rect.x + 8, y))
             y += sub.get_height() + 1
+        self._draw_gamble_pips(rect, game)
+
+    def _draw_gamble_pips(self, rect: pygame.Rect, game) -> None:
+        """Three diamond pips, top-right of the strip: remaining gambles.
+
+        Gold diamonds = gambles still available this battle; hollow dim
+        diamonds = spent. The final remaining pip pulses ember-orange so
+        the last gamble reads as a moment, not a stat.
+        """
+        if game is None:
+            return
+        used, _rounds = self._gamble_counts_state(game)
+        used = max(0, min(self.GAMBLE_PER_BATTLE_LIMIT, used))
+        remaining = self.GAMBLE_PER_BATTLE_LIMIT - used
+        size = max(4, int(rect.height * 0.14))
+        gap = size * 2 + 4
+        cy = rect.y + 6 + size
+        cx = rect.right - 10 - size
+        now = pygame.time.get_ticks()
+        for i in range(self.GAMBLE_PER_BATTLE_LIMIT):
+            # Right-most pip is the first spent.
+            is_available = i >= used
+            points = [(cx, cy - size), (cx + size, cy),
+                      (cx, cy + size), (cx - size, cy)]
+            if is_available:
+                color = (250, 226, 130)
+                if remaining == 1:
+                    phase = (now % 900) / 900.0
+                    pulse = 1.0 - abs(0.5 - phase) * 2.0
+                    color = (255, 170 + int(56 * pulse), 96 + int(34 * pulse))
+                pygame.draw.polygon(self.window, color, points)
+                pygame.draw.polygon(self.window, (120, 96, 52), points, 1)
+            else:
+                pygame.draw.polygon(self.window, (78, 66, 50), points, 1)
+            cx -= gap
 
     def _gamble_status_for_strip(self, game):
-        """Return (text, state) where state is 'ready'|'used'|'limit'|'idle'."""
+        """Return (text, state) where state is 'ready'|'last'|'used'|'limit'|'idle'."""
         if game is None:
             return ('', 'idle')
-        counts = getattr(game, 'battle_gamble_counts', None) or {}
-        my_id = getattr(game, 'player_id', None)
-        state = counts.get(str(my_id), 0)
-        if isinstance(state, dict):
-            try:
-                used = int(state.get('count', 0) or 0)
-            except (TypeError, ValueError):
-                used = 0
-        else:
-            try:
-                used = int(state or 0)
-            except (TypeError, ValueError):
-                used = 0
+        used, used_rounds = self._gamble_counts_state(game)
         try:
             current_round = int(getattr(game, 'battle_round', 0) or 0)
         except (TypeError, ValueError):
             current_round = 0
-        round_used = isinstance(state, dict) and current_round in {
-            int(round_value) for round_value in (state.get('rounds', []) or [])
-            if str(round_value).lstrip('-').isdigit()
-        }
+        round_used = current_round in used_rounds
         if round_used:
-            return ('Already gambled', 'used')
+            return (
+                ('Gamble used', 'used')
+                if settings.TOUCH_TARGET_MIN > 0 else
+                ('Already gambled', 'used')
+            )
         if used >= self.GAMBLE_PER_BATTLE_LIMIT:
-            return (f'Gamble limit reached ({used}/{self.GAMBLE_PER_BATTLE_LIMIT})', 'limit')
-        return ('Gamble ready this round', 'ready')
+            return (
+                (f'Limit {used}/{self.GAMBLE_PER_BATTLE_LIMIT}', 'limit')
+                if settings.TOUCH_TARGET_MIN > 0 else
+                (f'Gamble limit reached ({used}/{self.GAMBLE_PER_BATTLE_LIMIT})', 'limit')
+            )
+        if used == self.GAMBLE_PER_BATTLE_LIMIT - 1:
+            return (
+                ('Last gamble!', 'last')
+                if settings.TOUCH_TARGET_MIN > 0 else
+                ('Last gamble of the battle!', 'last')
+            )
+        return (
+            ('Gamble ready', 'ready')
+            if settings.TOUCH_TARGET_MIN > 0 else
+            ('Gamble ready this round', 'ready')
+        )
 
     def _top_strip_subtitle(self, game) -> str:
         hint = self._opponent_intent_hint(game)
@@ -1745,10 +2065,25 @@ class ConquerTacticsRail:
         suit_a = sel.get('suit', '?')
         suit_b = sel.get('suit_b')
         rank = sel.get('rank', '?')
-        line = f"{suit_a}{('+' + suit_b) if suit_b else ''} • {rank} • Power {self._power(sel)}"
+        if settings.TOUCH_TARGET_MIN > 0:
+            suit_a_label = str(suit_a or '?')[:1]
+            suit_b_label = f"+{str(suit_b)[:1]}" if suit_b else ''
+            line = f"{suit_a_label}{suit_b_label} {rank}  P{self._power(sel)}"
+        else:
+            line = f"{suit_a}{('+' + suit_b) if suit_b else ''} • {rank} • Power {self._power(sel)}"
         bs = body_font.render(
             self._fit_text(line, body_font, rect.width - 16), True, _TEXT_SECONDARY)
         self.window.blit(bs, (rect.left + 8, rect.top + 6 + ts.get_height() + 2))
+        # Gamble stake hint — only when a gamble is actually available for
+        # this tactic and there is vertical room for a third line.
+        stake_y = rect.top + 6 + ts.get_height() + 2 + bs.get_height() + 2
+        if (not self._gamble_block_reason()
+                and stake_y + body_font.get_height() <= rect.bottom - 2):
+            stake = body_font.render(
+                self._fit_text('Gamble: burn this → draw 2 random',
+                               body_font, rect.width - 16),
+                True, (196, 176, 120))
+            self.window.blit(stake, (rect.left + 8, stake_y))
 
     # -- action tray
     def _action_specs(self) -> List[tuple]:
@@ -1764,7 +2099,6 @@ class ConquerTacticsRail:
         """
         sel = self._selected_move()
         my_turn = self._is_my_battle_turn()
-        partner = self._combine_partner_move()
         hand_empty = not self._hand_moves()
         specs: List[tuple] = []
         if my_turn and hand_empty:
@@ -1776,33 +2110,38 @@ class ConquerTacticsRail:
             specs.append((ACTION_PLAY, 'Play'))
         gamble_reason = self._gamble_block_reason()
         if not gamble_reason:
-            specs.append((ACTION_GAMBLE, 'Gamble'))
+            gamble_label = ('Sure?'
+                            if sel is not None and self._gamble_armed_for(sel.get('id'))
+                            else 'Gamble')
+            specs.append((ACTION_GAMBLE, gamble_label))
         elif gamble_reason not in ('Not your battle turn',
                                    'Gamble only during active battle rounds',
                                    'No active game'):
             # Surface meaningful gates (limit hit, already gambled this
             # round) as a disabled button with a hover tooltip.
             specs.append((ACTION_GAMBLE, 'Gamble', gamble_reason))
-        if self._is_single_dagger(sel):
-            if self._combine_pending and partner is None:
-                specs.append((ACTION_COMBINE, 'Pick 2nd'))
-            else:
-                specs.append((ACTION_COMBINE, 'Combine'))
+        if self._is_single_dagger(sel) and self._best_combine_partner(sel) is not None:
+            specs.append((ACTION_COMBINE, 'Combine'))
         if self._is_double_dagger(sel):
             specs.append((ACTION_DISMANTLE, 'Dismantle'))
         return specs
 
     def _normalized_action_specs(self, specs: Optional[List[tuple]] = None) -> List[tuple]:
         specs = self._action_specs() if specs is None else specs
-        flight_active = False
+        block_reason = ''
         try:
-            flight_check = getattr(self._parent, 'is_tactic_flight_active', None)
-            flight_active = bool(callable(flight_check) and flight_check())
+            reason_getter = getattr(self._parent, 'conquer_action_block_reason', None)
+            if callable(reason_getter):
+                block_reason = str(reason_getter() or '')
+            else:
+                flight_check = getattr(self._parent, 'is_tactic_flight_active', None)
+                if callable(flight_check) and flight_check():
+                    block_reason = 'Tactic in flight…'
         except Exception:
-            flight_active = False
-        if flight_active:
+            block_reason = ''
+        if block_reason:
             return [
-                (spec[0], spec[1], spec[2] if len(spec) > 2 and spec[2] else 'Tactic in flight…')
+                (spec[0], spec[1], spec[2] if len(spec) > 2 and spec[2] else block_reason)
                 for spec in specs
             ]
         return [
@@ -1819,15 +2158,15 @@ class ConquerTacticsRail:
             row_h = max(28, min(target_h, int(width * 0.24)))
             return row_h * len(specs) + 5 * (len(specs) - 1) + 4
         if self._action_tray_uses_stacked_layout(width, specs):
-            return target_h * 2 + 8
+            return target_h * 2 + 9
         return target_h + 4
 
     @staticmethod
     def _action_tray_uses_column_layout(width: int, specs: List[tuple]) -> bool:
         has_primary = any(spec[0] in _PRIMARY_ACTION_KEYS for spec in specs)
-        has_multiple_secondary = sum(
-            1 for spec in specs if spec[0] not in _PRIMARY_ACTION_KEYS) >= 2
-        return has_primary and has_multiple_secondary and width < 130
+        secondary_count = sum(
+            1 for spec in specs if spec[0] not in _PRIMARY_ACTION_KEYS)
+        return has_primary and secondary_count >= 3 and width < 130
 
     @staticmethod
     def _action_tray_uses_stacked_layout(width: int, specs: List[tuple]) -> bool:
@@ -1837,8 +2176,6 @@ class ConquerTacticsRail:
 
     @staticmethod
     def _action_label_candidates(key: str, label: str) -> tuple:
-        if label == 'Pick 2nd':
-            return (label, 'Pick 2', '2nd')
         if key == ACTION_GAMBLE:
             return (label, 'Swap')
         if key == ACTION_COMBINE:
@@ -1864,11 +2201,12 @@ class ConquerTacticsRail:
         if key == ACTION_PLAY:
             return 'Commit this tactic to the current round.'
         if key == ACTION_GAMBLE:
-            return 'Trade this tactic for two new tactics.'
+            # Odds mirror the server's uniform draw: 8 ranks × 4 suits,
+            # ranks 7–10 → Dagger (50%), J/Q/K/A → one call family each.
+            return ('Burn this tactic for 2 random ones · '
+                    '50% Dagger · 12.5% each Call/Block.')
         if key == ACTION_COMBINE:
-            if label == 'Pick 2nd':
-                return 'Pick another same-colour Dagger.'
-            return 'Join two same-colour Daggers into one bigger tactic.'
+            return 'Join with your strongest same-colour Dagger.'
         if key == ACTION_DISMANTLE:
             return 'Split this Double Dagger back into two tactics.'
         if key == ACTION_SKIP:

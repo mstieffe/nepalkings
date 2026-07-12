@@ -40,9 +40,12 @@ class CastSpellScreen(SubScreen):
         # Store selected spells
         self.selected_spell_family = None
         self.selected_spells = []
-        
+
         # Version tracking to avoid per-frame recalculation
         self._last_game_data_version = -1
+
+        # Tracks which families were castable last update (one-shot pulse)
+        self._prev_castable_family_names = None
         
         self.confirm_button = ConfirmButton(
             self.window,
@@ -60,6 +63,7 @@ class CastSpellScreen(SubScreen):
         self.selected_spells = []
         self._last_game_data_version = -1
         self.dialogue_box = None
+        self._prev_castable_family_names = None
         logger.debug("[CastSpellScreen] State reset for game switch")
 
     def cast_spell_in_db(self, selected_spell):
@@ -150,6 +154,23 @@ class CastSpellScreen(SubScreen):
         if result.get('success'):
             from utils import sound
             sound.play('booster_reveal')
+            # Cast flourish: spell glyph arcs up from the family icon and a
+            # short banner names the cast (duel only; conquer is inert here).
+            fx = self._fx_layer()
+            if fx is not None:
+                from game.components.conquer_effects import spell_preset
+                primary = spell_preset(selected_spell.name)[0]
+                source_rect = None
+                for button in self.spell_family_buttons:
+                    if button.family.name == selected_spell.family.name:
+                        source_rect = (getattr(button, 'rect_frame', None)
+                                       or getattr(button, 'rect_icon', None))
+                        break
+                if source_rect is not None:
+                    target = pygame.Rect(source_rect).move(0, -int(0.08 * settings.SCREEN_HEIGHT))
+                    fx.spawn_spell_to_rect(selected_spell.name,
+                                           pygame.Rect(source_rect), target)
+                fx.spawn_banner(selected_spell.name, primary, duration_ms=800)
             # Check if waiting for opponent to respond (counterable spell)
             waiting_for_player_id = result.get('waiting_for_player_id')
             if waiting_for_player_id:
@@ -362,6 +383,10 @@ class CastSpellScreen(SubScreen):
         }
         
         for family in all_families:
+            # Conquer-only families (Royal Decree, Copy Figure, Landslide,
+            # Draw 4 MainCards) never appear in the duel spell book.
+            if getattr(family, 'conquer_only', False):
+                continue
             if family.type in families_by_effect:
                 families_by_effect[family.type].append(family)
         
@@ -459,7 +484,26 @@ class CastSpellScreen(SubScreen):
         
         castable_families = self.spell_manager.get_families_with_castable_spells(hand_cards)
         castable_family_names = {family.name for family in castable_families}
-        
+
+        # One-shot pulse on families that just became castable (only while
+        # the spell book is open — inactive subscreens don't update()).
+        prev_castable = self._prev_castable_family_names
+        self._prev_castable_family_names = set(castable_family_names)
+        if prev_castable is not None:
+            newly_castable = castable_family_names - prev_castable
+            if newly_castable and getattr(self.state, 'subscreen', None) == 'cast_spell':
+                fx = self._fx_layer()
+                if fx is not None:
+                    for button in self.spell_family_buttons:
+                        if button.family.name not in newly_castable:
+                            continue
+                        rect = (getattr(button, 'rect_frame', None)
+                                or getattr(button, 'rect_icon', None))
+                        if rect is not None:
+                            fx.spawn_rect_pulse(pygame.Rect(rect),
+                                                (238, 206, 130),
+                                                secondary=(255, 245, 200))
+
         for button in self.spell_family_buttons:
             # Set active if this family has at least one castable spell
             button.is_active = button.family.name in castable_family_names
@@ -711,12 +755,12 @@ class CastSpellScreen(SubScreen):
     def draw(self):
         """Draw the screen, including buttons and background."""
         super().draw()
-        
+
         # Draw spell type labels
         for effect_type, label_surface in self.type_labels.items():
             pos = self.type_label_positions[effect_type]
             self.window.blit(label_surface, pos)
-        
+
         # Draw spell family buttons (after backgrounds so they appear on top)
         for button in self.spell_family_buttons:
             button.draw()

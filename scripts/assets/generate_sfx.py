@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
 # See LICENSE file in the project root for full license information.
 #!/usr/bin/env python3
-"""Generate the game's SFX set as small mono WAV files (pure stdlib).
+"""Generate the game's SFX set as small mono WAV files plus web OGG companions.
 
 Every sound in nepal_kings/sound/ is synthesized by this script, so the
 whole set is license-clean, reproducible, and tweakable in one place.
@@ -9,20 +9,25 @@ Re-run after changing any recipe:
 
     python scripts/assets/generate_sfx.py
 
-Design notes: 22.05 kHz mono 16-bit keeps each file in the 10–60 KB
-range (~0.5 MB total). The palette aims for soft, felt-and-wood UI
-sounds with a few short musical stingers — minimal, not arcade-y.
+Design notes: 22.05 kHz mono 16-bit keeps each WAV in the 10–60 KB range
+(~0.5 MB total). The OGG companions are used by the pygbag web build because
+browsers are more reliable with OGG than SDL WAV decoding. The palette aims
+for soft, felt-and-wood UI sounds with a few short musical stingers —
+minimal, not arcade-y.
 """
 
 import array
 import math
 import os
 import random
+import shutil
+import subprocess
 import wave
 
 SAMPLE_RATE = 22050
 OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                        '..', '..', 'nepal_kings', 'sound')
+WAV_OUTPUTS = []
 
 random.seed(42)  # deterministic noise → reproducible files
 
@@ -127,8 +132,34 @@ def write_wav(name, sound):
         wf.setsampwidth(2)
         wf.setframerate(SAMPLE_RATE)
         wf.writeframes(pcm.tobytes())
+    WAV_OUTPUTS.append(path)
     kb = os.path.getsize(path) / 1024
     print(f'  {name:<22} {len(sound) / SAMPLE_RATE * 1000:5.0f} ms  {kb:5.1f} KB')
+
+
+def write_ogg_companions():
+    ffmpeg = shutil.which('ffmpeg')
+    if not ffmpeg:
+        print('Skipping web OGG companions: ffmpeg not found.')
+        return
+
+    print('Writing web OGG companions...')
+    for wav_path in WAV_OUTPUTS:
+        ogg_path = os.path.splitext(wav_path)[0] + '.ogg'
+        subprocess.run([
+            ffmpeg,
+            '-y',
+            '-loglevel', 'error',
+            '-i', wav_path,
+            '-ar', str(SAMPLE_RATE),
+            '-ac', '1',
+            '-c:a', 'libvorbis',
+            '-q:a', '4',
+            ogg_path,
+        ], check=True)
+        name = os.path.basename(ogg_path)
+        kb = os.path.getsize(ogg_path) / 1024
+        print(f'  {name:<22} web        {kb:5.1f} KB')
 
 
 # ── Note helper ────────────────────────────────────────────────────
@@ -144,6 +175,8 @@ WOOD = ((1.0, 1.0), (2.76, 0.4), (5.4, 0.15))
 # ── Recipes ────────────────────────────────────────────────────────
 
 def build_all():
+    WAV_OUTPUTS[:] = []
+    random.seed(42)
     print(f'Writing SFX to {os.path.relpath(OUT_DIR)}/')
 
     # Soft fingertip tick for any UI button.
@@ -256,6 +289,20 @@ def build_all():
                                                  (3.0, 0.25))),
         gain(noise(0.05, decay=40, lowpass=0.3), 0.2),
     ), peak=0.40))
+
+    # Low felt-drum riser for the round-reveal HOLD tension beat.
+    write_wav('reveal_hold.wav', finalize(mix(
+        tone(0.30, 110, 185, decay=5, partials=((1.0, 1.0), (2.0, 0.25))),
+        gain(noise(0.30, decay=6, lowpass=0.10), 0.35),
+    ), peak=0.40))
+
+    # Tiny wooden tick for the round-diff tally count-up.
+    write_wav('tally_tick.wav', finalize(mix(
+        tone(0.030, 1150, 1000, decay=80, partials=WOOD),
+        gain(noise(0.02, decay=90, lowpass=0.5), 0.35),
+    ), peak=0.32))
+
+    write_ogg_companions()
 
 
 if __name__ == '__main__':

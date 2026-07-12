@@ -8,17 +8,18 @@
 
 **Nepal Kings** is a tactical card game you can play solo or against other
 rulers. Your starter army is ready for a first conquest, booster packs grow
-your collection, and AI-held lands fall one battle at a time as your kingdom
-expands — then test yourself in head-to-head duels when you are ready. Some
-call the duel *the chess of cards*.
+your collection, and each conquered land expands the kingdom you must defend
+from AI and human rivals. When you are ready for a longer head-to-head match,
+step into a duel — some call it *the chess of cards*.
 
-- **Single-player first.** The full conquest loop — conquer lands, defend
-  them, collect their production, and expand your kingdom — plays entirely
-  against the built-in AI opponent. No other players required.
-- **Duels when you want them.** Challenge the AI or another player to a duel:
-  a strategic clash of **attack and defense** across a Build Phase and a
-  Battle Phase. Pick the length that suits you — **Quick (7)**,
-  **Standard (21)**, or **Epic (35)** points.
+- **Conquest on the map.** Attack lands defended by the AI or by other rulers,
+  then set up your own defences so your kingdom can answer future attacks. The
+  conquest loop is playable solo; no other players are required to get started.
+- **Duels when you want them.** Challenge the AI or another player to a full
+  head-to-head duel: both players draw from a shared deck, build figures over
+  several rounds, cast spells, and fight battles for points. Pick any point
+  target that suits your table; Quick (7), Standard (21), and Epic (35) are
+  convenient presets.
 
 The sections below describe the duel rules in detail.
 

@@ -78,10 +78,25 @@ class Game:
                 self.opponent_player = player_dict
                 self.opponent_online = player_dict.get('is_online', False)
 
+        for player_dict in self.players:
+            if 'figures' in player_dict:
+                self.cached_figures_data[player_dict['id']] = player_dict.get('figures') or []
+        if self.cached_figures_data:
+            self._figures_data_version += 1
+
         # Whether it is this player's turn
         # Initialize to False so first update() can detect if it's their turn
         self.turn = False
         self.invader = True if self.invader_player_id == self.player_id else False
+        # Conquer battles are player-driven from the very first frame (the
+        # invader must advance a figure) and their game-start notification is
+        # fired explicitly on screen entry — not via first-poll turn-change
+        # detection. Seed `turn` from the snapshot so the pre-battle UI
+        # (forced-advance prompt, timeline attacker step) works even if the
+        # first full poll is discarded or short-circuited; duel keeps the
+        # False seed so its first-update turn detection still fires.
+        if self.mode == 'conquer':
+            self.turn = self.turn_player_id == self.player_id
 
         # Track previous turn to detect turn changes
         # Initialize to None so first login triggers turn detection if it's their turn
@@ -210,6 +225,9 @@ class Game:
         self.conquer_tactics = game_dict.get('conquer_tactics', []) or []
         # Per-player gamble usage (tactics_hand conquer): {pid: {count, rounds}}.
         self.battle_gamble_counts = game_dict.get('battle_gamble_counts') or {}
+        # All Seeing Eye gamble previews (owner-only, server-redacted):
+        # {str(player_id): {tactic_id, round, specs}}.
+        self.battle_gamble_previews = game_dict.get('battle_gamble_previews') or {}
 
         # Suppress next turn notification after battle/fold (result dialogue already shown)
         self.suppress_next_turn_summary = False
@@ -373,6 +391,33 @@ class Game:
                 logger.info(f"[ACTION_LOCK] Timeout after {elapsed}ms — force-unlocking")
                 self.unlock_actions()
 
+    def _clear_conquer_advance_dependent_flags(self):
+        """Clear local latches that are only valid while an advance exists."""
+        if getattr(self, 'mode', None) != 'conquer':
+            return
+        self.pending_defender_selection = False
+        self.defender_selection_dialogue_shown = False
+        self.pending_waiting_for_defender_pick = False
+        self.waiting_for_defender_pick_shown = False
+        self.pending_battle_ready = False
+        self.battle_ready_shown = False
+        self.pending_advance_notification = False
+        self.pending_own_advance_notification = False
+        self.own_advance_figure_name = None
+        self.pending_conquer_own_defender_selection = False
+        self.conquer_own_defender_selection_shown = False
+        self.civil_war_awaiting_second = False
+        self.civil_war_defender_second = False
+        self.civil_war_required_color = None
+
+    def _clear_conquer_battle_cycle_flags(self):
+        """Clear client-side conquer prompts when the server resets a battle."""
+        if getattr(self, 'mode', None) != 'conquer':
+            return
+        self.pending_forced_advance = False
+        self.forced_advance_dialogue_shown = False
+        self._clear_conquer_advance_dependent_flags()
+
     def _apply_game_dict(self, game_dict):
         """Apply a game dict to this instance (main-thread only)."""
         self._game_data_version += 1
@@ -516,6 +561,8 @@ class Game:
         # Reset advance-notification tracking when advance is fully cleared
         if not self.advancing_figure_id:
             self._last_advance_notified_id = None
+            if self.mode == 'conquer':
+                self._clear_conquer_advance_dependent_flags()
             # Server cleared battle state (new round) — allow battle_ready
             # detection again.  Until this moment, battle_ready_shown stays
             # True to block stale in-flight polls from re-triggering the
@@ -527,19 +574,7 @@ class Game:
                 # cleared by the server).  Wipe any client-side latches and
                 # heuristic flags that survived the previous cycle, otherwise
                 # the next conquest would inherit ghost dialogues / modes.
-                if self.mode == 'conquer':
-                    self.pending_forced_advance = False
-                    self.forced_advance_dialogue_shown = False
-                    self.pending_defender_selection = False
-                    self.defender_selection_dialogue_shown = False
-                    self.pending_waiting_for_defender_pick = False
-                    self.waiting_for_defender_pick_shown = False
-                    self.pending_conquer_own_defender_selection = False
-                    self.conquer_own_defender_selection_shown = False
-                    self.civil_war_awaiting_second = False
-                    self.civil_war_defender_second = False
-                    self.civil_war_required_color = None
-                    self.pending_advance_notification = False
+                self._clear_conquer_battle_cycle_flags()
         elif not previous_advancing:
             # A brand-new advance appeared (None → set).  Reset battle_ready
             # tracking so the fight/fold dialogue can fire for this new battle.
@@ -667,8 +702,20 @@ class Game:
                         f"advancing={self.advancing_figure_id}"
                     )
         
-        # Battle is ready when both sides have their figures set
-        battle_ready = (not battle_active and
+        # Battle is ready when both sides have their figures set.
+        # NOTE: an opponent-only entry in battle_decisions must NOT block
+        # this — the invader decides first, so when only their decision is
+        # recorded we (the defender) still owe ours.  Blocking here stalled
+        # conquer games where the automated invader's decision was recorded
+        # server-side before the client ever saw the completed selection.
+        decisions_now = game_dict.get('battle_decisions') or {}
+        own_decision_recorded = str(self.player_id) in decisions_now
+        battle_ready_blocked = (
+            server_battle_confirmed
+            or own_decision_recorded
+            or bool(game_dict.get('fold_outcome'))
+        )
+        battle_ready = (not battle_ready_blocked and
                        self.advancing_figure_id and self.defending_figure_id and
                        not self.pending_battle_ready and not self.battle_ready_shown)
         
@@ -694,7 +741,7 @@ class Game:
                 self._last_battle_ready_block_signature = None
             else:
                 blocked_reasons = []
-                if battle_active:
+                if battle_ready_blocked:
                     blocked_reasons.append('battle_active')
                 if self.pending_battle_ready:
                     blocked_reasons.append('pending_battle_ready')
@@ -771,6 +818,7 @@ class Game:
         self.conquer_resolution_step = int(game_dict.get('conquer_resolution_step', 0) or 0)
         self.conquer_tactics = game_dict.get('conquer_tactics', []) or []
         self.battle_gamble_counts = game_dict.get('battle_gamble_counts') or {}
+        self.battle_gamble_previews = game_dict.get('battle_gamble_previews') or {}
         self._sync_battle_moves_phase_from_server()
 
         # Reset fold tracking when server clears fold state (new round started)
@@ -826,10 +874,7 @@ class Game:
 
         # Check for game start notification on first update (regardless of turn number)
         if not self.game_start_notification_checked:
-            logger.info(f"[GAME_START] First update — player_id={self.player_id}, turn={self.turn}, invader={self.invader}")
-            self._start_turn_async()
-            self.game_start_notification_checked = True
-            self._game_start_pending = True
+            self.start_game_start_notification_if_needed()
         
         # Suppress all turn-change detection while game_start is in flight /
         # unprocessed.  Without this guard, a fast AI opponent causes a race:
@@ -939,6 +984,7 @@ class Game:
         self.waiting_for_counter_player_id = game_dict.get('waiting_for_counter_player_id')
         
         # Update advance/battle state
+        previous_advancing = self.advancing_figure_id
         self.advancing_figure_id = game_dict.get('advancing_figure_id')
         self.advancing_figure_id_2 = game_dict.get('advancing_figure_id_2')
         self.advancing_player_id = game_dict.get('advancing_player_id')
@@ -948,6 +994,13 @@ class Game:
         # Clear forced advance once an advance is underway
         if self.pending_forced_advance and self.advancing_figure_id:
             self.pending_forced_advance = False
+
+        if self.mode == 'conquer' and not self.advancing_figure_id:
+            self._clear_conquer_advance_dependent_flags()
+            if previous_advancing:
+                self.battle_ready_shown = False
+                self.pending_battle_ready = False
+                self._clear_conquer_battle_cycle_flags()
         
         # Update battle decision/fold state
         self.battle_decisions = game_dict.get('battle_decisions')
@@ -957,6 +1010,22 @@ class Game:
         previous_fold_outcome = self.fold_outcome
         self.fold_outcome = game_dict.get('fold_outcome')
         self.fold_winner_id = game_dict.get('fold_winner_id')
+
+        battle_active = (
+            self.battle_confirmed
+            or bool(self.battle_decisions)
+            or bool(self.fold_outcome)
+        )
+        is_now_our_turn = (self.turn_player_id == self.player_id)
+        if (not battle_active and
+            self.advancing_figure_id and
+            self.advancing_player_id == self.player_id and
+            not self.defending_figure_id and
+            is_now_our_turn and
+            not self.pending_defender_selection and
+            not self.defender_selection_dialogue_shown and
+            not self.civil_war_awaiting_second):
+            self.pending_defender_selection = True
 
         # Fix: If battle is confirmed, forcibly set guards to prevent double notification
         if self.battle_confirmed:
@@ -994,8 +1063,9 @@ class Game:
         self.conquer_resolution_step = int(game_dict.get('conquer_resolution_step', 0) or 0)
         self.conquer_tactics = game_dict.get('conquer_tactics', []) or []
         self.battle_gamble_counts = game_dict.get('battle_gamble_counts') or {}
+        self.battle_gamble_previews = game_dict.get('battle_gamble_previews') or {}
         self._sync_battle_moves_phase_from_server()
-        
+
         # Check if we're waiting for this player to counter
         if self.pending_spell_id and self.waiting_for_counter_player_id:
             self.waiting_for_counter = (self.waiting_for_counter_player_id == self.player_id)
@@ -1065,6 +1135,19 @@ class Game:
         except RuntimeError:
             self._handle_start_turn()  # fallback: run synchronously
 
+    def start_game_start_notification_if_needed(self):
+        """Kick off the one-shot game-start summary request immediately."""
+        if self.game_start_notification_checked:
+            return False
+        logger.info(
+            f"[GAME_START] First update — player_id={self.player_id}, "
+            f"turn={self.turn}, invader={self.invader}"
+        )
+        self.game_start_notification_checked = True
+        self._game_start_pending = True
+        self._start_turn_async()
+        return True
+
     def _start_async_start_turn_web(self):
         """Web-only: fire start_turn POST asynchronously, drain on main thread."""
         try:
@@ -1081,6 +1164,8 @@ class Game:
             self._pending_start_turn_rids.append(rid)
         except Exception as e:
             logger.error(f"[START_TURN] async POST failed to start: {e}")
+            if self.mode == 'conquer':
+                self._game_start_pending = False
 
     def drain_pending_start_turn(self):
         """Apply any completed start_turn responses (web async path).
@@ -1111,16 +1196,22 @@ class Game:
                 except Exception:
                     body = resp.text[:200] if hasattr(resp, 'text') else ''
                 logger.error(f"[START_TURN] Failed with status {resp.status_code}: {body}")
+                if self.mode == 'conquer':
+                    self._game_start_pending = False
                 continue
             try:
                 data = resp.json()
             except Exception as e:
                 logger.error(f"[START_TURN] bad JSON: {e}")
+                if self.mode == 'conquer':
+                    self._game_start_pending = False
                 continue
             try:
                 self._apply_start_turn_response(data)
             except Exception as e:
                 logger.error(f"[START_TURN] apply error: {e}")
+                if self.mode == 'conquer':
+                    self._game_start_pending = False
         self._pending_start_turn_rids = still
 
     def _handle_start_turn(self):
@@ -1151,6 +1242,8 @@ class Game:
     def _apply_start_turn_response(self, data):
         """Apply the parsed JSON body returned by ``/games/start_turn``."""
         if not data.get('success'):
+            if self.mode == 'conquer':
+                self._game_start_pending = False
             return
         auto_fill = data.get('auto_fill')
         if auto_fill:
@@ -1207,6 +1300,30 @@ class Game:
                 self._queue_opponent_turn_summary(opponent_turn_summary)
         else:
             logger.debug(f"[START_TURN] No opponent turn summary")
+
+        # Conquer's timeline waits on the game-start summary so prelude spell
+        # snapshots can be seeded before the overview advances.  Some web
+        # start-turn responses legitimately contain no summary (or only an
+        # empty one); in that case there is nothing left to process and the
+        # overview gate must open instead of waiting forever.
+        if self.mode == 'conquer' and getattr(self, '_game_start_pending', False):
+            if not self._has_pending_conquer_game_start_summary():
+                self._game_start_pending = False
+
+    def _has_pending_conquer_game_start_summary(self):
+        """Return True if a queued turn summary still needs game-start handling."""
+        pending = []
+        summary = getattr(self, 'pending_opponent_turn_summary', None)
+        if summary:
+            pending.append(summary)
+        queue = getattr(self, 'pending_opponent_turn_summaries', None) or []
+        pending.extend(queue)
+        for item in pending:
+            if not isinstance(item, dict):
+                continue
+            if item.get('action') == 'game_start' and item.get('mode') == 'conquer':
+                return True
+        return False
 
     def _queue_opponent_turn_summary(self, summary):
         """Queue a turn summary without overwriting an older unseen one."""
@@ -1411,6 +1528,7 @@ class Game:
                     cannot_be_targeted=cannot_be_targeted,
                     checkmate=checkmate,
                     override_base_power=override_base_power,
+                    is_clone=bool(figure_data.get('is_clone', False)),
                 )
                 if self.mode == 'conquer':
                     figure = filter_figure_for_display(
@@ -1566,6 +1684,30 @@ class Game:
             or self.battle_confirmed
             or self.waiting_for_battle_decision
         )
+
+    def landslide_active(self) -> bool:
+        """True when a Landslide battle modifier inverts the land bonus."""
+        modifiers = self.battle_modifier if isinstance(self.battle_modifier, list) else []
+        return any(
+            isinstance(m, dict) and m.get('type') == 'Landslide'
+            for m in modifiers
+        )
+
+    def effective_land_bonus(self):
+        """Return ``(suit, value)`` of the land bonus after battle modifiers.
+
+        Landslide inverts the bonus for the whole battle: figures matching
+        the land suit get ``-value`` instead of ``+value`` (both sides).
+        Returns ``(None, 0)`` when the game has no land bonus.
+        """
+        suit = getattr(self, 'land_suit_bonus_suit', None)
+        value = getattr(self, 'land_suit_bonus_value', None)
+        if not suit or not value:
+            return None, 0
+        value = int(value)
+        if self.landslide_active():
+            return suit, -abs(value)
+        return suit, value
 
     def has_opponent_cast_all_seeing_eye(self) -> bool:
         """

@@ -27,6 +27,7 @@ class FigureIcon:
                 'white': pygame.image.load(settings.GAME_BUTTON_GLOW_RECT_IMG_PATH + 'white.png').convert_alpha(),
                 'yellow': pygame.image.load(settings.GAME_BUTTON_GLOW_RECT_IMG_PATH + 'yellow.png').convert_alpha(),
                 'orange': pygame.image.load(settings.GAME_BUTTON_GLOW_RECT_IMG_PATH + 'orange.png').convert_alpha(),
+                'blue': pygame.image.load(settings.GAME_BUTTON_GLOW_RECT_IMG_PATH + 'blue.png').convert_alpha(),
             }
         return cls._glow_cache
     """
@@ -680,6 +681,7 @@ class FieldFigureIcon(FigureIcon):
         # Defender selection greyed-out state (set by field_screen during defender selection)
         self.defender_selectable = True
         self.in_defender_selection_mode = False
+        self.conquer_selection_selectable = True
 
         # Conquer mode: when True the figure is not part of the active battle
         # and should be rendered greyed out (set by ConquerGameScreen each
@@ -803,6 +805,56 @@ class FieldFigureIcon(FigureIcon):
             (big_glow_size, big_glow_size)
         )
 
+        # Blue clone aura — permanently drawn behind Copy Figure clones so a
+        # copied figure is always recognisable regardless of hover/select
+        # state. Moderately oversized: haloes past the normal glow without
+        # swamping neighbouring figures.
+        clone_size = int(normal_glow_size * 1.22)
+        clone_size_big = int(big_glow_size * 1.16)
+        self.glow_clone = pygame.transform.smoothscale(
+            cache['blue'], (clone_size, clone_size))
+        self.glow_clone_big = pygame.transform.smoothscale(
+            cache['blue'], (clone_size_big, clone_size_big))
+
+    def _is_clone_figure(self) -> bool:
+        return bool(getattr(getattr(self, 'figure', None), 'is_clone', False))
+
+    def _draw_clone_aura(self, shadow_offset_y: int, *, big: bool = False) -> None:
+        """Draw the permanent, pulsing blue aura + ring on a clone figure.
+
+        Additively blended and drawn twice so the clone reads as clearly
+        "magically duplicated" even against busy field art.
+        """
+        if not self._is_clone_figure():
+            return
+        glow = self.glow_clone_big if big else getattr(self, 'glow_clone', None)
+        if glow is None:
+            glow = getattr(self, 'glow_clone', None)
+        if glow is None:
+            return
+        cx, cy = self.x, self.y + shadow_offset_y
+        # Breathing pulse — noticeably brighter floor than before.
+        t = (pygame.time.get_ticks() % 1500) / 1500.0
+        pulse = 0.5 - 0.5 * math.cos(t * 2.0 * math.pi)  # 0..1
+        alpha = int(190 + 65 * pulse)
+        aura = glow.copy()
+        aura.set_alpha(alpha)
+        rect = aura.get_rect(center=(cx, cy))
+        # Additive blend makes the blue read vividly over dark field art.
+        self.window.blit(aura, rect.topleft, special_flags=pygame.BLEND_RGBA_ADD)
+        # A crisp pulsing ring hugging the frame for an unmistakable outline.
+        try:
+            ring_r = int(max(self.rect_frame.width, self.rect_frame.height) * 0.54)
+        except Exception:
+            ring_r = int(glow.get_width() * 0.28)
+        ring_r = max(7, ring_r)
+        ring_alpha = int(150 + 90 * pulse)
+        ring_w = max(2, ring_r // 9)
+        ring_surf = pygame.Surface((ring_r * 2 + 4, ring_r * 2 + 4), pygame.SRCALPHA)
+        pygame.draw.circle(ring_surf, (120, 200, 255, ring_alpha),
+                           (ring_r + 2, ring_r + 2), ring_r, ring_w)
+        self.window.blit(ring_surf, (int(cx) - ring_r - 2, int(cy) - ring_r - 2))
+
     def draw(self, x: int, y: int) -> None:
         """
         Draw the figure icon at the specified position, along with its cards.
@@ -816,13 +868,23 @@ class FieldFigureIcon(FigureIcon):
         is_mouse_pressed = _get_pressed()[0]
         is_default_state = not self.hovered and not self.clicked
 
+        # Permanent clone aura — drawn first so it haloes behind every other
+        # glow/frame and reads as an always-on marker on Copy Figure clones.
+        self._draw_clone_aura(shadow_offset_y, big=(self.hovered or self.clicked))
+
         # Draw the figure icon
         if self.is_visible:
             # Check if greyed out for defender selection or resting after battle
             is_resting = (hasattr(self, 'game') and self.game and
                           hasattr(self, 'figure') and self.figure and
                           self.figure.id in (getattr(self.game, 'resting_figure_ids', None) or []))
-            greyed_out = (hasattr(self, 'defender_selectable') and not self.defender_selectable) or is_resting or self.has_deficit or bool(getattr(self, 'conquer_battle_dimmed', False))
+            greyed_out = (
+                (hasattr(self, 'defender_selectable') and not self.defender_selectable)
+                or not getattr(self, 'conquer_selection_selectable', True)
+                or is_resting
+                or self.has_deficit
+                or bool(getattr(self, 'conquer_battle_dimmed', False))
+            )
             
             # Choose icon/frame images based on greyed-out state
             icon_normal = self.icon_gray_img if greyed_out else self.icon_img
@@ -865,6 +927,7 @@ class FieldFigureIcon(FigureIcon):
             # Check if greyed out for defender selection
             greyed_out_hidden = (
                 (hasattr(self, 'defender_selectable') and not self.defender_selectable)
+                or not getattr(self, 'conquer_selection_selectable', True)
                 or bool(getattr(self, 'conquer_battle_dimmed', False))
             )
             is_big_state = self.hovered and not is_mouse_pressed
@@ -1057,7 +1120,9 @@ class FieldFigureIcon(FigureIcon):
         if self.is_visible:
             # Calculate power display
             base_power = self.figure.get_value()
-            battle_bonus = self.battle_bonus_received  # Use cached value (calculated once in __init__)
+            # Support part is cached from __init__; the land component is
+            # live so Landslide's inversion shows up without an icon rebuild.
+            battle_bonus = self._current_battle_bonus_received()
             
             # Create power text
             power_text = f"{base_power}"
@@ -1079,12 +1144,16 @@ class FieldFigureIcon(FigureIcon):
             bonus_surface = None
             bonus_outline_surface = None
             bonus_blocked = getattr(self, 'battle_bonus_blocked', False)
-            if battle_bonus > 0:
-                bonus_text = f"(+{battle_bonus})"
+            if battle_bonus != 0:
+                # Negative totals happen when Landslide inverts the land
+                # bonus — render them in red instead of hiding them.
+                bonus_text = f"({battle_bonus:+d})"
+                bonus_color = (settings.COLOR_BATTLE_BONUS if battle_bonus > 0
+                               else (226, 120, 110))
                 # Create outline for better contrast
                 bonus_outline_surface = font.render(bonus_text, True, (0, 0, 0))
-                # Always green — the red strikethrough dash indicates it's blocked
-                bonus_surface = font.render(bonus_text, True, settings.COLOR_BATTLE_BONUS)
+                # Positive stays green — the red strikethrough dash indicates blocked
+                bonus_surface = font.render(bonus_text, True, bonus_color)
             
             # Create distance-attack penalty text if applicable
             distance_penalty_surface = None
@@ -1827,23 +1896,42 @@ class FieldFigureIcon(FigureIcon):
                     not self._figure_in_deficit(fig))
             ]
             
-            # Sum battle bonuses from other figures
+            # Sum battle bonuses from other figures.  NOTE: the land suit
+            # bonus is intentionally NOT included here — this value is
+            # cached at icon build time, while the land component can flip
+            # sign mid-game (Landslide).  See _current_battle_bonus_received.
             total_bonus = sum(fig.get_battle_bonus() for fig in same_suit_figures)
-
-            # Conquer mode: land suit bonus for figures matching the land's suit
-            if (self.game and
-                    getattr(self.game, 'mode', 'duel') == 'conquer'):
-                land_suit = getattr(self.game, 'land_suit_bonus_suit', None)
-                land_value = getattr(self.game, 'land_suit_bonus_value', None)
-                if land_suit and land_value:
-                    if (self.figure.suit or '').lower() == land_suit.lower():
-                        total_bonus += land_value
 
             return total_bonus
         except Exception as e:
             # If anything fails, just return 0
             print(f"[FIELD_ICON] Failed to calculate battle bonus: {e}")
             return 0
+
+    def _current_battle_bonus_received(self):
+        """Cached figure-support bonus plus the LIVE land bonus component.
+
+        The land part must be evaluated per frame: Landslide inverts the
+        land bonus at battle start, long after most icons were built and
+        their support bonus cached.
+        """
+        if getattr(self, 'suppress_battle_bonus', False):
+            return 0
+        total = int(getattr(self, 'battle_bonus_received', 0) or 0)
+        try:
+            if self.game and getattr(self.game, 'mode', 'duel') == 'conquer':
+                bonus_getter = getattr(self.game, 'effective_land_bonus', None)
+                if callable(bonus_getter):
+                    land_suit, land_value = bonus_getter()
+                else:
+                    land_suit = getattr(self.game, 'land_suit_bonus_suit', None)
+                    land_value = getattr(self.game, 'land_suit_bonus_value', None)
+                if land_suit and land_value:
+                    if (self.figure.suit or '').lower() == land_suit.lower():
+                        total += int(land_value)
+        except Exception:
+            pass
+        return total
 
     def _scale_icon(self, image, scale_factor: float) -> pygame.Surface:
         """

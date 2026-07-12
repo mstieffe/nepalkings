@@ -139,6 +139,37 @@ class TestDefenceBuildFigure:
         rv = _build_figure(client, auth_headers_user1, land.id, [c1.id])
         assert rv.status_code == 400
 
+    def test_himalaya_maharaja_requires_matching_mk_card(
+            self, client, db, two_users, auth_headers_user1):
+        u1, _ = two_users
+        land = _add_land(db, owner_id=u1.id)
+        mk = _add_collection_card(db, u1.id, 'Spades', 'MK', 4)
+
+        rv = _build_figure(
+            client, auth_headers_user1, land.id, [mk.id],
+            family='Himalaya Maharaja', field='village', color='offensive',
+            produces={'gold': 999}, suit='Spades')
+
+        assert rv.status_code == 200
+        fig = rv.get_json()['config']['figures'][0]
+        assert fig['field'] == 'castle'
+        assert fig['color'] == 'defensive'
+        assert fig['produces'] == {'villager_black': 3, 'warrior_black': 2}
+        assert fig['checkmate'] is True
+
+    def test_mk_card_cannot_build_another_family(
+            self, client, db, two_users, auth_headers_user1):
+        u1, _ = two_users
+        land = _add_land(db, owner_id=u1.id)
+        mk = _add_collection_card(db, u1.id, 'Spades', 'MK', 4)
+
+        rv = _build_figure(
+            client, auth_headers_user1, land.id, [mk.id],
+            family='Himalaya King', suit='Spades')
+
+        assert rv.status_code == 400
+        assert 'only build a Maharaja' in rv.get_json()['message']
+
     def test_rejects_non_owned_land(self, client, db, two_users, auth_headers_user1):
         _, u2 = two_users
         land = _add_land(db, owner_id=u2.id)

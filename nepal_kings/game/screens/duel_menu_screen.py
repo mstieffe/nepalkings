@@ -1,13 +1,16 @@
 # Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
 # See LICENSE file in the project root for full license information.
+import math
 import pygame
 from pygame.locals import *
 from game.screens.screen import Screen
 from game.screens._menu_base import MenuScreenMixin
+from game.components.easing import ease_out_back
 from config import settings
 from config.screen_settings import _UI_SCALE
 from utils.utils import Button
 from utils.game_service import fetch_user_games, fetch_user
+from utils import sound
 import logging
 
 logger = logging.getLogger('nk.screens.duel_menu')
@@ -88,9 +91,15 @@ class DuelMenuScreen(MenuScreenMixin, Screen):
         self._badge_font = settings.get_font(int(0.018 * _SH * _UI_SCALE), bold=True)
         self._duel_tutorial_intro_dialogue = None
 
+        # Entrance-slide bookkeeping (stamped when rendering resumes)
+        self._last_render_ms = None
+        self._entered_at_ms = 0
+
 
     # ── helper: draw a menu button with glow BEHIND ─────────────────
-    def _draw_menu_button(self, btn):
+    def _draw_menu_button(self, btn, dy=0):
+        # dy is a draw-only entrance offset; hit-testing keeps btn.rect.
+        rect = btn.rect.move(0, dy) if dy else btn.rect
         is_disabled = hasattr(btn, 'disabled') and btn.disabled
         if not is_disabled:
             if btn.hovered and btn.clicked:
@@ -102,28 +111,40 @@ class DuelMenuScreen(MenuScreenMixin, Screen):
             else:
                 glow = None
             if glow:
-                gx = btn.rect.centerx - glow.get_width() // 2
-                gy = btn.rect.centery - glow.get_height() // 2
+                gx = rect.centerx - glow.get_width() // 2
+                gy = rect.centery - glow.get_height() // 2
                 self.window.blit(glow, (gx, gy))
 
         if btn.clicked:
             img = btn.button_image_small
-            pos = img.get_rect(center=btn.rect.center).topleft
+            pos = img.get_rect(center=rect.center).topleft
         else:
             img = btn.button_image
-            pos = btn.rect.topleft
+            pos = rect.topleft
         self.window.blit(img, pos)
 
         font = btn.font_small if btn.clicked else btn.font
         text_surf = font.render(btn.text, True, btn.get_text_color())
-        self.window.blit(text_surf, text_surf.get_rect(center=btn.rect.center))
+        self.window.blit(text_surf, text_surf.get_rect(center=rect.center))
+
+    def _menu_button_entrance_dy(self, index):
+        """Draw-only staggered slide-up offset for a menu button."""
+        if not self._entered_at_ms:
+            return 0
+        t = (pygame.time.get_ticks() - self._entered_at_ms - index * 60) / 240.0
+        if t >= 1.0:
+            return 0
+        return int((1.0 - ease_out_back(max(0.0, t))) * 12)
 
     def _draw_badge(self, btn, count):
         if count <= 0:
             return
+        # Gentle breathing pulse — pure draw, no state.
+        radius = int(_BADGE_RADIUS
+                     * (1.0 + 0.12 * math.sin(pygame.time.get_ticks() * 0.006)))
         cx = btn.rect.right - _BADGE_RADIUS
         cy = btn.rect.top + _BADGE_RADIUS
-        pygame.draw.circle(self.window, _BADGE_CLR, (cx, cy), _BADGE_RADIUS)
+        pygame.draw.circle(self.window, _BADGE_CLR, (cx, cy), radius)
         txt = self._badge_font.render(str(count), True, _BADGE_TXT)
         self.window.blit(txt, txt.get_rect(center=(cx, cy)))
 
@@ -138,9 +159,16 @@ class DuelMenuScreen(MenuScreenMixin, Screen):
         title_y = self._box_rect.y + settings.GAME_MENU_BOX_PAD_TOP
         self.window.blit(self._title_surf, (title_x, title_y))
 
+        # Entrance detection: a gap in rendering means the screen was just
+        # (re)entered — slide the buttons up with a small stagger.
+        now = pygame.time.get_ticks()
+        if self._last_render_ms is None or now - self._last_render_ms > 500:
+            self._entered_at_ms = now
+        self._last_render_ms = now
+
         # Menu buttons
-        for btn in (self.button_new, self.button_load, self.button_back):
-            self._draw_menu_button(btn)
+        for index, btn in enumerate((self.button_new, self.button_load, self.button_back)):
+            self._draw_menu_button(btn, dy=self._menu_button_entrance_dy(index))
 
         # Badges
         self._draw_badge(self.button_load, self.state.badge_new_games)
@@ -178,6 +206,7 @@ class DuelMenuScreen(MenuScreenMixin, Screen):
 
     def handle_button_clicks(self):
         if self.button_new.collide():
+            sound.play('ui_click')
             self._mark_menu_coach_seen('new_game')
             # Mark current challenges as seen
             self.state.badge_new_challenges = 0
@@ -192,6 +221,7 @@ class DuelMenuScreen(MenuScreenMixin, Screen):
             self.state.screen = 'new_game'
             logger.debug("New Game button clicked")
         elif self.button_load.collide():
+            sound.play('ui_click')
             # Mark current games as seen
             self.state.badge_new_games = 0
             try:
@@ -204,6 +234,7 @@ class DuelMenuScreen(MenuScreenMixin, Screen):
             self.state.screen = 'load_game'
             logger.debug("Load Game button clicked")
         elif self.button_back.collide():
+            sound.play('ui_back')
             self.state.screen = 'game_menu'
             logger.debug("Back button clicked")
 
@@ -223,42 +254,8 @@ class DuelMenuScreen(MenuScreenMixin, Screen):
         return True
 
     def _duel_tutorial_intro_pages(self):
-        from game.components import tutorial_diagrams
-        return [
-            {
-                'title': 'Duels Are The Heart Of Nepal Kings',
-                'layout': 'image_top',
-                'image': lambda: tutorial_diagrams.duel_start_image(),
-                'image_frame': False,
-                'image_caption': 'Draw, build, battle, and climb toward the point goal.',
-                'lines': [
-                    'A duel is the long, chess-like version of Nepal Kings.',
-                    'Two players take turns planning, building, and threatening each other until a battle breaks out.',
-                ],
-            },
-            {
-                'title': 'Build, Then Battle',
-                'layout': 'image_top',
-                'image': lambda: tutorial_diagrams.duel_build_battle_diagram(),
-                'image_caption': 'Building phases create the board that decides the battle phase.',
-                'lines': [
-                    'The game switches between building phases and battle phases.',
-                    'During building, you turn cards into figures, spells, and support.',
-                    'During battle, the figures you prepared decide who scores points.',
-                ],
-            },
-            {
-                'title': 'One Shared Card Pool',
-                'layout': 'image_top',
-                'image': lambda: tutorial_diagrams.duel_shared_card_pool_image(),
-                'image_frame': False,
-                'image_caption': 'Every draw comes from one pool shared by both players.',
-                'lines': [
-                    'Both players draw from the same pool of cards, so every card you take is a card your opponent cannot draw.',
-                    'You play until someone reaches the agreed point goal through battles.',
-                ],
-            },
-        ]
+        from game.tutorial_content import duel_intro_pages
+        return duel_intro_pages()
 
     def _maybe_show_duel_tutorial_intro_window(self):
         if getattr(self, '_duel_tutorial_intro_dialogue', None):
@@ -299,7 +296,7 @@ class DuelMenuScreen(MenuScreenMixin, Screen):
             'id': 'new_game',
             'rect': self.button_new.rect,
             'title': 'Create A Duel',
-            'body': 'Click New Game yourself. The next screen prepares a gentle AI challenge for your first run.',
+            'body': "Tap New Game. We'll set up a friendly AI opponent for your first duel.",
             'action': 'click',
             'mark_on_click': True,
         }

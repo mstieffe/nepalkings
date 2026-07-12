@@ -14,6 +14,7 @@ The SpellManager will automatically load all spells from this list.
 from .ability_spell_config import ALL_ABILITY_CONFIGS
 from .battle_spell_config import ALL_BATTLE_CONFIGS
 from .instant_spell_config import ALL_INSTANT_CONFIGS
+from .conquer_spell_config import ALL_CONQUER_CONFIGS
 
 # Combine all spell configs into a single list
 SPELL_CONFIG_LIST = [
@@ -25,6 +26,7 @@ SPELL_CONFIG_LIST = [
     *ALL_ABILITY_CONFIGS,
     *ALL_BATTLE_CONFIGS,
     *ALL_INSTANT_CONFIGS,
+    *ALL_CONQUER_CONFIGS,
 ]
 
 # When you create actual spell configs, uncomment and import them above

@@ -18,8 +18,8 @@ Usage:
     sound.init()                 # once at startup (reads preference)
     sound.play('ui_click')       # anywhere; never raises
 
-Assets are tiny synthesized WAVs in nepal_kings/sound/, produced by
-scripts/assets/generate_sfx.py.
+Assets are tiny synthesized WAVs in nepal_kings/sound/, with OGG companions
+for the pygbag web build, produced by scripts/assets/generate_sfx.py.
 """
 
 import json
@@ -53,6 +53,8 @@ EVENTS = {
     'conquer_win':    ('conquer_win.wav', 1.0),
     'your_turn':      ('your_turn.wav', 0.9),
     'error':          ('error.wav', 0.8),
+    'reveal_hold':    ('reveal_hold.wav', 0.8),
+    'tally_tick':     ('tally_tick.wav', 0.6),
 }
 
 _enabled = True
@@ -109,6 +111,14 @@ def is_enabled():
 
 # ── Playback ───────────────────────────────────────────────────────
 
+def _candidate_filenames(filename):
+    """Return load candidates for an event asset, preferring web-safe OGG."""
+    if _IS_WEB:
+        stem, _ext = os.path.splitext(filename)
+        return (stem + '.ogg', filename)
+    return (filename,)
+
+
 def _ensure_mixer():
     """Lazy mixer init; remembers permanent failure so we stop retrying."""
     global _mixer_failed
@@ -139,10 +149,17 @@ def play(name, volume=1.0):
         import pygame
         snd = _cache.get(name)
         if snd is None:
-            path = os.path.join(_sound_dir(), entry[0])
-            if not os.path.exists(path):
+            for filename in _candidate_filenames(entry[0]):
+                path = os.path.join(_sound_dir(), filename)
+                if not os.path.exists(path):
+                    continue
+                try:
+                    snd = pygame.mixer.Sound(path)
+                    break
+                except Exception:
+                    continue
+            if snd is None:
                 return False
-            snd = pygame.mixer.Sound(path)
             _cache[name] = snd
         snd.set_volume(max(0.0, min(1.0, MASTER_VOLUME * entry[1] * volume)))
         snd.play()
@@ -183,4 +200,13 @@ def play_for_dialogue(title):
         return play('ui_back')
     if 'battle' in t and ('begin' in t or 'start' in t or t == 'to battle!'):
         return play('battle_start')
+    # Invalid-action feedback (the duel action screens title these dialogs
+    # consistently: "Action Blocked", "Not Your Turn", "... Failed", ...).
+    if ('failed' in t or 'error' in t or 'invalid' in t or 'blocked' in t
+            or 'cannot' in t or 'wrong' in t or 'not your turn' in t
+            or 'must advance' in t or 'already selected' in t
+            or 'no valid target' in t or 'target required' in t
+            or 'resource deficit' in t or 'ceasefire active' in t
+            or 'resting' in t or 'immune' in t):
+        return play('error')
     return False

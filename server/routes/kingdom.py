@@ -912,10 +912,6 @@ def _recommended_tutorial_land_id(user, lands, now=None):
     now = now or _utcnow()
     attack_suit = _user_offensive_suit(user)
     attacker_beats = _SUIT_ADVANTAGE.get(attack_suit)
-    attacker_loses_to = {
-        suit for suit, beaten in _SUIT_ADVANTAGE.items()
-        if beaten == attack_suit
-    }
     candidates = []
     for land in lands:
         if land.owner_user_id is not None:
@@ -924,20 +920,10 @@ def _recommended_tutorial_land_id(user, lands, now=None):
             continue
         if land.conquer_cooldown_until and land.conquer_cooldown_until > now:
             continue
-        try:
-            template = get_ai_defence_template_for_land(land)
-        except Exception:
-            template = {}
-        defender_suit = _ai_template_battle_suit(template)
-        if defender_suit == attacker_beats:
-            matchup_score = 0
-        elif defender_suit in attacker_loses_to:
-            matchup_score = 3
-        else:
-            matchup_score = 1
+        # First-conquest battles use the scripted-safe defender regardless of
+        # the land's normal AI template, so keep map loading cheap here.
         suit_score = 0 if land.suit_bonus_suit == attacker_beats else 1
         candidates.append((
-            matchup_score,
             suit_score,
             -float(land.gold_rate or 0),
             int(land.id or 0),
@@ -1026,7 +1012,7 @@ def _bulk_defence_incomplete_by_land(land_ids, user_id):
     from game_service.figure_rule_helpers import (
         config_strategy_modifiers,
         figure_can_counter_advance,
-        modifiers_require_village,
+        battle_required_field,
     )
 
     incomplete_by_land = {land_id: True for land_id in land_ids}
@@ -1084,14 +1070,14 @@ def _bulk_defence_incomplete_by_land(land_ids, user_id):
             if not battle_fig:
                 continue
             modifiers = config_strategy_modifiers(cfg)
-            require_village = modifiers_require_village(modifiers)
+            required_field = battle_required_field(modifiers)
             if not figure_can_counter_advance(
                     battle_fig,
-                    require_village=require_village,
+                    required_field=required_field,
                     deficit=deficit_map.get(battle_fig.id, False)):
                 continue
 
-            is_civil_war = any(
+            is_civil_war = required_field != 'castle' and any(
                 mod.get('type') == 'Civil War'
                 for mod in modifiers
                 if isinstance(mod, dict)
@@ -1102,7 +1088,7 @@ def _bulk_defence_incomplete_by_land(land_ids, user_id):
                     continue
                 if not figure_can_counter_advance(
                         battle_fig_2,
-                        require_village=require_village,
+                        required_field=required_field,
                         deficit=deficit_map.get(battle_fig_2.id, False)):
                     continue
                 if battle_fig.color != battle_fig_2.color:
@@ -1255,15 +1241,16 @@ def get_kingdom_map():
     from kingdom_service import (compute_owned_land_components,
                                  describe_kingdom_bonuses, effective_gold_rate_for_lands,
                                  kingdom_shield_block_reason, kingdom_skill_bonuses,
-                                 reconcile_all_kingdoms, serialize_kingdom_config,
+                                 reconcile_user_kingdoms,
+                                 serialize_kingdom_config,
                                  summarize_user_kingdom)
 
     user = db.session.get(User, g.user_id)
     if not user:
         return jsonify({'error': 'User not found'}), 404
 
-    reconcile_all_kingdoms(commit=True)
     now = _utcnow()
+    reconcile_user_kingdoms(user.id, commit=False)
     lands = Land.query.order_by(Land.row, Land.col).all()
     kingdom_ids = {land.kingdom_id for land in lands if land.kingdom_id}
     kingdoms_by_id = {
@@ -1417,20 +1404,28 @@ _SPELL_CARD_COST = {
     'Civil War':        ('5', 2, None),
     'Blitzkrieg':       ('Q', 2, None),
     'Invader Swap':     ('A', 2, None),
+    'Royal Decree':     ('K', 2, None),
+    'Copy Figure':      ('10', 2, None),
+    'Landslide':        ('2', 2, None),
+    'Draw 4 MainCards': ('8', 2, None),
 }
 
 _CONQUER_PRELUDE_SPELLS = frozenset({
-    'Draw 2 MainCards', 'Fill up to 10', 'Dump Cards', 'Forced Deal',
+    'Draw 2 MainCards', 'Dump Cards', 'Forced Deal',
     'Poison', 'Health Boost', 'All Seeing Eye', 'Explosion',
     'Peasant War', 'Civil War', 'Blitzkrieg',
     'Invader Swap',
+    'Royal Decree', 'Copy Figure', 'Landslide', 'Draw 4 MainCards',
 })
 
-_TARGETED_PRELUDE_SPELLS = frozenset({'Poison', 'Health Boost', 'Explosion'})
+_TARGETED_PRELUDE_SPELLS = frozenset({'Poison', 'Health Boost', 'Explosion',
+                                      'Copy Figure'})
 
 _DEFENCE_PRELUDE_SPELLS = frozenset({
     'Dump Cards', 'Forced Deal', 'Poison', 'Health Boost',
     'Explosion', 'Peasant War', 'Civil War',
+    'Draw 2 MainCards', 'All Seeing Eye',
+    'Royal Decree', 'Copy Figure', 'Landslide', 'Draw 4 MainCards',
 })
 
 _DEFENCE_COUNTER_SPELLS = frozenset({
@@ -1439,7 +1434,10 @@ _DEFENCE_COUNTER_SPELLS = frozenset({
 
 # Spells that must also be recorded in game.battle_modifier for existing
 # game logic (advance restrictions, turn updates, ceasefire, etc.)
-_BATTLE_MODIFIER_SPELLS = frozenset({'Peasant War', 'Civil War', 'Blitzkrieg'})
+# Royal Decree is special-cased in _create_prelude_spell: it registers the
+# modifier AND executes the Dump-Cards fresh-hand effect.
+_BATTLE_MODIFIER_SPELLS = frozenset({'Peasant War', 'Civil War', 'Blitzkrieg',
+                                     'Royal Decree', 'Landslide'})
 
 # ── Prelude effect_data keys ────────────────────────────────────────
 # Centralised so future additions don't have to grep magic strings.
@@ -1495,6 +1493,10 @@ _SPELL_TYPE_MAP = {
     'Civil War':        'tactics',
     'Blitzkrieg':       'tactics',
     'Invader Swap':     'tactics',
+    'Royal Decree':     'tactics',
+    'Copy Figure':      'enchantment',
+    'Landslide':        'enchantment',
+    'Draw 4 MainCards': 'greed',
 }
 
 
@@ -1625,9 +1627,9 @@ def _validate_config_own_spell_target(cfg, target_fig_id):
 def _config_counter_advance_error(fig, cfg, deficit_map=None, planned_modifiers=None):
     """Return why a defence-config figure cannot be a battle figure."""
     from game_service.figure_rule_helpers import (
+        battle_required_field,
         config_strategy_modifiers,
         explain_counter_advance_block,
-        modifiers_require_village,
     )
 
     modifiers = (planned_modifiers if planned_modifiers is not None
@@ -1635,7 +1637,7 @@ def _config_counter_advance_error(fig, cfg, deficit_map=None, planned_modifiers=
     deficit = bool((deficit_map or {}).get(getattr(fig, 'id', None), False))
     return explain_counter_advance_block(
         fig,
-        require_village=modifiers_require_village(modifiers),
+        required_field=battle_required_field(modifiers),
         deficit=deficit,
     )
 
@@ -2536,6 +2538,73 @@ def _resolve_cards_by_specs(user_id, card_specs):
     return card_ids, None
 
 
+_MAHARAJA_FAMILIES = frozenset({
+    'Himalaya Maharaja',
+    'Djungle Maharaja',
+})
+
+
+def _canonicalize_maharaja_build(data, cards, card_roles):
+    """Validate the crafted MK recipe and return trusted figure attributes.
+
+    Other figure families retain their legacy payload handling for now.  MK is
+    different because it is a costly crafted card: it may build only the
+    matching Maharaja family, and Maharaja combat/resource attributes must not
+    be supplied by the client.
+    """
+    family_name = str(data.get('family_name') or '')
+    uses_mk = any(str(getattr(card, 'rank', '') or '').upper() == 'MK'
+                  for card in cards)
+    is_maharaja = family_name in _MAHARAJA_FAMILIES
+
+    if not is_maharaja:
+        if uses_mk:
+            return None, 'Maharaja cards can only build a Maharaja castle'
+        return dict(data), None
+
+    from ai.figure_recipes import FIGURE_RECIPES
+    recipe = next(
+        (item for item in FIGURE_RECIPES
+         if item.get('family_name') == family_name),
+        None,
+    )
+    if recipe is None:
+        return None, 'Maharaja recipe is unavailable'
+
+    suit = str(data.get('suit') or '')
+    if suit not in recipe.get('suits', ()):
+        return None, f'{family_name} cannot be built with {suit or "that suit"}'
+    if (len(cards) != 1
+            or str(getattr(cards[0], 'rank', '') or '').upper() != 'MK'
+            or getattr(cards[0], 'suit', None) != suit):
+        return None, f'{family_name} requires exactly one {suit} Maharaja card'
+    if card_roles and list(card_roles) != ['key']:
+        return None, 'The Maharaja card must be the figure key card'
+
+    produces = recipe['produces_fn'](suit, 0)
+    flags = recipe.get('special_flags', {}) or {}
+    canonical = dict(data)
+    canonical.update({
+        'family_name': family_name,
+        'name': recipe.get('name', family_name),
+        'suit': suit,
+        'color': recipe['color'],
+        'field': recipe['field'],
+        'card_roles': ['key'],
+        'produces': produces,
+        'requires': dict(recipe.get('requires', {})),
+        'description': (
+            f'The {family_name} supports three village slots and two '
+            'military slots. Triggers checkmate when defeated.'
+        ),
+        'upgrade_family_name': None,
+        'checkmate': bool(flags.get('checkmate', False)),
+        'cannot_be_blocked': bool(flags.get('cannot_be_blocked', False)),
+        'rest_after_attack': bool(flags.get('rest_after_attack', False)),
+    })
+    return canonical, None
+
+
 # ── POST /kingdom/conquer/build_figure ───────────────────────────────────────
 
 @kingdom.route('/conquer/build_figure', methods=['POST'])
@@ -2601,6 +2670,17 @@ def conquer_build_figure():
     if locked_cards:
         return jsonify({'success': False, 'message': 'Some cards are already locked'}), 400
 
+    trusted_data, recipe_error = _canonicalize_maharaja_build(
+        data, cards, card_roles)
+    if recipe_error:
+        return jsonify({'success': False, 'message': recipe_error}), 400
+    family_name = trusted_data.get('family_name')
+    name = trusted_data.get('name', family_name)
+    suit = trusted_data.get('suit')
+    color = trusted_data.get('color', suit)
+    field = trusted_data.get('field')
+    card_roles = trusted_data.get('card_roles', card_roles)
+
     cfg = _get_or_create_conquer_config(g.user_id, land_id)
 
     # Castle figure cap (per-tier).  Castle figures (Kings/Maharaja) on a
@@ -2623,13 +2703,13 @@ def conquer_build_figure():
         field=field,
         card_ids=card_ids,
         card_roles=card_roles,
-        produces=data.get('produces'),
-        requires=data.get('requires'),
-        description=data.get('description', ''),
-        upgrade_family_name=data.get('upgrade_family_name'),
-        checkmate=data.get('checkmate', False),
-        cannot_be_blocked=data.get('cannot_be_blocked', False),
-        rest_after_attack=data.get('rest_after_attack', False),
+        produces=trusted_data.get('produces'),
+        requires=trusted_data.get('requires'),
+        description=trusted_data.get('description', ''),
+        upgrade_family_name=trusted_data.get('upgrade_family_name'),
+        checkmate=trusted_data.get('checkmate', False),
+        cannot_be_blocked=trusted_data.get('cannot_be_blocked', False),
+        rest_after_attack=trusted_data.get('rest_after_attack', False),
     )
     db.session.add(figure)
     db.session.flush()
@@ -3334,6 +3414,17 @@ def defence_build_figure():
     if any(c.locked for c in cards):
         return jsonify({'success': False, 'message': 'Some cards are already locked'}), 400
 
+    trusted_data, recipe_error = _canonicalize_maharaja_build(
+        data, cards, card_roles)
+    if recipe_error:
+        return jsonify({'success': False, 'message': recipe_error}), 400
+    family_name = trusted_data.get('family_name')
+    name = trusted_data.get('name', family_name)
+    suit = trusted_data.get('suit')
+    color = trusted_data.get('color', suit)
+    field = trusted_data.get('field')
+    card_roles = trusted_data.get('card_roles', card_roles)
+
     cfg = _get_defence_edit_config(g.user_id, land_id)
 
     # Castle figure cap (per-tier).  Castle figures (Kings/Maharaja) on a
@@ -3352,12 +3443,12 @@ def defence_build_figure():
         family_name=family_name, name=name or family_name,
         suit=suit, color=color or suit, field=field,
         card_ids=card_ids, card_roles=card_roles,
-        produces=data.get('produces'), requires=data.get('requires'),
-        description=data.get('description', ''),
-        upgrade_family_name=data.get('upgrade_family_name'),
-        checkmate=data.get('checkmate', False),
-        cannot_be_blocked=data.get('cannot_be_blocked', False),
-        rest_after_attack=data.get('rest_after_attack', False),
+        produces=trusted_data.get('produces'), requires=trusted_data.get('requires'),
+        description=trusted_data.get('description', ''),
+        upgrade_family_name=trusted_data.get('upgrade_family_name'),
+        checkmate=trusted_data.get('checkmate', False),
+        cannot_be_blocked=trusted_data.get('cannot_be_blocked', False),
+        rest_after_attack=trusted_data.get('rest_after_attack', False),
     )
     db.session.add(figure)
     db.session.flush()
@@ -4217,7 +4308,7 @@ def defence_set_auto_gamble_threshold():
 
 _RANK_TO_VALUE = {
     '7': 7, '8': 8, '9': 9, '10': 10,
-    'J': 1, 'Q': 2, 'K': 4, 'A': 3,
+    'J': 1, 'Q': 2, 'K': 4, 'A': 3, 'MK': 4,
 }
 
 _SIDE_RANK_TO_VALUE = {
@@ -4225,7 +4316,10 @@ _SIDE_RANK_TO_VALUE = {
 }
 
 _MAIN_RANKS = set(_RANK_TO_VALUE.keys())
-_NUMERIC_TO_MAIN_RANK = {v: k for k, v in _RANK_TO_VALUE.items()}
+_NUMERIC_TO_MAIN_RANK = {
+    value: rank for rank, value in _RANK_TO_VALUE.items()
+    if rank != 'MK'
+}
 _NUMERIC_TO_MAIN_RANK.update({11: 'J', 12: 'Q', 13: 'K', 14: 'A'})
 _SIDE_RANKS = set(_SIDE_RANK_TO_VALUE.keys())
 _NUMERIC_TO_SIDE_RANK = {v: k for k, v in _SIDE_RANK_TO_VALUE.items()}
@@ -4246,7 +4340,6 @@ def _normalize_main_rank(rank, *, fallback_rank='10', value=None, context=''):
     candidate = str(raw_rank).strip().upper() if raw_rank is not None else ''
     if candidate in _MAIN_RANKS:
         return candidate
-
     for source, source_name in ((candidate, 'rank'), (value, 'value')):
         try:
             numeric = int(source)
@@ -5042,16 +5135,19 @@ def _get_prelude_target_scope(spell_name):
         return 'opponent'
     if spell_name == 'Health Boost':
         return 'own'
+    if spell_name == 'Copy Figure':
+        # Opponent figures are shown as hidden icons only during targeting.
+        return 'opponent_hidden'
     return None
 
 
 def _list_valid_prelude_targets(game, caster_player_id, spell_name):
-    """Return valid prelude targets, excluding checkmate figures."""
+    """Return valid prelude targets (checkmate excluded except Copy Figure)."""
     scope = _get_prelude_target_scope(spell_name)
     if not scope:
         return []
 
-    if scope == 'opponent':
+    if scope in ('opponent', 'opponent_hidden'):
         candidate_player_ids = [p.id for p in game.players if p.id != caster_player_id]
     else:
         candidate_player_ids = [caster_player_id]
@@ -5063,6 +5159,14 @@ def _list_valid_prelude_targets(game, caster_player_id, spell_name):
         Figure.game_id == game.id,
         Figure.player_id.in_(candidate_player_ids),
     ).all()
+    if spell_name == 'Copy Figure':
+        # Checkmate figures ARE copyable (the copy itself is never
+        # checkmate); cannot_be_targeted figures and destroyed/replay
+        # ghosts are not.
+        return [
+            f for f in targets
+            if not _figure_has_family_skill(f, 'cannot_be_targeted')
+        ]
     live_targets = [f for f in targets if not getattr(f, 'checkmate', False)]
     replay_targets = conquer_destroyed_replay_targets_for_prelude(
         game,
@@ -5243,11 +5347,52 @@ def _create_prelude_spell(game, player, spell_name, spell_data, game_figures,
     )
     db.session.add(spell)
 
+    def _execute_and_persist():
+        """Run the spell effect and persist prelude metadata on the record."""
+        db.session.flush()
+        from routes.spells import _execute_spell
+        result = _execute_spell(spell, game, player)
+        if result.get('error'):
+            logger.warning(f'Prelude spell {spell_name} execution failed: {result}')
+            _update_prelude_effect_data(
+                spell,
+                status=PRELUDE_STATUS_FAILED,
+                **{PRELUDE_KEY_ORIGIN: True},
+            )
+            return
+        # Persist prelude metadata and actually-drawn cards on the spell so
+        # game-start notifications can report precise effects.
+        extras = {PRELUDE_KEY_ORIGIN: True}
+        drawn = result.get('drawn_cards', [])
+        if drawn:
+            extras['drawn_card_ids'] = [c['id'] for c in drawn]
+        for key in (
+            'target_figure_id', 'target_figure_name',
+            'target_figure_snapshot', 'destroyed_figure_snapshot',
+            'power_modifier', 'spell_icon',
+            'destroyed_figure_name', 'card_count', 'caster_dumped',
+            'opponent_dumped', 'caster_dumped_cards', 'opponent_dumped_cards',
+            'drawn_cards', 'opponent_drawn_cards', 'cards_given',
+            'cards_received', 'opponent_notification',
+            'conquer_invader_swap', 'old_invader_id', 'new_invader_id',
+            'invader_swapped',
+            'source_figure_id', 'copied_figure_id',
+            'source_figure_snapshot', 'copied_figure_snapshot',
+        ):
+            if key in result:
+                extras[key] = result[key]
+        _update_prelude_effect_data(spell, status=PRELUDE_STATUS_EXECUTED, **extras)
+
     if spell_name in _BATTLE_MODIFIER_SPELLS:
         if not isinstance(game.battle_modifier, list):
             game.battle_modifier = []
         game.battle_modifier.append({'type': spell_name, 'caster_id': player.id})
-        _update_prelude_effect_data(spell, status=PRELUDE_STATUS_EXECUTED)
+        if spell_name == 'Royal Decree':
+            # Royal Decree is a battle modifier AND a card effect: both
+            # players dump their hands and redraw (Dump Cards effect).
+            _execute_and_persist()
+        else:
+            _update_prelude_effect_data(spell, status=PRELUDE_STATUS_EXECUTED)
     else:
         # Target-required prelude spells can be auto-resolved (defender) or
         # deferred for explicit invader target selection.
@@ -5282,47 +5427,22 @@ def _create_prelude_spell(game, player, spell_name, spell_data, game_figures,
                     return
                 spell.target_figure_id = chosen_target.id
             elif target_resolution == 'defence_auto':
-                chosen_target = _pick_defence_prelude_target(
-                    valid_targets,
-                    planned_modifiers=target_modifiers,
-                )
+                if spell_name == 'Copy Figure':
+                    # Copy Figure defender auto-target is fixed by rule:
+                    # highest base power, then lowest figure ID.
+                    chosen_target = _pick_deterministic_prelude_target(valid_targets)
+                else:
+                    chosen_target = _pick_defence_prelude_target(
+                        valid_targets,
+                        planned_modifiers=target_modifiers,
+                    )
                 spell.target_figure_id = chosen_target.id if chosen_target else None
             elif target_resolution == 'auto':
                 chosen_target = _pick_deterministic_prelude_target(valid_targets)
                 spell.target_figure_id = chosen_target.id if chosen_target else None
 
         # Greed / enchantment prelude spells: execute immediately
-        db.session.flush()
-        from routes.spells import _execute_spell
-        result = _execute_spell(spell, game, player)
-        if result.get('error'):
-            logger.warning(f'Prelude spell {spell_name} execution failed: {result}')
-            _update_prelude_effect_data(
-                spell,
-                status=PRELUDE_STATUS_FAILED,
-                **{PRELUDE_KEY_ORIGIN: True},
-            )
-        else:
-            # Persist prelude metadata and actually-drawn cards on the spell so
-            # game-start notifications can report precise effects.
-            extras = {PRELUDE_KEY_ORIGIN: True}
-            drawn = result.get('drawn_cards', [])
-            if drawn:
-                extras['drawn_card_ids'] = [c['id'] for c in drawn]
-            for key in (
-                'target_figure_id', 'target_figure_name',
-                'target_figure_snapshot', 'destroyed_figure_snapshot',
-                'power_modifier', 'spell_icon',
-                'destroyed_figure_name', 'card_count', 'caster_dumped',
-                'opponent_dumped', 'caster_dumped_cards', 'opponent_dumped_cards',
-                'drawn_cards', 'opponent_drawn_cards', 'cards_given',
-                'cards_received', 'opponent_notification',
-                'conquer_invader_swap', 'old_invader_id', 'new_invader_id',
-                'invader_swapped',
-            ):
-                if key in result:
-                    extras[key] = result[key]
-            _update_prelude_effect_data(spell, status=PRELUDE_STATUS_EXECUTED, **extras)
+        _execute_and_persist()
 
 
 # ── POST /kingdom/conquer/start_battle ───────────────────────────────────────
@@ -5872,6 +5992,8 @@ def conquer_resolve_prelude_target():
         'opponent_dumped', 'caster_dumped_cards', 'opponent_dumped_cards',
         'drawn_cards', 'opponent_drawn_cards', 'cards_given',
         'cards_received', 'opponent_notification',
+        'source_figure_id', 'copied_figure_id',
+        'source_figure_snapshot', 'copied_figure_snapshot',
     ):
         if key in result:
             resolved_data[key] = result[key]

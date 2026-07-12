@@ -112,9 +112,12 @@ class ScrollTextListShifter:
         # Use 1.4x the mini card size for better visibility in scroll
         card_width = int(settings.MINI_CARD_WIDTH * 1.4)
         card_height = int(settings.MINI_CARD_HEIGHT * 1.4)
+        # RANKS_WITH_ZK excludes the crafted Maharaja rank, but the kingdom
+        # build screen shows Maharaja figures whose key card is MK.
+        ranks = list(settings.RANKS_WITH_ZK) + [settings.RANK_MAHARAJA]
         return {(suit, rank): CardImg(self.window, suit, rank, width=card_width,
-                                      height=card_height) for suit in settings.SUITS for rank in
-                settings.RANKS_WITH_ZK}
+                                      height=card_height)
+                for suit in settings.SUITS for rank in ranks}
     
     def _load_resource_icons(self):
         """Load and scale resource icons."""

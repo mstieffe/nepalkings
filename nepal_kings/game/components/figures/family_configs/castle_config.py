@@ -40,8 +40,8 @@ castle_dict_list = [
             "The Himalaya Maharaja is the primordial defensive king. "
             "Supports three village slots and two military slots. Triggers checkmate when defeated."
         ),
-        "icon_img": "castle_black.png",
-        "icon_gray_img": "castle_black.png",
+        "icon_img": "maharaja_black.png",
+        "icon_gray_img": "maharaja_black.png",
         "frame_img": "castle.png",
         "frame_closed_img": "castle.png",
         "glow_img": "blue.png",
@@ -53,7 +53,7 @@ castle_dict_list = [
                 sub_name=f"{suit}",
                 suit=suit,
                 family=family,
-                key_cards=[Card("K", suit, 4)],
+                key_cards=[Card("MK", suit, 4)],
                 override_base_power=16,
                 produces={'villager_black': 3, 'warrior_black': 2},
                 checkmate=True
@@ -95,8 +95,8 @@ castle_dict_list = [
             "The Djungle Maharaja is the primordial offensive king. "
             "Supports three village slots and two military slots. Triggers checkmate when defeated."
         ),
-        "icon_img": "castle_red.png",
-        "icon_gray_img": "castle_red.png",
+        "icon_img": "maharaja_red.png",
+        "icon_gray_img": "maharaja_red.png",
         "frame_img": "castle.png",
         "frame_closed_img": "castle.png",
         "glow_img": "green.png",
@@ -108,7 +108,7 @@ castle_dict_list = [
                 sub_name=f"{suit}",
                 suit=suit,
                 family=family,
-                key_cards=[Card("K", suit, 4)],
+                key_cards=[Card("MK", suit, 4)],
                 override_base_power=16,
                 produces={'villager_red': 3, 'warrior_red': 2},
                 checkmate=True

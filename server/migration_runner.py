@@ -105,6 +105,44 @@ def _m_game_turn_email_log():
     _add_column_if_missing('game', 'turn_email_log', 'JSON')
 
 
+def _m_game_battle_gamble_previews():
+    _add_column_if_missing('game', 'battle_gamble_previews', 'JSON')
+
+
+def _m_duel_turn_time_limit_columns():
+    _add_column_if_missing('challenge', 'turn_time_limit', 'INTEGER')
+    _add_column_if_missing('game', 'turn_time_limit', 'INTEGER')
+
+
+def _m_figure_is_clone_column():
+    _add_column_if_missing('figure', 'is_clone',
+                           'BOOLEAN NOT NULL DEFAULT 0')
+
+
+def _m_clear_fill_up_to_10_preludes():
+    """'Fill up to 10' left the conquer/defence prelude pool — clear saved
+    configs that still reference it and unlock their locked 10-cards."""
+    from models import LandConfig, CollectionCard
+    configs = LandConfig.query.filter(
+        LandConfig.prelude_spell_name == 'Fill up to 10',
+        LandConfig.config_type.in_(('conquer', 'defence')),
+    ).all()
+    for cfg in configs:
+        card_ids = cfg.prelude_spell_card_ids or []
+        if card_ids:
+            CollectionCard.query.filter(
+                CollectionCard.id.in_(card_ids)
+            ).update({
+                CollectionCard.locked: False,
+                CollectionCard.lock_type: None,
+                CollectionCard.lock_ref_id: None,
+            }, synchronize_session='fetch')
+        cfg.prelude_spell_name = None
+        cfg.prelude_spell_data = None
+        cfg.prelude_spell_card_ids = None
+    db.session.commit()
+
+
 # ── Registry ───────────────────────────────────────────────────────
 
 MIGRATIONS = [
@@ -117,6 +155,10 @@ MIGRATIONS = [
     (7, 'user legal columns', _m_user_legal_columns),
     (8, 'user.notify_emails_enabled column', _m_user_notify_emails_enabled),
     (9, 'game.turn_email_log column', _m_game_turn_email_log),
+    (10, 'game.battle_gamble_previews column', _m_game_battle_gamble_previews),
+    (11, 'clear Fill up to 10 prelude configs', _m_clear_fill_up_to_10_preludes),
+    (12, 'duel turn_time_limit columns', _m_duel_turn_time_limit_columns),
+    (13, 'figure.is_clone column', _m_figure_is_clone_column),
 ]
 
 

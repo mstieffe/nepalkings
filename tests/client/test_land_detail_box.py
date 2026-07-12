@@ -60,6 +60,24 @@ def test_conquer_button_allows_click_during_player_cooldown(monkeypatch):
     assert called == [tile]
 
 
+def test_conquer_button_uses_release_position_when_mouse_pos_is_stale(monkeypatch):
+    called = []
+    tile = _tile()
+    box = _box(tile, cooldown=0, on_conquer=lambda clicked: called.append(clicked))
+    button = _button(box, 'conquer')
+
+    box._created_at = pygame.time.get_ticks() - 500
+    monkeypatch.setattr(pygame.mouse, 'get_pos', lambda: (0, 0))
+    event = pygame.event.Event(
+        pygame.MOUSEBUTTONUP,
+        button=1,
+        pos=button.rect.center,
+    )
+
+    assert box.handle_event(event) == 'conquer'
+    assert called == [tile]
+
+
 def test_conquer_button_remains_disabled_by_kingdom_shield(monkeypatch):
     called = []
     tile = _tile(kingdom_shield_remaining=300)

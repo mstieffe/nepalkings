@@ -1,5 +1,6 @@
 # Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
 # See LICENSE file in the project root for full license information.
+import math
 import pygame
 from datetime import datetime
 from email.utils import parsedate_to_datetime
@@ -355,6 +356,12 @@ class LoadGameScreen(MenuScreenMixin, Screen):
             elif is_my_turn:
                 turn_surf = self._cell_font.render("Your turn", True, _TURN_TAG_CLR)
                 self.window.blit(turn_surf, (status_x, text_y))
+                # Pulsing dot draws the eye to actionable games (pure draw)
+                pulse_r = max(2, int(_DOT_RADIUS
+                                     * (1.0 + 0.25 * math.sin(pygame.time.get_ticks() * 0.006))))
+                dot_cx = status_x + turn_surf.get_width() + int(0.008 * _SW)
+                pygame.draw.circle(self.window, _TURN_TAG_CLR,
+                                   (dot_cx, rect.centery), pulse_r)
 
             # Online dot next to opponent name
             dot_clr = _DOT_ONLINE if getattr(game, 'opponent_online', False) else _DOT_OFFLINE
@@ -496,6 +503,8 @@ class LoadGameScreen(MenuScreenMixin, Screen):
             if (rect.top >= self._rows_top and rect.bottom <= self._rows_bottom
                     and rect.collidepoint(mx, my)):
                 game = self.games[i]
+                from utils import sound
+                sound.play('ui_click')
                 label = f"{game.opponent_name}  —  {game.date}"
                 self.set_action("load_game", label, "open")
                 stake_str = f"{game.stake} gold"

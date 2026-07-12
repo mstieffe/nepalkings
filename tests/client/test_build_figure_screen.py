@@ -4,6 +4,8 @@
 
 from types import SimpleNamespace
 
+import pytest
+
 
 def _make_instant_charge_figure():
     family = SimpleNamespace(
@@ -417,13 +419,13 @@ class TestBuildFigureScreenKingdomExtras:
 
 
 class TestSecondBuildTutorialGating:
-    def _screen(self, completed, conquer_battles, skipped=False):
+    def _screen(self, completed, conquered_lands, skipped=False):
         from game.screens.build_figure_screen import BuildFigureScreen
         screen = BuildFigureScreen.__new__(BuildFigureScreen)
         screen.mode = 'conquer'
         screen.state = SimpleNamespace(user_dict={'onboarding': {
             'completed_steps': completed,
-            'facts': {'conquer_battles': conquer_battles},
+            'facts': {'conquered_lands': conquered_lands},
             'onboarding_skipped': skipped,
         }})
         return screen
@@ -462,7 +464,7 @@ class TestSecondBuildHintText:
         return BuildFigureScreen._second_build_hint_text(self._screen(figures))
 
     def test_starts_with_king(self):
-        assert 'King' in self._text([])
+        assert 'Castle' in self._text([])
 
     def test_advances_to_farm_after_king(self):
         text = self._text([{'field': 'castle'}])
@@ -476,3 +478,161 @@ class TestSecondBuildHintText:
         text = self._text([
             {'field': 'castle'}, {'field': 'village'}, {'field': 'military'}])
         assert 'Daggers' in text or 'ready' in text.lower()
+
+    def test_routes_to_collection_when_no_recipe_is_buildable(self):
+        from game.screens.build_figure_screen import BuildFigureScreen
+
+        screen = self._screen([])
+        screen.figure_family_buttons = {
+            'offensive': [SimpleNamespace(is_active=False)],
+            'defensive': [SimpleNamespace(is_active=False)],
+        }
+        text = BuildFigureScreen._second_build_hint_text(screen)
+        assert 'Collection' in text
+        assert 'reward packs' in text
+
+
+def _ensure_display():
+    """Kingdom-icon tests need a real surface so icon images can convert."""
+    import pygame
+    if pygame.display.get_surface() is None:
+        pygame.display.set_mode((854, 480))
+
+
+class TestBuildFigureScreenMaharajaCastleRow:
+    """Maharaja castle families are hidden in duel mode (each duel player is
+    dealt a Maharaja automatically) and shown in kingdom config modes, placed
+    symmetrically to the left of the King on the shared castle build_position."""
+
+    def _make_icons_screen(self, mode):
+        import pygame
+        from game.screens.build_figure_screen import BuildFigureScreen
+        from game.components.figures.figure_manager import FigureManager
+
+        _ensure_display()
+        screen = BuildFigureScreen.__new__(BuildFigureScreen)
+        screen.mode = mode
+        screen.figure_manager = FigureManager()
+        screen.window = pygame.display.get_surface()
+        screen.game = SimpleNamespace(get_hand=lambda: ([], []))
+        screen._sx = lambda x: x
+        screen._sy = lambda y: y
+        BuildFigureScreen.init_figure_family_icons(screen)
+        return screen
+
+    @staticmethod
+    def _by_name(buttons, name):
+        return next(b for b in buttons if b.family.name == name)
+
+    def test_duel_mode_hides_maharaja_family_icons(self):
+        from config import settings
+
+        screen = self._make_icons_screen('duel')
+        for color in ('offensive', 'defensive'):
+            names = [b.family.name for b in screen.figure_family_buttons[color]]
+            assert not any('Maharaja' in n for n in names)
+
+        # King stays centered on the shared castle build_position.
+        king = self._by_name(
+            screen.figure_family_buttons['offensive'], 'Djungle King')
+        assert king.x == pytest.approx(0.615 * settings.SCREEN_WIDTH)
+
+    def test_conquer_mode_shows_maharaja_left_of_king(self):
+        from config import settings
+
+        screen = self._make_icons_screen('conquer')
+        dx = 0.060 * settings.SCREEN_WIDTH
+        base_x = 0.615 * settings.SCREEN_WIDTH
+
+        for color, king_name, maharaja_name in (
+            ('offensive', 'Djungle King', 'Djungle Maharaja'),
+            ('defensive', 'Himalaya King', 'Himalaya Maharaja'),
+        ):
+            buttons = screen.figure_family_buttons[color]
+            names = [b.family.name for b in buttons]
+            assert maharaja_name in names
+
+            king = self._by_name(buttons, king_name)
+            maharaja = self._by_name(buttons, maharaja_name)
+
+            # Maharaja left of King in a dedicated, overlap-free castle row.
+            assert maharaja.x == pytest.approx(base_x - dx)
+            assert king.x == pytest.approx(base_x + dx)
+            assert maharaja.x < king.x
+            assert (king.x + maharaja.x) / 2 == pytest.approx(base_x)
+            assert king.x - maharaja.x == pytest.approx(0.12 * settings.SCREEN_WIDTH)
+            assert maharaja.y == king.y
+            assert not maharaja.rect_frame.colliderect(king.rect_frame)
+
+            pad = settings.FIGURE_NAME_PADDING
+            maharaja_caption = maharaja.text_rect.inflate(pad * 2, pad * 2)
+            king_caption = king.text_rect.inflate(pad * 2, pad * 2)
+            assert not maharaja_caption.colliderect(king_caption)
+
+
+class TestBuildHierarchyArtworkPerMode:
+    """Kingdom config modes get the two-castle hierarchy tree; duel keeps
+    the original single-castle artwork."""
+
+    def test_duel_uses_original_hierarchy(self):
+        from config import settings
+        from game.screens.build_figure_screen import _build_hierarchy_img_path
+        assert (_build_hierarchy_img_path('duel')
+                == settings.BUILD_HIERARCHY_IMG_PATH)
+
+    def test_kingdom_modes_use_conquer_hierarchy(self):
+        import os
+        from config import settings
+        from game.screens.build_figure_screen import _build_hierarchy_img_path
+        for mode in ('conquer', 'defence', 'defence_draft'):
+            assert (_build_hierarchy_img_path(mode)
+                    == settings.BUILD_HIERARCHY_CONQUER_IMG_PATH)
+        assert os.path.exists(settings.BUILD_HIERARCHY_CONQUER_IMG_PATH)
+
+
+class TestBuildFigureScreenMaharajaBuildable:
+    """A collection MK card makes the Maharaja figure buildable through the
+    kingdom card-source path (CollectionCardSource -> get_figures_in_hand)."""
+
+    def test_mk_card_makes_maharaja_buildable(self):
+        from game.components.cards.card import Card
+        from game.core.card_source import CollectionCardSource
+        from game.components.figures.figure_manager import FigureManager
+        from game.screens.build_figure_screen import BuildFigureScreen
+
+        _ensure_display()
+        family = FigureManager().get_family_by_name('Djungle Maharaja')
+
+        screen = BuildFigureScreen.__new__(BuildFigureScreen)
+        screen.mode = 'conquer'
+        screen._display_figure_for_mode = lambda f: f
+
+        # Without a free MK card the Maharaja is not buildable.
+        screen.card_source = CollectionCardSource([], [], set())
+        assert BuildFigureScreen.get_figures_in_hand(screen, family) == []
+
+        # With a matching MK card it lights up for that suit.
+        mk = Card('MK', 'Hearts', 4, id=1)
+        screen.card_source = CollectionCardSource([mk], [], set())
+        buildable = BuildFigureScreen.get_figures_in_hand(screen, family)
+        assert any(
+            f.name == 'Djungle Maharaja' and f.suit == 'Hearts'
+            for f in buildable)
+
+
+class TestScrollShifterMaharajaCardImgs:
+    """Regression: the figure-info scroll's card image cache must include the
+    crafted MK rank — selecting a Maharaja family in the kingdom builder
+    renders its MK key card there (crashed with AttributeError on None)."""
+
+    def test_card_img_cache_includes_maharaja(self):
+        from types import SimpleNamespace
+        from config import settings
+        from game.components.scroll_text_list_shifter import ScrollTextListShifter
+
+        _ensure_display()
+        import pygame
+        fake = SimpleNamespace(window=pygame.display.get_surface())
+        imgs = ScrollTextListShifter.initialize_card_imgs(fake)
+        for suit in settings.SUITS:
+            assert imgs.get((suit, settings.RANK_MAHARAJA)) is not None

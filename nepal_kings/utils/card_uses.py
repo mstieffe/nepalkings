@@ -40,11 +40,6 @@ def _build_index():
         # Farm — Q is the upgrade-to-Large cost, not a Small-Farm card.
         cards = list(fig.cards)
         for c in cards:
-            # For K-rank cards only show regular King figures.
-            # Maharaja also requires K but is a castle upgrade; listing it
-            # alongside King adds confusion without adding actionable info.
-            if c.rank == 'K' and 'Maharaja' in fig.name:
-                continue
             key = (c.suit, c.rank)
             ident = (key, fig.name)
             if ident in seen_fig:

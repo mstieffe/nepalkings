@@ -13,7 +13,12 @@ from game.screens._menu_base import (
 from game.screens.build_figure_screen import BuildFigureScreen
 from game.screens.battle_shop_screen import BattleShopScreen
 from game.screens.prelude_spell_screen import PreludeSpellScreen
-from game.screens.conquer_loot_summary import build_loot_risk_description
+from game.screens.loot_risk_tutorial import (
+    draw_loot_risk_tutorial,
+    handle_loot_risk_tutorial_events,
+    loot_risk_tutorial_seen,
+    open_loot_risk_tutorial,
+)
 from game.core.card_source import CollectionCardSource
 from game.core.figure_buffs import apply_buffs_allies_to_icon_map
 from game.core.kingdom_game_proxy import KingdomGameProxy
@@ -30,21 +35,38 @@ from game.components.castle_cap_indicator import (
     castle_cap_reached,
     draw_castle_cap_indicator,
 )
-from game.components.dialogue_box import DialogueBox
+from game.components import info_popup
+from game.components.config_screen_common import (
+    DIVIDER,
+    ERROR_TEXT,
+    SLOT_HOVER_GLOW,
+    draw_close_x_button,
+    draw_empty_slot,
+    draw_hover_tooltip,
+    draw_panel as _draw_panel,
+    draw_remove_x,
+    draw_section_panel,
+    fit_text,
+    mobile_collide as _mobile_collide,
+    open_dialogue,
+)
 from game.components.figures.figure_manager import FigureManager
 from game.components.battle_moves.battle_move_manager import BattleMoveManager
 from game.components.battle_moves.battle_move_icon_renderer import draw_battle_move_icon
 from game.components.battle_moves.battle_move_detail_box import BattleMoveDetailBox
 from game.components.spells.spell_manager import SpellManager
+from game.components.easing import ease_out_back
 from game.components.loading_indicator import draw_loading_indicator
 from game.core.game import Game
 from game.core.screen_routing import gameplay_screen_for
 from utils.game_service import fetch_game
 from config import settings
 from utils import http_compat as requests
+from utils import sound
 from utils.background_poller import BackgroundPoller
 from utils import collection_service
 import logging
+import sys as _sys
 
 logger = logging.getLogger('nk.screens.conquer')
 
@@ -59,37 +81,10 @@ _BOX_BOTTOM = int(0.92 * _SH)
 _BOX_H      = _BOX_BOTTOM - _BOX_Y
 
 
-def _draw_panel(window, rect, corner_r=None):
-    r = corner_r or settings.SUB_SCREEN_PANEL_CORNER_R
-    surf = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
-    pygame.draw.rect(surf, settings.SUB_SCREEN_PANEL_BG_CLR, surf.get_rect(), border_radius=r)
-    window.blit(surf, rect.topleft)
-    pygame.draw.rect(window, settings.SUB_SCREEN_PANEL_BORDER_CLR, rect,
-                     settings.SUB_SCREEN_PANEL_BORDER_W, border_radius=r)
-
-
-def _mobile_hit_rect(rect, min_w=None, min_h=None):
-    """Return a touch-friendly hit rect while leaving visuals unchanged."""
-    if rect is None or settings.TOUCH_TARGET_MIN <= 0:
-        return rect
-    min_w = min_w or settings.TOUCH_TARGET_MIN
-    min_h = min_h or settings.TOUCH_TARGET_MIN
-    grow_w = max(0, min_w - rect.w)
-    grow_h = max(0, min_h - rect.h)
-    hit = rect.inflate(grow_w, grow_h)
-    hit.clamp_ip(pygame.Rect(0, 0, _SW, _SH))
-    return hit
-
-
-def _mobile_collide(rect, pos, min_w=None, min_h=None):
-    hit = _mobile_hit_rect(rect, min_w=min_w, min_h=min_h)
-    return bool(hit and hit.collidepoint(pos))
-
-
 def _strip_duel_only_skill_description(text):
     return strip_duel_only_skill_description(
         text,
-        hide_checkmate=True,
+        hide_checkmate=False,
         hide_instant_charge=True,
     )
 
@@ -97,32 +92,16 @@ def _strip_duel_only_skill_description(text):
 def _display_family_without_duel_only_skills(family):
     return filter_family_for_display(
         family,
-        hide_checkmate=True,
+        hide_checkmate=False,
         hide_instant_charge=True,
     )
 
 
-# Card requirements per modifier/spell: rank, count, color_constraint
-_SPELL_CARD_COST = {
-    'Draw 2 MainCards': ('8', 1, None),
-    'Fill up to 10':    ('10', 1, None),
-    'Dump Cards':       ('7', 4, None),
-    'Forced Deal':      ('4', 2, None),
-    'Invader Swap':     ('A', 2, None),
-    'Poison':           ('3', 2, 'black'),
-    'Health Boost':     ('3', 2, 'red'),
-    'All Seeing Eye':   ('9', 2, None),
-    'Explosion':        ('6', 4, None),
-    'Peasant War':      ('J', 2, None),
-    'Civil War':        ('5', 2, None),
-    'Blitzkrieg':       ('Q', 2, None),
-}
-
 _CONQUER_PRELUDE_SPELLS = [
-    'Draw 2 MainCards', 'Fill up to 10', 'Dump Cards', 'Forced Deal',
-    'Poison', 'Health Boost', 'All Seeing Eye', 'Explosion',
+    'Draw 2 MainCards', 'Draw 4 MainCards', 'Dump Cards', 'Forced Deal',
+    'Poison', 'Health Boost', 'All Seeing Eye', 'Explosion', 'Copy Figure',
     'Peasant War', 'Civil War', 'Blitzkrieg',
-    'Invader Swap',
+    'Invader Swap', 'Royal Decree', 'Landslide',
 ]
 
 _RIGHT_SECTION_INFO = {
@@ -130,7 +109,8 @@ _RIGHT_SECTION_INFO = {
         'title': 'Battle Plan',
         'message': (
             'Choose the three battle move cards your attacking force will use, one per battle round. '
-            'You need all three rounds filled before starting a conquer battle, and these cards are committed to the attack.'
+            'You need all three rounds filled before starting a conquer battle, and these cards are committed to the attack. '
+            "You cannot see the defender's setup — commit your plan blind."
         ),
     },
     'prelude_spell': {
@@ -203,9 +183,8 @@ class ConquerScreen(MenuScreenMixin, Screen):
         self._btn_buy_move = None    # "Buy Move" button rect
         self._btn_battle = None      # "To Battle!" button rect
         self._btn_close_rect = None   # X close button rect
+        self._btn_retry = None       # "Retry" button rect (error state only)
         self._res_rect = None        # Resource panel rect
-        self._res_castle_rect = None  # Resource sub-panel below castle
-        self._res_village_rect = None # Resource sub-panel below village
         self._field_title_pos = None  # section title position
         self._moves_title_pos = None  # section title position
         self._prelude_title_pos = None
@@ -222,15 +201,27 @@ class ConquerScreen(MenuScreenMixin, Screen):
         self._figure_detail_box = None
         self._move_detail_box = None
         self._config_version = 0       # incremented on config change
-        self._pending_battle_confirm = False
-        self._pending_battle_confirm_use_map = False
+        # ── Entrance animations (draw-only) ─────────────────────────
+        # Newly appearing config slots (figures / battle moves / prelude)
+        # slide up into place with a small overshoot instead of popping in.
+        # Keyed ('fig', id) / ('move', round_index) / ('prelude',); records
+        # are {'started_at': ms, 'index': stagger_slot}.  Change detection
+        # diffs a config signature (``_config_version`` is vestigial and
+        # never incremented).  Offsets apply to DRAW positions only — hit
+        # rects always use the resting position.
+        self._entrance_anims = {}
+        self._entrance_prev_sig = None
         self._pending_map_confirm = False
+        self._start_battle_rid = None
+        self._start_battle_fetch_game_rid = None
+        self._start_battle_fetch_game_id = None
+        self._start_battle_poller = None
+        self._loot_risk_tutorial_dialogue = None
+        self._loot_risk_tutorial_action = None
         self._pending_leave_confirm = False
-        self._pending_prelude_spell = None   # spell name pending confirmation
-        self._pending_prelude_clear = False  # pending clear confirmation
-        self._prelude_spell_choices = []     # affordable spells list
-        self._prelude_spell_choice_idx = 0   # current index in choices
+        self._pending_tooltip = None   # (anchor_rect, text) for edit-icon hover
         self._move_remove_rects = {}   # round_index → Rect for X buttons
+        self._empty_move_slot_rects = {}  # round_index → Rect for empty slots
 
         # ── Battle move slot caches (for draw_battle_move_icon) ─────
         self._slot_glow_cache = {}
@@ -301,14 +292,22 @@ class ConquerScreen(MenuScreenMixin, Screen):
         self._active_subscreen = None
         self._subscreen_obj = None
         self._game_proxy = None
-        self._pending_battle_confirm = False
-        self._pending_battle_confirm_use_map = False
+        self._entrance_anims = {}
+        self._entrance_prev_sig = None   # None → full cascade on next config
         self._pending_map_confirm = False
+        self._start_battle_rid = None
+        self._start_battle_fetch_game_rid = None
+        self._start_battle_fetch_game_id = None
+        self._start_battle_poller = None
+        self._loot_risk_tutorial_dialogue = None
+        self._loot_risk_tutorial_action = None
         self._figure_objects = []
         self._figure_icons = {}
         self._figure_detail_box = None
         self._layout_built = False
         self._hovered_slot = -1
+        self._btn_retry = None
+        self._pending_tooltip = None
         self._active_info_key = None
         self._active_info_popup_rect = None
 
@@ -462,6 +461,7 @@ class ConquerScreen(MenuScreenMixin, Screen):
         panel_gap = int(0.014 * _SH)
         panel_pad = int(0.010 * _SW)
         panel_pad_y = int(0.010 * _SH)
+        mobile_ui = settings.TOUCH_TARGET_MIN > 0
 
         # To Battle — lower right of box
         battle_w = int(0.20 * _SW)
@@ -478,6 +478,8 @@ class ConquerScreen(MenuScreenMixin, Screen):
         slot_row_h = int(sw * 2.0)
         fsz = self._mod_frame_size
         header_h = self._label_font.get_height() + self._res_font.get_height() + int(0.015 * _SH)
+        if mobile_ui:
+            header_h = max(header_h, settings.TOUCH_COMPACT_MIN + int(0.010 * _SH))
         right_content_bottom = self._btn_battle.y - panel_gap
         right_content_h = max(1, right_content_bottom - content_top)
         available_panel_h = max(1, right_content_h - panel_gap)
@@ -545,15 +547,12 @@ class ConquerScreen(MenuScreenMixin, Screen):
         res_w = village_r.right - castle_r.x
         res_h = max(1, _BOX_BOTTOM - _BOX_PAD - res_top)
         self._res_rect = pygame.Rect(castle_r.x, res_top, res_w, res_h)
-        self._res_castle_rect = None
-        self._res_village_rect = None
 
         # ── Divider positions ──────────────────────────────────────
         # Vertical: between left fields/resources and right battle column
         self._divider_v_x = right_x - pad // 2
         self._divider_v_top = content_top
         self._divider_v_bottom = _BOX_BOTTOM - _BOX_PAD
-        self._divider_h1_y = None
 
         # X close button (top-right of box)
         _xsz = max(int(0.028 * _SH), settings.TOUCH_COMPACT_MIN)
@@ -756,6 +755,7 @@ class ConquerScreen(MenuScreenMixin, Screen):
             if data.get('success'):
                 self._config = data['config']
                 self._rebuild_figure_objects()
+                sound.play('card_slide')
             else:
                 logger.warning(f'Remove figure failed: {data.get("message")}')
         except Exception as e:
@@ -771,6 +771,7 @@ class ConquerScreen(MenuScreenMixin, Screen):
             data = resp.json()
             if data.get('success'):
                 self._config = data['config']
+                sound.play('card_slide')
             else:
                 logger.warning(f'Return move failed: {data.get("message")}')
         except Exception as e:
@@ -803,6 +804,7 @@ class ConquerScreen(MenuScreenMixin, Screen):
             if data.get('success'):
                 self._config = data['config']
                 self._refresh_collection()
+                sound.play('card_slide')
         except Exception as e:
             logger.error(f'Clear prelude spell error: {e}')
 
@@ -816,34 +818,6 @@ class ConquerScreen(MenuScreenMixin, Screen):
         except Exception as e:
             logger.error(f'Collection fetch error: {e}')
             self._collection_cards = []
-
-    def _has_cards_for(self, req_key, reqs_dict=None):
-        """Check if player has enough free cards for a requirement."""
-        reqs = (reqs_dict or _SPELL_CARD_COST).get(req_key)
-        if not reqs:
-            return False
-        rank, count, color = reqs
-        cards = self._collection_cards or []
-        # Group free cards of the required rank by colour
-        red_free = sum(c.get('free', 0) for c in cards
-                       if c.get('rank') == rank and c.get('suit') in _RED_SUITS)
-        black_free = sum(c.get('free', 0) for c in cards
-                         if c.get('rank') == rank and c.get('suit') in _BLACK_SUITS)
-        if color == 'red':
-            return red_free >= count
-        elif color == 'black':
-            return black_free >= count
-        else:
-            return red_free >= count or black_free >= count
-
-    def _card_req_label(self, req_key, reqs_dict=None):
-        """Return a human-readable label for card requirements."""
-        reqs = (reqs_dict or _SPELL_CARD_COST).get(req_key)
-        if not reqs:
-            return ''
-        rank, count, color = reqs
-        color_str = f' ({color})' if color else ''
-        return f'{count}\u00d7 rank {rank}{color_str}'
 
     # ── Figure conversion ──────────────────────────────────────────
 
@@ -978,11 +952,12 @@ class ConquerScreen(MenuScreenMixin, Screen):
             instant_charge=getattr(matched, 'instant_charge', False) if matched else False,
             cannot_be_blocked=cfg_fig.get('cannot_be_blocked', False),
             cannot_be_targeted=getattr(matched, 'cannot_be_targeted', False) if matched else False,
+            checkmate=cfg_fig.get('checkmate', False),
             override_base_power=getattr(matched, 'override_base_power', None) if matched else None,
         )
         return filter_figure_for_display(
             figure,
-            hide_checkmate=True,
+            hide_checkmate=False,
             hide_instant_charge=True,
         )
 
@@ -998,165 +973,56 @@ class ConquerScreen(MenuScreenMixin, Screen):
         return {'produces': produces, 'requires': requires}
 
     def _info_button_rect(self, panel_rect):
-        size = max(int(0.022 * _SH), 18, settings.TOUCH_ICON_MIN)
-        margin_x = int(0.008 * _SW)
-        margin_y = int(0.010 * _SH)
-        return pygame.Rect(
-            panel_rect.right - margin_x - size,
-            panel_rect.y + margin_y,
-            size,
-            size,
-        )
+        return info_popup.info_button_rect(panel_rect)
 
     def _draw_info_button(self, rect, active=False):
-        if not rect:
-            return
-        mx, my = pygame.mouse.get_pos()
-        hovered = rect.collidepoint(mx, my)
-        center = rect.center
-        radius = rect.w // 2
-        fill = (80, 70, 45, 235) if active else ((70, 62, 42, 225) if hovered else (45, 40, 32, 210))
-        border = (230, 210, 140) if active or hovered else (150, 135, 95)
-        text_clr = (255, 240, 185) if active or hovered else (195, 180, 130)
-        pygame.draw.circle(self.window, fill, center, radius)
-        pygame.draw.circle(self.window, border, center, radius, 1)
-        font = settings.get_font(max(int(rect.h * 0.72), 9), bold=True)
-        txt = font.render('i', True, text_clr)
-        self.window.blit(txt, txt.get_rect(center=center))
+        info_popup.draw_info_button(self.window, rect, active=active)
 
     def _wrap_info_text(self, text, font, max_width):
-        lines = []
-        for paragraph in str(text).split('\n'):
-            words = paragraph.split()
-            current = ''
-            for word in words:
-                candidate = f'{current} {word}'.strip()
-                if current and font.size(candidate)[0] > max_width:
-                    lines.append(current)
-                    current = word
-                else:
-                    current = candidate
-            if current:
-                lines.append(current)
-        return lines
+        return info_popup.wrap_info_text(text, font, max_width)
 
     def _draw_info_popup(self):
         info = _RIGHT_SECTION_INFO.get(self._active_info_key)
         anchor = self._info_button_rects.get(self._active_info_key) if self._active_info_key else None
-        if not info or not anchor:
-            self._active_info_popup_rect = None
-            return
-
-        pad = int(0.010 * _SW)
-        gap = int(0.006 * _SH)
-        popup_w = min(int(0.30 * _SW), max(int(0.20 * _SW), self._battle_plan_rect.w - 2 * pad))
-        text_w = popup_w - 2 * pad
-        title_font = self._small_font
-        body_font = self._res_font
-        title = info['title']
-        lines = self._wrap_info_text(info['message'], body_font, text_w)
-        line_gap = 3
-        popup_h = (
-            pad
-            + title_font.get_height()
-            + int(0.006 * _SH)
-            + len(lines) * body_font.get_height()
-            + max(0, len(lines) - 1) * line_gap
-            + pad
+        self._active_info_popup_rect = info_popup.draw_info_popup(
+            self.window, info, anchor,
+            box_rect=pygame.Rect(_BOX_X, _BOX_Y, _BOX_W, _BOX_H),
+            box_pad=_BOX_PAD,
+            max_panel_w=self._battle_plan_rect.w,
+            title_font=self._small_font,
+            body_font=self._res_font,
         )
-        x = min(anchor.right - popup_w, _BOX_X + _BOX_W - _BOX_PAD - popup_w)
-        x = max(_BOX_X + _BOX_PAD, x)
-        y = anchor.bottom + gap
-        if y + popup_h > _BOX_BOTTOM - _BOX_PAD:
-            y = anchor.top - popup_h - gap
-        y = max(_BOX_Y + _BOX_PAD, y)
-        popup_rect = pygame.Rect(int(x), int(y), int(popup_w), int(popup_h))
-        self._active_info_popup_rect = popup_rect
-
-        surf = pygame.Surface((popup_rect.w, popup_rect.h), pygame.SRCALPHA)
-        pygame.draw.rect(surf, (26, 22, 16, 242), surf.get_rect(), border_radius=6)
-        self.window.blit(surf, popup_rect.topleft)
-        pygame.draw.rect(self.window, (210, 185, 115), popup_rect, 1, border_radius=6)
-
-        cx = popup_rect.x + pad
-        cy = popup_rect.y + pad
-        title_surf = title_font.render(title, True, (235, 215, 145))
-        self.window.blit(title_surf, (cx, cy))
-        cy += title_surf.get_height() + int(0.006 * _SH)
-        for line in lines:
-            line_surf = body_font.render(line, True, (195, 180, 140))
-            self.window.blit(line_surf, (cx, cy))
-            cy += body_font.get_height() + line_gap
 
     def _draw_info_buttons(self):
         for key, rect in self._info_button_rects.items():
             self._draw_info_button(rect, active=(key == self._active_info_key))
 
     def _handle_info_button_event(self, event):
-        if event.type != MOUSEBUTTONUP or event.button != 1:
+        consumed, new_key, hit_button = info_popup.handle_info_event(
+            event, self._info_button_rects, self._active_info_key,
+            self._active_info_popup_rect, collide=_mobile_collide)
+        if not consumed:
             return False
-        pos = event.pos
-        for key, rect in self._info_button_rects.items():
-            if _mobile_collide(rect, pos, settings.TOUCH_COMPACT_MIN, settings.TOUCH_COMPACT_MIN):
-                self._active_info_key = None if self._active_info_key == key else key
-                return True
-        if self._active_info_key:
-            popup = self._active_info_popup_rect
-            if popup and popup.collidepoint(pos):
-                return True
-            self._active_info_key = None
+        if hit_button:
+            sound.play('ui_click', volume=0.6)
+        self._active_info_key = new_key
+        if new_key is None:
             self._active_info_popup_rect = None
-            return True
-        return False
+        return True
 
     def _draw_section_panel(self, rect, title, *, description=None,
                             icon_rect=None, title_pos=None):
         """Draw a quiet section card with one title row and optional edit icon."""
-        if not rect:
-            return
-        surf = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
-        pygame.draw.rect(surf, (28, 24, 20, 120), surf.get_rect(), border_radius=5)
-        self.window.blit(surf, rect.topleft)
-        pygame.draw.rect(self.window, (110, 95, 72), rect, 1, border_radius=5)
-
-        x = title_pos[0] if title_pos else rect.x + int(0.010 * _SW)
-        y = title_pos[1] if title_pos else rect.y + int(0.010 * _SH)
         font = self._label_font if title == 'Battle Plan' else self._small_font
-        title_surf = font.render(title, True, (200, 185, 150))
-        self.window.blit(title_surf, (x, y))
-        if description:
-            desc_surf = self._res_font.render(description, True, (160, 145, 120))
-            self.window.blit(desc_surf, (x, y + title_surf.get_height() + 2))
-
-        if icon_rect:
-            isz = self._edit_icon_size
-            mx, my = pygame.mouse.get_pos()
-            hovered = icon_rect.collidepoint(mx, my)
-            if hovered:
-                glow = pygame.Surface((isz + 4, isz + 4), pygame.SRCALPHA)
-                glow.fill((255, 255, 200, 40))
-                self.window.blit(glow, (icon_rect.x - 2, icon_rect.y - 2))
-            self.window.blit(self._edit_icon, icon_rect.topleft)
+        draw_section_panel(
+            self.window, rect, title,
+            title_font=font, desc_font=self._res_font,
+            edit_icon=self._edit_icon,
+            description=description, icon_rect=icon_rect, title_pos=title_pos)
 
     def _fit_text(self, text, font, max_width):
         """Trim text with an ellipsis so captions stay inside their panel."""
-        text = str(text)
-        if max_width <= 0:
-            return ''
-        if font.size(text)[0] <= max_width:
-            return text
-        ellipsis = '…'
-        if font.size(ellipsis)[0] > max_width:
-            return ''
-        lo = 0
-        hi = len(text)
-        while lo < hi:
-            mid = (lo + hi + 1) // 2
-            if font.size(text[:mid] + ellipsis)[0] <= max_width:
-                lo = mid
-            else:
-                hi = mid - 1
-        return text[:lo] + ellipsis
+        return fit_text(text, font, max_width)
 
     def _draw_caption_lines(self, lines, x, y, max_width, *, line_gap=2):
         """Draw fitted caption lines and return the bottom y position."""
@@ -1170,17 +1036,18 @@ class ConquerScreen(MenuScreenMixin, Screen):
 
     def _draw_right_panels(self):
         """Draw structured panels behind the right-column controls."""
+        mobile_ui = settings.TOUCH_TARGET_MIN > 0
         self._draw_section_panel(
             self._battle_plan_rect,
             'Battle Plan',
-            description='Assign cards for battle rounds',
+            description=None if mobile_ui else 'Assign cards for battle rounds',
             icon_rect=self._btn_buy_move,
             title_pos=self._moves_title_pos,
         )
         self._draw_section_panel(
             self._prelude_panel_rect,
             'Prelude Spell',
-            description='Optional spell before battle',
+            description=None if mobile_ui else 'Optional spell before battle',
             icon_rect=self._btn_prelude_edit,
             title_pos=self._prelude_title_pos,
         )
@@ -1215,11 +1082,17 @@ class ConquerScreen(MenuScreenMixin, Screen):
             return
 
         if self._error:
-            txt = self._label_font.render(self._error, True, (200, 80, 80))
+            txt = self._label_font.render(self._error, True, ERROR_TEXT)
             self.window.blit(txt, txt.get_rect(center=(_SW // 2, _SH // 2)))
+            btn_w = int(0.12 * _SW)
+            btn_h = max(int(0.05 * _SH), settings.TOUCH_TARGET_MIN)
+            self._btn_retry = pygame.Rect(
+                _SW // 2 - btn_w // 2, _SH // 2 + int(0.05 * _SH), btn_w, btn_h)
+            self._draw_button(self._btn_retry, 'Retry', (100, 140, 90))
             self._draw_close_x_button()
             self._draw_menu_overlay()
             return
+        self._btn_retry = None
 
         if not self._config:
             self._draw_menu_overlay()
@@ -1227,6 +1100,9 @@ class ConquerScreen(MenuScreenMixin, Screen):
 
         if not self._layout_built:
             self._build_layout()
+
+        # Stamp entrance animations for slots that just appeared.
+        self._sync_entrance_animations()
 
         # ── Title (centred inside box) ──────────────────────────────
         land = self._land or {}
@@ -1237,6 +1113,10 @@ class ConquerScreen(MenuScreenMixin, Screen):
         else:
             defender_name = land.get('ai_name') or 'AI'
         title = f'Conquer Land (Tier {tier}) \u2014 Defended by {defender_name}'
+        title_max_w = _BOX_W - 2 * _BOX_PAD
+        if self._btn_close_rect:
+            title_max_w -= self._btn_close_rect.w + int(0.02 * _SW)
+        title = self._fit_text(title, self._title_font, title_max_w)
         t_surf = self._title_font.render(title, True, (250, 221, 0))
         self.window.blit(t_surf, t_surf.get_rect(centerx=_BOX_X + _BOX_W // 2,
                                                   top=_BOX_Y + _BOX_PAD))
@@ -1248,16 +1128,27 @@ class ConquerScreen(MenuScreenMixin, Screen):
         specs_text = f'Gold: {gold_rate}/hr  |  Suit Bonus: +{bonus} '
         specs_surf = self._res_font.render(specs_text, True, (180, 170, 140))
         suit_icon = self._header_suit_icons.get(suit.lower())
-        total_w = specs_surf.get_width() + (suit_icon.get_width() + 2 if suit_icon else 0)
+        fog_surf = None
+        if settings.TOUCH_TARGET_MIN <= 0:
+            # Fog of war: the defender's setup is never revealed pre-battle.
+            fog_surf = self._res_font.render(
+                '  |  Enemy defence hidden', True, (150, 140, 115))
+        total_w = (specs_surf.get_width()
+                   + (suit_icon.get_width() + 2 if suit_icon else 0)
+                   + (fog_surf.get_width() if fog_surf else 0))
         specs_x = _BOX_X + _BOX_W // 2 - total_w // 2
         specs_y = _BOX_Y + _BOX_PAD + t_surf.get_height() + 4
         self.window.blit(specs_surf, (specs_x, specs_y))
+        cursor_x = specs_x + specs_surf.get_width()
         if suit_icon:
-            self.window.blit(suit_icon, (specs_x + specs_surf.get_width() + 2,
+            self.window.blit(suit_icon, (cursor_x + 2,
                                         specs_y + (specs_surf.get_height() - suit_icon.get_height()) // 2))
+            cursor_x += suit_icon.get_width() + 2
+        if fog_surf:
+            self.window.blit(fog_surf, (cursor_x, specs_y))
 
         loot_effects = [e for e in (land.get('kingdom_skill_effects') or []) if 'loot chance' in e]
-        if loot_effects:
+        if loot_effects and settings.TOUCH_TARGET_MIN <= 0:
             effect_text = self._fit_text(loot_effects[0], self._tiny_font, int(_BOX_W * 0.72))
             effect_surf = self._tiny_font.render(effect_text, True, settings.KINGDOM_CONFIG_HIGHLIGHT)
             self.window.blit(effect_surf, effect_surf.get_rect(centerx=_BOX_X + _BOX_W // 2,
@@ -1278,9 +1169,8 @@ class ConquerScreen(MenuScreenMixin, Screen):
         self._draw_resources()
 
         # ── Divider lines ───────────────────────────────────────────
-        div_clr = (90, 80, 60)
         # Vertical divider between left (field/resources) and right (battle) columns
-        pygame.draw.line(self.window, div_clr,
+        pygame.draw.line(self.window, DIVIDER,
                          (self._divider_v_x, self._divider_v_top),
                          (self._divider_v_x, self._divider_v_bottom), 1)
 
@@ -1307,8 +1197,26 @@ class ConquerScreen(MenuScreenMixin, Screen):
 
         self._draw_info_popup()
 
+        # Desktop hover tooltips for the small edit (pencil) icons
+        self._pending_tooltip = None
+        if (settings.TOUCH_TARGET_MIN <= 0 and not self.dialogue_box
+                and not self._figure_detail_box and not self._move_detail_box):
+            mpos = pygame.mouse.get_pos()
+            for icon_rect, tip in (
+                (self._btn_build, 'Build a figure'),
+                (self._btn_buy_move, 'Buy battle moves'),
+                (self._btn_prelude_edit, 'Choose a spell'),
+            ):
+                if icon_rect and icon_rect.collidepoint(mpos):
+                    self._pending_tooltip = (icon_rect, tip)
+                    break
+        if self._pending_tooltip:
+            draw_hover_tooltip(self.window, self._pending_tooltip[0],
+                               self._pending_tooltip[1], self._res_font)
+
         self._draw_menu_overlay()
         self._draw_menu_coach(self._current_conquer_coach_step())
+        draw_loot_risk_tutorial(self)
 
     def _conquer_coach_ready(self):
         # The starter conquer config is preassembled server-side, so the first
@@ -1340,8 +1248,8 @@ class ConquerScreen(MenuScreenMixin, Screen):
         """True during the player's guided second conquest (build-it-yourself).
 
         The first conquer attack is pre-assembled; this coaches the *next* one,
-        which the player builds by hand. Gated to exactly one finished conquer
-        battle so it fires only for the second conquest and never again.
+        which the player builds by hand. Gated to exactly one conquered land,
+        so a no-penalty loss before the first win does not suppress it.
         """
         onboarding = (getattr(self.state, 'user_dict', None) or {}).get('onboarding') or {}
         if not onboarding or onboarding.get('onboarding_skipped'):
@@ -1350,43 +1258,44 @@ class ConquerScreen(MenuScreenMixin, Screen):
         if 'finish_first_conquer_battle' not in completed:
             return False
         facts = onboarding.get('facts') or {}
-        return int(facts.get('conquer_battles') or 0) == 1
+        return int(facts.get('conquered_lands') or 0) == 1
 
     def _second_build_coach_step(self, seen):
         if not self._second_build_coach_ready():
             return None
         figures = (self._config or {}).get('figures', []) if self._config else []
+        moves = (self._config or {}).get('battle_moves', []) if self._config else []
         if self._btn_build and 'conquer_build_yourself' not in seen:
             return {
                 'id': 'conquer_build_yourself',
                 'rect': self._btn_build,
-                'title': 'Now Build It Yourself',
-                'body': 'This land has no army yet. Tap Build, pick a glowing recipe — start with your King — then confirm. Add a Farm and Warriors the same way.',
+                'title': 'Now build it yourself',
+                'body': 'Tap Build and choose any glowing recipe. Start with a Castle figure, then add Village or Military figures as your cards allow.',
                 'action': 'click',
-                'mark_on_click': True,
+                'mark_on_click': False,
                 'max_lines': 5,
             }
         if not figures:
             # Wait until the player has actually built a figure before moving on.
             return None
-        battle_plan_rect = self._conquer_combined_rect(
-            self._battle_plan_rect, self._btn_buy_move)
-        if battle_plan_rect and 'conquer_build_yourself_tactics' not in seen:
+        if (len(moves) < 3 and self._btn_buy_move
+                and 'conquer_build_yourself_tactics' not in seen):
             return {
                 'id': 'conquer_build_yourself_tactics',
-                'rect': battle_plan_rect,
+                'rect': self._btn_buy_move,
                 'title': 'Add Your Tactics',
-                'body': 'Now set your battle plan: add three Daggers as tactics, just like your first attack.',
-                'action': 'next',
-                'button_label': 'Got it',
+                'body': 'Add any three available tactics. Daggers are the simplest option; Calls and Block are valid too.',
+                'action': 'click',
+                'mark_on_click': False,
                 'max_lines': 4,
             }
-        if self._btn_battle and 'conquer_build_yourself_battle' not in seen:
+        if (self._btn_battle and self._is_battle_ready()
+                and 'conquer_build_yourself_battle' not in seen):
             return {
                 'id': 'conquer_build_yourself_battle',
                 'rect': self._btn_battle,
-                'title': 'Start When Ready',
-                'body': 'Once you have at least one figure and three tactics, Start Battle lights up. This land has a real defender — your build decides it.',
+                'title': 'Start when ready',
+                'body': 'When you have a figure and three tactics, Start Battle lights up. This defender is real, so your build decides the fight.',
                 'action': 'next',
                 'button_label': 'Got it',
                 'max_lines': 5,
@@ -1407,20 +1316,119 @@ class ConquerScreen(MenuScreenMixin, Screen):
             return second
         if not self._conquer_coach_ready():
             return None
-        # The first attack is pre-assembled, so a single window orients the
-        # player and sends them straight into battle. The mechanics (tactics,
-        # prelude, loot) are taught in context once the battle is under way.
+        # The first attack is pre-assembled, so a single card orients the
+        # player and sends them straight into battle. Detailed mechanics are
+        # taught in context once the battle is under way.
         if self._btn_battle and 'conquer_config_to_battle' not in seen:
             return {
                 'id': 'conquer_config_to_battle',
                 'rect': self._btn_battle,
                 'title': 'Your Attack Is Ready',
-                'body': 'We pre-built this attack from your starter cards: figures, three tactics, and a prelude spell. Tap Start Battle — the prelude draws cards, then you play tactics each round. Lose and only looted cards are gone; the rest return.',
+                'body': 'Here is your attack: figures for power, three tactics for the rounds, and a prelude spell. Tap Start Battle to try it out.',
                 'action': 'next',
                 'button_label': 'Got it',
-                'max_lines': 6,
+                'max_lines': 5,
             }
         return None
+
+    # ── Entrance animations (draw-only) ──────────────────────────────
+
+    #: Duration of one slot's slide-in, and the cascade gap between slots.
+    ENTRANCE_MS = 380
+    ENTRANCE_STAGGER_MS = 70
+    ENTRANCE_SLIDE_PX = max(18, int(0.028 * _SH))
+
+    def _config_entrance_signature(self):
+        """Cheap identity of the visible config slots for change detection."""
+        cfg = self._config or {}
+        fig_ids = tuple(sorted(
+            str(f.get('id')) for f in (cfg.get('figures') or [])))
+        move_keys = tuple(sorted(
+            (int(m.get('round_index', -1)), str(m.get('family_name')))
+            for m in (cfg.get('battle_moves') or [])))
+        prelude = cfg.get('prelude_spell_name') or None
+        return fig_ids, move_keys, prelude
+
+    def _sync_entrance_animations(self):
+        """Stamp entrance records for newly appearing config slots.
+
+        Diffs a config signature each frame (covering every ``self._config``
+        assignment site uniformly — ``_config_version`` is never bumped), so
+        the first config sighting cascades the whole board in and later
+        changes animate only the new slot(s).  Fail-soft: on any hiccup the
+        board simply appears instantly, exactly as before.
+        """
+        try:
+            sig = self._config_entrance_signature()
+        except Exception:
+            return
+        prev = self._entrance_prev_sig
+        if sig == prev:
+            return
+        self._entrance_prev_sig = sig
+        now = pygame.time.get_ticks()
+        prev_figs = set(prev[0]) if prev else set()
+        prev_moves = set(prev[1]) if prev else set()
+        prev_prelude = prev[2] if prev else None
+        stagger = 0
+        for fid in sig[0]:
+            if fid not in prev_figs:
+                self._entrance_anims[('fig', fid)] = {
+                    'started_at': now, 'index': stagger}
+                stagger += 1
+        for key in sig[1]:
+            if key not in prev_moves:
+                self._entrance_anims[('move', key[0])] = {
+                    'started_at': now, 'index': stagger}
+                stagger += 1
+        if sig[2] and sig[2] != prev_prelude:
+            self._entrance_anims[('prelude',)] = {
+                'started_at': now, 'index': stagger}
+
+    def _entrance_offset(self, key):
+        """(dx, dy) DRAW offset for an entering slot; (0, 0) once settled.
+
+        Slots rise from ``ENTRANCE_SLIDE_PX`` below their resting spot with
+        an ``ease_out_back`` overshoot.  Callers must never apply this to
+        hit rects — hover/click always test the resting position.
+        """
+        rec = self._entrance_anims.get(key)
+        if not rec:
+            return 0, 0
+        try:
+            elapsed = (pygame.time.get_ticks() - int(rec['started_at'])
+                       - int(rec['index']) * self.ENTRANCE_STAGGER_MS)
+            t = elapsed / max(1, self.ENTRANCE_MS)
+        except Exception:
+            self._entrance_anims.pop(key, None)
+            return 0, 0
+        if t >= 1.0:
+            self._entrance_anims.pop(key, None)
+            return 0, 0
+        if t <= 0.0:
+            # Cascade slot not reached yet — parked below its resting spot.
+            return 0, self.ENTRANCE_SLIDE_PX
+        return 0, int((1.0 - ease_out_back(t)) * self.ENTRANCE_SLIDE_PX)
+
+    def _draw_icon_with_entrance(self, icon, ix, iy, fig_id):
+        """Draw a figure icon honouring its entrance offset.
+
+        ``FieldFigureIcon.draw`` moves the icon's logical rects via
+        ``set_position`` and hover / detail-open key off those rects, so
+        after an offset draw the resting position is restored immediately
+        (review finding: a naive draw offset would move hover targets).
+        """
+        dx, dy = self._entrance_offset(('fig', str(fig_id)))
+        if not dx and not dy:
+            icon.draw(ix, iy)
+            return
+        try:
+            icon.draw(ix + dx, iy + dy)
+        finally:
+            try:
+                icon.set_position(ix, iy)
+            except Exception:
+                pass
 
     def _draw_field_compartments(self):
         """Draw the three field compartments with FieldFigureIcon rendering."""
@@ -1476,6 +1484,8 @@ class ConquerScreen(MenuScreenMixin, Screen):
             bottom_margin = 0.34 * settings.FIGURE_ICON_HEIGHT + caption_h
 
             title_space = 24
+            if settings.TOUCH_TARGET_MIN > 0:
+                title_space = max(title_space, int(0.068 * _SH))
             first_center = rect.top + title_space + top_margin
             last_center = rect.top + rect.height - bottom_margin
 
@@ -1506,16 +1516,17 @@ class ConquerScreen(MenuScreenMixin, Screen):
                 icon_y = icon_y_start + i * icon_spacing
                 icon_positions[fig.id] = (icon_x, icon_y)
                 if icon.hovered:
-                    all_hovered = (icon, icon_x, icon_y)
+                    all_hovered = (icon, icon_x, icon_y, fig.id)
                 else:
-                    all_regular.append((icon, icon_x, icon_y))
+                    all_regular.append((icon, icon_x, icon_y, fig.id))
 
-        # Draw in z-order layers
-        for icon, ix, iy in reversed(all_regular):
-            icon.draw(ix, iy)
+        # Draw in z-order layers (entrance-aware: offsets apply to the draw
+        # only; logical rects are restored to the resting position).
+        for icon, ix, iy, fig_id in reversed(all_regular):
+            self._draw_icon_with_entrance(icon, ix, iy, fig_id)
         if all_hovered:
-            icon, ix, iy = all_hovered
-            icon.draw(ix, iy)
+            icon, ix, iy, fig_id = all_hovered
+            self._draw_icon_with_entrance(icon, ix, iy, fig_id)
 
         # Draw X buttons on each figure icon (top-right of frame)
         _xbs = self._x_btn_sz
@@ -1536,14 +1547,7 @@ class ConquerScreen(MenuScreenMixin, Screen):
                 xbtn = pygame.Rect(int(fr_left + frame_w - _xbs - 2), int(fr_top + 2), _xbs, _xbs)
                 x_hovered = xbtn.collidepoint(mouse_pos)
                 if settings.TOUCH_TARGET_MIN > 0 or frame_rect.collidepoint(mouse_pos) or x_hovered:
-                    bg = (180, 60, 60) if x_hovered else (120, 40, 40)
-                    bdr = (220, 120, 120) if x_hovered else (160, 80, 80)
-                    tc = (255, 255, 255) if x_hovered else (200, 180, 180)
-                    pygame.draw.rect(self.window, bg, xbtn, border_radius=3)
-                    pygame.draw.rect(self.window, bdr, xbtn, 1, border_radius=3)
-                    xf = settings.get_font(max(int(xbtn.h * 1.3), 8), bold=True)
-                    xt = xf.render('\u00d7', True, tc)
-                    self.window.blit(xt, xt.get_rect(center=xbtn.center))
+                    draw_remove_x(self.window, xbtn, x_hovered)
                     cfg_fig['_remove_rect'] = xbtn
                 else:
                     cfg_fig['_remove_rect'] = None
@@ -1569,6 +1573,7 @@ class ConquerScreen(MenuScreenMixin, Screen):
         move_by_round = {m['round_index']: m for m in moves}
         self._hovered_slot = -1
         self._move_remove_rects = {}
+        self._empty_move_slot_rects = {}
 
         sw = self._move_slot_size
         slot_spacing = int(sw * 2.0)
@@ -1590,8 +1595,11 @@ class ConquerScreen(MenuScreenMixin, Screen):
                 m = move_by_round[i]
                 hovered = is_hovered and not mouse_pressed
 
+                # Entrance offset applies to the DRAW only — the diamond
+                # hit-test and X-button rects stay on the resting position.
+                dxe, dye = self._entrance_offset(('move', i))
                 draw_battle_move_icon(
-                    self.window, cx, cy,
+                    self.window, cx + dxe, cy + dye,
                     m['family_name'], m['suit'],
                     self._battle_move_display_power(m),
                     self._slot_glow_cache, self._slot_icon_cache,
@@ -1600,29 +1608,33 @@ class ConquerScreen(MenuScreenMixin, Screen):
                     hovered=hovered,
                 )
 
-                xsz = self._x_btn_sz
-                xrect = pygame.Rect(cx + int(sw * 0.35), cy - int(sw * 0.65), xsz, xsz)
-                x_hovered = xrect.collidepoint(mouse_pos)
-                if settings.TOUCH_TARGET_MIN > 0 or is_hovered or x_hovered:
-                    bg = (180, 60, 60) if x_hovered else (120, 40, 40)
-                    bdr = (220, 120, 120) if x_hovered else (160, 80, 80)
-                    tc = (255, 255, 255) if x_hovered else (200, 180, 180)
-                    pygame.draw.rect(self.window, bg, xrect, border_radius=3)
-                    pygame.draw.rect(self.window, bdr, xrect, 1, border_radius=3)
-                    xf = settings.get_font(max(int(xsz * 1.3), 8), bold=True)
-                    xt = xf.render('\u00d7', True, tc)
-                    self.window.blit(xt, xt.get_rect(center=xrect.center))
-                    self._move_remove_rects[i] = xrect
+                if not dxe and not dye:
+                    # X button only once the slot has settled, so the remove
+                    # chrome never floats detached from a sliding icon.
+                    xsz = self._x_btn_sz
+                    xrect = pygame.Rect(cx + int(sw * 0.35), cy - int(sw * 0.65), xsz, xsz)
+                    x_hovered = xrect.collidepoint(mouse_pos)
+                    if settings.TOUCH_TARGET_MIN > 0 or is_hovered or x_hovered:
+                        draw_remove_x(self.window, xrect, x_hovered)
+                        self._move_remove_rects[i] = xrect
 
                 # Round label below
                 rlbl = self._small_font.render(f'R{i + 1}', True, (160, 140, 120))
-                self.window.blit(rlbl, rlbl.get_rect(centerx=cx, top=cy + int(sw * 0.55)))
+                self.window.blit(rlbl, rlbl.get_rect(centerx=cx + dxe,
+                                                     top=cy + dye + int(sw * 0.55)))
             else:
-                # Empty slot
+                # Empty slot \u2014 clickable to open the Battle Shop
                 dr = self._slot_diamond.get_rect(center=(cx, cy))
+                hovered = dr.collidepoint(mouse_pos)
+                if hovered:
+                    glow = pygame.Surface((dr.w + 6, dr.h + 6), pygame.SRCALPHA)
+                    glow.fill(SLOT_HOVER_GLOW)
+                    self.window.blit(glow, (dr.x - 3, dr.y - 3))
                 self.window.blit(self._slot_diamond, dr.topleft)
-                rlbl = self._small_font.render(f'R{i + 1}', True, (100, 100, 100))
+                rlbl = self._small_font.render(
+                    f'R{i + 1}', True, (150, 135, 110) if hovered else (100, 100, 100))
                 self.window.blit(rlbl, rlbl.get_rect(centerx=cx, top=cy + int(sw * 0.55)))
+                self._empty_move_slot_rects[i] = dr
 
     def _figure_by_id(self, figure_id):
         return next((
@@ -1728,15 +1740,19 @@ class ConquerScreen(MenuScreenMixin, Screen):
         if spell_name:
             icons = self._spell_icons.get(spell_name)
             if icons:
+                # Entrance offset applies to the icon draw only; the caption,
+                # badge and X-button hit rect stay on the resting position.
+                dxe, dye = self._entrance_offset(('prelude',))
+                icx, icy = cx + dxe, cy + dye
                 if icons.get('glow'):
                     glow_surf = icons['glow']
-                    gr = glow_surf.get_rect(center=(cx, cy))
+                    gr = glow_surf.get_rect(center=(icx, icy))
                     self.window.blit(glow_surf, gr.topleft)
                 if icons.get('icon'):
-                    ir = icons['icon'].get_rect(center=(cx, cy))
+                    ir = icons['icon'].get_rect(center=(icx, icy))
                     self.window.blit(icons['icon'], ir.topleft)
                 if icons.get('frame'):
-                    fr = icons['frame'].get_rect(center=(cx, cy))
+                    fr = icons['frame'].get_rect(center=(icx, icy))
                     self.window.blit(icons['frame'], fr.topleft)
                 lines = [(spell_name, self._res_font, (200, 180, 80))]
                 text_h = sum(font.get_height() for _, font, _ in lines)
@@ -1748,24 +1764,16 @@ class ConquerScreen(MenuScreenMixin, Screen):
                 _xbs = self._x_btn_sz
                 xrect = pygame.Rect(rect.right - _xbs - 2, rect.y + 2, _xbs, _xbs)
                 x_hovered = xrect.collidepoint(mx_mouse, my_mouse)
-                if settings.TOUCH_TARGET_MIN > 0 or rect.collidepoint(mx_mouse, my_mouse) or x_hovered:
+                if (not dxe and not dye) and (
+                        settings.TOUCH_TARGET_MIN > 0
+                        or rect.collidepoint(mx_mouse, my_mouse) or x_hovered):
                     self._prelude_x_rect = xrect
-                    bg = (180, 60, 60) if x_hovered else (120, 40, 40)
-                    bdr = (220, 120, 120) if x_hovered else (160, 80, 80)
-                    tc = (255, 255, 255) if x_hovered else (200, 180, 180)
-                    pygame.draw.rect(self.window, bg, xrect, border_radius=3)
-                    pygame.draw.rect(self.window, bdr, xrect, 1, border_radius=3)
-                    xf = settings.get_font(max(int(_xbs * 1.3), 8), bold=True)
-                    xt = xf.render('\u00d7', True, tc)
-                    self.window.blit(xt, xt.get_rect(center=xrect.center))
+                    draw_remove_x(self.window, xrect, x_hovered)
                 else:
                     self._prelude_x_rect = None
         else:
             self._prelude_x_rect = None
-            empty_surf = pygame.Surface((fsz, fsz), pygame.SRCALPHA)
-            pygame.draw.rect(empty_surf, (50, 45, 35, 180), empty_surf.get_rect(), border_radius=6)
-            pygame.draw.rect(empty_surf, (100, 90, 70), empty_surf.get_rect(), 1, border_radius=6)
-            self.window.blit(empty_surf, rect.topleft)
+            draw_empty_slot(self.window, rect)
             lines = [
                 ('No prelude spell', self._res_font, (140, 130, 110)),
                 ('Optional', self._res_font, (110, 105, 95)),
@@ -1807,7 +1815,7 @@ class ConquerScreen(MenuScreenMixin, Screen):
             return
         txt = self._label_font.render(title, True, (200, 185, 150))
         self.window.blit(txt, title_pos)
-        if description:
+        if description and settings.TOUCH_TARGET_MIN <= 0:
             desc_surf = self._res_font.render(description, True, (160, 145, 120))
             self.window.blit(desc_surf, (title_pos[0], title_pos[1] + txt.get_height() + 2))
         # Draw icon with hover highlight
@@ -1825,22 +1833,7 @@ class ConquerScreen(MenuScreenMixin, Screen):
         if not self._btn_close_rect:
             if not self._layout_built:
                 self._build_layout()
-        r = self._btn_close_rect
-        mouse_pos = pygame.mouse.get_pos()
-        hovered = r.collidepoint(mouse_pos)
-
-        bg_clr = (80, 50, 25, 220) if hovered else (55, 35, 18, 200)
-        border_clr = (180, 160, 120) if hovered else (120, 100, 70)
-        txt_clr = (255, 240, 200) if hovered else (200, 180, 140)
-
-        surf = pygame.Surface((r.w, r.h), pygame.SRCALPHA)
-        pygame.draw.rect(surf, bg_clr, surf.get_rect(), border_radius=4)
-        pygame.draw.rect(surf, border_clr, surf.get_rect(), 1, border_radius=4)
-        self.window.blit(surf, r.topleft)
-
-        _xfont = settings.get_font(int(settings.FONT_SIZE * 0.85), bold=True)
-        txt = _xfont.render('\u00d7', True, txt_clr)
-        self.window.blit(txt, txt.get_rect(center=r.center))
+        draw_close_x_button(self.window, self._btn_close_rect)
 
     # ── Subscreen helpers ──────────────────────────────────────────
 
@@ -1860,7 +1853,8 @@ class ConquerScreen(MenuScreenMixin, Screen):
                     rank=c['rank'], suit=c['suit'],
                     value=settings.RANK_TO_VALUE.get(c['rank'], 0),
                     id=c.get('id', hash((c['suit'], c['rank'], i))),
-                    type='main' if c['rank'] in settings.RANKS_MAIN_CARDS else 'side_card',
+                    type='main' if (c['rank'] in settings.RANKS_MAIN_CARDS
+                                    or c['rank'] == settings.RANK_MAHARAJA) else 'side_card',
                 ))
 
         locked_ids = set()
@@ -1901,6 +1895,8 @@ class ConquerScreen(MenuScreenMixin, Screen):
             title='Figure Builder', card_source=card_source, mode='conquer',
         )
         self._subscreen_obj._on_done = self._close_subscreen
+        self._subscreen_obj._on_build_success = (
+            lambda: self._mark_menu_coach_seen('conquer_build_yourself'))
         self._active_subscreen = 'build_figure'
 
     def _open_battle_shop(self):
@@ -1919,6 +1915,9 @@ class ConquerScreen(MenuScreenMixin, Screen):
             title='Battle Shop', card_source=card_source, mode='conquer',
         )
         self._subscreen_obj._on_done = self._close_subscreen
+        self._subscreen_obj._on_move_bought = (
+            lambda: self._mark_menu_coach_seen(
+                'conquer_build_yourself_tactics'))
         self._active_subscreen = 'battle_shop'
 
     def _open_prelude_spell_screen(self):
@@ -1949,8 +1948,8 @@ class ConquerScreen(MenuScreenMixin, Screen):
         self._active_subscreen = None
         self._subscreen_obj = None
         self._game_proxy = None
-        # Refresh config from server to get authoritative state
-        self._load_config()
+        # Refresh config from server (async — keeps the event loop responsive)
+        self._start_config_load()
 
     # ── Readiness check ────────────────────────────────────────────
 
@@ -2017,77 +2016,6 @@ class ConquerScreen(MenuScreenMixin, Screen):
 
         return problems
 
-    def _build_confirm_data(self):
-        """Build confirmation data: message text, grouped cards, and after-message."""
-        from game.components.cards.card_img import CardImg
-
-        at_risk_cards = []
-        at_risk_card_specs = []
-
-        def add_card(target, suit, rank):
-            if suit and rank:
-                ci = CardImg(self.window, suit, rank)
-                target.append(ci.front_img)
-                at_risk_card_specs.append({'suit': suit, 'rank': rank})
-
-        # Every committed card is locked and at loot risk; none are consumed
-        # automatically in conquer mode.
-        for fig in self._config.get('figures', []):
-            for cd in fig.get('card_details', []):
-                add_card(at_risk_cards, cd.get('suit', ''), cd.get('rank', ''))
-
-        for mv in self._config.get('battle_moves', []):
-            if mv.get('card_id'):
-                add_card(at_risk_cards, mv.get('suit', ''), mv.get('rank', ''))
-
-        for cd in self._config.get('modifier_card_details') or []:
-            add_card(at_risk_cards, cd.get('suit', ''), cd.get('rank', ''))
-        for cd in self._config.get('spell_card_details') or []:
-            add_card(at_risk_cards, cd.get('suit', ''), cd.get('rank', ''))
-
-        prelude_details = self._config.get('prelude_spell_card_details') or []
-        if prelude_details:
-            for cd in prelude_details:
-                add_card(at_risk_cards, cd.get('suit', ''), cd.get('rank', ''))
-
-        for cd in self._config.get('counter_spell_card_details') or []:
-            add_card(at_risk_cards, cd.get('suit', ''), cd.get('rank', ''))
-
-        image_groups = []
-        if at_risk_cards:
-            image_groups.append({
-                'key': 'loot_risk',
-                'title': 'Committed cards',
-                'description': build_loot_risk_description(
-                    self._land or {}, at_risk_card_specs, mode='conquer'),
-                'icon': 'lock',
-                'badge_icon': 'lock',
-                'items': at_risk_cards,
-            })
-
-        msg = 'Review the cards committed to this conquer battle.'
-        if not image_groups:
-            msg = 'No cards are used in this configuration.'
-
-        after_msg = None
-        if at_risk_cards:
-            after_msg = 'Starting the battle does not consume cards by itself. Only cards selected as loot after a failed attack are lost.'
-
-        return msg, image_groups, after_msg
-
-    def _open_battle_confirm(self, use_map=False):
-        msg, image_groups, after_msg = self._build_confirm_data()
-        self._pending_battle_confirm = True
-        self._pending_battle_confirm_use_map = bool(use_map)
-        self.dialogue_box = DialogueBox(
-            self.window,
-            msg,
-            actions=['Confirm', 'Cancel'],
-            title='To Battle!',
-            image_groups=image_groups,
-            message_after_images=after_msg,
-        )
-
     def _show_cooldown_dialogue(self, remaining=None):
         remaining = self._current_cooldown_remaining() if remaining is None else remaining
         remaining = max(0, int(remaining or 0))
@@ -2097,45 +2025,68 @@ class ConquerScreen(MenuScreenMixin, Screen):
         self._cooldown_synced_at_ms = pygame.time.get_ticks()
         if maps_available > 0:
             self._pending_map_confirm = True
-            self.dialogue_box = DialogueBox(
-                self.window,
+            open_dialogue(
+                self,
                 f'Conquer cooldown: {cd_text} remaining.\n'
                 f'Use 1 map to start this battle now? '
                 f'You have {maps_available}.',
-                actions=['Use Map', 'Cancel'],
-                title='Conquer Cooldown',
+                ['Use Map', 'Cancel'],
+                'Conquer Cooldown',
             )
         else:
-            self.dialogue_box = DialogueBox(
-                self.window,
+            open_dialogue(
+                self,
                 f'Conquer cooldown: {cd_text} remaining.\n'
                 'You do not have a map to bypass it.',
-                actions=['OK'],
-                title='Conquer Cooldown',
+                ['OK'],
+                'Conquer Cooldown',
             )
 
     def _on_battle_click(self):
         """Handle click on 'To Battle!' — validate or confirm."""
+        sound.play('ui_click', volume=0.8)
         if self._is_battle_ready():
             remaining = self._current_cooldown_remaining()
             if remaining > 0:
                 self._show_cooldown_dialogue(remaining)
                 return
-            self._open_battle_confirm(use_map=False)
+            self._start_battle_with_loot_tutorial(use_map=False)
         else:
             problems = self._get_battle_problems()
             msg = '\n'.join(f'\u2022 {p}' for p in problems)
-            self.dialogue_box = DialogueBox(
-                self.window,
-                msg,
-                actions=['OK'],
-                title='Cannot Start Battle',
-            )
+            open_dialogue(self, msg, ['OK'], 'Cannot Start Battle')
+
+    def _first_conquer_tutorial_active(self):
+        """True during the first guided conquest, before any land is won.
+
+        The first tutorial battle is risk-free (losing costs nothing and the
+        retry is free), so the loot-and-lock lesson is meaningless there. It is
+        deferred to the second, self-built conquest — the first battle with a
+        real defender where cards can actually be looted.
+        """
+        onboarding = (getattr(self.state, 'user_dict', None) or {}).get('onboarding') or {}
+        if not onboarding or onboarding.get('onboarding_skipped'):
+            return False
+        return 'finish_first_conquer_battle' not in set(onboarding.get('completed_steps') or [])
+
+    def _start_battle_with_loot_tutorial(self, use_map=False):
+        if loot_risk_tutorial_seen(self) or self._first_conquer_tutorial_active():
+            self._start_battle(use_map=use_map)
+            return
+        open_loot_risk_tutorial(
+            self,
+            {'kind': 'start_battle', 'use_map': bool(use_map)},
+        )
+
+    def _resume_loot_risk_tutorial_action(self, action):
+        if isinstance(action, dict) and action.get('kind') == 'start_battle':
+            self._start_battle(use_map=bool(action.get('use_map')))
 
     # ── Start battle ────────────────────────────────────────────────
 
     def _leave_screen(self):
         """Reset config on the server (unlock cards) and go back to kingdom."""
+        sound.play('ui_back')
         try:
             requests.post(
                 f'{settings.SERVER_URL}/kingdom/conquer/reset_config',
@@ -2161,26 +2112,41 @@ class ConquerScreen(MenuScreenMixin, Screen):
         """Prompt if config has content; otherwise leave immediately."""
         if self._has_config_content():
             self._pending_leave_confirm = True
-            self.dialogue_box = DialogueBox(
-                self.window,
+            open_dialogue(
+                self,
                 'You have unsaved changes.\n'
                 'Leaving will discard all figures, battle moves,\n'
                 'and spells you have configured.',
-                actions=['Leave', 'Stay'],
-                title='Discard Changes?',
+                ['Leave', 'Stay'],
+                'Discard Changes?',
             )
         else:
             self._leave_screen()
 
     def _start_battle(self, use_map=False):
-        """Call start_battle endpoint and transition to the game screen."""
+        """Start the battle without blocking the UI; transition on success."""
+        if _sys.platform == 'emscripten':
+            self._start_battle_web(use_map=use_map)
+            return
+        if self._start_battle_poller is not None and self._start_battle_poller.busy:
+            return
+        if not use_map:
+            remaining = self._current_cooldown_remaining()
+            if remaining > 0:
+                self._show_cooldown_dialogue(remaining)
+                return
+        self._loading = True
+        self._loading_started_at_ms = pygame.time.get_ticks()
+        self._loading_message = 'Starting conquer battle...'
+        self._error = None
+        self._start_battle_poller = BackgroundPoller(self._start_battle_task)
+        self._start_battle_poller.poll(args=(self._land_id, bool(use_map)))
+
+    def _start_battle_task(self, land_id, use_map):
+        """Background start_battle request. Must never raise — the poller
+        swallows exceptions without publishing a result."""
         try:
-            if not use_map:
-                remaining = self._current_cooldown_remaining()
-                if remaining > 0:
-                    self._show_cooldown_dialogue(remaining)
-                    return
-            payload = {'land_id': self._land_id}
+            payload = {'land_id': land_id}
             if use_map:
                 payload['use_map'] = True
             resp = requests.post(
@@ -2188,53 +2154,183 @@ class ConquerScreen(MenuScreenMixin, Screen):
                 json=payload,
                 timeout=15,
             )
-            data = resp.json()
+            data = self._response_json(resp)
+            result = {'data': data}
             if data.get('game_id'):
-                game_id = data['game_id']
-                self.state.game_id = game_id
-                # Update local maps count if a map was consumed.
-                if data.get('map_consumed') and self.state.user_dict is not None:
-                    self.state.user_dict['maps'] = int(data.get('maps', 0))
-                    self._maps_available = int(data.get('maps', 0))
-                # Fetch and create a real Game object for the game screen
                 try:
-                    game_dict = fetch_game(game_id)
-                    if game_dict:
-                        self.state.game = Game(game_dict, self.state.user_dict)
-                    else:
-                        self.state.game = None
+                    result['game_dict'] = fetch_game(data['game_id'])
                 except Exception as e:
                     logger.error(f'Failed to fetch game after battle start: {e}')
-                    self.state.game = None
-                self.state.screen = gameplay_screen_for(self.state.game)
-                logger.info(f'Battle started: game_id={game_id} use_map={use_map}')
-                return
-            # Cooldown branch: offer to consume a map.
-            if data.get('code') == 'cooldown':
-                self._set_cooldown_state(data)
-                self._show_cooldown_dialogue(data.get('cooldown_remaining') or 0)
-                return
-            if data.get('code') == 'no_cooldown':
-                self._set_cooldown_state(data)
-                self._start_battle(use_map=False)
-                return
-            if data.get('code') == 'no_maps':
-                self._set_cooldown_state(data)
-            self._error = (
-                data.get('message')
-                or data.get('error')
-                or 'Failed to start battle'
-            )
-            logger.warning(f'Start battle failed: {self._error}')
+                    result['game_dict'] = None
+            return result
         except Exception as e:
-            self._error = 'Connection error'
             logger.error(f'Start battle error: {e}')
+            return {'error': 'Connection error'}
+
+    def _drain_start_battle_native(self):
+        poller = self._start_battle_poller
+        if poller is None or not poller.has_result():
+            return
+        self._start_battle_poller = None
+        result = poller.result or {}
+        self._loading = False
+        if result.get('error'):
+            self._error = result['error']
+            return
+        data = result.get('data') or {}
+        if data.get('game_id'):
+            game_id = data['game_id']
+            self.state.game_id = game_id
+            # Update local maps count if a map was consumed.
+            if data.get('map_consumed') and self.state.user_dict is not None:
+                self.state.user_dict['maps'] = int(data.get('maps', 0))
+                self._maps_available = int(data.get('maps', 0))
+            game_dict = result.get('game_dict')
+            self.state.game = (
+                Game(game_dict, self.state.user_dict) if game_dict else None)
+            # Mark the deliberate start so the battle screen plays its
+            # "3·2·1·GO!" moment. Lives on ``state`` (not the game) so it
+            # survives the game-object lifecycle and is naturally absent on
+            # a reload/resume (which should not replay the countdown).
+            self.state.conquer_battle_countdown_pending = True
+            self.state.screen = gameplay_screen_for(self.state.game)
+            logger.info(f'Battle started: game_id={game_id}')
+            return
+        self._handle_start_battle_failure(data)
+
+    def _handle_start_battle_failure(self, data):
+        """Shared tail for start_battle responses without a game_id."""
+        # Cooldown branch: offer to consume a map.
+        if data.get('code') == 'cooldown':
+            self._set_cooldown_state(data)
+            self._show_cooldown_dialogue(data.get('cooldown_remaining') or 0)
+            return
+        if data.get('code') == 'no_cooldown':
+            self._set_cooldown_state(data)
+            self._start_battle(use_map=False)
+            return
+        if data.get('code') == 'no_maps':
+            self._set_cooldown_state(data)
+        self._error = (
+            data.get('message')
+            or data.get('error')
+            or 'Failed to start battle'
+        )
+        logger.warning(f'Start battle failed: {self._error}')
+
+    def _start_battle_web(self, use_map=False):
+        """Web-only non-blocking start_battle flow."""
+        if self._start_battle_rid or self._start_battle_fetch_game_rid:
+            return
+        if not use_map:
+            remaining = self._current_cooldown_remaining()
+            if remaining > 0:
+                self._show_cooldown_dialogue(remaining)
+                return
+        try:
+            payload = {'land_id': self._land_id}
+            if use_map:
+                payload['use_map'] = True
+            self._loading = True
+            self._loading_started_at_ms = pygame.time.get_ticks()
+            self._loading_message = 'Starting conquer battle...'
+            self._error = None
+            self._start_battle_rid = requests.start_async_post_json(
+                f'{settings.SERVER_URL}/kingdom/conquer/start_battle',
+                payload,
+            )
+        except Exception as e:
+            self._loading = False
+            self._error = 'Connection error'
+            logger.error(f'Start battle async error: {e}')
+
+    def _drain_start_battle_web(self):
+        if _sys.platform != 'emscripten':
+            return
+        if self._start_battle_rid:
+            try:
+                resp = requests.check_async(self._start_battle_rid)
+            except Exception as e:
+                self._start_battle_rid = None
+                self._loading = False
+                self._error = 'Connection error'
+                logger.error(f'Start battle async check error: {e}')
+                return
+            if resp is None:
+                return
+            self._start_battle_rid = None
+            if resp.status_code != 200:
+                self._loading = False
+                err = self._response_json(resp)
+                self._error = err.get('message') or err.get('error') or 'Failed to start battle'
+                logger.warning(f'Start battle failed: {self._error}')
+                return
+            data = self._response_json(resp)
+            self._handle_start_battle_response(data)
+            return
+
+        if self._start_battle_fetch_game_rid:
+            try:
+                resp = requests.check_async(self._start_battle_fetch_game_rid)
+            except Exception as e:
+                self._start_battle_fetch_game_rid = None
+                self._start_battle_fetch_game_id = None
+                self._loading = False
+                self._error = 'Connection error'
+                logger.error(f'Fetch game async check error: {e}')
+                return
+            if resp is None:
+                return
+            game_id = self._start_battle_fetch_game_id
+            self._start_battle_fetch_game_rid = None
+            self._start_battle_fetch_game_id = None
+            self._loading = False
+            if resp.status_code != 200:
+                err = self._response_json(resp)
+                self._error = err.get('message') or err.get('error') or 'Failed to load battle'
+                logger.warning(f'Fetch game after battle start failed: {self._error}')
+                return
+            game_dict = (self._response_json(resp) or {}).get('game')
+            if not game_dict:
+                self._error = 'Failed to load battle'
+                return
+            self.state.game = Game(game_dict, self.state.user_dict, lightweight=True)
+            # See _drain_start_battle_native: flag the battle-start moment.
+            self.state.conquer_battle_countdown_pending = True
+            self.state.screen = gameplay_screen_for(self.state.game)
+            logger.info(f'Battle started: game_id={game_id}')
+
+    def _handle_start_battle_response(self, data):
+        if data.get('game_id'):
+            game_id = data['game_id']
+            self.state.game_id = game_id
+            if data.get('map_consumed') and self.state.user_dict is not None:
+                self.state.user_dict['maps'] = int(data.get('maps', 0))
+                self._maps_available = int(data.get('maps', 0))
+            if _sys.platform == 'emscripten':
+                try:
+                    self._loading_message = 'Loading conquer battle...'
+                    self._start_battle_fetch_game_id = game_id
+                    self._start_battle_fetch_game_rid = requests.start_async_get(
+                        f'{settings.SERVER_URL}/games/get_game',
+                        {'game_id': game_id},
+                    )
+                except Exception as e:
+                    self._loading = False
+                    self._error = 'Connection error'
+                    logger.error(f'Fetch game async start error: {e}')
+            return
+        self._loading = False
+        self._handle_start_battle_failure(data)
 
     # ── Update / events ─────────────────────────────────────────────
 
     def update(self, events):
         super().update()
         self._update_icon_buttons()
+
+        self._drain_start_battle_web()
+        self._drain_start_battle_native()
 
         # If subscreen is active, delegate
         if self._active_subscreen and self._subscreen_obj:
@@ -2265,21 +2361,13 @@ class ConquerScreen(MenuScreenMixin, Screen):
     def handle_events(self, events):
         super().handle_events(events)
 
-        # Handle battle confirm / info dialogue response
+        # Handle cooldown / info dialogue response
         response = self.state.action.get('status')
-        if response and self._pending_battle_confirm:
-            use_map = bool(getattr(self, '_pending_battle_confirm_use_map', False))
-            self._pending_battle_confirm = False
-            self._pending_battle_confirm_use_map = False
-            self.reset_action()
-            if response == 'confirm':
-                self._start_battle(use_map=use_map)
-            return
         if response and self._pending_map_confirm:
             self._pending_map_confirm = False
             self.reset_action()
             if response == 'use map':
-                self._open_battle_confirm(use_map=True)
+                self._start_battle_with_loot_tutorial(use_map=True)
             return
         if response and self._pending_leave_confirm:
             self._pending_leave_confirm = False
@@ -2287,26 +2375,18 @@ class ConquerScreen(MenuScreenMixin, Screen):
             if response == 'leave':
                 self._leave_screen()
             return
-        if response and self._pending_prelude_spell:
-            self._pending_prelude_spell = None
-            self.reset_action()
-            return
-        if response and self._pending_prelude_clear:
-            self._pending_prelude_clear = False
-            self.reset_action()
-            if response == 'confirm':
-                self._server_clear_prelude_spell()
-            return
         if response in ('ok', 'cancel'):
-            self._pending_battle_confirm = False
-            self._pending_battle_confirm_use_map = False
             self._pending_leave_confirm = False
-            self._pending_prelude_spell = None
-            self._pending_prelude_clear = False
             self.reset_action()
             return
 
         if self.dialogue_box:
+            return
+
+        loot_tutorial_action = handle_loot_risk_tutorial_events(self, events)
+        if loot_tutorial_action is not None:
+            if isinstance(loot_tutorial_action, dict):
+                self._resume_loot_risk_tutorial_action(loot_tutorial_action)
             return
 
         coach_step = self._current_conquer_coach_step()
@@ -2380,21 +2460,25 @@ class ConquerScreen(MenuScreenMixin, Screen):
                     self._try_leave_screen()
                     return
 
+                # Retry button (error state)
+                if self._error and self._btn_retry and _mobile_collide(self._btn_retry, pos):
+                    sound.play('ui_click')
+                    self._error = None
+                    self._btn_retry = None
+                    if not self._config:
+                        self._start_config_load()
+                    return
+
                 if not self._config:
                     continue
 
                 # Remove buttons must win over icon/detail clicks.
+                # Removals are free draft edits (cards unlock server-side),
+                # so they fire immediately — same as figure/move removal.
                 if _mobile_collide(self._prelude_x_rect, pos,
                                    settings.TOUCH_COMPACT_MIN, settings.TOUCH_COMPACT_MIN):
-                    current_spell = self._config.get('prelude_spell_name')
-                    if current_spell:
-                        self._pending_prelude_clear = True
-                        self.dialogue_box = DialogueBox(
-                            self.window,
-                            f'Remove {current_spell} prelude spell?',
-                            actions=['Confirm', 'Cancel'],
-                            title='Clear Prelude Spell',
-                        )
+                    if self._config.get('prelude_spell_name'):
+                        self._server_clear_prelude_spell()
                     continue
 
                 figure_removed = False
@@ -2438,12 +2522,21 @@ class ConquerScreen(MenuScreenMixin, Screen):
                 # Build Figure button
                 if _mobile_collide(self._btn_build, pos,
                                    settings.TOUCH_COMPACT_MIN, settings.TOUCH_COMPACT_MIN):
+                    sound.play('ui_click')
                     self._open_build_figure()
                     continue
 
                 # Buy Move button
                 if _mobile_collide(self._btn_buy_move, pos,
                                    settings.TOUCH_COMPACT_MIN, settings.TOUCH_COMPACT_MIN):
+                    sound.play('ui_click')
+                    self._open_battle_shop()
+                    continue
+
+                # Empty battle-move slot click → open the Battle Shop
+                if any(_mobile_collide(r, pos)
+                       for r in self._empty_move_slot_rects.values()):
+                    sound.play('ui_click')
                     self._open_battle_shop()
                     continue
 
@@ -2451,6 +2544,7 @@ class ConquerScreen(MenuScreenMixin, Screen):
                 if (_mobile_collide(self._btn_prelude_edit, pos,
                                     settings.TOUCH_COMPACT_MIN, settings.TOUCH_COMPACT_MIN)
                         or _mobile_collide(self._prelude_spell_rect, pos)):
+                    sound.play('ui_click')
                     self._open_prelude_spell_screen()
                     continue
 

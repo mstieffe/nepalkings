@@ -331,6 +331,7 @@ def test_tactics_rail_action_buttons_adapt_to_selected_tactic():
     moves = [
         _move(1, family='Call King', suit='Hearts', rank='K', value=4),
         _move(2, family='Dagger', suit='Hearts', rank='9', value=9),
+        _move(4, family='Dagger', suit='Diamonds', rank='5', value=5),
         _move(3, family='Double Dagger', suit='Hearts', suit_b='Diamonds',
               rank='8+9', value=17, card_id_b=203),
     ]
@@ -368,9 +369,11 @@ def test_tactics_rail_action_buttons_adapt_to_selected_tactic():
     narrow_by_key = {key: rect for key, _label, _disabled, rect, _role in narrow_rects}
     assert narrow_by_key[ACTION_PLAY].width == 101
     assert narrow_by_key[ACTION_PLAY].bottom < narrow_by_key[ACTION_GAMBLE].top
-    assert narrow_by_key[ACTION_GAMBLE].width == 101
-    assert narrow_by_key[ACTION_GAMBLE].bottom < narrow_by_key[ACTION_COMBINE].top
-    assert narrow_by_key[ACTION_COMBINE].width == 101
+    assert narrow_by_key[ACTION_GAMBLE].top == narrow_by_key[ACTION_COMBINE].top
+    assert narrow_by_key[ACTION_GAMBLE].bottom == narrow_by_key[ACTION_COMBINE].bottom
+    assert narrow_by_key[ACTION_GAMBLE].right < narrow_by_key[ACTION_COMBINE].left
+    assert narrow_by_key[ACTION_GAMBLE].width < 101
+    assert narrow_by_key[ACTION_COMBINE].width < 101
     assert not narrow_by_key[ACTION_PLAY].colliderect(narrow_by_key[ACTION_GAMBLE])
     assert not narrow_by_key[ACTION_PLAY].colliderect(narrow_by_key[ACTION_COMBINE])
     assert not narrow_by_key[ACTION_GAMBLE].colliderect(narrow_by_key[ACTION_COMBINE])
@@ -378,6 +381,72 @@ def test_tactics_rail_action_buttons_adapt_to_selected_tactic():
     rail._selected_id = 3
     rail.draw()
     assert set(rail._action_button_rects) == {ACTION_PLAY, ACTION_GAMBLE, ACTION_DISMANTLE}
+
+
+def test_tactics_rail_hides_combine_without_matching_partner():
+    from config import settings
+    from game.components.conquer_tactics_rail import (
+        ACTION_COMBINE,
+        ACTION_GAMBLE,
+        ACTION_PLAY,
+        ConquerTacticsRail,
+    )
+
+    window = pygame.Surface((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+    game = SimpleNamespace(
+        mode='conquer',
+        player_id=1,
+        battle_round=1,
+        battle_turn_player_id=1,
+        battle_confirmed=True,
+        battle_gamble_counts={},
+        last_battle_result=None,
+    )
+    moves = [
+        _move(1, family='Dagger', suit='Hearts', rank='7', value=7),
+        _move(2, family='Dagger', suit='Spades', rank='A', value=14),
+    ]
+    rail = ConquerTacticsRail(_ConquerUiParent(window, game, moves))
+
+    rail._selected_id = 1
+    rail.draw()
+
+    assert set(rail._action_button_rects) == {ACTION_PLAY, ACTION_GAMBLE}
+    assert ACTION_COMBINE not in {spec[0] for spec in rail._action_specs()}
+    assert rail._best_combine_partner() is None
+
+
+def test_tactics_rail_combine_uses_strongest_matching_partner():
+    from config import settings
+    from game.components.conquer_tactics_rail import (
+        ACTION_COMBINE,
+        ConquerTacticsRail,
+    )
+
+    window = pygame.Surface((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+    game = SimpleNamespace(
+        mode='conquer',
+        player_id=1,
+        battle_round=1,
+        battle_turn_player_id=1,
+        battle_confirmed=True,
+        battle_gamble_counts={},
+        last_battle_result=None,
+    )
+    dagger = _move(1, family='Dagger', suit='Hearts', rank='3', value=3)
+    weak_partner = _move(2, family='Dagger', suit='Diamonds', rank='5', value=5)
+    strong_partner = _move(3, family='Dagger', suit='Hearts', rank='K', value=13)
+    wrong_color = _move(4, family='Dagger', suit='Spades', rank='A', value=14)
+    rail = ConquerTacticsRail(_ConquerUiParent(
+        window, game, [dagger, weak_partner, strong_partner, wrong_color]))
+
+    rail._selected_id = dagger['id']
+    rail._trigger_action(ACTION_COMBINE)
+    pending = rail.consume_pending_action()
+
+    assert pending and pending['action'] == ACTION_COMBINE
+    assert pending['move']['id'] == dagger['id']
+    assert pending['partner']['id'] == strong_partner['id']
 
 
 def test_tactics_rail_header_shows_per_round_gamble_state():
@@ -766,6 +835,43 @@ def test_conquer_effects_rect_projectile_keeps_target_for_impact():
     assert not layer._projectiles
     assert layer._impacts
     assert layer._impacts[0]['target_rect'] == target
+
+
+def test_conquer_effects_countdown_lifecycle_and_draw(monkeypatch):
+    from game.components.conquer_effects import ConquerEffectsLayer
+
+    clock = {'now': 1_000}
+    monkeypatch.setattr('pygame.time.get_ticks', lambda: clock['now'])
+    window = pygame.Surface((800, 600), pygame.SRCALPHA)
+    layer = ConquerEffectsLayer(window, lambda _target_id: None)
+
+    layer.spawn_countdown(('3', '2', '1', 'GO!'), beat_ms=500, final_ms=700)
+    total = 3 * 500 + 700
+    assert layer.countdown_active()
+    # Draw one frame in each beat window (must not raise).
+    for offset in (10, 520, 1020, 1600):
+        clock['now'] = 1_000 + offset
+        window.fill((0, 0, 0))
+        layer.draw()
+        assert layer.countdown_active()
+    # After the total window the countdown is gone.
+    clock['now'] = 1_000 + total + 5
+    assert not layer.countdown_active()
+    window.fill((0, 0, 0))
+    layer.draw()
+    assert not layer._countdowns
+
+    # dismiss_countdowns cancels an in-flight sequence (click-to-skip).
+    clock['now'] = 5_000
+    layer.spawn_countdown(('3', '2', '1', 'GO!'))
+    assert layer.countdown_active()
+    layer.dismiss_countdowns()
+    assert not layer.countdown_active()
+    assert layer._countdowns == []
+
+    # Empty label list is a no-op, not a crash.
+    assert isinstance(layer.spawn_countdown(()), int)
+    assert not layer.countdown_active()
 
 
 def test_round_ledger_uses_revealed_opponent_tactics_and_icons(monkeypatch):
@@ -1636,8 +1742,12 @@ def test_tactics_rail_gamble_combine_dismantle_enabled_outside_my_turn():
     )
     rail = ConquerTacticsRail(parent)
 
-    # Gamble while it's not my turn:
+    # Gamble while it's not my turn: first click arms the devil's-bargain
+    # confirm, the second click within the window commits.
     rail._selected_id = dagger_a['id']
+    rail._trigger_action(ACTION_GAMBLE)
+    assert rail.consume_pending_action() is None
+    assert rail._gamble_armed_for(dagger_a['id'])
     rail._trigger_action(ACTION_GAMBLE)
     pending = rail.consume_pending_action()
     assert pending and pending['action'] == ACTION_GAMBLE
@@ -1672,6 +1782,174 @@ def test_round_ledger_total_includes_figure_diff():
     total = ledger._total_diff(you_per, opp_per)
     # round1 diff (5-3=2) + figure diff (6) = 8
     assert total == 8
+
+
+def test_round_ledger_current_total_diff_public():
+    from game.components.conquer_round_ledger import ConquerRoundLedger
+
+    parent = SimpleNamespace(
+        window=pygame.Surface((100, 100)),
+        state=SimpleNamespace(game=SimpleNamespace()),
+        _conquer_lane_figure_diff=lambda: 6,
+        _conquer_lane_played_tactics=lambda: (
+            [_move(1, value=5, played_round=0), None, None],
+            [_move(2, value=3, played_round=0), None, None]),
+    )
+    ledger = ConquerRoundLedger(parent)
+
+    assert ledger.current_total_diff() == 8
+
+
+def test_round_ledger_reveal_total_adjustment_glides_with_tally():
+    from game.components.conquer_round_ledger import ConquerRoundLedger
+
+    stage = {'stage': 'tally', 'progress': 0.5, 'opp_visible': True,
+             'diff_factor': 0.0}
+    parent = SimpleNamespace(
+        window=pygame.Surface((100, 100)),
+        state=SimpleNamespace(game=SimpleNamespace()),
+        _conquer_lane_figure_diff=lambda: 0,
+        conquer_round_reveal_stage=lambda idx: stage if idx == 0 else None,
+    )
+    ledger = ConquerRoundLedger(parent)
+    you_per = [_move(1, value=8, played_round=0), None, None]
+    opp_per = [_move(2, value=2, played_round=0), None, None]
+
+    # diff = 6; the un-tallied share is withheld from the displayed total.
+    assert ledger._reveal_total_adjustment(you_per, opp_per) == -6
+    stage['diff_factor'] = 0.5
+    assert ledger._reveal_total_adjustment(you_per, opp_per) == -3
+    stage['diff_factor'] = 1.0
+    assert ledger._reveal_total_adjustment(you_per, opp_per) == 0
+    # Pre-flip (opponent identity still hidden) → no adjustment.
+    stage['opp_visible'] = False
+    stage['diff_factor'] = 0.0
+    assert ledger._reveal_total_adjustment(you_per, opp_per) == 0
+
+
+def test_round_ledger_tally_tick_hook_fires_per_increment():
+    from config import settings
+    from game.components.conquer_round_ledger import ConquerRoundLedger
+
+    ticks = []
+    stage = {'stage': 'tally', 'progress': 0.0, 'opp_visible': True,
+             'diff_factor': 0.0}
+    parent = SimpleNamespace(
+        window=pygame.Surface((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT)),
+        state=SimpleNamespace(game=SimpleNamespace()),
+        _on_conquer_tally_tick=lambda shown, diff: ticks.append(shown),
+    )
+    ledger = ConquerRoundLedger(parent)
+    you = _move(1, value=6, played_round=0)
+    opp = _move(2, value=2, played_round=0)
+    rect = pygame.Rect(10, 10, 120, 48)
+
+    for factor in (0.0, 0.25, 0.25, 0.5, 0.75, 1.0):
+        stage['diff_factor'] = factor
+        ledger._draw_diff_pill_revealing(rect, you, opp, stage)
+
+    # diff=4 → shown 0,1,1,2,3,4; one tick per *increase* only.
+    assert ticks == [1, 2, 3, 4]
+
+
+def test_round_ledger_final_round_stakes_flag():
+    from game.components.conquer_round_ledger import ConquerRoundLedger
+
+    game = SimpleNamespace(last_battle_result=None)
+    parent = SimpleNamespace(
+        window=pygame.Surface((100, 100)),
+        state=SimpleNamespace(game=game),
+        _final_round_contested=True,
+    )
+    ledger = ConquerRoundLedger(parent)
+
+    assert ledger._final_round_stakes_active() is True
+    game.last_battle_result = {'outcome': 'win'}
+    assert ledger._final_round_stakes_active() is False
+    game.last_battle_result = None
+    parent._final_round_contested = False
+    assert ledger._final_round_stakes_active() is False
+
+
+def test_is_conquer_final_round_contested_threshold():
+    from game.screens.conquer_game_screen import ConquerGameScreen
+
+    screen = ConquerGameScreen.__new__(ConquerGameScreen)
+    screen._round_ledger = SimpleNamespace(current_total_diff=lambda: 12)
+    assert screen._is_conquer_final_round_contested() is True
+    screen._round_ledger = SimpleNamespace(current_total_diff=lambda: -13)
+    assert screen._is_conquer_final_round_contested() is False
+
+
+def test_reveal_start_cue_only_for_full_hold(monkeypatch):
+    from game.screens.conquer_game_screen import ConquerGameScreen
+
+    pulses = []
+    played = []
+
+    class Effects:
+        def spawn_rect_pulse(self, *args, **kwargs):
+            pulses.append(args)
+
+    screen = ConquerGameScreen.__new__(ConquerGameScreen)
+    screen.state = SimpleNamespace(game=SimpleNamespace(opponent_name='Opp'))
+    screen._conquer_lane_played_tactics_raw = lambda: ([None] * 3, [None] * 3)
+    screen._conquer_round_card_rect = lambda idx: pygame.Rect(0, 0, 50, 30)
+    screen._conquer_effects = Effects()
+    monkeypatch.setattr('utils.sound.play',
+                        lambda name, **kwargs: played.append(name) or True)
+
+    screen._on_conquer_round_reveal_event(0, 'start', {'hold_ms': 320})
+    assert played == ['reveal_hold']
+    assert len(pulses) == 1
+
+    # Skip-beats / opp-seen entries (short or zero HOLD) stay silent.
+    screen._on_conquer_round_reveal_event(0, 'start', {'hold_ms': 160})
+    screen._on_conquer_round_reveal_event(0, 'start', {'hold_ms': 0})
+    assert played == ['reveal_hold']
+    assert len(pulses) == 1
+
+
+def test_reveal_impact_skips_shake_when_fast_forwarded(monkeypatch):
+    from game.screens.conquer_game_screen import ConquerGameScreen
+
+    shakes = []
+    bursts = []
+
+    class Effects:
+        def spawn_rect_pulse(self, *args, **kwargs):
+            pass
+
+        def spawn_floating_text_at_rect(self, *args, **kwargs):
+            pass
+
+        def spawn_burst(self, *args, **kwargs):
+            bursts.append(kwargs)
+
+        def spawn_shake(self, **kwargs):
+            shakes.append(kwargs)
+
+    screen = ConquerGameScreen.__new__(ConquerGameScreen)
+    screen.state = SimpleNamespace(game=SimpleNamespace(opponent_name='Opp'))
+    you = _move(1, value=15, played_round=2)
+    opp = _move(2, value=2, played_round=2)
+    screen._conquer_lane_played_tactics_raw = lambda: (
+        [None, None, you], [None, None, opp])
+    screen._conquer_round_card_rect = lambda idx: pygame.Rect(0, 0, 50, 30)
+    screen._round_ledger = SimpleNamespace(_round_diff=lambda y, o: 13)
+    screen._conquer_effects = Effects()
+    screen._conquer_battle_feed = []
+    monkeypatch.setattr('utils.sound.play', lambda *args, **kwargs: True)
+
+    screen._on_conquer_round_reveal_event(2, 'impact', {'fast_forwarded': True})
+    assert shakes == []
+    assert bursts == []  # fast-forwarded reveals stay calm
+
+    # Natural playback: big-diff shake + contested-final-round shake,
+    # plus the decisive-round particle burst.
+    screen._on_conquer_round_reveal_event(2, 'impact', {})
+    assert len(shakes) == 2
+    assert len(bursts) == 1
 
 
 def test_current_conquer_tactics_filters_by_displayed_step(monkeypatch):

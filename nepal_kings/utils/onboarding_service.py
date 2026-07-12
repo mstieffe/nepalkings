@@ -32,6 +32,29 @@ def mark_tip(tip_key):
     return response.json()
 
 
+def mark_tips(tip_keys, *, event=None):
+    payload = {'tip_keys': list(tip_keys or [])}
+    if event:
+        payload['event'] = event
+    response = requests.post(
+        f'{settings.SERVER_URL}/onboarding/mark_tip',
+        json=payload,
+        timeout=6,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def complete_step(step_id):
+    response = requests.post(
+        f'{settings.SERVER_URL}/onboarding/complete_step',
+        json={'step_id': step_id},
+        timeout=6,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
 def skip_onboarding():
     response = requests.post(f'{settings.SERVER_URL}/onboarding/skip', timeout=6)
     response.raise_for_status()

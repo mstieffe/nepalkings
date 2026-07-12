@@ -63,6 +63,33 @@ def _reset_conquer_idempotency_cache():
 
 
 @pytest.fixture(autouse=True)
+def _reset_conquer_timer_state():
+    """Reset routes.games' module-level conquer timer/watchdog maps.
+
+    ``_conquer_round_deadlines`` / ``_conquer_timeout_last_check`` /
+    ``_conquer_ai_watchdog_last`` are keyed by game id, which repeats
+    across tests (fresh DB, ids restart at 1). Stale entries would
+    throttle the AI watchdog or fire round timeouts for a previous
+    test's game.
+    """
+    import importlib
+    try:
+        # NOTE: ``from routes import games`` would resolve to the Blueprint
+        # attribute re-exported by the package, not the module.
+        _games_module = importlib.import_module('routes.games')
+    except Exception:
+        yield
+        return
+    for attr in ('_conquer_round_deadlines', '_conquer_timeout_last_check',
+                 '_conquer_ai_watchdog_last'):
+        getattr(_games_module, attr, {}).clear()
+    yield
+    for attr in ('_conquer_round_deadlines', '_conquer_timeout_last_check',
+                 '_conquer_ai_watchdog_last'):
+        getattr(_games_module, attr, {}).clear()
+
+
+@pytest.fixture(autouse=True)
 def _reset_land_coord_counter():
     """Reset the shared ``_LAND_COORD_COUNTER`` in ``test_land_battle``.
 
