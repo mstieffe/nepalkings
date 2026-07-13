@@ -50,6 +50,19 @@ rsync -a \
 RAW_IMG_MB=$(du -sm "$APP/img" | cut -f1)
 echo "   Staged image tree: ${RAW_IMG_MB} MB (before web optimization)"
 
+# The browser always prefers OGG and every shipped WAV has a verified OGG
+# companion. Keep lossless WAV masters in the desktop/source tree without
+# making the web download carry both copies of the same audio.
+PRUNED_WAVS=0
+while IFS= read -r -d '' wav; do
+    ogg="${wav%.wav}.ogg"
+    if [ -f "$ogg" ]; then
+        rm "$wav"
+        PRUNED_WAVS=$((PRUNED_WAVS + 1))
+    fi
+done < <(find "$APP/sound" -type f -name '*.wav' -print0)
+echo "   Web audio: OGG only (${PRUNED_WAVS} WAV masters omitted)"
+
 # ── 2. Optimize the staged images for the web ────────────────────────
 echo "🖼️  Optimizing images ${QUANTIZE_FLAG:+(quantize on)}..."
 "$PYTHON" scripts/assets/optimize_web_pngs.py "$APP/img" $QUANTIZE_FLAG

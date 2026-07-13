@@ -9,8 +9,10 @@ from scripts/assets/audio_sources/. Re-run after changing a recipe or source:
 
     python scripts/assets/generate_sfx.py
 
-Design notes: 22.05 kHz mono 16-bit keeps effects tiny; approved music stays
-stereo. The OGG companions are used by the pygbag web build
+Design notes: 44.1 kHz avoids audible browser resampling and preserves the
+detail in approved source recordings. Most short effects stay mono, while
+music and spatial spell cues stay stereo. The OGG companions use a higher
+quality setting than the original web pass and are used by the pygbag build
 because browsers are more reliable with OGG than SDL WAV decoding. The
 palette aims for soft felt, wood, bell metal, frame drum, and airy tones —
 minimal and tactile rather than arcade-like.
@@ -24,7 +26,7 @@ import shutil
 import subprocess
 import wave
 
-SAMPLE_RATE = 22050
+SAMPLE_RATE = 44100
 OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                        '..', '..', 'nepal_kings', 'sound')
 SOURCE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -65,21 +67,24 @@ MIXKIT_EFFECTS = {
         'filter': (
             '[0:a]atrim=start=0:end=1.6,asetpts=PTS-STARTPTS,'
             'afade=t=out:st=1.25:d=0.35,volume=9dB,'
-            'pan=mono|c0=0.5*c0+0.5*c1,aresample=22050[out]'),
+            'aresample=44100[out]'),
+        'channels': 2,
     },
     'counter_spell': {
         'sources': ('mixkit-icicles-spell-whoosh-881.wav',),
         'filter': (
             '[0:a]atrim=start=0.1:end=2.25,asetpts=PTS-STARTPTS,'
             'afade=t=out:st=1.8:d=0.35,volume=6dB,'
-            'pan=mono|c0=0.5*c0+0.5*c1,aresample=22050[out]'),
+            'aresample=44100[out]'),
+        'channels': 2,
     },
     'spell_heal': {
         'sources': ('mixkit-medium-healing-spell-880.wav',),
         'filter': (
             '[0:a]atrim=start=0.1:end=2.2,asetpts=PTS-STARTPTS,'
             'afade=t=out:st=1.75:d=0.35,volume=5dB,'
-            'pan=mono|c0=0.5*c0+0.5*c1,aresample=22050[out]'),
+            'aresample=44100[out]'),
+        'channels': 2,
         'fallback': 'spell_cast.wav',
     },
     'spell_poison': {
@@ -87,7 +92,8 @@ MIXKIT_EFFECTS = {
         'filter': (
             '[0:a]atrim=start=0.05:end=1.7,asetpts=PTS-STARTPTS,'
             'afade=t=out:st=1.35:d=0.35,volume=8dB,lowpass=f=4200,'
-            'pan=mono|c0=0.5*c0+0.5*c1,aresample=22050[out]'),
+            'aresample=44100[out]'),
+        'channels': 2,
         'fallback': 'spell_cast.wav',
     },
     'spell_reveal': {
@@ -95,7 +101,8 @@ MIXKIT_EFFECTS = {
         'filter': (
             '[0:a]atrim=start=0.05:end=1.7,asetpts=PTS-STARTPTS,'
             'afade=t=out:st=1.35:d=0.35,volume=9dB,'
-            'pan=mono|c0=0.5*c0+0.5*c1,aresample=22050[out]'),
+            'aresample=44100[out]'),
+        'channels': 2,
         'fallback': 'spell_cast.wav',
     },
     'spell_cards': {
@@ -103,7 +110,8 @@ MIXKIT_EFFECTS = {
         'filter': (
             '[0:a]atrim=start=0:end=1.55,asetpts=PTS-STARTPTS,'
             'afade=t=out:st=1.2:d=0.35,volume=-2dB,'
-            'pan=mono|c0=0.5*c0+0.5*c1,aresample=22050[out]'),
+            'aresample=44100[out]'),
+        'channels': 2,
         'fallback': 'spell_cast.wav',
     },
     'spell_explosion': {
@@ -119,7 +127,8 @@ MIXKIT_EFFECTS = {
             'adelay=420:all=1[impact];'
             '[cast][impact]amix=inputs=2:duration=longest:normalize=0,'
             'alimiter=limit=0.7:attack=5:release=50,'
-            'pan=mono|c0=0.5*c0+0.5*c1,aresample=22050[out]'),
+            'aresample=44100[out]'),
+        'channels': 2,
         'fallback': 'spell_cast.wav',
     },
     'card_slide_4': {
@@ -128,7 +137,7 @@ MIXKIT_EFFECTS = {
             '[0:a]atrim=start=0.035:end=0.335,asetpts=PTS-STARTPTS,'
             'afade=t=out:st=0.22:d=0.08,volume=10dB,'
             'alimiter=limit=0.7:attack=2:release=20,'
-            'pan=mono|c0=0.5*c0+0.5*c1,aresample=22050[out]'),
+            'pan=mono|c0=0.5*c0+0.5*c1,aresample=44100[out]'),
         'fallback': 'card_slide.wav',
     },
     'card_place_3': {
@@ -137,7 +146,7 @@ MIXKIT_EFFECTS = {
             '[0:a]atrim=start=0:end=0.18,asetpts=PTS-STARTPTS,'
             'afade=t=out:st=0.12:d=0.06,volume=6dB,'
             'alimiter=limit=0.7:attack=2:release=20,'
-            'pan=mono|c0=0.5*c0+0.5*c1,aresample=22050[out]'),
+            'pan=mono|c0=0.5*c0+0.5*c1,aresample=44100[out]'),
         'fallback': 'card_place.wav',
     },
     'coin_3': {
@@ -145,7 +154,7 @@ MIXKIT_EFFECTS = {
         'filter': (
             '[0:a]atrim=start=0:end=0.38,asetpts=PTS-STARTPTS,'
             'afade=t=out:st=0.30:d=0.08,volume=-3dB,'
-            'pan=mono|c0=0.5*c0+0.5*c1,aresample=22050[out]'),
+            'pan=mono|c0=0.5*c0+0.5*c1,aresample=44100[out]'),
         'fallback': 'coin.wav',
     },
     'booster_open': {
@@ -154,7 +163,7 @@ MIXKIT_EFFECTS = {
             '[0:a]atrim=start=0:end=0.82,asetpts=PTS-STARTPTS,'
             'afade=t=out:st=0.68:d=0.14,volume=8dB,'
             'alimiter=limit=0.7:attack=2:release=25,'
-            'pan=mono|c0=0.5*c0+0.5*c1,aresample=22050[out]'),
+            'pan=mono|c0=0.5*c0+0.5*c1,aresample=44100[out]'),
     },
     'booster_open_2': {
         'sources': ('mixkit-thin-metal-card-deck-shuffle-3175.wav',),
@@ -162,7 +171,7 @@ MIXKIT_EFFECTS = {
             '[0:a]atrim=start=0.25:end=1.0,asetpts=PTS-STARTPTS,'
             'afade=t=out:st=0.62:d=0.13,volume=9dB,'
             'alimiter=limit=0.7:attack=2:release=25,'
-            'pan=mono|c0=0.5*c0+0.5*c1,aresample=22050[out]'),
+            'pan=mono|c0=0.5*c0+0.5*c1,aresample=44100[out]'),
         'fallback': 'booster_open.wav',
     },
     'rare_card_reveal': {
@@ -170,7 +179,7 @@ MIXKIT_EFFECTS = {
         'filter': (
             '[0:a]atrim=start=0:end=2.38,asetpts=PTS-STARTPTS,'
             'afade=t=out:st=2.08:d=0.30,volume=-1.5dB,'
-            'pan=mono|c0=0.5*c0+0.5*c1,aresample=22050[out]'),
+            'pan=mono|c0=0.5*c0+0.5*c1,aresample=44100[out]'),
     },
     'reward_reveal': {
         'sources': ('mixkit-game-loot-win-2013.wav',),
@@ -178,21 +187,21 @@ MIXKIT_EFFECTS = {
             '[0:a]atrim=start=0.10:end=1.03,asetpts=PTS-STARTPTS,'
             'afade=t=out:st=0.78:d=0.15,volume=2dB,'
             'alimiter=limit=0.7:attack=3:release=30,'
-            'pan=mono|c0=0.5*c0+0.5*c1,aresample=22050[out]'),
+            'pan=mono|c0=0.5*c0+0.5*c1,aresample=44100[out]'),
     },
     'quest_claim': {
         'sources': ('mixkit-achievement-bell-600.wav',),
         'filter': (
             '[0:a]atrim=start=0:end=1.25,asetpts=PTS-STARTPTS,'
             'afade=t=out:st=1.0:d=0.25,volume=-2dB,'
-            'pan=mono|c0=0.5*c0+0.5*c1,aresample=22050[out]'),
+            'pan=mono|c0=0.5*c0+0.5*c1,aresample=44100[out]'),
     },
     'craft_success': {
         'sources': ('mixkit-metal-medieval-construction-818.wav',),
         'filter': (
             '[0:a]atrim=start=0.10:end=1.40,asetpts=PTS-STARTPTS,'
             'afade=t=out:st=1.10:d=0.20,volume=-1dB,'
-            'pan=mono|c0=0.5*c0+0.5*c1,aresample=22050[out]'),
+            'pan=mono|c0=0.5*c0+0.5*c1,aresample=44100[out]'),
     },
     'figure_place_2': {
         'sources': ('mixkit-metal-hammer-hit-833.wav',),
@@ -200,7 +209,7 @@ MIXKIT_EFFECTS = {
             '[0:a]atrim=start=0.08:end=0.55,asetpts=PTS-STARTPTS,'
             'afade=t=out:st=0.35:d=0.12,volume=12dB,'
             'alimiter=limit=0.7:attack=2:release=25,'
-            'pan=mono|c0=0.5*c0+0.5*c1,aresample=22050[out]'),
+            'pan=mono|c0=0.5*c0+0.5*c1,aresample=44100[out]'),
         'fallback': 'figure_place.wav',
     },
     'map_gain': {
@@ -208,35 +217,35 @@ MIXKIT_EFFECTS = {
         'filter': (
             '[0:a]atrim=start=0:end=0.95,asetpts=PTS-STARTPTS,'
             'afade=t=out:st=0.72:d=0.18,volume=6dB,'
-            'pan=mono|c0=0.5*c0+0.5*c1,aresample=22050[out]'),
+            'pan=mono|c0=0.5*c0+0.5*c1,aresample=44100[out]'),
     },
     'round_win': {
         'sources': ('mixkit-quick-win-video-game-notification-269.wav',),
         'filter': (
             '[0:a]atrim=start=0.08:end=0.98,asetpts=PTS-STARTPTS,'
             'afade=t=out:st=0.70:d=0.20,volume=-3dB,'
-            'pan=mono|c0=0.5*c0+0.5*c1,aresample=22050[out]'),
+            'pan=mono|c0=0.5*c0+0.5*c1,aresample=44100[out]'),
     },
     'battle_total': {
         'sources': ('mixkit-arcade-score-interface-217.wav',),
         'filter': (
             '[0:a]atrim=start=0.10:end=1.65,asetpts=PTS-STARTPTS,'
             'afade=t=out:st=1.30:d=0.25,volume=-1dB,'
-            'pan=mono|c0=0.5*c0+0.5*c1,aresample=22050[out]'),
+            'pan=mono|c0=0.5*c0+0.5*c1,aresample=44100[out]'),
     },
     'battle_win': {
         'sources': ('mixkit-winning-notification-2018.wav',),
         'filter': (
             '[0:a]atrim=start=0:end=1.50,asetpts=PTS-STARTPTS,'
             'afade=t=out:st=1.20:d=0.25,volume=-1.5dB,'
-            'pan=mono|c0=0.5*c0+0.5*c1,aresample=22050[out]'),
+            'pan=mono|c0=0.5*c0+0.5*c1,aresample=44100[out]'),
     },
     'battle_lose': {
         'sources': ('mixkit-losing-drums-2023.wav',),
         'filter': (
             '[0:a]atrim=start=0.06:end=2.15,asetpts=PTS-STARTPTS,'
             'afade=t=out:st=1.75:d=0.30,'
-            'pan=mono|c0=0.5*c0+0.5*c1,aresample=22050[out]'),
+            'pan=mono|c0=0.5*c0+0.5*c1,aresample=44100[out]'),
     },
 }
 
@@ -374,12 +383,16 @@ def finalize_loop(sound, peak=0.30):
     return out
 
 
-def write_wav(name, sound):
+def write_wav(name, sound, channels=1):
     os.makedirs(OUT_DIR, exist_ok=True)
     path = os.path.join(OUT_DIR, name)
-    pcm = array.array('h', (int(max(-1.0, min(1.0, s)) * 32767) for s in sound))
+    pcm = array.array('h', (
+        int(max(-1.0, min(1.0, sample)) * 32767)
+        for sample in sound
+        for _channel in range(channels)
+    ))
     with wave.open(path, 'wb') as wf:
-        wf.setnchannels(1)
+        wf.setnchannels(channels)
         wf.setsampwidth(2)
         wf.setframerate(SAMPLE_RATE)
         wf.writeframes(pcm.tobytes())
@@ -397,6 +410,7 @@ def write_ogg_companions():
     print('Writing web OGG companions...')
     for wav_path in WAV_OUTPUTS:
         ogg_path = os.path.splitext(wav_path)[0] + '.ogg'
+        quality = '7' if os.path.basename(wav_path).startswith('music_') else '6'
         with wave.open(wav_path, 'rb') as wf:
             channels = wf.getnchannels()
         subprocess.run([
@@ -407,7 +421,7 @@ def write_ogg_companions():
             '-ar', str(SAMPLE_RATE),
             '-ac', str(channels),
             '-c:a', 'libvorbis',
-            '-q:a', '4',
+            '-q:a', quality,
             ogg_path,
         ], check=True)
         name = os.path.basename(ogg_path)
@@ -446,7 +460,7 @@ def write_external_music_loop(track_name):
         '[tail][head]amix=inputs=2:duration=first:'
         'dropout_transition=0:normalize=0[xfade];'
         f'[mid][xfade]concat=n=2:v=0:a=1,volume={spec["gain_db"]}dB,'
-        'aresample=22050[out]'
+        'aresample=44100[out]'
     )
     subprocess.run([
         ffmpeg,
@@ -481,6 +495,7 @@ def write_mixkit_effect(name, spec):
 
     os.makedirs(OUT_DIR, exist_ok=True)
     path = os.path.join(OUT_DIR, f'{name}.wav')
+    channels = int(spec.get('channels', 1))
     command = [ffmpeg, '-y', '-loglevel', 'error']
     for source in sources:
         command.extend(['-i', source])
@@ -489,7 +504,7 @@ def write_mixkit_effect(name, spec):
         '-map', '[out]',
         '-c:a', 'pcm_s16le',
         '-ar', str(SAMPLE_RATE),
-        '-ac', '1',
+        '-ac', str(channels),
         '-metadata', f'title=Nepal Kings {name} runtime edit',
         '-metadata', 'artist=Mixkit / Nepal Kings edit',
         '-metadata', 'comment=Derived under the Mixkit Sound Effects Free License',
@@ -685,12 +700,12 @@ def build_all():
     write_wav('spell_cast.wav', finalize(echo(mix(
         tone(0.42, note(67), note(86), decay=5, partials=PLUCK),
         gain(noise(0.32, decay=7, lowpass=0.11, highpass=0.03), 0.36),
-    ), delay=0.075, amount=0.25, repeats=2), peak=0.46))
+    ), delay=0.075, amount=0.25, repeats=2), peak=0.46), channels=2)
     write_wav('counter_spell.wav', finalize(echo(seq(
         (mix(tone(0.22, note(86), note(74), decay=8, partials=PLUCK),
              gain(noise(0.16, decay=12, lowpass=0.14), 0.28)), 0.00),
         (gain(tone(0.32, note(79), decay=8, partials=WOOD), 0.72), 0.12),
-    ), delay=0.065, amount=0.22, repeats=2), peak=0.47))
+    ), delay=0.065, amount=0.22, repeats=2), peak=0.47), channels=2)
     write_wav('attack_launch.wav', finalize(seq(
         (tone(0.30, 95, 62, decay=9,
               partials=((1.0, 1.0), (1.5, 0.22))), 0.00),

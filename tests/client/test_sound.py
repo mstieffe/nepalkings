@@ -168,7 +168,7 @@ def test_counter_spell_always_uses_counter_event(monkeypatch):
     assert played == ['counter_spell']
 
 
-def test_mixkit_effects_are_compact_mono_runtime_edits():
+def test_mixkit_effects_are_high_quality_runtime_edits():
     max_durations = {
         'spell_cast.wav': 1.6,
         'counter_spell.wav': 2.2,
@@ -197,8 +197,11 @@ def test_mixkit_effects_are_compact_mono_runtime_edits():
         path = os.path.join(sound._sound_dir(), filename)
         with wave.open(path, 'rb') as wf:
             duration = wf.getnframes() / wf.getframerate()
-            assert wf.getframerate() == 22050, filename
-            assert wf.getnchannels() == 1, filename
+            assert wf.getframerate() == 44100, filename
+            expected_channels = 2 if (
+                filename.startswith('spell_') or filename == 'counter_spell.wav'
+            ) else 1
+            assert wf.getnchannels() == expected_channels, filename
             assert duration <= max_duration + 0.01, filename
 
 
@@ -237,6 +240,22 @@ def test_mixer_failure_is_remembered(monkeypatch):
     assert sound.play('ui_click') is False
     assert sound.play('ui_click') is False
     assert len(attempts) == 1  # second call short-circuits on _mixer_failed
+
+
+def test_mixer_uses_high_quality_output_rate(monkeypatch):
+    init_kwargs = []
+    import pygame
+    monkeypatch.setattr(pygame.mixer, 'get_init', lambda: None)
+    monkeypatch.setattr(
+        pygame.mixer, 'init', lambda **kwargs: init_kwargs.append(kwargs))
+
+    assert sound._ensure_mixer() is True
+    assert init_kwargs == [{
+        'frequency': 44100,
+        'size': -16,
+        'channels': 2,
+        'buffer': 512,
+    }]
 
 
 def test_preference_persists_roundtrip():

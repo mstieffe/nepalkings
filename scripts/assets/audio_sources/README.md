@@ -16,7 +16,9 @@ creator on 2026-07-13.
 | Battle | `Battle Theme Source.flac` | 0-51s | `db9a709b-4806-4f4f-a04c-adb5340fd7ae` | 45s |
 
 Each runtime edit uses a 6-second tail-to-head crossfade, -8 dB gain, and
-22.05 kHz stereo output. The generated files are
+44.1 kHz stereo output. Web OGG companions use Vorbis quality 7; this keeps
+the generated files compact without discarding the upper half of the audible
+band. The generated files are
 `nepal_kings/sound/music_<use>.wav` and `.ogg`.
 
 The original 48 kHz WAV exports are retained locally as `Menu Suno Master.wav`,

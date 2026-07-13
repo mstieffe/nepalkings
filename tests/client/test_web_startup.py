@@ -184,3 +184,14 @@ def test_web_audio_gate_requires_real_user_gesture():
     assert "new Audio(cdn + 'empty.ogg')" in index_html
     assert 'while not platform.window.MM.UME:' in index_html
     assert "document.getElementById('canvas').click()" not in index_html
+
+
+def test_web_audio_gate_arms_only_after_loading_bar_is_full():
+    repo_root = Path(__file__).resolve().parents[2]
+    index_html = (repo_root / 'nepal_kings/web/index.html').read_text()
+
+    assert "loader.dataset.audioGate = 'filling';" in index_html
+    assert 'window.nk_fill_before_audio_gate(armGate);' in index_html
+    assert 'if (loader.dataset.audioGate !== \'ready\') return;' in index_html
+    assert 'shown = 1;' in index_html
+    assert 'if (armGate) armGate();' in index_html

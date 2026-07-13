@@ -215,7 +215,6 @@ function show_infobox() {
             width: 0%;
             background: linear-gradient(90deg, #fadd00, #c8a820);
             border-radius: 3px;
-            transition: width .3s ease;
         }
         #nk-loader .status {
             margin-top: 14px;
@@ -373,25 +372,29 @@ function show_infobox() {
 
     window.nk_prepare_audio_gate = function(){
         var loader = document.getElementById('nk-loader');
-        if (!loader || loader.dataset.audioGate === 'ready') return;
-        loader.dataset.audioGate = 'ready';
-        loader.classList.add('audio-gate');
-        loader.setAttribute('role', 'button');
-        loader.setAttribute('tabindex', '0');
+        if (!loader || loader.dataset.audioGate) return;
+        loader.dataset.audioGate = 'filling';
 
         var subtitle = loader.querySelector('.subtitle');
         var status = document.getElementById('nk-status');
         if (subtitle) subtitle.textContent = 'Ready to play';
-        if (status) status.textContent = 'Tap to start';
+        if (status) status.textContent = 'Finishing loading...';
+
+        function armGate(){
+            loader.dataset.audioGate = 'ready';
+            loader.classList.add('audio-gate');
+            loader.setAttribute('role', 'button');
+            loader.setAttribute('tabindex', '0');
+            if (status) status.textContent = 'Tap to start';
+        }
 
         function markWaiting(){
-            loader.dataset.audioGate = 'ready';
-            if (status) status.textContent = 'Tap to start';
+            armGate();
         }
 
         function tryUnlock(ev){
             if (window.MM && window.MM.UME) return;
-            if (loader.dataset.audioGate === 'starting') return;
+            if (loader.dataset.audioGate !== 'ready') return;
             loader.dataset.audioGate = 'starting';
             if (status) status.textContent = 'Starting game...';
 
@@ -425,12 +428,21 @@ function show_infobox() {
         loader.addEventListener('keydown', function(ev){
             if (ev.key === 'Enter' || ev.key === ' ') tryUnlock(ev);
         });
+
+        if (typeof window.nk_fill_before_audio_gate === 'function') {
+            window.nk_fill_before_audio_gate(armGate);
+        } else {
+            var bar = document.getElementById('nk-bar');
+            if (bar) bar.style.width = '100%';
+            armGate();
+        }
     };
 
     window.nk_finish_audio_gate = function(){
         var loader = document.getElementById('nk-loader');
         if (!loader) return;
         loader.classList.remove('audio-gate');
+        loader.dataset.audioGate = 'starting';
         loader.removeAttribute('role');
         loader.removeAttribute('tabindex');
         var subtitle = loader.querySelector('.subtitle');
@@ -458,10 +470,14 @@ function show_infobox() {
         var pyReady = false;         // Python boot finished (nk_loader_done)
         var canvasUp = false;        // pygame canvas has a real size on screen
         var done = false;            // both true -> fill to 100% and fade
+        var gateReadyCallback = null;
         var DL_CAP = 0.90;           // download phase ceiling
         var BOOT_CAP = 0.99;         // python-boot ceiling before "done"
 
-        function cap(){ return done ? 1 : ((pyReady || canvasUp) ? BOOT_CAP : DL_CAP); }
+        function cap(){
+            if (done || loader.dataset.audioGate) return 1;
+            return (pyReady || canvasUp) ? BOOT_CAP : DL_CAP;
+        }
 
         // Hand off only after Python has shown its first frame and pygbag has
         // sized the canvas. A canvas resize alone can otherwise reveal a blank
@@ -469,6 +485,9 @@ function show_infobox() {
         function maybeFinish(){ if (pyReady && canvasUp) done = true; }
 
         function label(p){
+            if (loader.dataset.audioGate === 'filling') return 'Finishing loading\u2026';
+            if (loader.dataset.audioGate === 'ready') return 'Tap to start';
+            if (loader.dataset.audioGate === 'starting') return 'Starting game\u2026';
             if (done || p > 0.965) return 'Starting game\u2026';
             if (canvasUp)          return 'Preparing game\u2026';
             if (p < 0.5)           return 'Downloading assets\u2026';
@@ -485,8 +504,16 @@ function show_infobox() {
             var goal = done ? 1 : target;
             shown += (goal - shown) * 0.14;
             if (done && goal - shown < 0.004) shown = 1;
+            var armGate = null;
+            if (gateReadyCallback && goal - shown < 0.004){
+                shown = 1;
+                target = 1;
+                armGate = gateReadyCallback;
+                gateReadyCallback = null;
+            }
             bar.style.width = (Math.max(0, Math.min(1, shown)) * 100).toFixed(1) + '%';
             if (statEl) statEl.textContent = label(shown);
+            if (armGate) armGate();
             if (done && shown >= 1){
                 loader.style.transition = 'opacity .45s ease';
                 loader.style.opacity = '0';
@@ -520,6 +547,10 @@ function show_infobox() {
         window.nk_set_progress = function(frac){
             frac = Math.max(0, Math.min(1, +frac || 0));
             bump(DL_CAP + (BOOT_CAP - DL_CAP) * frac);
+        };
+        window.nk_fill_before_audio_gate = function(callback){
+            gateReadyCallback = callback;
+            target = 1;
         };
         window.nk_loader_done = function(){ pyReady = true; maybeFinish(); };
 

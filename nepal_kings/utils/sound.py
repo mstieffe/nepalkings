@@ -189,7 +189,7 @@ def _ensure_mixer():
         import pygame
         if pygame.mixer.get_init():
             return True
-        pygame.mixer.init(frequency=22050, size=-16, channels=2, buffer=512)
+        pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=512)
         return True
     except Exception:
         _mixer_failed = True

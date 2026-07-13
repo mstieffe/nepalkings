@@ -42,14 +42,14 @@ def test_every_track_has_desktop_and_web_assets():
     ('kingdom', 60.0),
     ('battle', 45.0),
 ])
-def test_music_is_compact_stereo_runtime_edit(track_name, expected_duration):
+def test_music_is_high_quality_stereo_runtime_edit(track_name, expected_duration):
     path = os.path.join(sound._sound_dir(), music.TRACKS[track_name][0])
     with wave.open(path, 'rb') as wf:
         duration = wf.getnframes() / wf.getframerate()
-        assert wf.getframerate() == 22050
+        assert wf.getframerate() == 44100
         assert wf.getnchannels() == 2
     assert duration == pytest.approx(expected_duration, abs=0.05)
-    assert os.path.getsize(path) < 7 * 1024 * 1024
+    assert os.path.getsize(path) < 12 * 1024 * 1024
 
 
 def test_full_music_sources_are_not_in_runtime_sound_directory():
