@@ -7,8 +7,8 @@ Design goals, mirroring the haptics bridge:
 - Callers never need a platform guard: every entry point is a cheap
   no-op when sound is disabled, the mixer is unavailable, or an asset
   is missing.
-- The mixer initializes lazily on the first play() so the web build
-  starts audio only after a user gesture (required by browsers).
+- Web builds route playback through the browser-native Web Audio manager;
+  desktop builds initialize Pygame's mixer lazily on the first play().
 - The on/off preference persists in ~/.nepalkings/resolution.json next
   to the resolution; on web (no filesystem) it lives for the session.
 
@@ -26,6 +26,8 @@ import json
 import logging
 import os
 import sys
+
+from utils import web_audio
 
 logger = logging.getLogger('nk.utils.sound')
 
@@ -204,13 +206,19 @@ def play(name, volume=1.0):
     entry = EVENTS.get(name)
     if entry is None:
         return False
+    filename = _next_event_filename(name)
+    if filename is None:
+        return False
+    playback_volume = max(
+        0.0, min(1.0, MASTER_VOLUME * entry[1] * volume))
+    if _IS_WEB:
+        stem, _ext = os.path.splitext(filename)
+        if web_audio.play_sfx(stem + '.ogg', playback_volume):
+            return True
     if not _ensure_mixer():
         return False
     try:
         import pygame
-        filename = _next_event_filename(name)
-        if filename is None:
-            return False
         cache_key = (name, filename)
         snd = _cache.get(cache_key)
         if snd is None:
@@ -226,7 +234,7 @@ def play(name, volume=1.0):
             if snd is None:
                 return False
             _cache[cache_key] = snd
-        snd.set_volume(max(0.0, min(1.0, MASTER_VOLUME * entry[1] * volume)))
+        snd.set_volume(playback_volume)
         snd.play()
         return True
     except Exception:

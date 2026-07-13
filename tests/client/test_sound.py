@@ -10,7 +10,7 @@ import wave
 
 import pytest
 
-from utils import sound
+from utils import sound, web_audio
 
 
 @pytest.fixture(autouse=True)
@@ -74,6 +74,20 @@ def test_web_play_prefers_ogg_companion(tmp_path, monkeypatch):
 
     assert sound.play('ui_click') is True
     assert paths == ['ui_click.ogg']
+
+
+def test_web_play_uses_native_audio_before_pygame(monkeypatch):
+    calls = []
+    monkeypatch.setattr(sound, '_IS_WEB', True)
+    monkeypatch.setattr(
+        web_audio, 'play_sfx',
+        lambda filename, volume: calls.append((filename, volume)) or True)
+    monkeypatch.setattr(
+        sound, '_ensure_mixer',
+        lambda: pytest.fail('Pygame mixer should not handle web SFX'))
+
+    assert sound.play('ui_click', volume=0.5) is True
+    assert calls == [('ui_click.ogg', pytest.approx(0.35))]
 
 
 def test_web_play_falls_back_to_wav_when_ogg_load_fails(tmp_path, monkeypatch):

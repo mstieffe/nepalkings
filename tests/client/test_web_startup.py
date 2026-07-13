@@ -182,6 +182,7 @@ def test_web_audio_gate_requires_real_user_gesture():
     assert 'ume_block : 1' in index_html
     assert 'window.nk_prepare_audio_gate' in index_html
     assert "new Audio(cdn + 'empty.ogg')" in index_html
+    assert 'window.nk_audio_unlock()' in index_html
     assert 'while not platform.window.MM.UME:' in index_html
     assert "document.getElementById('canvas').click()" not in index_html
 
@@ -195,3 +196,17 @@ def test_web_audio_gate_arms_only_after_loading_bar_is_full():
     assert 'if (loader.dataset.audioGate !== \'ready\') return;' in index_html
     assert 'shown = 1;' in index_html
     assert 'if (armGate) armGate();' in index_html
+
+
+def test_web_uses_native_audio_manager_and_publishes_direct_assets():
+    repo_root = Path(__file__).resolve().parents[2]
+    index_html = (repo_root / 'nepal_kings/web/index.html').read_text()
+    build_script = (repo_root / 'scripts/build_web.sh').read_text()
+
+    assert "new AudioContextClass({latencyHint: 'playback'})" in index_html
+    assert "new URL('audio/' + encodeURIComponent(filename)" in index_html
+    assert 'window.nk_audio_play_sfx' in index_html
+    assert 'window.nk_audio_play_music' in index_html
+    assert 'source.loop = true;' in index_html
+    assert 'WEB_AUDIO_STAGE=' in build_script
+    assert '"$WEB_OUT/audio"' in build_script

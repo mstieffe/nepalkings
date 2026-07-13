@@ -22,6 +22,7 @@ cd "$ROOT"
 PYTHON="${PYTHON:-python3}"
 STAGING="build/web-staging"
 APP="$STAGING/nepal_kings"
+WEB_AUDIO_STAGE="$STAGING/web-audio"
 QUANTIZE_FLAG="--quantize"
 for arg in "$@"; do
     [ "$arg" = "--no-quantize" ] && QUANTIZE_FLAG=""
@@ -50,6 +51,16 @@ rsync -a \
 RAW_IMG_MB=$(du -sm "$APP/img" | cut -f1)
 echo "   Staged image tree: ${RAW_IMG_MB} MB (before web optimization)"
 
+# Native Web Audio needs URL-addressable files outside pygbag's mounted
+# archive. Keep a staging copy that will be published beside index.html.
+mkdir -p "$WEB_AUDIO_STAGE"
+cp "$APP"/sound/*.ogg "$WEB_AUDIO_STAGE/"
+WEB_AUDIO_COUNT=$(find "$WEB_AUDIO_STAGE" -type f -name '*.ogg' | wc -l | tr -d ' ')
+if [ "$WEB_AUDIO_COUNT" -eq 0 ]; then
+    echo "No browser audio assets found in $APP/sound" >&2
+    exit 1
+fi
+
 # The browser always prefers OGG and every shipped WAV has a verified OGG
 # companion. Keep lossless WAV masters in the desktop/source tree without
 # making the web download carry both copies of the same audio.
@@ -68,19 +79,23 @@ echo "🖼️  Optimizing images ${QUANTIZE_FLAG:+(quantize on)}..."
 "$PYTHON" scripts/assets/optimize_web_pngs.py "$APP/img" $QUANTIZE_FLAG
 
 # ── 3. Build with pygbag ─────────────────────────────────────────────
-# The web client loads OGG SFX companions. Leave pygbag's audio-format guard
-# enabled so missing OGG files fail the build instead of going silent in Chrome.
+# The web client keeps OGG companions in the archive as a fallback. Leave
+# pygbag's audio-format guard enabled so missing OGG files fail the build.
 echo "🛠️  Running pygbag..."
 "$PYTHON" -m pygbag --build "$APP"
 
 # ── 4. Apply the custom branded index.html ───────────────────────────
+WEB_OUT="$APP/build/web"
 if [ -f nepal_kings/web/index.html ]; then
-    cp nepal_kings/web/index.html "$APP/build/web/index.html"
+    cp nepal_kings/web/index.html "$WEB_OUT/index.html"
     echo "   Applied custom index.html"
 fi
 
+mkdir -p "$WEB_OUT/audio"
+cp "$WEB_AUDIO_STAGE"/*.ogg "$WEB_OUT/audio/"
+echo "   Published ${WEB_AUDIO_COUNT} native Web Audio assets"
+
 # ── 5. Report final bundle size ──────────────────────────────────────
-WEB_OUT="$APP/build/web"
 echo ""
 echo "✅ Web bundle ready: $WEB_OUT"
 if [ -d "$WEB_OUT" ]; then

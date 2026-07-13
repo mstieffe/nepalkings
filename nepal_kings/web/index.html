@@ -370,6 +370,155 @@ function show_infobox() {
 
     globalThis.__canvas_resized = (self, ecw, ech) => {}
 
+    // Browser-native audio avoids SDL's realtime callback starving when the
+    // WebAssembly game frame is busy. Desktop builds continue to use Pygame.
+    (function(){
+        var AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        var context = null;
+        var buffers = Object.create(null);
+        var requests = Object.create(null);
+        var currentMusic = null;
+        var musicGeneration = 0;
+
+        function clampVolume(value){
+            value = Number(value);
+            return isFinite(value) ? Math.max(0, Math.min(1, value)) : 0;
+        }
+
+        function audioContext(){
+            if (!AudioContextClass) return null;
+            if (!context) context = new AudioContextClass({latencyHint: 'playback'});
+            if (context.state === 'suspended') {
+                context.resume().catch(function(){});
+            }
+            return context;
+        }
+
+        function validFilename(filename){
+            return typeof filename === 'string'
+                && /^[A-Za-z0-9_.-]+$/.test(filename);
+        }
+
+        function loadBuffer(filename){
+            var ctx = audioContext();
+            if (!ctx || !validFilename(filename)) {
+                return Promise.reject(new Error('Web Audio unavailable'));
+            }
+            if (buffers[filename]) return Promise.resolve(buffers[filename]);
+            if (requests[filename]) return requests[filename];
+
+            var url = new URL('audio/' + encodeURIComponent(filename), document.baseURI);
+            requests[filename] = fetch(url.toString(), {cache: 'force-cache'})
+                .then(function(response){
+                    if (!response.ok) throw new Error('Audio HTTP ' + response.status);
+                    return response.arrayBuffer();
+                })
+                .then(function(data){ return ctx.decodeAudioData(data); })
+                .then(function(buffer){
+                    buffers[filename] = buffer;
+                    delete requests[filename];
+                    return buffer;
+                })
+                .catch(function(error){
+                    delete requests[filename];
+                    throw error;
+                });
+            return requests[filename];
+        }
+
+        function reportError(filename, error){
+            console.warn('Nepal Kings audio failed:', filename, error);
+        }
+
+        window.nk_audio_unlock = function(){
+            var ctx = audioContext();
+            if (!ctx) return false;
+            // Warm the first screen's theme while Python finishes booting.
+            loadBuffer('music_menu.ogg').catch(function(error){
+                reportError('music_menu.ogg', error);
+            });
+            return true;
+        };
+
+        window.nk_audio_play_sfx = function(filename, volume){
+            var ctx = audioContext();
+            if (!ctx || !validFilename(filename)) return false;
+            loadBuffer(filename).then(function(buffer){
+                var source = ctx.createBufferSource();
+                var gain = ctx.createGain();
+                source.buffer = buffer;
+                gain.gain.value = clampVolume(volume);
+                source.connect(gain);
+                gain.connect(ctx.destination);
+                source.start();
+            }).catch(function(error){ reportError(filename, error); });
+            return true;
+        };
+
+        window.nk_audio_play_music = function(filename, volume, fadeMs){
+            var ctx = audioContext();
+            if (!ctx || !validFilename(filename)) return false;
+            var targetVolume = clampVolume(volume);
+            var fadeSeconds = Math.max(0, Number(fadeMs) || 0) / 1000;
+
+            if (currentMusic && currentMusic.filename === filename) {
+                currentMusic.gain.gain.cancelScheduledValues(ctx.currentTime);
+                currentMusic.gain.gain.setValueAtTime(
+                    currentMusic.gain.gain.value, ctx.currentTime);
+                currentMusic.gain.gain.linearRampToValueAtTime(
+                    targetVolume, ctx.currentTime + fadeSeconds);
+                return true;
+            }
+
+            var generation = ++musicGeneration;
+            loadBuffer(filename).then(function(buffer){
+                if (generation !== musicGeneration) return;
+                var now = ctx.currentTime;
+                var previous = currentMusic;
+                var source = ctx.createBufferSource();
+                var gain = ctx.createGain();
+                source.buffer = buffer;
+                source.loop = true;
+                gain.gain.setValueAtTime(fadeSeconds ? 0 : targetVolume, now);
+                if (fadeSeconds) {
+                    gain.gain.linearRampToValueAtTime(
+                        targetVolume, now + fadeSeconds);
+                }
+                source.connect(gain);
+                gain.connect(ctx.destination);
+                source.start();
+                currentMusic = {filename: filename, source: source, gain: gain};
+
+                if (previous) {
+                    previous.gain.gain.cancelScheduledValues(now);
+                    previous.gain.gain.setValueAtTime(
+                        previous.gain.gain.value, now);
+                    previous.gain.gain.linearRampToValueAtTime(
+                        0, now + fadeSeconds);
+                    previous.source.stop(now + fadeSeconds + 0.05);
+                }
+            }).catch(function(error){ reportError(filename, error); });
+            return true;
+        };
+
+        window.nk_audio_stop_music = function(fadeMs){
+            var ctx = audioContext();
+            if (!ctx) return false;
+            musicGeneration += 1;
+            if (!currentMusic) return true;
+            var previous = currentMusic;
+            var fadeSeconds = Math.max(0, Number(fadeMs) || 0) / 1000;
+            currentMusic = null;
+            previous.gain.gain.cancelScheduledValues(ctx.currentTime);
+            previous.gain.gain.setValueAtTime(
+                previous.gain.gain.value, ctx.currentTime);
+            previous.gain.gain.linearRampToValueAtTime(
+                0, ctx.currentTime + fadeSeconds);
+            previous.source.stop(ctx.currentTime + fadeSeconds + 0.05);
+            return true;
+        };
+    })();
+
     window.nk_prepare_audio_gate = function(){
         var loader = document.getElementById('nk-loader');
         if (!loader || loader.dataset.audioGate) return;
@@ -401,6 +550,7 @@ function show_infobox() {
             try {
                 var canvas = document.getElementById('canvas');
                 if (canvas && canvas.focus) canvas.focus();
+                if (window.nk_audio_unlock) window.nk_audio_unlock();
                 if (window.MM && window.MM.focus_handler && ev && ev.type === 'click') {
                     window.MM.focus_handler(ev);
                 }

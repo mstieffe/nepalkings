@@ -4,8 +4,9 @@
 
 The tracks are compact runtime loops prepared alongside the SFX. They may be
 procedural or derived from an approved source master. Using a
-``pygame.mixer.Sound`` channel instead of ``pygame.mixer.music`` keeps the web
-and desktop asset-loading paths identical, including OGG preference on web.
+``pygame.mixer.Sound`` channel instead of ``pygame.mixer.music`` keeps desktop
+playback predictable. Web builds bypass SDL's realtime mixer and use the native
+Web Audio manager defined by the pygbag page.
 """
 
 import json
@@ -13,6 +14,7 @@ import os
 import sys
 
 from utils import sound
+from utils import web_audio
 
 _IS_WEB = sys.platform == 'emscripten'
 _CFG_DIR = os.path.join(os.path.expanduser('~'), '.nepalkings')
@@ -147,13 +149,18 @@ def play(name, fade_ms=700):
         return False
     if _current_track == name:
         return True
+    volume = max(0.0, min(1.0, MASTER_VOLUME * TRACKS[name][1]))
+    if _IS_WEB:
+        stem, _ext = os.path.splitext(TRACKS[name][0])
+        if web_audio.play_music(stem + '.ogg', volume, fade_ms):
+            _current_track = name
+            return True
     channel = _get_channel()
     track = _load_track(name)
     if channel is None or track is None:
         return False
     try:
-        channel.set_volume(max(0.0, min(
-            1.0, MASTER_VOLUME * TRACKS[name][1])))
+        channel.set_volume(volume)
         channel.play(track, loops=-1, fade_ms=max(0, int(fade_ms)))
         _current_track = name
         return True
@@ -164,7 +171,8 @@ def play(name, fade_ms=700):
 def stop(fade_ms=350):
     """Fade the current track out while retaining the requested screen track."""
     global _current_track
-    if _channel is not None:
+    web_stopped = _IS_WEB and web_audio.stop_music(fade_ms)
+    if not web_stopped and _channel is not None:
         try:
             if fade_ms:
                 _channel.fadeout(max(0, int(fade_ms)))

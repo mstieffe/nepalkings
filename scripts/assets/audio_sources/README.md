@@ -21,6 +21,10 @@ the generated files compact without discarding the upper half of the audible
 band. The generated files are
 `nepal_kings/sound/music_<use>.wav` and `.ogg`.
 
+The web build publishes the OGG files beside `index.html` and plays them with
+the browser-native Web Audio API. This avoids distortion from SDL's realtime
+audio callback when a WebAssembly frame is late.
+
 The original 48 kHz WAV exports are retained locally as `Menu Suno Master.wav`,
 `Kingdom Suno Master.wav`, and `Battle Suno Master.wav`. They are Git-ignored
 and excluded from every game bundle.

@@ -10,7 +10,7 @@ import wave
 
 import pytest
 
-from utils import music, sound
+from utils import music, sound, web_audio
 
 
 @pytest.fixture(autouse=True)
@@ -121,6 +121,30 @@ def test_web_track_prefers_ogg(tmp_path, monkeypatch):
 
     assert music.play('menu') is True
     assert loaded == ['music_menu.ogg']
+
+
+def test_web_track_uses_native_audio_before_pygame(monkeypatch):
+    plays = []
+    stops = []
+    monkeypatch.setattr(music, '_IS_WEB', True)
+    monkeypatch.setattr(
+        web_audio, 'play_music',
+        lambda *args: plays.append(args) or True)
+    monkeypatch.setattr(
+        web_audio, 'stop_music',
+        lambda *args: stops.append(args) or True)
+    monkeypatch.setattr(
+        music, '_get_channel',
+        lambda: pytest.fail('Pygame mixer should not handle web music'))
+
+    assert music.play('kingdom', fade_ms=450) is True
+    assert plays == [(
+        'music_kingdom.ogg',
+        pytest.approx(music.MASTER_VOLUME * music.TRACKS['kingdom'][1]),
+        450,
+    )]
+    music.stop(fade_ms=200)
+    assert stops == [(200,)]
 
 
 def test_disabled_music_remembers_screen_and_resumes(tmp_path, monkeypatch):
