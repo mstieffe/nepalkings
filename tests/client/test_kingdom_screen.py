@@ -78,6 +78,56 @@ class TestKingdomLayout:
         assert map_viewport.top == map_frame.top + settings.KINGDOM_MAP_FRAME_PAD
         assert map_viewport.height == map_frame.height - 2 * settings.KINGDOM_MAP_FRAME_PAD
 
+    def test_collapsed_activity_gives_its_column_to_the_map(self):
+        from game.screens.kingdom_screen import _compute_kingdom_layout
+        from config import settings
+
+        expanded = _compute_kingdom_layout(activity_open=True)
+        collapsed = _compute_kingdom_layout(activity_open=False)
+
+        assert collapsed['map_frame'].left == expanded['map_frame'].left
+        assert collapsed['map_frame'].width > expanded['map_frame'].width
+        assert collapsed['map_frame'].right == (
+            collapsed['box'].right - int(0.020 * settings.SCREEN_HEIGHT)
+        )
+
+    def test_activity_toggle_resizes_viewport_and_repositions_map_widgets(self):
+        from game.screens.kingdom_screen import KingdomScreen, _compute_kingdom_layout
+        from config import settings
+
+        expanded = _compute_kingdom_layout(activity_open=True)
+        screen = KingdomScreen.__new__(KingdomScreen)
+        screen._mobile_ui = False
+        screen._activity_open = True
+        screen._layout = expanded
+        screen._map_frame_rect = expanded['map_frame']
+        screen._map_viewport_rect = expanded['map_viewport']
+        screen._activity_rect = expanded['activity']
+        screen._activity_panel_toggle_rect = pygame.Rect(1, 1, 10, 10)
+        screen._detail_box = None
+        screen._leaderboard_panel = MagicMock()
+
+        hm = SimpleNamespace(
+            viewport_rect=expanded['map_viewport'].copy(),
+            camera_x=100.0,
+            camera_y=80.0,
+            zoom=2.0,
+            minimap_origin=None,
+        )
+        hm.set_viewport = lambda rect: setattr(hm, 'viewport_rect', pygame.Rect(rect))
+        screen._hex_map = hm
+
+        KingdomScreen._set_activity_open(screen, False)
+
+        assert screen._activity_open is False
+        assert screen._map_viewport_rect.width > expanded['map_viewport'].width
+        assert hm.viewport_rect == screen._map_viewport_rect
+        assert hm.minimap_origin == (
+            screen._map_viewport_rect.right - settings.MINIMAP_W - settings.MINIMAP_MARGIN,
+            screen._map_viewport_rect.bottom - settings.MINIMAP_H - settings.MINIMAP_MARGIN,
+        )
+        screen._leaderboard_panel.set_rect.assert_called_once()
+
     def test_iphone_se_activity_rows_have_separate_title_detail_and_land_lines(self):
         _run_mobile_geometry_check("""
 import pygame
@@ -215,6 +265,18 @@ class TestKingdomActivityPanel:
 
         assert handled is True
         assert screen._activity_tab == 'history'
+
+    def test_desktop_panel_toggle_collapses_activity(self):
+        KingdomScreen, screen = self._screen()
+        screen._mobile_ui = False
+        screen._activity_open = True
+        screen._activity_panel_toggle_rect = pygame.Rect(270, 15, 24, 24)
+        screen._set_activity_open = MagicMock()
+
+        handled = KingdomScreen._handle_activity_click(screen, (280, 25))
+
+        assert handled is True
+        screen._set_activity_open.assert_called_once_with(False)
 
     def test_row_click_focuses_related_land(self):
         KingdomScreen, screen = self._screen()

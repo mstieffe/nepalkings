@@ -57,7 +57,7 @@ def _draw_panel(window, rect, corner_r=None):
                      settings.SUB_SCREEN_PANEL_BORDER_W, border_radius=r)
 
 
-def _compute_kingdom_layout():
+def _compute_kingdom_layout(activity_open=True):
     """Return non-overlapping layout rects for the kingdom dashboard."""
     box = pygame.Rect(_BOX_X, _BOX_Y, _BOX_W, _BOX_H)
     pad = _BOX_PAD
@@ -93,7 +93,8 @@ def _compute_kingdom_layout():
             activity_w,
             content_h,
         )
-        map_right = activity.x - gap
+        map_right = (activity.x - gap
+                     if activity_open else box.right - pad)
     map_frame = pygame.Rect(
         box.x + pad,
         content_top,
@@ -134,6 +135,7 @@ class KingdomScreen(MenuScreenMixin, Screen):
     _mobile_ui = settings.TOUCH_TARGET_MIN > 0
     _activity_open = True
     _layers_open = False
+    _activity_panel_toggle_rect = None
     _activity_tab_hit_rects = {}
     _mark_read_hit_rect = None
     _new_msg_hit_rect = None
@@ -171,6 +173,7 @@ class KingdomScreen(MenuScreenMixin, Screen):
         self._activity_open = not self._mobile_ui
         self._layers_open = False
         self._activity_toggle_rect = None
+        self._activity_panel_toggle_rect = None
         self._activity_close_rect = None
         self._activity_tab_hit_rects = {}
         self._mark_read_hit_rect = None
@@ -203,7 +206,7 @@ class KingdomScreen(MenuScreenMixin, Screen):
         self._message_cancel_rect = None
 
         # ── Layout ──────────────────────────────────────────────────
-        self._layout = _compute_kingdom_layout()
+        self._layout = _compute_kingdom_layout(self._activity_open)
         self._box_rect = self._layout['box']
         self._header_rect = self._layout['header']
         self._map_frame_rect = self._layout['map_frame']
@@ -448,28 +451,8 @@ class KingdomScreen(MenuScreenMixin, Screen):
         if hasattr(self._hex_map, 'set_map_mode'):
             self._hex_map.set_map_mode(self._map_mode)
 
-        # Position minimap inside the framed map viewport (bottom-right)
-        mm_w = settings.MINIMAP_W
-        mm_h = settings.MINIMAP_H
-        self._hex_map.minimap_origin = (
-            self._map_viewport_rect.right - mm_w - settings.MINIMAP_MARGIN,
-            self._map_viewport_rect.bottom - mm_h - settings.MINIMAP_MARGIN,
-        )
-
-        # Mirror the minimap geometry at the top-left of the map viewport
-        # for the leaderboard panel.  Twice the minimap height fits the
-        # two sections with a "you: rank" footer.
-        lb_w = mm_w
-        lb_h = int(mm_h * 2.1)
-        if self._mobile_ui:
-            # Expanded state is a temporary readable popover.  The panel
-            # starts collapsed below, so it occupies only one compact header
-            # until the player asks for rankings.
-            lb_w = min(int(0.34 * _SW), int(self._map_viewport_rect.w * 0.48))
-            lb_h = min(int(0.60 * _SH), int(self._map_viewport_rect.h * 0.94))
-        lb_x = self._map_viewport_rect.x + settings.MINIMAP_MARGIN
-        lb_y = self._map_viewport_rect.y + settings.MINIMAP_MARGIN
-        self._leaderboard_panel.set_rect((lb_x, lb_y, lb_w, lb_h))
+        # Keep the minimap and leaderboard pinned to the resized map corners.
+        self._position_map_overlays()
         if cold_load and self._mobile_ui:
             self._leaderboard_panel.collapsed = True
         self._leaderboard_panel.set_my_user_id(self._current_user_id())
@@ -825,7 +808,7 @@ class KingdomScreen(MenuScreenMixin, Screen):
             self.window.blit(self._title_surf, (tx, self._title_y))
         self._draw_info_bar()
         self._draw_map_frame()
-        if not self._mobile_ui:
+        if not self._mobile_ui and self._activity_open:
             self._draw_activity_panel()
 
         if self._loading:
@@ -1096,6 +1079,75 @@ class KingdomScreen(MenuScreenMixin, Screen):
         pygame.draw.rect(self.window, settings.KINGDOM_MAP_FRAME_BORDER, r,
                          settings.KINGDOM_MAP_FRAME_BORDER_W, border_radius=8)
 
+    def _position_map_overlays(self):
+        """Keep map-corner widgets aligned after the viewport changes size."""
+        vp = self._map_viewport_rect
+        hm = getattr(self, '_hex_map', None)
+        if hm is not None:
+            hm.minimap_origin = (
+                vp.right - settings.MINIMAP_W - settings.MINIMAP_MARGIN,
+                vp.bottom - settings.MINIMAP_H - settings.MINIMAP_MARGIN,
+            )
+
+        leaderboard = getattr(self, '_leaderboard_panel', None)
+        if leaderboard is None or not hasattr(leaderboard, 'set_rect'):
+            return
+        lb_w = settings.MINIMAP_W
+        lb_h = int(settings.MINIMAP_H * 2.1)
+        if self._mobile_ui:
+            lb_w = min(int(0.34 * _SW), int(vp.w * 0.48))
+            lb_h = min(int(0.60 * _SH), int(vp.h * 0.94))
+        leaderboard.set_rect((
+            vp.x + settings.MINIMAP_MARGIN,
+            vp.y + settings.MINIMAP_MARGIN,
+            lb_w,
+            lb_h,
+        ))
+
+    def _set_activity_open(self, is_open):
+        """Open/close Activity and let the desktop map reclaim its column."""
+        is_open = bool(is_open)
+        if self._activity_open == is_open:
+            return
+        self._activity_open = is_open
+        self._activity_toggle_rect = None
+        self._activity_panel_toggle_rect = None
+
+        # Mobile already renders Activity as an overlay over a full-width map.
+        if self._mobile_ui:
+            return
+
+        old_vp = pygame.Rect(self._map_viewport_rect)
+        layout = _compute_kingdom_layout(is_open)
+        self._layout = layout
+        self._map_frame_rect = layout['map_frame']
+        self._map_viewport_rect = layout['map_viewport']
+        self._activity_rect = layout['activity']
+
+        hm = getattr(self, '_hex_map', None)
+        set_viewport = getattr(hm, 'set_viewport', None)
+        if callable(set_viewport):
+            # Preserve the world point at the centre of the map while the
+            # viewport grows/shrinks, then clamp it to the legal map bounds.
+            zoom = max(0.001, float(getattr(hm, 'zoom', 1.0) or 1.0))
+            world_cx = getattr(hm, 'camera_x', 0.0) + old_vp.w / (2 * zoom)
+            world_cy = getattr(hm, 'camera_y', 0.0) + old_vp.h / (2 * zoom)
+            set_viewport(self._map_viewport_rect)
+            if hasattr(hm, 'camera_x') and hasattr(hm, 'camera_y'):
+                hm.camera_x = world_cx - self._map_viewport_rect.w / (2 * zoom)
+                hm.camera_y = world_cy - self._map_viewport_rect.h / (2 * zoom)
+                clamp = getattr(hm, '_clamp_camera', None)
+                if callable(clamp):
+                    clamp()
+
+        self._position_map_overlays()
+
+        detail = getattr(self, '_detail_box', None)
+        if (detail is not None and getattr(detail, '_anchored', False)
+                and hasattr(detail, '_build_layout')):
+            detail._viewport_rect = pygame.Rect(self._map_viewport_rect)
+            detail._build_layout()
+
     def _activity_scroll_offsets_map(self):
         offsets = getattr(self, '_activity_scroll_offsets', None)
         if not isinstance(offsets, dict):
@@ -1187,6 +1239,7 @@ class KingdomScreen(MenuScreenMixin, Screen):
         self._new_msg_hit_rect = None
         self._mark_read_hit_rect = None
         self._activity_close_rect = None
+        self._activity_panel_toggle_rect = None
 
         surf = pygame.Surface((r.w, r.h), pygame.SRCALPHA)
         panel_bg = ((22, 20, 28, 246) if self._mobile_ui
@@ -1205,7 +1258,8 @@ class KingdomScreen(MenuScreenMixin, Screen):
                 or (self._activity_tab == 'messages' and self._message_unread_count)
             )
             title_label = 'Activity' if self._mobile_ui else 'Kingdom Activity'
-            title_max_w = r.w - (152 if self._mobile_ui else (140 if has_mark_read else 20))
+            title_max_w = r.w - (
+                152 if self._mobile_ui else (168 if has_mark_read else 48))
             title_label = self._fit_text(title_label, self._activity_title_font, title_max_w)
             title = self._activity_title_font.render(title_label, True, settings.KINGDOM_INFO_CLR)
             title_y = r.y + (12 if self._mobile_ui else 8)
@@ -1221,6 +1275,24 @@ class KingdomScreen(MenuScreenMixin, Screen):
                                                          (230, 214, 180))
                 self.window.blit(close, close.get_rect(
                     center=self._activity_close_rect.center))
+            else:
+                toggle_sz = max(22, self._activity_title_font.get_height() + 6)
+                self._activity_panel_toggle_rect = pygame.Rect(
+                    r.right - toggle_sz - 7, r.y + 5, toggle_sz, toggle_sz)
+                hovered = self._activity_panel_toggle_rect.collidepoint(
+                    pygame.mouse.get_pos())
+                toggle_bg = ((72, 64, 88, 235) if hovered
+                             else settings.KINGDOM_ACTIVITY_TAB_BG)
+                pygame.draw.rect(self.window, toggle_bg,
+                                 self._activity_panel_toggle_rect,
+                                 border_radius=5)
+                pygame.draw.rect(self.window, settings.KINGDOM_ACTIVITY_BORDER,
+                                 self._activity_panel_toggle_rect, 1,
+                                 border_radius=5)
+                caret = self._activity_title_font.render(
+                    '\u203a', True, settings.KINGDOM_ACTIVITY_TEXT_CLR)
+                self.window.blit(caret, caret.get_rect(
+                    center=self._activity_panel_toggle_rect.center))
 
             msg_label = 'Messages'
             if self._message_unread_count:
@@ -1269,7 +1341,8 @@ class KingdomScreen(MenuScreenMixin, Screen):
             if self._activity_tab == 'alerts' and rows:
                 mark_w = 104
                 mark_h = settings.TOUCH_COMPACT_MIN if self._mobile_ui else 20
-                right_pad = (settings.TOUCH_ICON_MIN + 16) if self._mobile_ui else 14
+                right_pad = ((settings.TOUCH_ICON_MIN + 16) if self._mobile_ui
+                             else self._activity_panel_toggle_rect.w + 20)
                 self._mark_read_rect = pygame.Rect(
                     r.right - right_pad - mark_w, r.y + 6, mark_w, mark_h)
                 self._mark_read_kind = 'alerts'
@@ -1282,7 +1355,8 @@ class KingdomScreen(MenuScreenMixin, Screen):
             elif self._activity_tab == 'messages' and self._message_unread_count:
                 mark_w = 104
                 mark_h = settings.TOUCH_COMPACT_MIN if self._mobile_ui else 20
-                right_pad = (settings.TOUCH_ICON_MIN + 16) if self._mobile_ui else 14
+                right_pad = ((settings.TOUCH_ICON_MIN + 16) if self._mobile_ui
+                             else self._activity_panel_toggle_rect.w + 20)
                 self._mark_read_rect = pygame.Rect(
                     r.right - right_pad - mark_w, r.y + 6, mark_w, mark_h)
                 self._mark_read_kind = 'messages'
@@ -2206,9 +2280,9 @@ class KingdomScreen(MenuScreenMixin, Screen):
             if key == self._map_toolbar_toggle_at_pos(pos):
                 if key == 'layers_toggle':
                     self._layers_open = not self._layers_open
-                    self._activity_open = False
+                    self._set_activity_open(False)
                 elif key == 'activity_toggle':
-                    self._activity_open = not self._activity_open
+                    self._set_activity_open(not self._activity_open)
                     self._layers_open = False
             return True
         return True
@@ -2298,10 +2372,10 @@ class KingdomScreen(MenuScreenMixin, Screen):
                 if (self._activity_close_rect
                         and self._activity_close_rect.collidepoint(event.pos)):
                     if event.type == MOUSEBUTTONUP:
-                        self._activity_open = False
+                        self._set_activity_open(False)
                     continue
                 if not self._activity_rect.collidepoint(event.pos):
-                    self._activity_open = False
+                    self._set_activity_open(False)
                     self._cancel_hex_map_drag()
                     continue
                 if event.type == MOUSEBUTTONDOWN:
@@ -2356,7 +2430,7 @@ class KingdomScreen(MenuScreenMixin, Screen):
                 continue
 
             if event.type == MOUSEWHEEL:
-                if ((not self._mobile_ui or self._activity_open)
+                if (self._activity_open
                         and self._activity_rect.collidepoint(pygame.mouse.get_pos())):
                     # Prefer precise_y so a slow trackpad swipe (which yields
                     # fractional deltas that int() would truncate to 0) still
@@ -2386,13 +2460,13 @@ class KingdomScreen(MenuScreenMixin, Screen):
                         and self._mobile_ui and self._layers_toggle_rect
                         and self._layers_toggle_rect.collidepoint(event.pos)):
                     self._layers_open = not self._layers_open
-                    self._activity_open = False
+                    self._set_activity_open(False)
                     continue
 
                 if (not map_drag_release
                         and self._mobile_ui and self._activity_toggle_rect
                         and self._activity_toggle_rect.collidepoint(event.pos)):
-                    self._activity_open = not self._activity_open
+                    self._set_activity_open(not self._activity_open)
                     self._layers_open = False
                     continue
 
@@ -2635,10 +2709,14 @@ class KingdomScreen(MenuScreenMixin, Screen):
 
     def _handle_activity_click(self, pos):
         """Handle clicks in the right activity panel. Returns True if handled."""
-        if self._mobile_ui and not self._activity_open:
+        if not self._activity_open:
             return False
         if not self._activity_rect.collidepoint(pos):
             return False
+        panel_toggle = getattr(self, '_activity_panel_toggle_rect', None)
+        if panel_toggle and panel_toggle.collidepoint(pos):
+            self._set_activity_open(False)
+            return True
         if (self._mark_read_hit_rect
                 and self._mark_read_hit_rect.collidepoint(pos)):
             if self._mark_read_kind == 'messages':
@@ -2696,7 +2774,7 @@ class KingdomScreen(MenuScreenMixin, Screen):
                     if tile:
                         self.state.set_msg(f'Focused {self._activity_land_label(item)}')
                         if self._mobile_ui:
-                            self._activity_open = False
+                            self._set_activity_open(False)
                 return True
         return True
 
@@ -3307,12 +3385,29 @@ class KingdomScreen(MenuScreenMixin, Screen):
 
     # ── Hover preview ────────────────────────────────────────────────
 
-    def _draw_hover_preview(self):
-        """Draw a compact info card next to the hovered hex.
+    @staticmethod
+    def _hover_preview_lines(tile):
+        """Return the deliberately small set of facts shown before a click."""
+        title = f'Land ({tile.col}, {tile.row})  \u00b7  Tier {int(tile.tier)}'
+        if (tile.suit_bonus_suit and tile.suit_bonus_suit != 'Neutral'
+                and tile.suit_bonus_value):
+            suit = f'{tile.suit_bonus_suit} +{tile.suit_bonus_value}'
+        else:
+            suit = 'Neutral'
+        stats = f'{tile.gold_rate:.1f} gold/hr  \u00b7  {suit}'
+        if tile.is_mine:
+            owner = 'Yours'
+        elif getattr(tile, 'owner_username', None):
+            owner = f'Owner: {tile.owner_username}'
+        else:
+            owner = 'Unclaimed'
+        return title, stats, owner
 
-        Reveals production, tier, suit bonus, owner and (for enemy/neutral
-        land) what conquering it would mean — so players can scan and compare
-        lands without opening the inspector.
+    def _draw_hover_preview(self):
+        """Draw a small summary next to the hovered hex.
+
+        The click-open inspector owns shields, conquest outcomes, cooldowns,
+        and the rest of the detailed land information.
         """
         hm = self._hex_map
         if not hm or self._loading or self._error:
@@ -3330,50 +3425,27 @@ class KingdomScreen(MenuScreenMixin, Screen):
                 and getattr(self._detail_box.tile, 'land_id', None) == tile.land_id):
             return
 
-        tan = getattr(settings, 'KINGDOM_INFO_CLR', (214, 200, 168))
         title_clr = getattr(settings, 'LAND_DETAIL_TITLE_CLR', (236, 214, 150))
         dim = getattr(settings, 'KINGDOM_ACTIVITY_DIM_CLR', (150, 140, 120))
         good = getattr(settings, 'KINGDOM_CONFIG_GOOD_CLR', (132, 220, 142))
 
-        # Build (kind, text, color) rows.
-        rows = [('title', f'Land ({tile.col}, {tile.row})', title_clr),
-                ('tier', f'Tier {int(tile.tier)}', tan),
-                ('body', f'{tile.gold_rate:.1f} gold / hour', tan)]
-        if (tile.suit_bonus_suit and tile.suit_bonus_suit != 'Neutral'
-                and tile.suit_bonus_value):
-            rows.append(('body',
-                         f'Suit: {tile.suit_bonus_suit} +{tile.suit_bonus_value}',
-                         tan))
-        else:
-            rows.append(('body', 'Neutral land (no suit bonus)', dim))
+        title_text, stats_text, owner_text = self._hover_preview_lines(tile)
         if tile.is_mine:
-            rows.append(('body', 'Owner: You', good))
+            owner_clr = good
         elif getattr(tile, 'owner_username', None):
-            rows.append(('body', f'Owner: {tile.owner_username}', tan))
+            owner_clr = settings.KINGDOM_INFO_CLR
         else:
-            rows.append(('body', 'Unclaimed (AI defended)', dim))
-        if not tile.is_mine:
-            shield = getattr(tile, 'kingdom_shield_remaining', 0) or 0
-            reason = getattr(tile, 'kingdom_shield_reason', None)
-            if reason == 'core_protection' or shield < 0:
-                rows.append(('body', 'Protected: cannot be conquered',
-                             (216, 132, 132)))
-            elif shield > 0:
-                rows.append(('body', 'Kingdom shield active', (216, 168, 116)))
-            else:
-                outcome = hm.conquest_outcome_for(tile)
-                if outcome == 'expand':
-                    rows.append(('body', 'Conquer: expands your kingdom',
-                                 (124, 202, 124)))
-                elif outcome:
-                    rows.append(('body', 'Conquer: starts a new kingdom',
-                                 (205, 178, 112)))
+            owner_clr = dim
+        rows = [
+            ('title', title_text, title_clr),
+            ('body', stats_text, settings.KINGDOM_INFO_CLR),
+            ('body', owner_text, owner_clr),
+        ]
 
         title_font = self._activity_title_font
         body_font = self._activity_font
-        pad = max(6, int(0.008 * settings.SCREEN_HEIGHT))
-        gap = 3
-        pip_r = max(2, int(body_font.get_height() * 0.18))
+        pad = max(5, int(0.006 * settings.SCREEN_HEIGHT))
+        gap = 2
 
         # Measure.
         surfs = []
@@ -3383,8 +3455,6 @@ class KingdomScreen(MenuScreenMixin, Screen):
             font = title_font if kind == 'title' else body_font
             surf = font.render(text, True, clr)
             w = surf.get_width()
-            if kind == 'tier':
-                w += int(tile.tier) * (pip_r * 2 + 3) + 6
             max_w = max(max_w, w)
             surfs.append((kind, surf))
             total_h += surf.get_height() + gap
@@ -3411,23 +3481,14 @@ class KingdomScreen(MenuScreenMixin, Screen):
         # Panel.
         panel = pygame.Surface((card_w, card_h), pygame.SRCALPHA)
         pygame.draw.rect(panel, (24, 20, 15, 234), panel.get_rect(),
-                         border_radius=8)
+                         border_radius=6)
         pygame.draw.rect(panel, settings.KINGDOM_MAP_FRAME_BORDER,
-                         panel.get_rect(), 1, border_radius=8)
+                         panel.get_rect(), 1, border_radius=6)
         self.window.blit(panel, (cx, cy))
 
         y = cy + pad
         for kind, surf in surfs:
             self.window.blit(surf, (cx + pad, y))
-            if kind == 'tier':
-                px = cx + pad + surf.get_width() + 6
-                py = y + surf.get_height() // 2
-                for _ in range(int(tile.tier)):
-                    pygame.draw.circle(self.window, settings.HEX_STAR_FILL,
-                                       (px + pip_r, py), pip_r)
-                    pygame.draw.circle(self.window, settings.HEX_STAR_BORDER,
-                                       (px + pip_r, py), pip_r, 1)
-                    px += pip_r * 2 + 3
             y += surf.get_height() + gap
 
     # ── Map scan modes toolbar ───────────────────────────────────────
@@ -3461,6 +3522,18 @@ class KingdomScreen(MenuScreenMixin, Screen):
             h = max(h, bh)
         total_w -= gap
 
+        activity_button = None
+        if not self._activity_open:
+            count = self._mobile_activity_count()
+            activity_label = '\u2039 Activity'
+            if count:
+                activity_label += f' {count}'
+            tw, th = font.size(activity_label)
+            activity_w = tw + pad_x * 2
+            activity_button = (activity_label, activity_w)
+            total_w += gap + activity_w
+            h = max(h, th + pad_y * 2)
+
         x = vp.right - margin - total_w
         y = vp.y + margin
         mx, my = pygame.mouse.get_pos()
@@ -3482,6 +3555,22 @@ class KingdomScreen(MenuScreenMixin, Screen):
             self.window.blit(tsurf, tsurf.get_rect(center=rect.center))
             self._map_mode_rects[key] = rect
             x += bw + gap
+
+        if activity_button:
+            label, bw = activity_button
+            rect = pygame.Rect(x, y, bw, h)
+            hovered = rect.collidepoint(mx, my)
+            bg = ((72, 64, 88, 238) if hovered else (42, 38, 52, 224))
+            border = ((210, 194, 225) if hovered
+                      else settings.KINGDOM_ACTIVITY_BORDER)
+            bsurf = pygame.Surface((bw, h), pygame.SRCALPHA)
+            pygame.draw.rect(bsurf, bg, bsurf.get_rect(), border_radius=6)
+            pygame.draw.rect(bsurf, border, bsurf.get_rect(), 1,
+                             border_radius=6)
+            self.window.blit(bsurf, rect.topleft)
+            tsurf = font.render(label, True, settings.KINGDOM_ACTIVITY_TEXT_CLR)
+            self.window.blit(tsurf, tsurf.get_rect(center=rect.center))
+            self._activity_toggle_rect = rect
 
         self._draw_map_mode_legend(vp, y + h + max(3, pad_y), margin)
 

@@ -261,6 +261,19 @@ def test_hover_preview_draws_for_hovered_tile():
     assert _drew_something(_hover_screen(_tile(owner=None, owner_username=None)))
 
 
+def test_hover_preview_keeps_only_land_stats_and_owner_summary():
+    from game.screens.kingdom_screen import KingdomScreen
+
+    lines = KingdomScreen._hover_preview_lines(_tile())
+
+    assert lines == (
+        'Land (2, 3)  ·  Tier 2',
+        '4.2 gold/hr  ·  Spades +2',
+        'Owner: rival',
+    )
+    assert not any('Conquer' in line or 'shield' in line for line in lines)
+
+
 def test_hover_preview_suppressed_without_hover():
     s = _hover_screen(_tile())
     s._hex_map.hovered_tile = None
