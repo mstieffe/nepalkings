@@ -108,17 +108,36 @@ def _draw_wolf(surf, sz, color):
 
 def _draw_lotus(surf, sz, color):
     o = _outline(color)
-    cx, cy = sz / 2, sz * 0.60
-    petal_r = sz * 0.30
-    for ang_deg in (-90, -45, 0, 45, 90, 135, 180, 225):
-        ang = math.radians(ang_deg)
-        px = cx + math.cos(ang) * petal_r * 0.55
-        py = cy + math.sin(ang) * petal_r * 0.55
-        pygame.draw.ellipse(surf, color,
-                            (px - petal_r * 0.45, py - petal_r * 0.25,
-                             petal_r * 0.9, petal_r * 0.5))
-    pygame.draw.circle(surf, o, (int(cx), int(cy)),
-                       max(2, int(sz * 0.10)))
+    cx = sz / 2
+    base_y = sz * 0.78
+    ow = max(1, int(sz * 0.04))
+
+    def petal(tip_x, tip_y, base_l, base_r, bulge):
+        pts = [
+            (tip_x, tip_y),
+            (tip_x + bulge, (tip_y + base_r[1]) / 2),
+            base_r,
+            base_l,
+            (tip_x - bulge, (tip_y + base_l[1]) / 2),
+        ]
+        pygame.draw.polygon(surf, color, pts)
+        pygame.draw.polygon(surf, o, pts, ow)
+
+    # Outer petals droop almost horizontal (reads floral, not crown-like),
+    # inner pair rises, centre petal tallest.
+    petal(cx - sz * 0.44, sz * 0.56,
+          (cx - sz * 0.28, base_y), (cx - sz * 0.10, base_y), sz * 0.11)
+    petal(cx + sz * 0.44, sz * 0.56,
+          (cx + sz * 0.10, base_y), (cx + sz * 0.28, base_y), sz * 0.11)
+    petal(cx - sz * 0.22, sz * 0.26,
+          (cx - sz * 0.20, base_y), (cx - sz * 0.02, base_y), sz * 0.10)
+    petal(cx + sz * 0.22, sz * 0.26,
+          (cx + sz * 0.02, base_y), (cx + sz * 0.20, base_y), sz * 0.10)
+    petal(cx, sz * 0.12,
+          (cx - sz * 0.11, base_y), (cx + sz * 0.11, base_y), sz * 0.12)
+    # Water line under the bloom.
+    pygame.draw.line(surf, o, (cx - sz * 0.34, base_y + ow * 2),
+                     (cx + sz * 0.34, base_y + ow * 2), ow)
 
 
 def _draw_tower(surf, sz, color):
@@ -215,36 +234,73 @@ def _draw_lion(surf, sz, color):
 
 def _draw_phoenix(surf, sz, color):
     o = _outline(color)
-    # Spread wings + flame tail
-    pygame.draw.polygon(surf, color, [
-        (sz * 0.50, sz * 0.10), (sz * 0.20, sz * 0.50),
-        (sz * 0.10, sz * 0.85), (sz * 0.35, sz * 0.65),
-        (sz * 0.50, sz * 0.90), (sz * 0.65, sz * 0.65),
-        (sz * 0.90, sz * 0.85), (sz * 0.80, sz * 0.50),
-    ])
-    pygame.draw.polygon(surf, o, [
-        (sz * 0.50, sz * 0.10), (sz * 0.20, sz * 0.50),
-        (sz * 0.10, sz * 0.85), (sz * 0.35, sz * 0.65),
-        (sz * 0.50, sz * 0.90), (sz * 0.65, sz * 0.65),
-        (sz * 0.90, sz * 0.85), (sz * 0.80, sz * 0.50),
-    ], max(1, int(sz * 0.04)))
+    ow = max(1, int(sz * 0.04))
+    # Rising bird: wings swept UP above the head (distinct from the
+    # mountain sigil's peaks-down silhouette), flame tail streaming below.
+    for side in (-1, 1):
+        wing = [
+            (sz * 0.50, sz * 0.42),
+            (sz * (0.50 + side * 0.12), sz * 0.34),
+            (sz * (0.50 + side * 0.42), sz * 0.08),
+            (sz * (0.50 + side * 0.34), sz * 0.34),
+            (sz * (0.50 + side * 0.40), sz * 0.30),
+            (sz * (0.50 + side * 0.26), sz * 0.50),
+        ]
+        pygame.draw.polygon(surf, color, wing)
+        pygame.draw.polygon(surf, o, wing, ow)
+    # Body + head.
+    body = [
+        (sz * 0.50, sz * 0.30),
+        (sz * 0.58, sz * 0.48),
+        (sz * 0.50, sz * 0.66),
+        (sz * 0.42, sz * 0.48),
+    ]
+    pygame.draw.polygon(surf, color, body)
+    pygame.draw.polygon(surf, o, body, ow)
+    head_r = max(2, int(sz * 0.07))
+    pygame.draw.circle(surf, color, (int(sz * 0.50), int(sz * 0.26)), head_r)
+    pygame.draw.circle(surf, o, (int(sz * 0.50), int(sz * 0.26)), head_r, 1)
+    # Three flame-tail streamers.
+    for dx, length in ((-0.10, 0.82), (0.0, 0.92), (0.10, 0.82)):
+        tail = [
+            (sz * 0.50, sz * 0.60),
+            (sz * (0.50 + dx - 0.035), sz * 0.68),
+            (sz * (0.50 + dx * 1.6), sz * length),
+            (sz * (0.50 + dx + 0.035), sz * 0.68),
+        ]
+        pygame.draw.polygon(surf, color, tail)
+        pygame.draw.polygon(surf, o, tail, 1)
 
 
 def _draw_dragon(surf, sz, color):
     o = _outline(color)
-    # Serpentine body with wings
-    pts = [
-        (sz * 0.10, sz * 0.55), (sz * 0.25, sz * 0.30),
-        (sz * 0.45, sz * 0.40), (sz * 0.55, sz * 0.20),
-        (sz * 0.78, sz * 0.30), (sz * 0.90, sz * 0.55),
-        (sz * 0.75, sz * 0.75), (sz * 0.55, sz * 0.65),
-        (sz * 0.40, sz * 0.85), (sz * 0.25, sz * 0.78),
+    ow = max(1, int(sz * 0.04))
+    # Horned dragon head in profile, jaws open toward the right.
+    head = [
+        (sz * 0.16, sz * 0.52),   # back of neck
+        (sz * 0.24, sz * 0.34),   # back of skull
+        (sz * 0.44, sz * 0.26),   # crown
+        (sz * 0.88, sz * 0.38),   # upper snout tip
+        (sz * 0.56, sz * 0.48),   # inside of open mouth
+        (sz * 0.80, sz * 0.62),   # lower jaw tip
+        (sz * 0.50, sz * 0.66),   # jaw hinge
+        (sz * 0.42, sz * 0.88),   # neck front
+        (sz * 0.18, sz * 0.88),   # neck back
     ]
-    pygame.draw.polygon(surf, color, pts)
-    pygame.draw.polygon(surf, o, pts, max(1, int(sz * 0.04)))
-    # Eye
+    pygame.draw.polygon(surf, color, head)
+    pygame.draw.polygon(surf, o, head, ow)
+    # Two swept-back horns.
+    for base_x, tip_x, tip_y in ((0.30, 0.14, 0.10), (0.44, 0.32, 0.04)):
+        horn = [
+            (sz * base_x, sz * 0.30),
+            (sz * tip_x, sz * tip_y),
+            (sz * (base_x + 0.10), sz * 0.27),
+        ]
+        pygame.draw.polygon(surf, color, horn)
+        pygame.draw.polygon(surf, o, horn, 1)
+    # Eye.
     pygame.draw.circle(surf, o,
-                       (int(sz * 0.78), int(sz * 0.40)),
+                       (int(sz * 0.52), int(sz * 0.38)),
                        max(2, int(sz * 0.05)))
 
 
@@ -267,21 +323,98 @@ def _draw_crown(surf, sz, color):
 
 def _draw_serpent(surf, sz, color):
     o = _outline(color)
-    # S-curve drawn as a thick poly-line
-    pts = []
+    # Upright cobra: thick tapering S-coil rising to a hooded head.
     steps = 24
+    pts = []
     for i in range(steps + 1):
         t = i / steps
-        x = sz * 0.10 + (sz * 0.80) * t
-        y = sz * 0.50 + math.sin(t * math.pi * 2.0) * sz * 0.22
+        x = sz * 0.50 + math.sin(t * math.pi * 1.8 + math.pi) * sz * 0.24
+        y = sz * 0.88 - (sz * 0.58) * t
         pts.append((x, y))
-    pygame.draw.lines(surf, color, False, pts, max(3, int(sz * 0.10)))
-    # Head
-    head_cx, head_cy = pts[-1]
-    pygame.draw.circle(surf, color, (int(head_cx), int(head_cy)),
-                       max(2, int(sz * 0.10)))
-    pygame.draw.circle(surf, o, (int(head_cx), int(head_cy)),
-                       max(2, int(sz * 0.10)), 1)
+    # Taper: tail thin, body thick (three width bands).
+    band = max(1, len(pts) // 3)
+    for seg, width_f in ((pts[:band + 1], 0.07),
+                         (pts[band:2 * band + 1], 0.11),
+                         (pts[2 * band:], 0.15)):
+        if len(seg) >= 2:
+            pygame.draw.lines(surf, color, False, seg,
+                              max(2, int(sz * width_f)))
+    # Hooded head: wide teardrop atop the coil.
+    hx, hy = pts[-1]
+    hood = [
+        (hx - sz * 0.16, hy + sz * 0.02),
+        (hx, hy - sz * 0.20),
+        (hx + sz * 0.16, hy + sz * 0.02),
+        (hx, hy + sz * 0.10),
+    ]
+    pygame.draw.polygon(surf, color, hood)
+    pygame.draw.polygon(surf, o, hood, max(1, int(sz * 0.04)))
+    # Eyes + forked tongue.
+    eye_r = max(1, int(sz * 0.035))
+    pygame.draw.circle(surf, o, (int(hx - sz * 0.06), int(hy - sz * 0.04)), eye_r)
+    pygame.draw.circle(surf, o, (int(hx + sz * 0.06), int(hy - sz * 0.04)), eye_r)
+    tongue_w = max(1, int(sz * 0.03))
+    pygame.draw.line(surf, o, (hx, hy - sz * 0.20), (hx, hy - sz * 0.28), tongue_w)
+    pygame.draw.line(surf, o, (hx, hy - sz * 0.28),
+                     (hx - sz * 0.05, hy - sz * 0.34), tongue_w)
+    pygame.draw.line(surf, o, (hx, hy - sz * 0.28),
+                     (hx + sz * 0.05, hy - sz * 0.34), tongue_w)
+
+
+def _draw_yak(surf, sz, color):
+    o = _outline(color)
+    ow = max(1, int(sz * 0.04))
+    # Head-on yak: broad shaggy face with wide up-swept horns.
+    face = [
+        (sz * 0.32, sz * 0.30), (sz * 0.68, sz * 0.30),
+        (sz * 0.78, sz * 0.55), (sz * 0.66, sz * 0.90),
+        (sz * 0.34, sz * 0.90), (sz * 0.22, sz * 0.55),
+    ]
+    pygame.draw.polygon(surf, color, face)
+    pygame.draw.polygon(surf, o, face, ow)
+    for side in (-1, 1):
+        horn = [
+            (sz * (0.5 + side * 0.16), sz * 0.34),
+            (sz * (0.5 + side * 0.44), sz * 0.24),
+            (sz * (0.5 + side * 0.34), sz * 0.06),
+            (sz * (0.5 + side * 0.28), sz * 0.26),
+        ]
+        pygame.draw.polygon(surf, color, horn)
+        pygame.draw.polygon(surf, o, horn, 1)
+    eye_r = max(1, int(sz * 0.045))
+    pygame.draw.circle(surf, o, (int(sz * 0.40), int(sz * 0.50)), eye_r)
+    pygame.draw.circle(surf, o, (int(sz * 0.60), int(sz * 0.50)), eye_r)
+    # Muzzle band + nostrils.
+    pygame.draw.line(surf, o, (sz * 0.38, sz * 0.72), (sz * 0.62, sz * 0.72),
+                     max(1, int(sz * 0.03)))
+    pygame.draw.circle(surf, o, (int(sz * 0.44), int(sz * 0.80)), eye_r)
+    pygame.draw.circle(surf, o, (int(sz * 0.56), int(sz * 0.80)), eye_r)
+
+
+def _draw_stupa(surf, sz, color):
+    o = _outline(color)
+    ow = max(1, int(sz * 0.04))
+    # Boudhanath-style stupa: dome, harmika with painted eyes, spire.
+    dome = pygame.Rect(int(sz * 0.18), int(sz * 0.44),
+                       int(sz * 0.64), int(sz * 0.42))
+    pygame.draw.ellipse(surf, color, dome)
+    pygame.draw.ellipse(surf, o, dome, ow)
+    base = pygame.Rect(int(sz * 0.10), int(sz * 0.76),
+                       int(sz * 0.80), int(sz * 0.14))
+    pygame.draw.rect(surf, color, base)
+    pygame.draw.rect(surf, o, base, 1)
+    spire = [(sz * 0.50, sz * 0.02), (sz * 0.60, sz * 0.30),
+             (sz * 0.40, sz * 0.30)]
+    pygame.draw.polygon(surf, color, spire)
+    pygame.draw.polygon(surf, o, spire, 1)
+    box = pygame.Rect(int(sz * 0.36), int(sz * 0.30),
+                      int(sz * 0.28), int(sz * 0.18))
+    pygame.draw.rect(surf, color, box)
+    pygame.draw.rect(surf, o, box, 1)
+    # The Buddha eyes that make the silhouette read instantly.
+    eye_r = max(1, int(sz * 0.035))
+    pygame.draw.circle(surf, o, (int(sz * 0.44), int(sz * 0.38)), eye_r)
+    pygame.draw.circle(surf, o, (int(sz * 0.56), int(sz * 0.38)), eye_r)
 
 
 _SHAPE_DRAWERS = {
@@ -298,4 +431,6 @@ _SHAPE_DRAWERS = {
     'dragon':   _draw_dragon,
     'crown':    _draw_crown,
     'serpent':  _draw_serpent,
+    'yak':      _draw_yak,
+    'stupa':    _draw_stupa,
 }

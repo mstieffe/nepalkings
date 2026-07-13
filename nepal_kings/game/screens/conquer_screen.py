@@ -57,7 +57,7 @@ from game.components.battle_moves.battle_move_detail_box import BattleMoveDetail
 from game.components.spells.spell_manager import SpellManager
 from game.components.easing import ease_out_back
 from game.components.loading_indicator import draw_loading_indicator
-from game.core.game import Game
+from game.core.game import Game, battle_required_field
 from game.core.screen_routing import gameplay_screen_for
 from utils.game_service import fetch_game
 from config import settings
@@ -1961,12 +1961,18 @@ class ConquerScreen(MenuScreenMixin, Screen):
         moves = self._config.get('battle_moves', [])
 
         prelude = self._config.get('prelude_spell_name')
-        village_only = prelude in ('Peasant War', 'Civil War')
+        modifiers = [{'type': prelude}] if prelude else []
+        legacy_modifier = self._config.get('battle_modifier')
+        if isinstance(legacy_modifier, dict):
+            modifiers.append(legacy_modifier)
+        elif isinstance(legacy_modifier, list):
+            modifiers.extend(legacy_modifier)
+        required_field = battle_required_field(modifiers)
 
         has_valid_figure = any(
             not f.get('has_deficit', False)
             and not f.get('cannot_attack', False)
-            and (not village_only or f.get('field') == 'village')
+            and (not required_field or f.get('field') == required_field)
             for f in figures
         )
         has_moves = len(moves) == 3
@@ -1982,7 +1988,13 @@ class ConquerScreen(MenuScreenMixin, Screen):
         figures = self._config.get('figures', [])
         moves = self._config.get('battle_moves', [])
         prelude = self._config.get('prelude_spell_name')
-        village_only = prelude in ('Peasant War', 'Civil War')
+        modifiers = [{'type': prelude}] if prelude else []
+        legacy_modifier = self._config.get('battle_modifier')
+        if isinstance(legacy_modifier, dict):
+            modifiers.append(legacy_modifier)
+        elif isinstance(legacy_modifier, list):
+            modifiers.extend(legacy_modifier)
+        required_field = battle_required_field(modifiers)
 
         if not figures:
             problems.append('No figures on the field.')
@@ -2000,14 +2012,17 @@ class ConquerScreen(MenuScreenMixin, Screen):
                     problems.append('All figures that can fight have a resource deficit.')
                 else:
                     problems.append('No figure on the field is able to advance into battle.')
-            elif village_only:
-                village_advance = [
-                    f for f in can_advance if f.get('field') == 'village'
+            elif required_field:
+                field_advance = [
+                    f for f in can_advance if f.get('field') == required_field
                 ]
-                if not village_advance:
+                if not field_advance:
+                    modifier_name = (
+                        'Royal Decree' if required_field == 'castle' else prelude
+                    )
                     problems.append(
-                        f'{prelude} is selected — only village figures can advance, '
-                        'but none of your village figures are able to fight.'
+                        f'{modifier_name} is selected — only {required_field} figures can advance, '
+                        f'but none of your {required_field} figures are able to fight.'
                     )
 
         if len(moves) < 3:
@@ -2193,6 +2208,7 @@ class ConquerScreen(MenuScreenMixin, Screen):
             # survives the game-object lifecycle and is naturally absent on
             # a reload/resume (which should not replay the countdown).
             self.state.conquer_battle_countdown_pending = True
+            sound.play('attack_launch')
             self.state.screen = gameplay_screen_for(self.state.game)
             logger.info(f'Battle started: game_id={game_id}')
             return
@@ -2297,6 +2313,7 @@ class ConquerScreen(MenuScreenMixin, Screen):
             self.state.game = Game(game_dict, self.state.user_dict, lightweight=True)
             # See _drain_start_battle_native: flag the battle-start moment.
             self.state.conquer_battle_countdown_pending = True
+            sound.play('attack_launch')
             self.state.screen = gameplay_screen_for(self.state.game)
             logger.info(f'Battle started: game_id={game_id}')
 

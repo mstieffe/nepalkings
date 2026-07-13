@@ -4,6 +4,11 @@ import math
 import pygame
 from pygame.locals import *
 from config import settings
+from game.core.game import (
+    battle_modifier_types,
+    battle_required_field,
+    civil_war_pick_flow_active,
+)
 from game.core.figure_buffs import apply_buffs_allies_to_icon_map
 from game.components.conquer_layout import compute_conquer_layout
 from game.components.easing import ease_out_back
@@ -379,13 +384,14 @@ class FieldScreen(SubScreen):
         village-only modifiers.
         """
         game = self.game
-        modifiers = game.battle_modifier if game and isinstance(game.battle_modifier, list) else []
-        types = [m.get('type') for m in modifiers if isinstance(m, dict)]
-        if 'Royal Decree' in types:
+        modifiers = getattr(game, 'battle_modifier', None) if game else None
+        types = battle_modifier_types(modifiers)
+        required_field = battle_required_field(modifiers)
+        if required_field == 'castle':
             return 'castle', 'Royal Decree'
-        if 'Peasant War' in types:
+        if required_field == 'village' and 'Peasant War' in types:
             return 'village', 'Peasant War'
-        if 'Civil War' in types:
+        if required_field == 'village' and 'Civil War' in types:
             return 'village', 'Civil War'
         return None, None
 
@@ -2833,7 +2839,7 @@ class FieldScreen(SubScreen):
                                    secondary=(255, 240, 200),
                                    count=18, delay_ms=fx.PROJECTILE_MS)
             from utils import sound
-            sound.play('booster_reveal', volume=0.8)
+            sound.play_spell(selected_spell.name)
 
             # For Explosion spells, don't apply enchantment locally since figure is destroyed
             # Just update from server to remove the figure
@@ -3791,6 +3797,8 @@ class FieldScreen(SubScreen):
         game = self.game
         if not game or figure is None:
             return False
+        if battle_required_field(getattr(game, 'battle_modifier', None)) == 'castle':
+            return False
         if figure.player_id != game.player_id:
             return False
         if self._figure_field(figure) != 'village':
@@ -3814,12 +3822,19 @@ class FieldScreen(SubScreen):
             return False
         if figure.player_id != game.player_id:
             return False
-        modifier_types = self._active_modifier_types()
-        if (('Peasant War' in modifier_types or 'Civil War' in modifier_types)
-                and self._figure_field(figure) != 'village'):
+        modifiers = getattr(game, 'battle_modifier', None)
+        required_field = battle_required_field(modifiers)
+        has_civil_war = (
+            battle_required_field(modifiers) != 'castle'
+            and (
+                civil_war_pick_flow_active(modifiers)
+                or getattr(game, 'civil_war_defender_second', False)
+            )
+        )
+        if required_field and self._figure_field(figure) != required_field:
             return False
         if (getattr(game, 'civil_war_defender_second', False)
-                and 'Civil War' in modifier_types):
+                and has_civil_war):
             if figure.id == getattr(game, 'defending_figure_id', None):
                 return False
             required_color = getattr(game, 'civil_war_required_color', None)
@@ -4061,9 +4076,20 @@ class FieldScreen(SubScreen):
         game = self.game
         if not game:
             return False
-        if getattr(game, 'civil_war_awaiting_second', False):
+        modifiers = getattr(game, 'battle_modifier', None)
+        has_civil_war = (
+            battle_required_field(modifiers) != 'castle'
+            and (
+                civil_war_pick_flow_active(modifiers)
+                or getattr(game, 'civil_war_awaiting_second', False)
+                or getattr(game, 'civil_war_defender_second', False)
+            )
+        )
+        if (has_civil_war
+                and getattr(game, 'civil_war_awaiting_second', False)):
             return timeline_allows('attacker')
-        if getattr(game, 'civil_war_defender_second', False):
+        if (has_civil_war
+                and getattr(game, 'civil_war_defender_second', False)):
             return timeline_allows('defender')
         # Forced advance: only dim once the player has been notified that
         # they must pick their attacker (forced_advance_dialogue_shown guards

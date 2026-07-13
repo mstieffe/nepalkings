@@ -136,7 +136,11 @@ def _figure_score(fig: dict[str, Any], modifiers: set[str], resting_ids: set[int
         reasons.append('currently resting')
 
     field = str(fig.get('field') or '')
-    if 'Peasant War' in modifiers or 'Civil War' in modifiers:
+    if 'Royal Decree' in modifiers:
+        if field != 'castle':
+            score -= 8.0
+            reasons.append('castle-only modifier active')
+    elif 'Peasant War' in modifiers or 'Civil War' in modifiers:
         if field != 'village':
             score -= 8.0
             reasons.append('villager-only modifier active')

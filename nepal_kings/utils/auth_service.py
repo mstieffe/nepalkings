@@ -21,7 +21,7 @@ def fetch_rankings():
         response.raise_for_status()
         return response.json().get('rankings', [])
     except Exception:
-        return []
+        return None
 
 
 def fetch_kingdom_rankings():
@@ -31,7 +31,7 @@ def fetch_kingdom_rankings():
         response.raise_for_status()
         return response.json().get('rankings', [])
     except Exception:
-        return []
+        return None
 
 def login(username, password):
     try:

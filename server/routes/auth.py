@@ -491,7 +491,10 @@ def get_rankings():
         stats_by_user = {row.user_id: row for row in stat_rows}
 
         rankings = []
-        for user in User.query.all():
+        # AI opponents participate in games, but rankings are a comparison
+        # between human players.  Filter on the persisted flag rather than a
+        # username convention so renamed/additional bots stay excluded.
+        for user in User.query.filter(User.is_ai.is_(False)).all():
             stats = stats_by_user.get(user.id)
             total = stats.total if stats else 0
             wins = int(stats.wins) if stats and stats.wins is not None else 0

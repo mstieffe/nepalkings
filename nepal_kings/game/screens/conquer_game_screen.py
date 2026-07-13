@@ -1886,11 +1886,11 @@ class ConquerGameScreen(GameScreen):
             if diff > 0:
                 color, text = (130, 220, 190), f'+{diff}'
                 feed = f'Round {round_idx + 1} falls to you (+{diff}).'
-                snd = 'coin'
+                snd = 'round_win'
             elif diff < 0:
                 color, text = (226, 145, 130), f'\u2212{abs(diff)}'
                 feed = f'Round {round_idx + 1} goes to {opponent_name} ({diff}).'
-                snd = 'figure_place'
+                snd = 'round_loss'
             else:
                 color, text = (232, 220, 180), '\u00b10'
                 feed = f'Round {round_idx + 1} is dead even.'
@@ -1974,6 +1974,10 @@ class ConquerGameScreen(GameScreen):
                     pass
             self.push_conquer_feed('All rounds resolved \u2014 finish the battle!',
                                    (238, 206, 130))
+            try:
+                sound.play('battle_total')
+            except Exception:
+                pass
 
     def _on_conquer_tally_tick(self, shown, diff):
         """Ledger hook: soft tick as the round-diff count-up increments.
@@ -2345,7 +2349,12 @@ class ConquerGameScreen(GameScreen):
             return
         fired.add(step_key)
         from utils import sound
-        sound.play('booster_reveal')
+        try:
+            kind, spell_name = step_key[:2]
+        except Exception:
+            kind, spell_name = '', None
+        sound.play_spell(spell_name,
+                         counter='counter' in str(kind).lower())
 
     def _fire_spell_step_animation(self, step_key, anchor_rect, *,
                                    step_kind=None, spell_name=None):

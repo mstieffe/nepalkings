@@ -256,6 +256,38 @@ def test_field_required_mode_decree_beats_village_modifiers():
     assert stub._battle_required_field_mode() == (None, None)
 
 
+def test_own_defender_selection_uses_decree_pool_over_civil_war():
+    from game.screens.field_screen import FieldScreen
+
+    stub = _field_screen_stub([
+        {'type': 'Royal Decree'},
+        {'type': 'Civil War'},
+    ])
+    stub.game.civil_war_defender_second = True
+    stub.game.civil_war_required_color = 'offensive'
+    stub.game.defending_figure_id = 9
+
+    castle = SimpleNamespace(
+        id=10,
+        player_id=1,
+        family=SimpleNamespace(field='castle', color='defensive'),
+        cannot_defend=False,
+        cannot_be_targeted=False,
+    )
+    village = SimpleNamespace(
+        id=11,
+        player_id=1,
+        family=SimpleNamespace(field='village', color='offensive'),
+        cannot_defend=False,
+        cannot_be_targeted=False,
+    )
+
+    assert FieldScreen._is_conquer_own_defender_selectable(
+        stub, castle, SimpleNamespace(has_deficit=False)) is True
+    assert FieldScreen._is_conquer_own_defender_selectable(
+        stub, village, SimpleNamespace(has_deficit=False)) is False
+
+
 def test_detail_box_disables_advance_for_non_castle_under_decree():
     from game.components.figure_detail_box import FigureDetailBox
 

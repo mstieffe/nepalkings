@@ -98,6 +98,27 @@ class TestKingdomRankings:
         usernames = [r['username'] for r in data['rankings']]
         assert 'player1' in usernames
 
+    def test_ai_user_with_lands_is_excluded(self, client, db, two_users,
+                                            auth_headers_user1):
+        """AI-owned land must not put an opponent bot in human standings."""
+        from models import User
+
+        ai_user = User(
+            username='[AI] ConquerBot',
+            password_hash='not-a-login',
+            gold=99999,
+            is_ai=True,
+        )
+        db.session.add(ai_user)
+        db.session.commit()
+        _add_land(db, ai_user.id, 8, 8, gold_rate=100.0)
+
+        rv = client.get('/kingdom/rankings', headers=auth_headers_user1)
+        usernames = {row['username'] for row in rv.get_json()['rankings']}
+
+        assert rv.status_code == 200
+        assert ai_user.username not in usernames
+
     def test_no_auth_required(self, client, db, two_users):
         """Rankings endpoint does not require authentication."""
         u1, _ = two_users

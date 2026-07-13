@@ -153,7 +153,7 @@ class CastSpellScreen(SubScreen):
         
         if result.get('success'):
             from utils import sound
-            sound.play('booster_reveal')
+            sound.play_spell(selected_spell.name)
             # Cast flourish: spell glyph arcs up from the family icon and a
             # short banner names the cast (duel only; conquer is inert here).
             fx = self._fx_layer()
@@ -772,6 +772,4 @@ class CastSpellScreen(SubScreen):
                 self.confirm_button.draw()
         
         super().draw_on_top()
-
-
 

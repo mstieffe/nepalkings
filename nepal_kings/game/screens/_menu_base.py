@@ -1611,6 +1611,8 @@ class MenuScreenMixin:
                             self._suppress_next_gold_floater()
                         self._apply_onboarding_payload(data)
                         self._spawn_onboarding_reward_floaters(reward, rect.center)
+                        from utils import sound
+                        sound.play('quest_claim')
                         if getattr(self.state, 'set_msg', None):
                             self.state.set_msg(data.get('reward_label') or 'Reward claimed')
                     elif kind == 'resume_tutorial':

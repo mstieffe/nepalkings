@@ -16,6 +16,42 @@ import logging
 logger = logging.getLogger('nk.core.game')
 
 
+def battle_modifier_types(modifiers):
+    """Return normalized modifier names from a serialized modifier payload."""
+    if isinstance(modifiers, dict):
+        modifiers = [modifiers]
+    elif not isinstance(modifiers, (list, tuple)):
+        return set()
+    return {
+        modifier.get('type') if isinstance(modifier, dict) else modifier
+        for modifier in modifiers
+        if modifier
+    }
+
+
+def battle_required_field(modifiers):
+    """Return the effective battle field restriction for the client.
+
+    Royal Decree deliberately overrides the village-only Peasant War and
+    Civil War modifiers.  Keep this in sync with the server helper in
+    ``server/game_service/figure_rule_helpers.py``.
+    """
+    modifier_types = battle_modifier_types(modifiers)
+    if 'Royal Decree' in modifier_types:
+        return 'castle'
+    if modifier_types & {'Peasant War', 'Civil War'}:
+        return 'village'
+    return None
+
+
+def civil_war_pick_flow_active(modifiers):
+    """True only when Civil War controls the effective battle figure pool."""
+    return (
+        battle_required_field(modifiers) != 'castle'
+        and 'Civil War' in battle_modifier_types(modifiers)
+    )
+
+
 class Game:
     def __init__(self, game_dict, user_dict, lightweight=False):
         self.game_id = game_dict['id']
@@ -625,9 +661,15 @@ class Game:
             or bool(game_dict.get('fold_outcome'))
         )
 
-        # Check for Civil War modifier (needed for defender-pick guard below)
+        # Check the *effective* Civil War modifier. Royal Decree overrides
+        # Civil War's village-only/two-figure flow, so the presence of a stale
+        # or stacked Civil War entry alone must not hold battle-ready state.
         modifiers = self.battle_modifier if isinstance(self.battle_modifier, list) else []
-        has_civil_war = any(m.get('type') == 'Civil War' for m in modifiers)
+        has_civil_war = civil_war_pick_flow_active(modifiers)
+        if not has_civil_war:
+            self.civil_war_awaiting_second = False
+            self.civil_war_defender_second = False
+            self.civil_war_required_color = None
 
         # Detect: advancing player's turn returned without defender selected
         # This means opponent spent their turn, now advancer must pick a defender
@@ -982,6 +1024,10 @@ class Game:
         self.pending_spell_id = game_dict.get('pending_spell_id')
         self.battle_modifier = game_dict.get('battle_modifier')
         self.waiting_for_counter_player_id = game_dict.get('waiting_for_counter_player_id')
+        if not civil_war_pick_flow_active(self.battle_modifier):
+            self.civil_war_awaiting_second = False
+            self.civil_war_defender_second = False
+            self.civil_war_required_color = None
         
         # Update advance/battle state
         previous_advancing = self.advancing_figure_id

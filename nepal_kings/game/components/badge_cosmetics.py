@@ -195,6 +195,26 @@ def _text_panel_color(text_clr):
     return (248, 244, 232, 108), (24, 22, 18, 28)
 
 
+def _luminance(clr):
+    return clr[0] * 0.299 + clr[1] * 0.587 + clr[2] * 0.114
+
+
+def _needs_text_lane(style):
+    """Whether the contrast panel behind the text is actually needed.
+
+    Badge fills are near-opaque, so when the fill itself already contrasts
+    strongly with the text colour the extra panel just reads as a sticker
+    pasted over the badge art — skip it in that case.
+    """
+    text_clr = style.get('text', (255, 255, 255))
+    fill = style.get('fill')
+    if fill is None:
+        top = style.get('fill_top', (60, 60, 60))
+        bot = style.get('fill_bot', (30, 30, 30))
+        fill = tuple((top[i] + bot[i]) // 2 for i in range(3))
+    return abs(_luminance(text_clr) - _luminance(fill)) < 80
+
+
 def _draw_text_lane(surf, lane_rect, style):
     panel_fill, panel_border = _text_panel_color(
         style.get('text', (255, 255, 255)))
@@ -209,7 +229,8 @@ def _draw_text_lane(surf, lane_rect, style):
 
 def _blit_text_centered(surf, text_surf, rect, style):
     lane = _text_lane_rect(text_surf.get_rect(center=rect.center), rect)
-    _draw_text_lane(surf, lane, style)
+    if _needs_text_lane(style):
+        _draw_text_lane(surf, lane, style)
     text_rect = text_surf.get_rect(center=rect.center)
     shadow = text_surf.copy()
     shadow.fill((0, 0, 0, 120), special_flags=pygame.BLEND_RGBA_MULT)
@@ -281,7 +302,7 @@ def _render_pill(style, text_surf, th, shimmer_phase):
     if style.get('laurel_clr'):
         ornament_gutter = max(ornament_gutter, int(th * 0.55))
     if style.get('gem_left') or style.get('gem_right'):
-        ornament_gutter = max(ornament_gutter, int(th * 0.60))
+        ornament_gutter = max(ornament_gutter, int(th * 0.72))
     w = inner_w + pad_x * 2 + ornament_gutter * 2
     h = inner_h + pad_y * 2
     surf = pygame.Surface((w, h), pygame.SRCALPHA)
@@ -482,9 +503,11 @@ def _render_tablet(style, text_surf, th, shimmer_phase):
         ghost_overlay.fill((*text_hl[:3], 180))
         ghost = text_surf.copy()
         ghost.blit(ghost_overlay, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
-        lane = _text_lane_rect(text_surf.get_rect(center=surf.get_rect().center),
-                               surf.get_rect())
-        _draw_text_lane(surf, lane, style)
+        if _needs_text_lane(style):
+            lane = _text_lane_rect(
+                text_surf.get_rect(center=surf.get_rect().center),
+                surf.get_rect())
+            _draw_text_lane(surf, lane, style)
         surf.blit(ghost,
                   ghost.get_rect(center=(w // 2 + 1, h // 2 + 1)))
         surf.blit(text_surf,
@@ -606,30 +629,90 @@ def _render_plaque(style, text_surf, th, shimmer_phase):
         pts = [(cx, cy), (cx + dx * tri, cy), (cx, cy + dy * tri)]
         pygame.draw.polygon(surf, scroll_clr, pts)
 
-    # Serpent heads at each short end.
+    # Serpent-head finials at each short end.  Anchored against the plaque
+    # edge with a gold collar so they read as mounted ornaments instead of
+    # blobs floating beside the badge.
     serpent = style.get('serpent_clr', (132, 96, 36))
+    serpent_dark = (max(0, serpent[0] - 50), max(0, serpent[1] - 50),
+                    max(0, serpent[2] - 50))
     eye_clr = style.get('serpent_eye', (224, 64, 64))
     eye_r = 1 + (1 if shimmer_phase >= _SHIMMER_PHASES // 2 else 0)
-    for (cx, facing) in ((head_w // 2 + 2, 1), (w - head_w // 2 - 2, -1)):
+    collar_w = max(2, h // 8)
+    for (edge_x, facing) in ((body.x, -1), (body.right, 1)):
         cy = h // 2
-        # teardrop body
-        pygame.draw.ellipse(surf, serpent,
-                            pygame.Rect(cx - head_w // 2, cy - h // 4,
-                                        head_w, h // 2))
-        # snout — pointed tip toward the text
-        snout = [
-            (cx, cy - h // 8),
-            (cx + facing * head_w, cy),
-            (cx, cy + h // 8),
+        head_len = head_w + 2
+        base_x = edge_x
+        tip_x = edge_x + facing * head_len
+        # Head silhouette: wedge flaring from the plaque edge to a snout.
+        head_pts = [
+            (base_x, cy - h // 3),
+            (tip_x - facing * head_len // 3, cy - h // 4),
+            (tip_x, cy),
+            (tip_x - facing * head_len // 3, cy + h // 4),
+            (base_x, cy + h // 3),
         ]
-        pygame.draw.polygon(surf, serpent, snout)
-        # eye
+        pygame.draw.polygon(surf, serpent, head_pts)
+        pygame.draw.polygon(surf, serpent_dark, head_pts, 1)
+        # Gold collar where the head meets the plaque.
+        pygame.draw.line(surf, style.get('scrollwork_clr', (180, 144, 56)),
+                         (base_x + facing * (collar_w // 2), cy - h // 3),
+                         (base_x + facing * (collar_w // 2), cy + h // 3),
+                         collar_w)
+        # Eye with a dark ring so it reads at chip sizes.
+        eye_x = base_x + facing * (head_len // 2)
+        pygame.draw.circle(surf, serpent_dark,
+                           (eye_x, cy - max(1, h // 8)), eye_r + 1)
         pygame.draw.circle(surf, eye_clr,
-                           (cx, cy - max(1, h // 8)), eye_r)
+                           (eye_x, cy - max(1, h // 8)), eye_r)
 
     border = style.get('border', (124, 96, 36))
     pygame.draw.rect(surf, border, body, 1, border_radius=3)
 
+    _blit_text_centered(surf, text_surf, body, style)
+    return surf
+
+
+def _render_seal(style, text_surf, th, shimmer_phase):
+    """Dark lacquer plate with a pressed red wax seal at the left end."""
+    pad_x, pad_y = _pad_for(text_surf.get_height())
+    h = max(th, text_surf.get_height() + pad_y * 2)
+    seal_r = max(6, int(h * 0.46))
+    gutter = seal_r * 2 + 6
+    w = text_surf.get_width() + pad_x * 2 + gutter
+    surf = pygame.Surface((w, h), pygame.SRCALPHA)
+    radius = max(3, h // 3)
+
+    top = style.get('fill_top', (52, 40, 34, 242))
+    bot = style.get('fill_bot', (28, 20, 16, 242))
+    _vertical_gradient(surf, surf.get_rect(), top, bot)
+    mask = _round_clip_mask((w, h), radius)
+    surf.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
+    border = style.get('border', (168, 128, 62))
+    pygame.draw.rect(surf, border, surf.get_rect(), 1, border_radius=radius)
+
+    # Wax seal: scalloped blob rim, solid disc, pressed inner ring, gloss.
+    wax = style.get('wax_clr', (188, 40, 44))
+    wax_dark = style.get('wax_dark', (118, 18, 24))
+    wax_hl = style.get('wax_highlight', (255, 154, 150))
+    scx = seal_r + 4
+    scy = h // 2
+    rng = _lcg(_seed_for('seal', th))
+    for i in range(10):
+        a = i * math.tau / 10 + 0.3
+        rr = seal_r * (0.30 + rng() * 0.10)
+        pygame.draw.circle(
+            surf, wax,
+            (int(scx + math.cos(a) * seal_r * 0.72),
+             int(scy + math.sin(a) * seal_r * 0.72)),
+            max(1, int(rr)))
+    pygame.draw.circle(surf, wax, (scx, scy), int(seal_r * 0.88))
+    pygame.draw.circle(surf, wax_dark, (scx, scy), int(seal_r * 0.60),
+                       max(1, seal_r // 6))
+    pygame.draw.circle(surf, wax_hl,
+                       (int(scx - seal_r * 0.30), int(scy - seal_r * 0.35)),
+                       max(1, seal_r // 5))
+
+    body = pygame.Rect(gutter, 0, w - gutter, h)
     _blit_text_centered(surf, text_surf, body, style)
     return surf
 
@@ -640,39 +723,56 @@ def _draw_laurel(surf, style, shimmer_phase):
     w, h = surf.get_size()
     leaf_clr = style.get('laurel_clr', (172, 132, 48))
     leaf_hl = style.get('laurel_highlight', (244, 222, 138))
-    leaf_w = max(3, h // 3)
-    leaf_h = max(2, h // 5)
     cy = h // 2
+    # Wreath sprigs: pointed leaves fanned along an arc hugging each pill
+    # end, tips angled outward — reads as laurel rather than blob clusters.
+    leaf_len = max(4, int(h * 0.34))
+    leaf_half = max(1, int(h * 0.09))
+    arc_r = max(4, int(h * 0.38))
     for side in (-1, 1):
-        anchor_x = (h // 2 + 2) if side < 0 else (w - h // 2 - 2)
-        for i, (dx, dy, angle) in enumerate((
-            (-side * 2, -h // 5, -25),
-            (-side * 6, -h // 12, -10),
-            (-side * 6, h // 12, 10),
-            (-side * 2, h // 5, 25),
-        )):
-            ex = anchor_x + dx
-            ey = cy + dy
-            leaf_rect = pygame.Rect(0, 0, leaf_w, leaf_h)
-            leaf_rect.center = (ex, ey)
-            pygame.draw.ellipse(surf, leaf_clr, leaf_rect)
-            pygame.draw.ellipse(surf, leaf_hl, leaf_rect, 1)
+        anchor_x = (h // 2 + 1) if side < 0 else (w - h // 2 - 1)
+        for frac in (-0.75, -0.30, 0.30, 0.75):
+            a = frac * math.pi * 0.5
+            bx = anchor_x + side * math.cos(a) * arc_r * 0.35
+            by = cy + math.sin(a) * arc_r
+            # Leaf axis points outward along the arc normal.
+            ax = side * math.cos(a * 0.6)
+            ay = math.sin(a)
+            norm = math.hypot(ax, ay) or 1.0
+            ax /= norm
+            ay /= norm
+            tip = (bx + ax * leaf_len, by + ay * leaf_len)
+            px, py = -ay, ax  # perpendicular for leaf width
+            mid_x = bx + ax * leaf_len * 0.45
+            mid_y = by + ay * leaf_len * 0.45
+            leaf = [
+                (bx, by),
+                (mid_x + px * leaf_half, mid_y + py * leaf_half),
+                tip,
+                (mid_x - px * leaf_half, mid_y - py * leaf_half),
+            ]
+            pygame.draw.polygon(surf, leaf_clr, leaf)
+            pygame.draw.line(surf, leaf_hl, (bx, by), tip, 1)
 
-    # Diagonal shimmer band sweeps across pill.
+    # Diagonal shimmer band sweeps across the pill.  Soft-edged (triangular
+    # alpha profile) and clipped to the pill silhouette so the additive pass
+    # reads as a sheen instead of a hard glitch bar outside the corners.
     if style.get('shimmer'):
-        band_alpha = 60
+        band_alpha = 36
         band = pygame.Surface((w, h), pygame.SRCALPHA)
-        band_w = max(4, w // 5)
-        # Sweep from -band_w to w over the phase cycle.
+        band_w = max(6, w // 4)
         progress = shimmer_phase / max(1, _SHIMMER_PHASES - 1)
         x0 = int(-band_w + progress * (w + band_w))
-        pts = [
-            (x0, 0),
-            (x0 + band_w, 0),
-            (x0 + band_w + h, h),
-            (x0 + h, h),
-        ]
-        pygame.draw.polygon(band, (255, 255, 255, band_alpha), pts)
+        half = band_w / 2.0
+        for i in range(band_w):
+            a = int(band_alpha * (1.0 - abs(i - half) / half))
+            if a <= 0:
+                continue
+            x = x0 + i
+            pygame.draw.line(band, (255, 255, 255, a),
+                             (x, 0), (x + h, h), 1)
+        mask = _round_clip_mask((w, h), max(2, h // 2))
+        band.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
         surf.blit(band, (0, 0), special_flags=pygame.BLEND_RGBA_ADD)
 
 
@@ -682,7 +782,7 @@ def _draw_gems(surf, style, shimmer_phase):
     gem_r = max(2, h // 5)
     inset = h // 2 + 2
     pulse = math.sin(shimmer_phase / max(1, _SHIMMER_PHASES) * math.tau)
-    glow_alpha = max(0, int(80 + pulse * 60))
+    glow_alpha = max(0, int(42 + pulse * 24))
     for (cx, gem_clr_key, glow_key) in (
         (inset, 'gem_left', 'gem_glow_left'),
         (w - inset, 'gem_right', 'gem_glow_right'),
@@ -690,12 +790,18 @@ def _draw_gems(surf, style, shimmer_phase):
         gem_clr = style.get(gem_clr_key, (224, 46, 70))
         glow_clr = style.get(glow_key, (255, 96, 120, 0))
         if style.get('shimmer') and glow_alpha > 0:
-            glow = pygame.Surface((gem_r * 6, gem_r * 6), pygame.SRCALPHA)
-            pygame.draw.circle(glow,
-                               (glow_clr[0], glow_clr[1], glow_clr[2],
-                                glow_alpha),
-                               (gem_r * 3, gem_r * 3), gem_r * 3)
-            surf.blit(glow, (cx - gem_r * 3, cy - gem_r * 3),
+            # Tight halo with radial falloff — a rim light around the gem,
+            # not a balloon dwarfing the badge.
+            glow_r = int(gem_r * 2.0)
+            glow = pygame.Surface((glow_r * 2, glow_r * 2), pygame.SRCALPHA)
+            for ring_r, a_scale in ((glow_r, 0.35), (int(glow_r * 0.75), 0.6),
+                                    (int(glow_r * 0.55), 1.0)):
+                pygame.draw.circle(
+                    glow,
+                    (glow_clr[0], glow_clr[1], glow_clr[2],
+                     int(glow_alpha * a_scale)),
+                    (glow_r, glow_r), max(1, ring_r))
+            surf.blit(glow, (cx - glow_r, cy - glow_r),
                       special_flags=pygame.BLEND_RGBA_ADD)
         pygame.draw.circle(surf, (0, 0, 0), (cx, cy), gem_r + 1)
         pygame.draw.circle(surf, gem_clr, (cx, cy), gem_r)
@@ -714,4 +820,5 @@ _SHAPE_RENDERERS = {
     'tablet':      _render_tablet,
     'swallowtail': _render_swallowtail,
     'plaque':      _render_plaque,
+    'seal':        _render_seal,
 }

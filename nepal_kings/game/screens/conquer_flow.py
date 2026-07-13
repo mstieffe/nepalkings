@@ -122,6 +122,16 @@ def _has_modifier(game: Any, modifier_name: str) -> bool:
     )
 
 
+def _civil_war_pick_flow_active(game: Any) -> bool:
+    if _has_modifier(game, 'Royal Decree'):
+        return False
+    return bool(
+        _has_modifier(game, 'Civil War')
+        or _get(game, 'civil_war_awaiting_second', False)
+        or _get(game, 'civil_war_defender_second', False)
+    )
+
+
 def _battle_modifiers(game: Any) -> List[dict]:
     modifiers = _get(game, 'battle_modifier', [])
     if not isinstance(modifiers, list):
@@ -263,7 +273,9 @@ def derive_conquer_objective(game: Any, state: Any = None,
             tone='action',
         )
 
-    if _get(game, 'civil_war_awaiting_second', False) and advancing_id:
+    if (_civil_war_pick_flow_active(game)
+            and _get(game, 'civil_war_awaiting_second', False)
+            and advancing_id):
         return ConquerObjective(
             phase='advance',
             headline='Civil War: optional second attacker',
@@ -273,7 +285,9 @@ def derive_conquer_objective(game: Any, state: Any = None,
             tone='action',
         )
 
-    if _get(game, 'civil_war_defender_second', False) and advancing_id:
+    if (_civil_war_pick_flow_active(game)
+            and _get(game, 'civil_war_defender_second', False)
+            and advancing_id):
         own_mode = bool(_get(field_screen, 'conquer_own_defender_mode', False))
         return ConquerObjective(
             phase='defender',
@@ -1251,7 +1265,9 @@ def derive_conquer_timeline(game: Any, state: Any = None,
         and _get(game, 'pending_conquer_own_defender_selection', False)
     )
     attacker_second_active = bool(
-        advancing_id and _get(game, 'civil_war_awaiting_second', False)
+        advancing_id
+        and _civil_war_pick_flow_active(game)
+        and _get(game, 'civil_war_awaiting_second', False)
     )
     attacker_select_active = bool(
         _get(game, 'pending_forced_advance', False) and not advancing_id
@@ -1370,7 +1386,9 @@ def derive_conquer_timeline(game: Any, state: Any = None,
 
     # 5) Defender --------------------------------------------------------
     defender_second_active = bool(
-        advancing_id and _get(game, 'civil_war_defender_second', False)
+        advancing_id
+        and _civil_war_pick_flow_active(game)
+        and _get(game, 'civil_war_defender_second', False)
     )
     defender_select_active = bool(
         pending_defender_select_turn

@@ -101,6 +101,19 @@ def _cosmetic_catalog():
     return getattr(config, 'KINGDOM_COSMETIC_CATALOG', {}) or {}
 
 
+def _sigil_stats_payload(user_id):
+    """Achievement progress counters for the cosmetics shop.
+
+    Best-effort: the config screen degrades to static requirement labels
+    when the stats are absent, so never let this break the endpoint.
+    """
+    try:
+        from kingdom_service import _compute_user_sigil_stats
+        return _compute_user_sigil_stats(user_id)
+    except Exception:
+        return {}
+
+
 def _default_style_dict():
     return dict(getattr(config, 'KINGDOM_DEFAULT_STYLE', {}) or {
         'badge_key': 'badge_plain',
@@ -396,6 +409,7 @@ def get_kingdom_rankings():
             .outerjoin(conquer_attempts, User.id == conquer_attempts.c.user_id)
             .outerjoin(defence_stats, User.id == defence_stats.c.user_id)
             .filter(
+                User.is_ai.is_(False),
                 or_(
                     land_stats.c.lands_owned > 0,
                     conquer_attempts.c.conquer_attempts > 0,
@@ -496,6 +510,7 @@ def kingdom_config_list():
         'success': True,
         'catalog': _cosmetic_catalog(),
         'default_style': _default_style_dict(),
+        'sigil_stats': _sigil_stats_payload(user.id),
         'skill_definitions': _serialize_skill_definitions(),
         'skill_base_cost_curve': list(config.KINGDOM_SKILL_BASE_COST_CURVE),
         'level_max': int(config.KINGDOM_LEVEL_MAX),
@@ -525,6 +540,7 @@ def kingdom_config_detail(kingdom_id):
     return jsonify({
         'success': True,
         'catalog': _cosmetic_catalog(),
+        'sigil_stats': _sigil_stats_payload(g.user_id),
         'skill_definitions': _serialize_skill_definitions(),
         'skill_base_cost_curve': list(config.KINGDOM_SKILL_BASE_COST_CURVE),
         'level_max': int(config.KINGDOM_LEVEL_MAX),
@@ -1053,7 +1069,13 @@ def _bulk_defence_incomplete_by_land(land_ids, user_id):
             fig.id: check_land_config_deficit(fig, figures)
             for fig in figures
         }
-        if not any(not deficit_map.get(fig.id, False) for fig in figures):
+        modifiers = config_strategy_modifiers(cfg)
+        required_field = battle_required_field(modifiers)
+        if not any(
+            not deficit_map.get(fig.id, False)
+            and (not required_field or fig.field == required_field)
+            for fig in figures
+        ):
             continue
 
         if int(move_counts.get(cfg.id) or 0) < 3:
@@ -1069,8 +1091,6 @@ def _bulk_defence_incomplete_by_land(land_ids, user_id):
             battle_fig = figures_by_id.get(cfg.battle_figure_id)
             if not battle_fig:
                 continue
-            modifiers = config_strategy_modifiers(cfg)
-            required_field = battle_required_field(modifiers)
             if not figure_can_counter_advance(
                     battle_fig,
                     required_field=required_field,
@@ -1952,17 +1972,15 @@ def _get_defence_config_problems(cfg):
         return ['Configuration not loaded.']
 
     from kingdom_service import get_config_deficit_map
+    from game_service.figure_rule_helpers import (
+        battle_required_field,
+        config_strategy_modifiers,
+    )
     figures = list(cfg.figures)
     moves = list(cfg.battle_moves)
     prelude = cfg.prelude_spell_name
-    modifier_type = (
-        (cfg.battle_modifier or {}).get('type')
-        if isinstance(cfg.battle_modifier, dict) else None
-    )
-    village_only_name = (
-        prelude if prelude in ('Peasant War', 'Civil War') else modifier_type
-    )
-    village_only = village_only_name in ('Peasant War', 'Civil War')
+    strategy_modifiers = config_strategy_modifiers(cfg)
+    required_field = battle_required_field(strategy_modifiers)
     deficit_map = get_config_deficit_map(cfg.id)
 
     if not figures:
@@ -1971,10 +1989,18 @@ def _get_defence_config_problems(cfg):
         can_fight = [fig for fig in figures if not deficit_map.get(fig.id, False)]
         if not can_fight:
             problems.append('All figures have a resource deficit.')
-        elif village_only and not any(fig.field == 'village' for fig in can_fight):
+        elif (required_field
+              and not any(fig.field == required_field for fig in can_fight)):
+            modifier_name = (
+                'Royal Decree' if required_field == 'castle' else
+                ('Civil War' if any(
+                    mod.get('type') == 'Civil War'
+                    for mod in strategy_modifiers if isinstance(mod, dict)
+                ) else 'Peasant War')
+            )
             problems.append(
-                f'{village_only_name} is selected — only village figures can fight, '
-                'but none of your village figures are available.'
+                f'{modifier_name} is selected — only {required_field} figures can fight, '
+                f'but none of your {required_field} figures are available.'
             )
 
     if len(moves) < 3:
@@ -2002,9 +2028,11 @@ def _get_defence_config_problems(cfg):
             problems.append(err)
 
     is_civil_war = (
-        prelude == 'Civil War'
-        or (isinstance(cfg.battle_modifier, dict)
-            and cfg.battle_modifier.get('type') == 'Civil War')
+        required_field != 'castle'
+        and any(
+            mod.get('type') == 'Civil War'
+            for mod in strategy_modifiers if isinstance(mod, dict)
+        )
     )
     if has_battle_fig and is_civil_war:
         if not cfg.battle_figure_id_2:
@@ -5233,15 +5261,19 @@ def _pick_defence_prelude_target(figures, planned_modifiers=None):
         return (-_compute_figure_base_power(fig), fig.id)
 
     modifiers = planned_modifiers if isinstance(planned_modifiers, list) else []
-    modifier_types = {m.get('type') for m in modifiers if isinstance(m, dict)}
-
-    # Tier 1: Civil War / Peasant War — village figures with the most cards
-    # built into them are the highest-impact targets to disable.
-    if 'Civil War' in modifier_types or 'Peasant War' in modifier_types:
-        village_targets = [f for f in figures if (f.field or '').lower() == 'village']
-        if village_targets:
-            max_cards = max(_figure_card_count(f) for f in village_targets)
-            top = [f for f in village_targets if _figure_card_count(f) == max_cards]
+    # Tier 1: target the figure pool that can actually enter this battle.
+    # Royal Decree overrides Civil/Peasant War, so a stacked modifier set
+    # must prioritize castle targets rather than obsolete village targets.
+    from game_service.figure_rule_helpers import battle_required_field
+    required_field = battle_required_field(modifiers)
+    if required_field:
+        field_targets = [
+            f for f in figures
+            if (f.field or '').lower() == required_field
+        ]
+        if field_targets:
+            max_cards = max(_figure_card_count(f) for f in field_targets)
+            top = [f for f in field_targets if _figure_card_count(f) == max_cards]
             return sorted(top, key=_rank_key)[0]
 
     # Tier 2: figures that bypass blocking or have instant charge are the
@@ -5569,6 +5601,38 @@ def conquer_start_battle():
     if not non_deficit_figures:
         return jsonify({'success': False,
                         'message': 'All figures have resource deficit'}), 400
+
+    # Reject an attacker prelude that makes every configured attacker
+    # illegal before the game is created.  Royal Decree previously allowed a
+    # village-only attack config to launch; the client then prompted for a
+    # battle figure even though the server would reject every click.
+    from game_service.figure_rule_helpers import (
+        battle_required_field,
+        config_strategy_modifiers,
+    )
+    attacker_required_field = battle_required_field(
+        config_strategy_modifiers(atk_cfg))
+    legal_attackers = [
+        fig for fig in non_deficit_figures
+        if (not attacker_required_field or fig.field == attacker_required_field)
+        and not _figure_has_family_skill(fig, 'cannot_attack')
+    ]
+    if not legal_attackers:
+        if attacker_required_field == 'castle':
+            message = (
+                'Royal Decree requires at least one castle figure that can advance.'
+            )
+        elif attacker_required_field == 'village':
+            message = (
+                'This prelude requires at least one village figure that can advance.'
+            )
+        else:
+            message = 'No configured figure can advance into battle.'
+        return jsonify({
+            'success': False,
+            'message': message,
+            'reason': 'no_legal_battle_figure',
+        }), 400
 
     # Determine defender
     is_ai_land = land.owner_user_id is None

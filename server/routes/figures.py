@@ -268,7 +268,8 @@ def create_figure():
 
                     # Check battle modifier restrictions
                     modifiers = game.battle_modifier if isinstance(game.battle_modifier, list) else []
-                    has_civil_war = any(m.get('type') == 'Civil War' for m in modifiers)
+                    from game_service.figure_rule_helpers import battle_required_field
+                    required_field = battle_required_field(modifiers)
                     has_blitzkrieg = any(m.get('type') == 'Blitzkrieg' for m in modifiers)
 
                     # Check if advancing figure has cannot_be_blocked
@@ -279,8 +280,13 @@ def create_figure():
 
                     if instant_charge_result is None and has_blitzkrieg and is_counter_advance:
                         instant_charge_result = {'success': False, 'message': 'Blitzkrieg: defender cannot counter-advance'}
-                    elif instant_charge_result is None and (has_civil_war or any(m.get('type') == 'Peasant War' for m in modifiers)) and field != 'village':
-                        instant_charge_result = {'success': False, 'message': 'Only village figures can advance with this battle modifier'}
+                    elif (instant_charge_result is None and required_field
+                          and field != required_field):
+                        if required_field == 'castle':
+                            message = 'Royal Decree: only castle figures can advance'
+                        else:
+                            message = 'Only village figures can advance with this battle modifier'
+                        instant_charge_result = {'success': False, 'message': message}
 
                     if instant_charge_result is None:
                         # Set the advancing/defending figure

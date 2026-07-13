@@ -137,6 +137,7 @@ class KingdomScreen(MenuScreenMixin, Screen):
     _activity_tab_hit_rects = {}
     _mark_read_hit_rect = None
     _new_msg_hit_rect = None
+    _map_control_press = None
 
     def __init__(self, state):
         super().__init__(state)
@@ -247,6 +248,7 @@ class KingdomScreen(MenuScreenMixin, Screen):
             'zoom_out': '\u2212',  # minus sign
             'recenter': '\u25ce',  # bullseye / refocus
         }
+        self._map_control_press = None
 
         # ── Map scan modes (toolbar inside the map frame) ──────────
         # 'terrain' is the default rich suit/tier view; the others wash the
@@ -2098,6 +2100,119 @@ class KingdomScreen(MenuScreenMixin, Screen):
                 lbl = self._nav_font.render(label, True, clr)
                 self.window.blit(lbl, lbl.get_rect(center=rect.center))
 
+    def _nav_key_at_pos(self, pos):
+        rects = getattr(self, '_nav_hit_rects', None) or getattr(
+            self, '_nav_rects', {})
+        for key, rect in rects.items():
+            if rect.collidepoint(pos):
+                return key
+        return None
+
+    def _minimap_contains_pos(self, pos):
+        hm = getattr(self, '_hex_map', None)
+        rect = getattr(hm, '_minimap_rect', None)
+        return bool(rect and rect.collidepoint(pos))
+
+    def _map_mode_key_at_pos(self, pos):
+        for key, rect in (getattr(self, '_map_mode_rects', None) or {}).items():
+            if rect.collidepoint(pos):
+                return key
+        return None
+
+    def _map_toolbar_toggle_at_pos(self, pos):
+        layers_rect = getattr(self, '_layers_toggle_rect', None)
+        if layers_rect and layers_rect.collidepoint(pos):
+            return 'layers_toggle'
+        activity_rect = getattr(self, '_activity_toggle_rect', None)
+        if activity_rect and activity_rect.collidepoint(pos):
+            return 'activity_toggle'
+        return None
+
+    def _cancel_hex_map_drag(self):
+        hm = getattr(self, '_hex_map', None)
+        cancel = getattr(hm, 'cancel_drag', None)
+        if callable(cancel):
+            cancel()
+
+    def _activate_nav_control(self, key):
+        if not self._hex_map:
+            return False
+        if key == 'zoom_in':
+            self._hex_map.zoom_in()
+            return True
+        if key == 'zoom_out':
+            self._hex_map.zoom_out()
+            return True
+        if key == 'recenter':
+            kingdom = self._current_chip_kingdom()
+            if kingdom:
+                self._focus_kingdom_on_map(kingdom)
+            else:
+                self._focus_largest_kingdom_component()
+            return True
+        return False
+
+    def _begin_map_control_press(self, pos):
+        key = self._nav_key_at_pos(pos)
+        if key:
+            self._map_control_press = ('nav', key)
+            self._cancel_hex_map_drag()
+            return True
+        if self._minimap_contains_pos(pos):
+            self._map_control_press = ('minimap', None)
+            self._cancel_hex_map_drag()
+            return True
+        mode_key = self._map_mode_key_at_pos(pos)
+        if mode_key:
+            self._map_control_press = ('mode', mode_key)
+            self._cancel_hex_map_drag()
+            return True
+        toggle_key = self._map_toolbar_toggle_at_pos(pos)
+        if toggle_key:
+            self._map_control_press = ('toolbar_toggle', toggle_key)
+            self._cancel_hex_map_drag()
+            return True
+        return False
+
+    def _drag_map_control_press(self, pos):
+        press = getattr(self, '_map_control_press', None)
+        if not press:
+            return False
+        kind, _key = press
+        if kind == 'minimap' and self._minimap_contains_pos(pos):
+            self._hex_map.handle_minimap_click(*pos)
+        return True
+
+    def _finish_map_control_press(self, pos):
+        press = getattr(self, '_map_control_press', None)
+        if not press:
+            return False
+        self._map_control_press = None
+        self._cancel_hex_map_drag()
+        kind, key = press
+        if kind == 'nav':
+            if self._nav_key_at_pos(pos) == key:
+                self._activate_nav_control(key)
+            return True
+        if kind == 'minimap':
+            if self._minimap_contains_pos(pos):
+                self._hex_map.handle_minimap_click(*pos)
+            return True
+        if kind == 'mode':
+            if self._map_mode_key_at_pos(pos) == key:
+                self._handle_map_mode_click(pos)
+            return True
+        if kind == 'toolbar_toggle':
+            if key == self._map_toolbar_toggle_at_pos(pos):
+                if key == 'layers_toggle':
+                    self._layers_open = not self._layers_open
+                    self._activity_open = False
+                elif key == 'activity_toggle':
+                    self._activity_open = not self._activity_open
+                    self._layers_open = False
+            return True
+        return True
+
     # ── Update / events ─────────────────────────────────────────────
 
     def update(self, events):
@@ -2158,6 +2273,14 @@ class KingdomScreen(MenuScreenMixin, Screen):
                 self._handle_thread_event(event)
                 continue
 
+            if (event.type == MOUSEBUTTONUP and event.button == 1
+                    and self._finish_map_control_press(event.pos)):
+                continue
+
+            if (event.type == MOUSEMOTION
+                    and self._drag_map_control_press(event.pos)):
+                continue
+
             # X close button
             if (event.type == MOUSEBUTTONUP and event.button == 1
                     and not self.dialogue_box
@@ -2170,13 +2293,19 @@ class KingdomScreen(MenuScreenMixin, Screen):
             # map beneath them.  This prevents an outside-close tap from also
             # selecting a land.
             if (self._mobile_ui and self._activity_open
-                    and event.type == MOUSEBUTTONUP and event.button == 1):
+                    and event.type in (MOUSEBUTTONDOWN, MOUSEBUTTONUP)
+                    and event.button == 1):
                 if (self._activity_close_rect
                         and self._activity_close_rect.collidepoint(event.pos)):
-                    self._activity_open = False
+                    if event.type == MOUSEBUTTONUP:
+                        self._activity_open = False
                     continue
                 if not self._activity_rect.collidepoint(event.pos):
                     self._activity_open = False
+                    self._cancel_hex_map_drag()
+                    continue
+                if event.type == MOUSEBUTTONDOWN:
+                    self._cancel_hex_map_drag()
                     continue
 
             if (self._mobile_ui and self._layers_open
@@ -2213,8 +2342,18 @@ class KingdomScreen(MenuScreenMixin, Screen):
                     and self._detail_box.contains_point(event.pos)
                 )
                 if on_panel:
-                    self._detail_box.handle_event(event)
-                    continue
+                    map_drag_release = (
+                        event.type == MOUSEBUTTONUP
+                        and self._hex_map
+                        and self._hex_map.is_drag_release(event)
+                    )
+                    if not map_drag_release:
+                        self._detail_box.handle_event(event)
+                        continue
+
+            if (event.type == MOUSEBUTTONDOWN and event.button == 1
+                    and self._begin_map_control_press(event.pos)):
+                continue
 
             if event.type == MOUSEWHEEL:
                 if ((not self._mobile_ui or self._activity_open)
@@ -2233,73 +2372,72 @@ class KingdomScreen(MenuScreenMixin, Screen):
                     continue
 
             if event.type == MOUSEBUTTONUP and event.button == 1:
+                map_drag_release = bool(
+                    self._hex_map and self._hex_map.is_drag_release(event))
                 retry_rect = getattr(self, '_retry_rect', None)
-                if (getattr(self, '_error', None) and retry_rect
+                if (not map_drag_release
+                        and getattr(self, '_error', None) and retry_rect
                         and retry_rect.collidepoint(event.pos)):
                     self._next_map_retry_at_ms = 0
                     self._load_map()
                     continue
 
-                if (self._mobile_ui and self._layers_toggle_rect
+                if (not map_drag_release
+                        and self._mobile_ui and self._layers_toggle_rect
                         and self._layers_toggle_rect.collidepoint(event.pos)):
                     self._layers_open = not self._layers_open
                     self._activity_open = False
                     continue
 
-                if (self._mobile_ui and self._activity_toggle_rect
+                if (not map_drag_release
+                        and self._mobile_ui and self._activity_toggle_rect
                         and self._activity_toggle_rect.collidepoint(event.pos)):
                     self._activity_open = not self._activity_open
                     self._layers_open = False
                     continue
 
-                if self._handle_activity_click(event.pos):
+                if not map_drag_release and self._handle_activity_click(event.pos):
+                    continue
+                if (not map_drag_release
+                        and self._mobile_ui and self._activity_open
+                        and self._activity_rect.collidepoint(event.pos)):
                     continue
 
                 # Map scan-mode toolbar (top-right of the map).
-                if self._handle_map_mode_click(event.pos):
+                if (not map_drag_release
+                        and self._handle_map_mode_click(event.pos)):
                     continue
 
                 # Kingdom selector chip (header) — prev/next + gear-to-config.
-                if self._handle_kingdom_chip_click(event.pos):
+                if (not map_drag_release
+                        and self._handle_kingdom_chip_click(event.pos)):
                     continue
 
                 # Leaderboard panel (top-left of map viewport).  Must be
                 # handled before the hex map so a row click doesn't also
                 # trigger map pan/click logic underneath.
                 lb = getattr(self, '_leaderboard_panel', None)
-                if lb is not None and lb.contains_point(event.pos):
+                if (not map_drag_release
+                        and lb is not None and lb.contains_point(event.pos)):
                     lb.handle_event(event)
                     continue
 
                 # Collect All gold button (info bar)
-                if (self._collect_all_rect
+                if (not map_drag_release
+                    and self._collect_all_rect
                     and getattr(self, '_collect_all_enabled', False)
                         and self._collect_all_rect.collidepoint(event.pos)):
                     self._collect_all_gold()
                     continue
 
                 # Nav buttons
-                handled_nav = False
-                nav_hit_rects = getattr(self, '_nav_hit_rects', None)
-                for key, rect in (nav_hit_rects or self._nav_rects).items():
-                    if rect.collidepoint(event.pos):
-                        if key == 'zoom_in' and self._hex_map:
-                            self._hex_map.zoom_in()
-                        elif key == 'zoom_out' and self._hex_map:
-                            self._hex_map.zoom_out()
-                        elif key == 'recenter' and self._hex_map:
-                            kingdom = self._current_chip_kingdom()
-                            if kingdom:
-                                self._focus_kingdom_on_map(kingdom)
-                            else:
-                                self._focus_largest_kingdom_component()
-                        handled_nav = True
-                        break
-                if handled_nav:
+                nav_key = None if map_drag_release else self._nav_key_at_pos(event.pos)
+                if nav_key and self._activate_nav_control(nav_key):
                     continue
 
                 # Minimap click
-                if self._hex_map and self._hex_map.handle_minimap_click(*event.pos):
+                if (not map_drag_release and self._hex_map
+                        and self._hex_map.handle_minimap_click(*event.pos)):
                     continue
 
             # Hex map events (pan, zoom wheel, click) — gated so the

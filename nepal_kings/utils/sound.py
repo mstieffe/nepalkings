@@ -37,29 +37,70 @@ _CFG_FILE = os.path.join(_CFG_DIR, 'resolution.json')
 # Master volume applied to every sound (each event also has its own gain).
 MASTER_VOLUME = 0.7
 
-# Event name → (filename, relative gain). Files live in nepal_kings/sound/.
+# Event name → (filename or filename variants, relative gain).
+# Variants rotate deterministically so repeated actions feel less mechanical
+# without making tests or recordings nondeterministic.
 EVENTS = {
-    'ui_click':       ('ui_click.wav', 1.0),
+    'ui_click':       (('ui_click.wav', 'ui_click_2.wav', 'ui_click_3.wav'), 1.0),
     'ui_back':        ('ui_back.wav', 1.0),
-    'card_slide':     ('card_slide.wav', 1.0),
-    'card_place':     ('card_place.wav', 1.0),
-    'coin':           ('coin.wav', 0.9),
-    'booster_open':   ('booster_open.wav', 1.0),
+    'card_slide':     (('card_slide.wav', 'card_slide_2.wav',
+                        'card_slide_3.wav', 'card_slide_4.wav'), 1.0),
+    'card_place':     (('card_place.wav', 'card_place_2.wav',
+                        'card_place_3.wav'), 1.0),
+    'coin':           (('coin.wav', 'coin_2.wav', 'coin_3.wav'), 0.9),
+    'booster_open':   (('booster_open.wav', 'booster_open_2.wav'), 1.0),
     'booster_reveal': ('booster_reveal.wav', 0.9),
-    'figure_place':   ('figure_place.wav', 1.0),
+    'rare_card_reveal': ('rare_card_reveal.wav', 0.9),
+    'reward_reveal':  ('reward_reveal.wav', 0.9),
+    'quest_claim':    ('quest_claim.wav', 0.9),
+    'craft_success':  ('craft_success.wav', 1.0),
+    'figure_place':   (('figure_place.wav', 'figure_place_2.wav'), 1.0),
+    'land_select':    ('land_select.wav', 0.8),
+    'map_gain':       ('map_gain.wav', 0.9),
+    'defence_set':    ('defence_set.wav', 0.9),
+    'spell_cast':     ('spell_cast.wav', 0.9),
+    'counter_spell':  ('counter_spell.wav', 0.9),
+    'spell_heal':     ('spell_heal.wav', 0.9),
+    'spell_poison':   ('spell_poison.wav', 0.85),
+    'spell_reveal':   ('spell_reveal.wav', 0.9),
+    'spell_cards':    ('spell_cards.wav', 0.8),
+    'spell_explosion': ('spell_explosion.wav', 1.0),
+    'attack_launch':  ('attack_launch.wav', 1.0),
     'battle_start':   ('battle_start.wav', 1.0),
+    'round_win':      ('round_win.wav', 0.8),
+    'round_loss':     ('round_loss.wav', 0.75),
+    'battle_total':   ('battle_total.wav', 0.9),
     'battle_win':     ('battle_win.wav', 1.0),
     'battle_lose':    ('battle_lose.wav', 1.0),
     'conquer_win':    ('conquer_win.wav', 1.0),
     'your_turn':      ('your_turn.wav', 0.9),
     'error':          ('error.wav', 0.8),
     'reveal_hold':    ('reveal_hold.wav', 0.8),
-    'tally_tick':     ('tally_tick.wav', 0.6),
+    'tally_tick':     (('tally_tick.wav', 'tally_tick_2.wav'), 0.6),
+}
+
+SPELL_EVENTS = {
+    'Health Boost': 'spell_heal',
+    'Ceasefire': 'spell_heal',
+    'Poison': 'spell_poison',
+    'All Seeing Eye': 'spell_reveal',
+    'Royal Decree': 'spell_reveal',
+    'Draw 2 SideCards': 'spell_cards',
+    'Draw 2 MainCards': 'spell_cards',
+    'Draw 4 MainCards': 'spell_cards',
+    'Fill up to 10': 'spell_cards',
+    'Forced Deal': 'spell_cards',
+    'Dump Cards': 'spell_cards',
+    'Copy Figure': 'spell_cards',
+    'Invader Swap': 'spell_cards',
+    'Explosion': 'spell_explosion',
+    'Landslide': 'spell_explosion',
 }
 
 _enabled = True
 _mixer_failed = False
 _cache = {}
+_variant_counters = {}
 
 
 def _sound_dir():
@@ -119,6 +160,26 @@ def _candidate_filenames(filename):
     return (filename,)
 
 
+def event_filenames(name):
+    """Return every authored filename for an event."""
+    entry = EVENTS.get(name)
+    if entry is None:
+        return ()
+    filenames = entry[0]
+    if isinstance(filenames, (tuple, list)):
+        return tuple(filenames)
+    return (filenames,)
+
+
+def _next_event_filename(name):
+    filenames = event_filenames(name)
+    if not filenames:
+        return None
+    index = _variant_counters.get(name, 0)
+    _variant_counters[name] = index + 1
+    return filenames[index % len(filenames)]
+
+
 def _ensure_mixer():
     """Lazy mixer init; remembers permanent failure so we stop retrying."""
     global _mixer_failed
@@ -147,10 +208,14 @@ def play(name, volume=1.0):
         return False
     try:
         import pygame
-        snd = _cache.get(name)
+        filename = _next_event_filename(name)
+        if filename is None:
+            return False
+        cache_key = (name, filename)
+        snd = _cache.get(cache_key)
         if snd is None:
-            for filename in _candidate_filenames(entry[0]):
-                path = os.path.join(_sound_dir(), filename)
+            for candidate in _candidate_filenames(filename):
+                path = os.path.join(_sound_dir(), candidate)
                 if not os.path.exists(path):
                     continue
                 try:
@@ -160,12 +225,19 @@ def play(name, volume=1.0):
                     continue
             if snd is None:
                 return False
-            _cache[name] = snd
+            _cache[cache_key] = snd
         snd.set_volume(max(0.0, min(1.0, MASTER_VOLUME * entry[1] * volume)))
         snd.play()
         return True
     except Exception:
         return False
+
+
+def play_spell(spell_name, *, counter=False, volume=1.0):
+    """Play the semantic cue for a spell family, with a generic fallback."""
+    event = 'counter_spell' if counter else SPELL_EVENTS.get(
+        spell_name, 'spell_cast')
+    return play(event, volume=volume)
 
 
 def tap_edge(obj, name='ui_click', volume=0.7):

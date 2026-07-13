@@ -63,3 +63,12 @@ server_bu.py
 server_test.py
 /BUILD/
 backups/
+
+# Full local music exports. Commit the compact lossless production excerpt in
+# scripts/assets/audio_sources/ instead.
+scripts/assets/audio_sources/Kora Gate Loop.wav
+scripts/assets/audio_sources/Kora Gate Loop.mp3
+scripts/assets/audio_sources/Menu Suno Master.wav
+scripts/assets/audio_sources/Kingdom Suno Master.wav
+scripts/assets/audio_sources/Battle Suno Master.wav
+scripts/assets/audio_sources/mixkit/*.wav

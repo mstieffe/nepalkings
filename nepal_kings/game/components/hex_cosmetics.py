@@ -61,6 +61,19 @@ def _lcg(seed):
     return nxt
 
 
+def _blend_layer(surf, draw_fn):
+    """Draw translucent strokes on a temp layer and alpha-blend onto surf.
+
+    ``pygame.draw`` *replaces* destination pixels (including alpha), so a
+    low-alpha stroke drawn directly onto opaque art punches a see-through
+    hole instead of tinting it.  Routing through a separate layer + blit
+    gives true over-compositing.
+    """
+    layer = _make_alpha(*surf.get_size())
+    draw_fn(layer)
+    surf.blit(layer, (0, 0))
+
+
 def _apply_hex_mask(surf, hex_size):
     """Multiply ``surf`` alpha by a hex polygon centered on the surface."""
     w, h = surf.get_size()
@@ -186,14 +199,25 @@ def _draw_parchment(surf, cx, cy, sz, skin):
         y2 = y + math.sin(angle) * length
         pygame.draw.line(surf, ink, (x, y), (x2, y2), line_w)
 
-    # 4 corner ink stains as soft dark blobs.
-    for corner in (0, 1, 3, 4):
-        a = _HEX_ANGLES[corner]
-        bx = cx + math.cos(a) * sz * 0.78
-        by = cy + math.sin(a) * sz * 0.78
-        for j in range(3):
-            r = int(sz * (0.18 - j * 0.04))
-            pygame.draw.circle(surf, stain, (int(bx), int(by)), max(1, r))
+    # Corner ink blots: clusters of small jittered circles at low alpha so
+    # they read as soaked-in stains rather than solid polka dots.  Blended
+    # over the parchment (direct draw would punch alpha holes).
+    blot_alpha = max(18, int((stain[3] if len(stain) > 3 else 90) * 0.45))
+    blot_clr = (stain[0], stain[1], stain[2], blot_alpha)
+
+    def _blots(layer):
+        for corner in (0, 2, 4):
+            a = _HEX_ANGLES[corner]
+            bx = cx + math.cos(a) * sz * 0.74
+            by = cy + math.sin(a) * sz * 0.74
+            for _ in range(6):
+                ox = (rng() - 0.5) * sz * 0.16
+                oy = (rng() - 0.5) * sz * 0.16
+                r = int(sz * (0.035 + rng() * 0.045))
+                pygame.draw.circle(layer, blot_clr,
+                                   (int(bx + ox), int(by + oy)), max(1, r))
+
+    _blend_layer(surf, _blots)
 
 
 def _draw_grass(surf, cx, cy, sz, skin):
@@ -214,12 +238,22 @@ def _draw_grass(surf, cx, cy, sz, skin):
         clr = light if rng() < 0.4 else dark
         pygame.draw.line(surf, clr, (x, y),
                          (x + tilt, y - blade_h), line_w)
-    # Sprinkle a few micro-flowers.
-    for _ in range(8):
+    # Sprinkle wildflowers: a petal ring around a warm center so they read
+    # as flowers instead of stray pixels.
+    for _ in range(9):
         x = cx + (rng() * 2 - 1) * sz * 0.85
         y = cy + (rng() * 2 - 1) * sz * 0.8
         col = flowers[int(rng() * len(flowers)) % len(flowers)]
-        pygame.draw.circle(surf, col, (int(x), int(y)), max(1, int(sz * 0.022)))
+        petal_r = max(1, int(sz * 0.020))
+        for p in range(4):
+            a = math.pi / 4 + p * math.pi / 2
+            pygame.draw.circle(
+                surf, col,
+                (int(x + math.cos(a) * petal_r * 1.3),
+                 int(y + math.sin(a) * petal_r * 1.3)),
+                petal_r)
+        pygame.draw.circle(surf, (250, 214, 118, 235),
+                           (int(x), int(y)), max(1, int(petal_r * 0.8)))
 
 
 def _draw_snow(surf, cx, cy, sz, skin):
@@ -230,23 +264,43 @@ def _draw_snow(surf, cx, cy, sz, skin):
     _draw_radial_gradient(surf, cx, cy, sz, center, rim, steps=12)
 
     rng = _lcg(_seed_for('snow'))
+    # Wind-blown drift banks: soft white ellipses hugging the lower half,
+    # blended over the base (direct draw would punch alpha holes).
+    drift_clr = (255, 255, 255, 60)
+
+    def _drifts(layer):
+        for _ in range(4):
+            dw = int(sz * (0.55 + rng() * 0.45))
+            dh = max(2, int(dw * 0.22))
+            dx = cx + (rng() * 2 - 1) * sz * 0.55
+            dy = cy + sz * (0.15 + rng() * 0.55)
+            pygame.draw.ellipse(layer, drift_clr,
+                                pygame.Rect(int(dx - dw / 2),
+                                            int(dy - dh / 2), dw, dh))
+
+    _blend_layer(surf, _drifts)
     line_w = max(1, int(sz * 0.018))
-    arm = max(3, int(sz * 0.10))
-    # 4×3 jittered snowflake field covering the whole hex.
+    # 4×3 jittered snowflake field, mixed sizes: large 6-arm crystals plus
+    # small drifting dots so the field reads less clip-art.
     for r in range(3):
         for c in range(4):
             jx = (rng() - 0.5) * sz * 0.25
             jy = (rng() - 0.5) * sz * 0.25
             fx = cx - sz * 0.85 + sz * 0.55 * c + jx
             fy = cy - sz * 0.65 + sz * 0.55 * r + jy
-            pygame.draw.line(surf, flake, (fx - arm, fy), (fx + arm, fy), line_w)
-            pygame.draw.line(surf, flake, (fx, fy - arm), (fx, fy + arm), line_w)
-            pygame.draw.line(surf, flake,
-                             (fx - arm * 0.7, fy - arm * 0.7),
-                             (fx + arm * 0.7, fy + arm * 0.7), line_w)
-            pygame.draw.line(surf, flake,
-                             (fx - arm * 0.7, fy + arm * 0.7),
-                             (fx + arm * 0.7, fy - arm * 0.7), line_w)
+            if rng() < 0.35:
+                pygame.draw.circle(surf, flake, (int(fx), int(fy)),
+                                   max(1, int(sz * 0.022)))
+                continue
+            arm = max(3, int(sz * (0.07 + rng() * 0.05)))
+            spin = rng() * math.pi / 3
+            for k in range(3):
+                a = spin + k * math.pi / 3
+                dx_a = math.cos(a) * arm
+                dy_a = math.sin(a) * arm
+                pygame.draw.line(surf, flake,
+                                 (fx - dx_a, fy - dy_a),
+                                 (fx + dx_a, fy + dy_a), line_w)
     # 1-pixel inner halo ring for frosted edge feel.
     pygame.draw.polygon(surf, halo, _hex_polygon(cx, cy, sz * 0.96), 2)
 
@@ -317,13 +371,25 @@ def _draw_dusk(surf, cx, cy, sz, skin):
     _draw_radial_gradient(surf, cx, cy, sz, center, rim, steps=14)
 
     rng = _lcg(_seed_for('dusk'))
-    # 25 4-point stars in two sizes scattered across the hex.
+    # 25 4-point stars in two sizes scattered across the hex.  Big stars
+    # get a faint blended halo so the brightest ones twinkle.
+    stars = []
     for _ in range(25):
         x = cx + (rng() * 2 - 1) * sz * 0.92
         y = cy + (rng() * 2 - 1) * sz * 0.85
         big = rng() < 0.35
         r = sz * (0.05 if big else 0.028)
         clr = star if rng() < 0.7 else star2
+        stars.append((x, y, big, r, clr))
+
+    def _halos(layer):
+        for x, y, big, r, clr in stars:
+            if big:
+                pygame.draw.circle(layer, (clr[0], clr[1], clr[2], 40),
+                                   (int(x), int(y)), max(2, int(r * 1.9)))
+
+    _blend_layer(surf, _halos)
+    for x, y, _big, r, clr in stars:
         pts = [
             (x, y - r),
             (x + r * 0.32, y - r * 0.32),
@@ -346,20 +412,27 @@ def _draw_lava(surf, cx, cy, sz, skin):
     _draw_radial_gradient(surf, cx, cy, sz, center, rim, steps=14)
 
     rng = _lcg(_seed_for('lava'))
-    # 12 glowing cracks radiating from center outward.
-    for v in range(12):
-        a0 = 2 * math.pi * (v / 12) + rng() * 0.3
-        x, y = cx, cy
-        pts = [(x, y)]
-        for _ in range(6):
-            a0 += (rng() - 0.5) * 0.7
-            step = sz * (0.13 + rng() * 0.06)
-            x += math.cos(a0) * step
-            y += math.sin(a0) * step
-            pts.append((x, y))
-        thick = max(2, int(sz * 0.045))
-        pygame.draw.lines(surf, crack, False, pts, thick)
-        pygame.draw.lines(surf, crack_core, False, pts, max(1, thick - 2))
+    # Glowing cracks meander from a few off-center fissure nodes so the
+    # pattern reads as broken crust instead of a radial starburst.
+    node_count = 3
+    for n in range(node_count):
+        node_a = 2 * math.pi * (n / node_count) + rng() * 1.2
+        node_r = sz * (0.18 + rng() * 0.30)
+        ox = cx + math.cos(node_a) * node_r
+        oy = cy + math.sin(node_a) * node_r
+        for _ in range(4):
+            a0 = rng() * 2 * math.pi
+            x, y = ox, oy
+            pts = [(x, y)]
+            for _ in range(6):
+                a0 += (rng() - 0.5) * 1.1
+                step = sz * (0.10 + rng() * 0.08)
+                x += math.cos(a0) * step
+                y += math.sin(a0) * step
+                pts.append((x, y))
+            thick = max(2, int(sz * 0.045))
+            pygame.draw.lines(surf, crack, False, pts, thick)
+            pygame.draw.lines(surf, crack_core, False, pts, max(1, thick - 2))
     # Ember speckles near cracks.
     for _ in range(18):
         x = cx + (rng() * 2 - 1) * sz * 0.85
@@ -376,7 +449,7 @@ def _draw_starter(surf, cx, cy, sz, skin):
     """
     base_top = skin.get('base_clr_top', (236, 220, 184, 110))
     base_bot = skin.get('base_clr_bot', (196, 174, 128, 110))
-    hatch_clr = skin.get('hatch_clr', (96, 72, 36, 55))
+    hatch_clr = skin.get('hatch_clr', (96, 72, 36, 32))
     vignette_clr = skin.get('vignette_clr', (32, 22, 12, 70))
 
     # Soft warm tinted vertical gradient (low alpha keeps suit fill readable).
@@ -413,6 +486,80 @@ def _draw_starter(surf, cx, cy, sz, skin):
         )
 
 
+def _draw_dunes(surf, cx, cy, sz, skin):
+    top = skin.get('base_clr_top', (232, 202, 142, 215))
+    bot = skin.get('base_clr_bot', (198, 158, 96, 215))
+    ridge = skin.get('ridge_clr', (156, 116, 62, 190))
+    ridge_hl = skin.get('ridge_highlight', (250, 228, 176, 200))
+    _draw_vertical_gradient(surf, cx, cy, sz, top, bot, steps=12)
+
+    rng = _lcg(_seed_for('dunes'))
+    line_w = max(1, int(sz * 0.030))
+    # Stacked wind-ripple crests spanning the hex: a shadowed sine crest
+    # with a thin sunlit line above it reads as rippled sand.
+    rows = 5
+    for r in range(rows):
+        y0 = (cy - sz * 0.72 + (sz * 1.44) * (r + 0.5) / rows
+              + (rng() - 0.5) * sz * 0.08)
+        phase = rng() * math.tau
+        amp = sz * (0.045 + rng() * 0.040)
+        pts = []
+        steps = 14
+        for i in range(steps + 1):
+            t = i / steps
+            x = cx - sz * 0.95 + sz * 1.9 * t
+            y = y0 + math.sin(phase + t * math.pi * 2.2) * amp
+            pts.append((x, y))
+        pygame.draw.lines(surf, ridge, False, pts, line_w)
+        hl_pts = [(x, y - line_w) for x, y in pts]
+        pygame.draw.lines(surf, ridge_hl, False, hl_pts,
+                          max(1, line_w // 2))
+    # A few scattered pebbles.
+    for _ in range(6):
+        x = cx + (rng() * 2 - 1) * sz * 0.8
+        y = cy + (rng() * 2 - 1) * sz * 0.75
+        pygame.draw.circle(surf, ridge, (int(x), int(y)),
+                           max(1, int(sz * 0.02)))
+
+
+def _draw_crystal(surf, cx, cy, sz, skin):
+    center = skin.get('base_clr_center', (36, 66, 110, 225))
+    rim = skin.get('base_clr_rim', (14, 26, 52, 235))
+    face_light = skin.get('face_light', (150, 214, 255, 215))
+    face_dark = skin.get('face_dark', (74, 132, 208, 205))
+    edge = skin.get('edge_clr', (226, 246, 255, 235))
+    sparkle = skin.get('sparkle_clr', (255, 255, 255, 220))
+    _draw_radial_gradient(surf, cx, cy, sz, center, rim, steps=12)
+
+    rng = _lcg(_seed_for('crystal'))
+    # Faceted shards: elongated kites split along the spine into a lit and
+    # a shaded face, with a bright edge line for the crystalline glint.
+    for _ in range(8):
+        bx = cx + (rng() * 2 - 1) * sz * 0.72
+        by = cy + (rng() * 2 - 1) * sz * 0.68
+        ang = rng() * math.tau
+        length = sz * (0.26 + rng() * 0.30)
+        half_w = sz * (0.05 + rng() * 0.05)
+        ax, ay = math.cos(ang), math.sin(ang)
+        px, py = -ay, ax
+        mid_x = bx + ax * length * 0.45
+        mid_y = by + ay * length * 0.45
+        side_l = (mid_x - px * half_w, mid_y - py * half_w)
+        side_r = (mid_x + px * half_w, mid_y + py * half_w)
+        tip = (bx + ax * length, by + ay * length)
+        pygame.draw.polygon(surf, face_light, [(bx, by), side_l, tip])
+        pygame.draw.polygon(surf, face_dark, [(bx, by), side_r, tip])
+        pygame.draw.line(surf, edge, (bx, by), tip,
+                         max(1, int(sz * 0.014)))
+    # Tiny sparkle crosses between shards.
+    arm = max(2, int(sz * 0.045))
+    for _ in range(6):
+        x = cx + (rng() * 2 - 1) * sz * 0.8
+        y = cy + (rng() * 2 - 1) * sz * 0.75
+        pygame.draw.line(surf, sparkle, (x - arm, y), (x + arm, y), 1)
+        pygame.draw.line(surf, sparkle, (x, y - arm), (x, y + arm), 1)
+
+
 _SURFACE_DRAWERS = {
     'starter': _draw_starter,
     'cobblestone': _draw_cobblestones,
@@ -423,6 +570,8 @@ _SURFACE_DRAWERS = {
     'marble': _draw_marble,
     'dusk_stars': _draw_dusk,
     'lava': _draw_lava,
+    'dunes': _draw_dunes,
+    'crystal': _draw_crystal,
 }
 
 
@@ -459,17 +608,22 @@ def render_surface_art(skin_key, hex_size):
 #  Center emblems
 # ═══════════════════════════════════════════════════════════════════
 
-_EMBLEM_BASE_CLR = (255, 255, 255, 70)
-_EMBLEM_DARK_CLR = (10, 10, 10, 90)
+_EMBLEM_BASE_CLR = (255, 255, 255, 46)
+_EMBLEM_DARK_CLR = (10, 10, 10, 42)
+_EMBLEM_SHADOW_LIGHT = (255, 255, 255, 34)
+_EMBLEM_SHADOW_DARK = (10, 10, 10, 34)
 
 
-def _emblem_clr(skin):
-    """Pick an emblem colour that contrasts with the surface base."""
-    # Lava + dusk (dark surfaces) get a luminous warm emblem.
+def _emblem_clrs(skin):
+    """Pick emblem main + emboss-shadow colours contrasting the surface."""
+    # Lava + dusk (dark surfaces) get a luminous emblem with a dark relief
+    # shadow; light surfaces get the inverse so both read as engravings.
     base = (skin.get('base_clr_center') or skin.get('base_clr')
             or (180, 180, 180, 255))
     luminance = (base[0] * 0.299 + base[1] * 0.587 + base[2] * 0.114)
-    return _EMBLEM_BASE_CLR if luminance < 140 else _EMBLEM_DARK_CLR
+    if luminance < 140:
+        return _EMBLEM_BASE_CLR, _EMBLEM_SHADOW_DARK
+    return _EMBLEM_DARK_CLR, _EMBLEM_SHADOW_LIGHT
 
 
 def _draw_emblem_feather(surf, cx, cy, sz, clr):
@@ -542,6 +696,16 @@ def _draw_emblem_flame(surf, cx, cy, sz, clr):
     pygame.draw.polygon(surf, clr, pts)
 
 
+def _draw_emblem_shard(surf, cx, cy, sz, clr):
+    pts = [
+        (cx, cy - sz * 0.9),
+        (cx + sz * 0.55, cy - sz * 0.15),
+        (cx, cy + sz * 0.9),
+        (cx - sz * 0.55, cy - sz * 0.15),
+    ]
+    pygame.draw.polygon(surf, clr, pts)
+
+
 _EMBLEM_DRAWERS = {
     'feather': _draw_emblem_feather,
     'arch': _draw_emblem_arch,
@@ -549,6 +713,7 @@ _EMBLEM_DRAWERS = {
     'column': _draw_emblem_column,
     'crescent': _draw_emblem_crescent,
     'flame': _draw_emblem_flame,
+    'shard': _draw_emblem_shard,
 }
 
 
@@ -567,11 +732,17 @@ def render_center_emblem(skin_key, hex_size):
     drawer = _EMBLEM_DRAWERS.get(name)
     if drawer is None:
         return None
-    target_sz = max(10, int(hex_size * 0.40))
+    target_sz = max(10, int(hex_size * 0.34))
     scale = 4 if target_sz < 16 else (2 if target_sz < 32 else 1)
     sz = target_sz * scale
     surf = _make_alpha(sz * 2, sz * 2)
-    drawer(surf, sz, sz, sz * 0.85, _emblem_clr(skin))
+    main_clr, shadow_clr = _emblem_clrs(skin)
+    # Embossed watermark: relief shadow offset down-right, then the main
+    # glyph pass (pygame.draw replaces pixels, so the shadow only survives
+    # along the offset edge — reads as an engraving, not a sticker).
+    off = max(1, int(sz * 0.06))
+    drawer(surf, sz + off, sz + off, sz * 0.85, shadow_clr)
+    drawer(surf, sz, sz, sz * 0.85, main_clr)
     if scale > 1:
         surf = pygame.transform.smoothscale(surf, (target_sz * 2, target_sz * 2))
     return surf

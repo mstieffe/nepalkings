@@ -281,3 +281,23 @@ class TestRankings:
             assert 'wins' in entry
             assert 'losses' in entry
             assert 'is_online' in entry
+
+    def test_get_rankings_excludes_ai_users(self, client, db, two_users):
+        from models import User
+
+        ai_user = User(
+            username='[AI] RankingBot',
+            password_hash=generate_password_hash('not-a-login'),
+            gold=99999,
+            is_ai=True,
+        )
+        db.session.add(ai_user)
+        db.session.commit()
+
+        resp = client.get('/auth/get_rankings')
+        usernames = {
+            entry['username'] for entry in resp.get_json()['rankings']
+        }
+
+        assert resp.status_code == 200
+        assert ai_user.username not in usernames

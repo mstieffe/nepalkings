@@ -135,6 +135,11 @@ class _DummyHexMap:
         self.focused_groups = []
         self.events = []
         self.drag_release = False
+        self.cancelled_drags = 0
+        self.zoomed_in = 0
+        self.zoomed_out = 0
+        self.minimap_clicks = []
+        self._minimap_rect = None
         self.zoom = 1.0
 
     def focus_land(self, land_id):
@@ -156,7 +161,20 @@ class _DummyHexMap:
         return None
 
     def handle_minimap_click(self, sx, sy):
+        if self._minimap_rect and self._minimap_rect.collidepoint(sx, sy):
+            self.minimap_clicks.append((sx, sy))
+            return True
         return False
+
+    def cancel_drag(self):
+        self.cancelled_drags += 1
+        self.drag_release = False
+
+    def zoom_in(self):
+        self.zoomed_in += 1
+
+    def zoom_out(self):
+        self.zoomed_out += 1
 
     def pan(self, dx, dy):
         return None
@@ -538,6 +556,11 @@ class TestKingdomDragRelease:
         screen._mark_read_kind = None
         screen._activity_row_rects = []
         screen._nav_rects = {}
+        screen._nav_hit_rects = {}
+        screen._map_mode_rects = {}
+        screen._map_control_press = None
+        screen._mobile_ui = False
+        screen._activity_open = False
         screen._handle_icon_events = MagicMock(return_value=False)
         screen._hex_map = _DummyHexMap()
         screen._collect_all_rect = None
@@ -561,6 +584,101 @@ class TestKingdomDragRelease:
         KingdomScreen.handle_events(screen, [event])
 
         assert screen.state.screen == 'game_menu'
+        assert screen._hex_map.events == []
+
+    def test_zoom_button_press_does_not_start_map_drag(self):
+        KingdomScreen, screen = self._screen()
+        screen._nav_rects = {'zoom_in': pygame.Rect(120, 120, 40, 40)}
+        down = SimpleNamespace(type=pygame.MOUSEBUTTONDOWN, button=1,
+                               pos=(130, 130))
+        up = SimpleNamespace(type=pygame.MOUSEBUTTONUP, button=1,
+                             pos=(130, 130))
+
+        KingdomScreen.handle_events(screen, [down, up])
+
+        assert screen._hex_map.events == []
+        assert screen._hex_map.zoomed_in == 1
+
+    def test_zoom_button_press_release_elsewhere_does_not_select_map(self):
+        KingdomScreen, screen = self._screen()
+        screen._nav_rects = {'zoom_in': pygame.Rect(120, 120, 40, 40)}
+        down = SimpleNamespace(type=pygame.MOUSEBUTTONDOWN, button=1,
+                               pos=(130, 130))
+        up = SimpleNamespace(type=pygame.MOUSEBUTTONUP, button=1,
+                             pos=(260, 260))
+
+        KingdomScreen.handle_events(screen, [down, up])
+
+        assert screen._hex_map.events == []
+        assert screen._hex_map.zoomed_in == 0
+
+    def test_map_drag_release_over_zoom_button_does_not_zoom(self):
+        KingdomScreen, screen = self._screen()
+        screen._hex_map.drag_release = True
+        screen._nav_rects = {'zoom_in': pygame.Rect(120, 120, 40, 40)}
+        up = SimpleNamespace(type=pygame.MOUSEBUTTONUP, button=1,
+                             pos=(130, 130))
+
+        KingdomScreen.handle_events(screen, [up])
+
+        assert screen._hex_map.zoomed_in == 0
+        assert screen._hex_map.events == [up]
+
+    def test_map_drag_release_over_mode_button_does_not_switch_mode(self):
+        KingdomScreen, screen = self._screen()
+        screen._hex_map.drag_release = True
+        screen._map_mode = 'terrain'
+        screen._map_mode_rects = {'gold': pygame.Rect(120, 120, 80, 40)}
+        up = SimpleNamespace(type=pygame.MOUSEBUTTONUP, button=1,
+                             pos=(140, 140))
+
+        KingdomScreen.handle_events(screen, [up])
+
+        assert screen._map_mode == 'terrain'
+        assert screen._hex_map.events == [up]
+
+    def test_minimap_press_does_not_start_main_map_drag(self):
+        KingdomScreen, screen = self._screen()
+        screen._hex_map._minimap_rect = pygame.Rect(220, 180, 80, 60)
+        down = SimpleNamespace(type=pygame.MOUSEBUTTONDOWN, button=1,
+                               pos=(240, 200))
+        up = SimpleNamespace(type=pygame.MOUSEBUTTONUP, button=1,
+                             pos=(240, 200))
+
+        KingdomScreen.handle_events(screen, [down, up])
+
+        assert screen._hex_map.events == []
+        assert screen._hex_map.minimap_clicks == [(240, 200)]
+
+    def test_mobile_activity_drawer_press_does_not_reach_map(self):
+        KingdomScreen, screen = self._screen()
+        screen._mobile_ui = True
+        screen._activity_open = True
+        screen._activity_close_rect = None
+        screen._activity_rect = pygame.Rect(120, 120, 200, 180)
+        down = SimpleNamespace(type=pygame.MOUSEBUTTONDOWN, button=1,
+                               pos=(180, 180))
+
+        KingdomScreen.handle_events(screen, [down])
+
+        assert screen._hex_map.events == []
+
+    def test_mobile_toolbar_toggle_press_still_toggles_layer_picker(self):
+        KingdomScreen, screen = self._screen()
+        screen._mobile_ui = True
+        screen._activity_open = False
+        screen._layers_open = False
+        screen._layers_toggle_rect = pygame.Rect(120, 120, 120, 58)
+        screen._activity_toggle_rect = pygame.Rect(250, 120, 120, 58)
+        down = SimpleNamespace(type=pygame.MOUSEBUTTONDOWN, button=1,
+                               pos=(140, 140))
+        up = SimpleNamespace(type=pygame.MOUSEBUTTONUP, button=1,
+                             pos=(140, 140))
+
+        KingdomScreen.handle_events(screen, [down, up])
+
+        assert screen._layers_open is True
+        assert screen._activity_open is False
         assert screen._hex_map.events == []
 
 

@@ -251,6 +251,29 @@ class TestRoyalDecree:
             assert 'caster_dumped' in effect_data
             assert 'opponent_dumped' in effect_data
 
+    def test_decree_without_castle_is_rejected_before_battle_creation(self, app, db):
+        with app.app_context():
+            attacker = _make_user(db, username='rd_no_castle_atk')
+            defender = _make_user(db, username='rd_no_castle_def')
+            land = _make_land(db, tier=1, owner_user_id=defender.id)
+            atk_cfg = _make_conquer_config(db, attacker, land)
+            _make_defence_config(db, defender, land)
+            atk_cfg.prelude_spell_name = 'Royal Decree'
+            atk_cfg.prelude_spell_data = {}
+            db.session.commit()
+
+            client = app.test_client()
+            response = client.post(
+                '/kingdom/conquer/start_battle',
+                json={'land_id': land.id},
+                headers=_auth_headers(app, attacker),
+            )
+
+            assert response.status_code == 400
+            payload = response.get_json()
+            assert payload.get('reason') == 'no_legal_battle_figure'
+            assert 'castle figure' in payload.get('message', '').lower()
+
     def test_decree_castle_only_advance_and_defender_selection(self, app, db):
         with app.app_context():
             attacker, defender, land, _atk_cfg, _def_cfg = self._setup(app, db)
@@ -331,6 +354,99 @@ class TestRoyalDecree:
             # Royal Decree wins: castle figure advances and the Civil War
             # two-pick flow never opens.
             assert data.get('civil_war_need_second') is False
+
+    def test_attacker_decree_and_defender_civil_war_reach_castle_battle(
+        self, app, db, monkeypatch
+    ):
+        """The reported modifier combination must leave one resolvable pool."""
+        with app.app_context():
+            attacker, defender, land, _atk_cfg, def_cfg = self._setup(app, db)
+            first_village = _add_defence_config_figure(
+                def_cfg,
+                defender,
+                family_name='Small Rice Farm',
+                suit='Hearts',
+                color='defensive',
+                field='village',
+            )
+            second_village = _add_defence_config_figure(
+                def_cfg,
+                defender,
+                family_name='Small Yack Farm',
+                suit='Diamonds',
+                color='defensive',
+                field='village',
+            )
+            def_cfg.prelude_spell_name = 'Civil War'
+            def_cfg.prelude_spell_data = {}
+            def_cfg.battle_figure_id = first_village.id
+            def_cfg.battle_figure_id_2 = second_village.id
+            def_cfg.counter_spell_name = None
+            db.session.commit()
+
+            client, headers, game = _start_battle(app, attacker, land)
+            atk_player = _game_player(game, attacker)
+            def_player = _game_player(game, defender)
+            modifier_types = {
+                modifier.get('type') for modifier in (game.battle_modifier or [])
+            }
+            assert {'Royal Decree', 'Civil War'} <= modifier_types
+
+            attacker_castle = Figure.query.filter_by(
+                game_id=game.id,
+                player_id=atk_player.id,
+                field='castle',
+            ).first()
+            response = client.post('/games/advance_figure', json={
+                'game_id': game.id,
+                'player_id': atk_player.id,
+                'figure_id': attacker_castle.id,
+            }, headers=headers)
+            assert response.status_code == 200, response.get_json()
+            assert response.get_json().get('civil_war_need_second') is False
+
+            db.session.refresh(game)
+            if game.turn_player_id == def_player.id:
+                import ai.ai_worker as ai_worker
+                from tests.server.test_conquer_ai_defender_response import (
+                    _install_ai_post_via_test_client,
+                )
+                with ai_worker._ai_player_user_ids_lock:
+                    ai_worker._ai_player_user_ids[def_player.id] = defender.id
+                _install_ai_post_via_test_client(app, monkeypatch)
+                game_id = game.id
+                def_player_id = def_player.id
+            else:
+                game_id = game.id
+                def_player_id = None
+
+        if def_player_id is not None:
+            ai_worker._conquer_ai_loop(app, game_id, def_player_id)
+
+        with app.app_context():
+            game = db.session.get(Game, game_id)
+            atk_player = _game_player(game, attacker)
+            def_player = _game_player(game, defender)
+            if game.defending_figure_id is None:
+                defender_castle = Figure.query.filter_by(
+                    game_id=game.id,
+                    player_id=def_player.id,
+                    field='castle',
+                ).first()
+                response = app.test_client().post('/games/select_defender', json={
+                    'game_id': game.id,
+                    'player_id': atk_player.id,
+                    'figure_id': defender_castle.id,
+                }, headers=_auth_headers(app, attacker))
+                assert response.status_code == 200, response.get_json()
+                assert response.get_json().get('civil_war_need_second') is False
+                db.session.refresh(game)
+
+            defender_figure = db.session.get(Figure, game.defending_figure_id)
+            assert defender_figure is not None
+            assert defender_figure.field == 'castle'
+            assert game.defending_figure_id_2 is None
+            assert game.turn_player_id == atk_player.id
 
     def test_no_legal_castle_figures_resolve_via_loss_paths(self, app, db):
         with app.app_context():

@@ -207,6 +207,8 @@ KINGDOM_SIGIL_STYLES = {
     'sigil_dragon':   {'name': 'Dragon',       'shape': 'dragon'},
     'sigil_crown':    {'name': 'Crown',        'shape': 'crown'},
     'sigil_serpent':  {'name': 'Serpent',      'shape': 'serpent'},
+    'sigil_yak':      {'name': 'Yak',          'shape': 'yak'},
+    'sigil_stupa':    {'name': 'Stupa',        'shape': 'stupa'},
 }
 KINGDOM_SIGIL_DEFAULT_KEY = 'sigil_none'
 
@@ -305,6 +307,17 @@ HEX_BADGE_STYLES = {
         'text': (44, 30, 36),
         'shimmer': True,
     },
+    'badge_wax_seal': {
+        'rarity': 'rare',
+        'shape': 'seal',
+        'fill_top': (52, 40, 34, 242),
+        'fill_bot': (28, 20, 16, 242),
+        'border': (168, 128, 62),
+        'text': (238, 214, 170),
+        'wax_clr': (188, 40, 44),
+        'wax_dark': (118, 18, 24),
+        'wax_highlight': (255, 154, 150),
+    },
 }
 
 HEX_BADGE_DEFAULT_KEY = 'badge_plain'
@@ -363,10 +376,11 @@ HEX_BORDER_SKINS = {
         'rarity': 'rare',
     },
     'border_ruby': {
-        'outer': (80, 8, 18),
-        'main': (224, 46, 70),
-        'highlight': (255, 205, 215),
-        'width_bonus': 2,
+        # Deep jewel tones — bright pink reads as candy, not ruby.
+        'outer': (64, 6, 16),
+        'main': (178, 26, 48),
+        'highlight': (255, 172, 186),
+        'width_bonus': 1,
         'style': 'gem_cabochons',
         'rarity': 'epic',
     },
@@ -376,6 +390,24 @@ HEX_BORDER_SKINS = {
         'highlight': (228, 200, 168),
         'width_bonus': 1,
         'style': 'thorned_vine',
+        'rarity': 'epic',
+    },
+    'border_bamboo': {
+        'outer': (44, 68, 30),
+        'main': (150, 178, 94),
+        'highlight': (222, 238, 170),
+        'width_bonus': 1,
+        'style': 'bamboo_stalks',
+        'rarity': 'common',
+    },
+    'border_prayer_flags': {
+        # Rope palette; the five traditional flag colours live in the
+        # ``prayer_flags`` edge renderer.
+        'outer': (66, 48, 30),
+        'main': (172, 138, 92),
+        'highlight': (240, 220, 180),
+        'width_bonus': 1,
+        'style': 'prayer_flags',
         'rarity': 'epic',
     },
 }
@@ -392,7 +424,7 @@ HEX_SURFACE_SKINS = {
         # Alphas are kept low so the underlying suit-bonus fill stays primary.
         'base_clr_top':  (236, 220, 184, 95),
         'base_clr_bot':  (196, 174, 128, 95),
-        'hatch_clr':     (96, 72, 36, 50),
+        'hatch_clr':     (96, 72, 36, 32),
         'vignette_clr':  (32, 22, 12, 70),
         'emblem': None,
     },
@@ -469,6 +501,26 @@ HEX_SURFACE_SKINS = {
         'crack_core_clr':  (255, 232, 140, 230),
         'ember_clr':       (255, 196, 96, 230),
         'emblem': 'flame',
+    },
+    'surface_sand': {
+        'style': 'dunes',
+        'rarity': 'common',
+        'base_clr_top':    (232, 202, 142, 215),
+        'base_clr_bot':    (198, 158, 96, 215),
+        'ridge_clr':       (156, 116, 62, 190),
+        'ridge_highlight': (250, 228, 176, 200),
+        'emblem': None,
+    },
+    'surface_crystal': {
+        'style': 'crystal',
+        'rarity': 'epic',
+        'base_clr_center': (36, 66, 110, 225),
+        'base_clr_rim':    (14, 26, 52, 235),
+        'face_light':      (150, 214, 255, 215),
+        'face_dark':       (74, 132, 208, 205),
+        'edge_clr':        (226, 246, 255, 235),
+        'sparkle_clr':     (255, 255, 255, 220),
+        'emblem': 'shard',
     },
 }
 
@@ -591,6 +643,25 @@ KINGDOM_CONFIG_DIM_CLR = (156, 146, 132)
 KINGDOM_CONFIG_HIGHLIGHT = (232, 190, 104)
 KINGDOM_CONFIG_GOOD_CLR = (132, 220, 142)
 KINGDOM_CONFIG_BAD_CLR = (226, 112, 96)
+
+# Rarity accents for cosmetic shop rows / chip frames.  Warm-shifted so
+# they sit inside the game's parchment-and-gold palette.
+COSMETIC_RARITY_COLORS = {
+    'default':   (150, 142, 128),
+    'common':    (184, 172, 148),
+    'uncommon':  (150, 196, 140),
+    'rare':      (118, 170, 222),
+    'epic':      (194, 128, 236),
+    'legendary': (250, 196, 92),
+}
+COSMETIC_RARITY_LABELS = {
+    'default':   'Standard',
+    'common':    'Common',
+    'uncommon':  'Uncommon',
+    'rare':      'Rare',
+    'epic':      'Epic',
+    'legendary': 'Legendary',
+}
 
 # ── Hex labels ──────────────────────────────────────────────────────
 HEX_LABEL_FONT_SIZE     = FS_BODY

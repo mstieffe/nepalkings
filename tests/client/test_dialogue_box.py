@@ -98,6 +98,80 @@ def test_grouped_dialogue_keeps_a_lead_image_beside_message():
     box.draw()
 
 
+def test_grouped_dialogue_supports_single_feature_item_layout():
+    from config import settings
+    from game.components.dialogue_box import DialogueBox
+    import pygame
+
+    pygame.display.set_mode((1, 1))
+    window = pygame.Surface((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+    icon = pygame.Surface((48, 48), pygame.SRCALPHA)
+
+    box = DialogueBox(
+        window,
+        'Premium Castle Card',
+        actions=['Close'],
+        title='Maharaja',
+        image_groups=[{
+            'title': 'Builds',
+            'items': [icon],
+            'item_tooltips': ['Maharaja figure'],
+            'count': 1,
+            'item_unit': 'figure',
+            'feature_item': True,
+            'description': 'Power 16 castle with extra support slots.',
+        }],
+    )
+
+    group = box.image_groups[0]
+    assert group['feature_item'] is True
+    assert len(group['rows']) == 1
+    assert group['height'] < (
+        settings.DIALOGUE_BOX_GROUP_IMG_HEIGHT
+        + settings.DIALOGUE_BOX_GROUP_HEADER_GAP
+        + settings.DIALOGUE_BOX_GROUP_PADDING_Y * 2
+        + settings.FS_SMALL
+    )
+    box.draw()
+
+
+def test_grouped_dialogue_rewraps_message_beside_lead_image():
+    from config import settings
+    from game.components.dialogue_box import DialogueBox
+    import pygame
+
+    pygame.display.set_mode((1, 1))
+    window = pygame.Surface((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+    lead = pygame.Surface((120, 180), pygame.SRCALPHA)
+    item = pygame.Surface((48, 48), pygame.SRCALPHA)
+    message = (
+        'Trade one free copy of every Hearts rank (2-A) for the card that '
+        'builds your Djungle Maharaja.')
+
+    box = DialogueBox(
+        window,
+        message,
+        actions=['Craft', 'cancel'],
+        images=[lead],
+        image_groups=[{
+            'title': 'Builds',
+            'items': [item],
+            'feature_item': True,
+        }],
+    )
+
+    # The lead image reduces the available text column enough to require a
+    # tighter wrap than the normal full-width dialogue message.
+    full_width_lines = DialogueBox._wrap_text(
+        message,
+        box.font,
+        settings.DIALOGUE_BOX_WIDTH - int(0.08 * settings.SCREEN_WIDTH),
+    )
+    assert box.lines != full_width_lines
+    assert box.lines[0].endswith('for the')
+    box.draw()
+
+
 def test_dialogue_ignores_mouse_wheel_release_for_actions(monkeypatch):
     from config import settings
     from game.components.dialogue_box import DialogueBox

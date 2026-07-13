@@ -581,6 +581,9 @@ class RewardsRevealDialogueBox:
                     if item.rect.collidepoint(event.pos):
                         item.reveal_started_at = now
                         self._last_revealed_item = item
+                        from utils import sound
+                        sound.play('map_gain' if item.kind == 'map'
+                                   else 'reward_reveal')
                         break  # one click → one chest
         return None
 

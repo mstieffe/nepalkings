@@ -167,6 +167,28 @@ class DialogueBox:
         # Historically images were silently discarded whenever groups existed.
         self._lead_items = processed_images if self.image_groups else []
         self.ordered_items = [] if self.image_groups else processed_images
+        # The initial message wrap assumes the full dialogue width. A lead
+        # image takes a fixed slice of that row, so re-wrap against the actual
+        # remaining text column or long lines can run underneath the image.
+        if self._lead_items:
+            item_widths = [
+                item.get_width() if kind == 'surface'
+                else settings.DIALOGUE_BOX_DRAWABLE_OBJECT_HEIGHT
+                for kind, item in self._lead_items
+            ]
+            lead_w = (sum(item_widths)
+                      + max(0, len(item_widths) - 1) * int(0.008 * _SW))
+            box_x = (_SW - settings.DIALOGUE_BOX_WIDTH) // 2
+            text_left = (box_x + int(0.045 * _SW) + lead_w
+                         + int(0.020 * _SW))
+            text_right = (box_x + settings.DIALOGUE_BOX_WIDTH
+                          - int(0.035 * _SW))
+            lead_text_w = max(1, text_right - text_left)
+            self.lines = self._wrap_text(self.message, self.font, lead_text_w)
+            self.lines_surfaces = [
+                self.font.render(line, True, settings.DIALOGUE_BOX_MSG_TEXT_CLR)
+                for line in self.lines
+            ]
         has_surfaces = any(t == 'surface' for t, _ in self.ordered_items)
         has_drawables = any(t == 'drawable' for t, _ in self.ordered_items)
         lead_heights = [
@@ -309,6 +331,12 @@ class DialogueBox:
             item_unit = raw_group.get('item_unit', 'card')
             color = raw_group.get('color') or self._default_group_color(icon_name)
             note_prefix = raw_group.get('note_prefix', '')
+            feature_item = bool(raw_group.get('feature_item') and len(items) == 1)
+            note_width = self._group_max_w - int(0.040 * settings.SCREEN_WIDTH)
+            if feature_item:
+                note_width -= (
+                    settings.DIALOGUE_BOX_GROUP_IMG_HEIGHT
+                    + int(0.020 * settings.SCREEN_WIDTH))
             group = {
                 'key': raw_group.get('key'),
                 'title': self._format_group_title(title, count, item_unit),
@@ -320,11 +348,12 @@ class DialogueBox:
                 'icon': self._scaled_named_icon(icon_name, settings.DIALOGUE_BOX_GROUP_ICON_SIZE),
                 'badge_icon': self._scaled_named_icon(badge_name, settings.DIALOGUE_BOX_GROUP_BADGE_SIZE),
                 'color': color,
+                'feature_item': feature_item,
             }
             group['note_lines'] = self._wrap_text(
                 group['description'],
                 self.group_note_font,
-                self._group_max_w - int(0.040 * settings.SCREEN_WIDTH),
+                note_width,
             ) if group['description'] else []
             group['rows'] = self._layout_group_rows(group['items'], self._group_max_w)
             group['height'] = self._calc_single_group_height(group)
@@ -397,6 +426,9 @@ class DialogueBox:
         if note_h:
             note_h += int(0.003 * settings.SCREEN_HEIGHT)
         rows = group.get('rows') or []
+        if group.get('feature_item') and rows:
+            text_h = header_h + prefix_h + note_h
+            return pad_y * 2 + max(text_h, settings.DIALOGUE_BOX_GROUP_IMG_HEIGHT)
         cards_h = 0
         if rows:
             cards_h = (
@@ -660,7 +692,21 @@ class DialogueBox:
                     self.window.blit(note_surf, (group_rect.x + pad_x, y))
                     y += self.group_note_font.get_height() + 1
 
-            if group['rows']:
+            if group.get('feature_item') and group['rows']:
+                item = group['rows'][0][0]
+                item_x = group_rect.right - pad_x - item['width']
+                item_y = group_rect.centery - item['height'] // 2
+                self._draw_group_item(item, item_x, item_y, group.get('badge_icon'))
+                tooltip = item.get('tooltip', '')
+                if tooltip:
+                    self._hover_item_rects.append({
+                        'rect': pygame.Rect(
+                            item_x, item_y,
+                            item['width'],
+                            item['height']),
+                        'tooltip': tooltip,
+                    })
+            elif group['rows']:
                 y += settings.DIALOGUE_BOX_GROUP_HEADER_GAP
                 for row in group['rows']:
                     row_w = self._row_width(row)

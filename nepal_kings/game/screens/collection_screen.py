@@ -110,6 +110,13 @@ def _maharaja_craft_progress(cards, locked, suit):
     return ready, len(ranks), missing
 
 
+def _maharaja_family_name(suit):
+    """Return the Maharaja castle family unlocked by this suit's MK card."""
+    if suit in settings.SUITS_BLACK:
+        return 'Himalaya Maharaja'
+    return 'Djungle Maharaja'
+
+
 def _collection_stats(cards, locked=None):
     """Return compact collection summary values for the UI header."""
     locked = locked or {}
@@ -395,6 +402,9 @@ class CollectionScreen(MenuScreenMixin, Screen):
         # ── Maharaja craft dialogue (MK click — never sell/trade) ────
         self._craft_dialogue = None
         self._craft_suit = None
+        self._craft_ready = 0
+        self._craft_total = 0
+        self._craft_missing = []
 
         # ── Booster reveal overlay ──────────────────────────────────
         self._reveal_overlay = None
@@ -624,6 +634,7 @@ class CollectionScreen(MenuScreenMixin, Screen):
         # Craft dialogue (Maharaja)
         if self._craft_dialogue:
             self._craft_dialogue.draw()
+            self._draw_craft_progress_overlay()
 
         # Booster reveal overlay
         if self._reveal_overlay:
@@ -850,16 +861,19 @@ class CollectionScreen(MenuScreenMixin, Screen):
 
             if display_state == 'owned':
                 if is_mk:
-                    self._draw_maharaja_glow(card_rect)  # warm gold halo behind
+                    self._draw_maharaja_glow(card_rect)
                 card.draw_front_bright(cx, cy)
                 if is_mk:
                     self._draw_maharaja_border(card_rect, owned=True)
                 else:
                     self._draw_tier_border(cx, cy, cw, ch, rank, section, owned=True)
                 if hovered:
-                    glow_surf = pygame.Surface((cw + 4, ch + 4), pygame.SRCALPHA)
-                    pygame.draw.rect(glow_surf, (250, 221, 0, 80), glow_surf.get_rect(), 2)
-                    self.window.blit(glow_surf, (cx - 2, cy - 2))
+                    if is_mk:
+                        self._draw_maharaja_hover(card_rect)
+                    else:
+                        glow_surf = pygame.Surface((cw + 4, ch + 4), pygame.SRCALPHA)
+                        pygame.draw.rect(glow_surf, (250, 221, 0, 80), glow_surf.get_rect(), 2)
+                        self.window.blit(glow_surf, (cx - 2, cy - 2))
                 self._draw_card_badge(
                     cx, cy, cw, qty, locked,
                     show_locked=getattr(self, '_show_locked_cards', False),
@@ -871,9 +885,9 @@ class CollectionScreen(MenuScreenMixin, Screen):
                 card.draw_front_bright(cx, cy)
                 self.window.blit(self._grey_overlay, (cx, cy))
                 if is_mk:
-                    # Gold frame hint on the missing slot so players discover
-                    # that the Maharaja is craftable; once every rank has a
-                    # free copy the slot lights up fully and invites the craft.
+                    # Premium frame hint on the missing slot so players
+                    # discover that the Maharaja is craftable; once every rank
+                    # has a free copy the slot lights up fully.
                     self._draw_maharaja_border(card_rect, owned=mk_craftable)
                     if mk_craftable:
                         self._draw_maharaja_craft_ready_pill(card_rect)
@@ -989,17 +1003,80 @@ class CollectionScreen(MenuScreenMixin, Screen):
                        card_rect.bottom - max(3, int(0.004 * _SH)))))
 
     def _draw_maharaja_glow(self, card_rect, dim=False):
-        """Feathered royal-gold halo behind a Maharaja cell, gently pulsing."""
+        """Feathered mythic halo behind a Maharaja cell, gently pulsing."""
         now = pygame.time.get_ticks()
         pulse = 0.5 + 0.5 * math.sin(now / 480.0)
-        peak = (28 if dim else 66) + int((16 if dim else 44) * pulse)
-        color = settings.COLLECTION_MAHARAJA_GLOW_CLR
-        halo_rect = card_rect.inflate(int(card_rect.w * 0.42),
-                                      int(card_rect.h * 0.28))
+        self._draw_maharaja_halo_layers(
+            card_rect,
+            settings.COLLECTION_MAHARAJA_GLOW_CLR,
+            (32 if dim else 78) + int((18 if dim else 44) * pulse),
+            width_factor=0.82,
+            height_factor=0.58,
+            layers=8,
+        )
+        self._draw_maharaja_halo_layers(
+            card_rect,
+            settings.COLLECTION_MAHARAJA_AURA_CLR,
+            (24 if dim else 60) + int((12 if dim else 28) * pulse),
+            width_factor=0.42,
+            height_factor=0.30,
+            layers=6,
+        )
+
+    def _draw_maharaja_border(self, card_rect, owned=True):
+        """Premium layered frame around a Maharaja cell."""
+        now = pygame.time.get_ticks()
+        pulse = 0.5 + 0.5 * math.sin(now / 480.0)
+        if owned:
+            bright_alpha = int(214 + 41 * pulse)
+            dark_alpha = int(190 + 42 * pulse)
+            rim_alpha = int(92 + 82 * pulse)
+            thickness = 3
+        else:
+            bright_alpha = 128
+            dark_alpha = 112
+            rim_alpha = 58
+            thickness = 2
+
+        surf = pygame.Surface((card_rect.w + 10, card_rect.h + 10), pygame.SRCALPHA)
+        rect = surf.get_rect().inflate(-1, -1)
+        rim = settings.COLLECTION_MAHARAJA_RIM_CLR
+        dark = settings.COLLECTION_MAHARAJA_BORDER_DARK_CLR
+        bright = settings.COLLECTION_MAHARAJA_BORDER_CLR
+        aura = settings.COLLECTION_MAHARAJA_AURA_CLR
+
+        pygame.draw.rect(surf, (*rim, rim_alpha), rect, 1, border_radius=7)
+        pygame.draw.rect(surf, (*dark, dark_alpha), rect.inflate(-2, -2),
+                         thickness, border_radius=6)
+        pygame.draw.rect(surf, (*aura, max(60, dark_alpha - 54)),
+                         rect.inflate(-5, -5), 1, border_radius=5)
+        pygame.draw.rect(surf, (*bright, bright_alpha), rect.inflate(-7, -7),
+                         1, border_radius=4)
+        if owned:
+            self._draw_maharaja_corner_jewels(surf, rect, int(160 + 72 * pulse))
+
+        self.window.blit(surf, (card_rect.x - 5, card_rect.y - 5))
+
+    def _draw_maharaja_hover(self, card_rect):
+        """Hover highlight that keeps the Maharaja distinct from rare cards."""
+        surf = pygame.Surface((card_rect.w + 14, card_rect.h + 14), pygame.SRCALPHA)
+        rect = surf.get_rect().inflate(-1, -1)
+        rim = settings.COLLECTION_MAHARAJA_RIM_CLR
+        bright = settings.COLLECTION_MAHARAJA_BORDER_CLR
+        pygame.draw.rect(surf, (*rim, 92), rect, 2, border_radius=8)
+        pygame.draw.rect(surf, (*bright, 130), rect.inflate(-4, -4),
+                         2, border_radius=6)
+        self.window.blit(surf, (card_rect.x - 7, card_rect.y - 7))
+
+    def _draw_maharaja_halo_layers(
+            self, card_rect, color, peak_alpha, width_factor,
+            height_factor, layers):
+        halo_rect = card_rect.inflate(
+            int(card_rect.w * width_factor),
+            int(card_rect.h * height_factor))
         halo = pygame.Surface(halo_rect.size, pygame.SRCALPHA)
-        layers = 6
         for step in range(layers, 0, -1):
-            t = step / layers  # 1.0 outer → ~0 inner
+            t = step / layers
             inset_x = int(halo_rect.w * 0.5 * (1.0 - t))
             inset_y = int(halo_rect.h * 0.5 * (1.0 - t))
             ring = pygame.Rect(inset_x, inset_y,
@@ -1007,27 +1084,31 @@ class CollectionScreen(MenuScreenMixin, Screen):
                                halo_rect.h - inset_y * 2)
             if ring.w <= 0 or ring.h <= 0:
                 continue
-            layer_alpha = max(0, int(peak * (1.0 - t) ** 2))
+            layer_alpha = max(0, int(peak_alpha * (1.0 - t) ** 2))
             if layer_alpha == 0:
                 continue
             pygame.draw.ellipse(halo, (*color, layer_alpha), ring)
         self.window.blit(halo, halo_rect.topleft)
 
-    def _draw_maharaja_border(self, card_rect, owned=True):
-        """Gold frame around a Maharaja cell; pulses brighter when owned."""
-        now = pygame.time.get_ticks()
-        pulse = 0.5 + 0.5 * math.sin(now / 480.0)
-        r, g, b = settings.COLLECTION_MAHARAJA_BORDER_CLR
-        if owned:
-            alpha = int(200 + 55 * pulse)
-            thickness = 2
-        else:
-            alpha = 150
-            thickness = 1
-        surf = pygame.Surface((card_rect.w + 4, card_rect.h + 4), pygame.SRCALPHA)
-        pygame.draw.rect(surf, (r, g, b, alpha), surf.get_rect(),
-                         thickness, border_radius=4)
-        self.window.blit(surf, (card_rect.x - 2, card_rect.y - 2))
+    def _draw_maharaja_corner_jewels(self, surf, rect, alpha):
+        gem = settings.COLLECTION_MAHARAJA_GEM_CLR
+        bright = settings.COLLECTION_MAHARAJA_BORDER_CLR
+        size = max(2, min(rect.w, rect.h) // 18)
+        inset = max(5, size + 2)
+        centres = (
+            (rect.left + inset, rect.top + inset),
+            (rect.right - inset, rect.top + inset),
+            (rect.left + inset, rect.bottom - inset),
+            (rect.right - inset, rect.bottom - inset),
+        )
+        for cx, cy in centres:
+            points = ((cx, cy - size), (cx + size, cy),
+                      (cx, cy + size), (cx - size, cy))
+            pygame.draw.polygon(surf, (*bright, min(255, alpha)), points)
+            inner = max(1, size - 1)
+            inner_points = ((cx, cy - inner), (cx + inner, cy),
+                            (cx, cy + inner), (cx - inner, cy))
+            pygame.draw.polygon(surf, (*gem, min(255, alpha + 18)), inner_points)
 
     def _draw_card_badge(self, cx, cy, cw, qty, locked=0, show_locked=True):
         """Draw separate free-stock and in-use badges without slash ambiguity."""
@@ -1701,22 +1782,175 @@ class CollectionScreen(MenuScreenMixin, Screen):
             self._cards, self._locked, suit)
         card_img = self._card_imgs.get((suit, settings.RANK_MAHARAJA))
         self._craft_suit = suit
-        msg = (f'Trade one free copy of every {suit} rank (2–A, {total} cards) '
-               f'for a {suit} Maharaja.\n'
-               'Only free (unlocked) copies count.')
-        if ready >= total:
-            after = f'Ready to craft!  {ready} / {total} ranks available.'
-        else:
-            after = (f'{ready} / {total} ranks ready.\n'
-                     f'Still need a free copy of: {", ".join(missing)}')
+        self._craft_ready = ready
+        self._craft_total = total
+        self._craft_missing = list(missing)
+        family_name = _maharaja_family_name(suit)
+        msg = (
+            f'{settings.COLLECTION_MAHARAJA_LABEL} Castle Card\n'
+            f'Trade one free copy of every {suit} rank (2-A) for the card '
+            f'that builds your {family_name}.')
+        after = '\n\n\n'
+        lead_images = [card_img.front_img] if card_img else []
         self._craft_dialogue = DialogueBox(
             self.window, msg, actions=['Craft', 'cancel'],
-            images=[card_img] if card_img else [],
-            title='Craft Maharaja',
+            images=lead_images,
+            image_groups=[self._maharaja_figure_group(suit)],
+            title=f'Craft {suit} Maharaja',
             message_after_images=after)
         for button in self._craft_dialogue.buttons:
             if button.text.lower() == 'craft':
                 button.disabled = ready < total
+
+    def _maharaja_figure_group(self, suit):
+        """Focused use panel for MK cards: the Maharaja figure only."""
+        family_name = _maharaja_family_name(suit)
+        entries = []
+        try:
+            from utils.card_uses import get_card_uses
+            entries = get_card_uses(suit, settings.RANK_MAHARAJA).get(
+                'figures', [])
+        except Exception as e:  # pragma: no cover - defensive
+            logger.warning(f'Maharaja use lookup failed: {e}')
+
+        match = next(
+            (entry for entry in entries if entry[0] == family_name),
+            entries[0] if entries else None,
+        )
+        icon = match[1] if match and len(match) > 1 else None
+        tooltip = match[2] if match and len(match) > 2 else ''
+        description = (
+            'Power 16 castle. Supports 3 village slots and 2 military slots.')
+        return {
+            'title': 'Builds',
+            'items': [icon] if icon is not None else [],
+            'item_tooltips': [tooltip or description],
+            'count': 1,
+            'show_when_empty': True,
+            'item_unit': 'figure',
+            'icon': 'figure',
+            'badge_icon': None,
+            'feature_item': True,
+            'note_prefix': family_name,
+            'description': description,
+            'color': settings.COLLECTION_MAHARAJA_RIM_CLR,
+        }
+
+    def _draw_craft_progress_overlay(self):
+        """Draw visual craft progress in the reserved band of the MK dialogue."""
+        dlg = getattr(self, '_craft_dialogue', None)
+        suit = getattr(self, '_craft_suit', None)
+        if not dlg or not suit:
+            return
+        area = self._craft_progress_area(dlg)
+        if not area or area.h <= 0:
+            return
+        ready = max(0, int(getattr(self, '_craft_ready', 0) or 0))
+        total = max(1, int(getattr(self, '_craft_total', 0) or 1))
+        missing = list(getattr(self, '_craft_missing', []) or [])
+
+        label_font = settings.get_font(max(10, int(settings.FS_TINY * 0.95)), bold=True)
+        small_font = settings.get_font(max(9, int(settings.FS_TINY * 0.78)))
+        title = 'Ready to craft' if ready >= total else f'{ready}/{total} ranks ready'
+        title_surf = label_font.render(title, True, settings.COLLECTION_MAHARAJA_BORDER_CLR)
+        title_y = area.y + max(0, int(0.002 * _SH))
+        self.window.blit(title_surf, title_surf.get_rect(
+            centerx=area.centerx, top=title_y))
+
+        bar_w = min(area.w, int(0.46 * _SW))
+        bar_h = max(8, int(0.012 * _SH))
+        bar = pygame.Rect(
+            area.centerx - bar_w // 2,
+            title_y + title_surf.get_height() + max(3, int(0.004 * _SH)),
+            bar_w,
+            bar_h,
+        )
+        pygame.draw.rect(self.window, (26, 20, 36, 236), bar, border_radius=bar_h // 2)
+        fill = bar.copy()
+        fill.w = (max(bar_h, int(bar.w * min(1.0, ready / total)))
+                  if ready > 0 else 0)
+        if fill.w > 0:
+            pygame.draw.rect(
+                self.window,
+                (*settings.COLLECTION_MAHARAJA_RIM_CLR, 230),
+                fill,
+                border_radius=bar_h // 2,
+            )
+        pygame.draw.rect(
+            self.window,
+            (*settings.COLLECTION_MAHARAJA_BORDER_CLR, 210),
+            bar,
+            1,
+            border_radius=bar_h // 2,
+        )
+
+        if not missing:
+            done = small_font.render(
+                'Full suit set complete', True, settings.DIALOGUE_BOX_GROUP_NOTE_CLR)
+            self.window.blit(done, done.get_rect(
+                centerx=area.centerx,
+                top=bar.bottom + max(4, int(0.005 * _SH))))
+            return
+
+        missing_label = small_font.render(
+            'Missing free cards', True, settings.DIALOGUE_BOX_GROUP_NOTE_CLR)
+        label_top = bar.bottom + max(4, int(0.005 * _SH))
+        self.window.blit(missing_label, missing_label.get_rect(
+            centerx=area.centerx, top=label_top))
+        cards_top = label_top + missing_label.get_height() + max(2, int(0.003 * _SH))
+        self._draw_missing_craft_cards(suit, missing, area, cards_top)
+
+    def _craft_progress_area(self, dlg):
+        top = (dlg.rect.y + settings.DIALOGUE_BOX_TEXT_MARGIN_Y
+               + dlg.title_height + dlg._sep_extra + dlg.text_height
+               + dlg.img_spacing + dlg.content_height + dlg.caption_height
+               + dlg.drawable_bottom_spacing)
+        return pygame.Rect(
+            dlg.rect.x + int(0.045 * _SW),
+            top,
+            dlg.rect.w - int(0.090 * _SW),
+            max(0, dlg.after_text_height),
+        )
+
+    def _draw_missing_craft_cards(self, suit, missing, area, top):
+        if not missing:
+            return
+        card_h = max(20, min(int(0.045 * _SH), area.bottom - top - 1))
+        if card_h <= 0:
+            return
+        sample = self._card_imgs.get((suit, missing[0]))
+        if sample and sample.front_img.get_height() > 0:
+            card_w = max(1, int(card_h * sample.front_img.get_width()
+                                / sample.front_img.get_height()))
+        else:
+            card_w = max(12, int(card_h * settings.COLLECTION_CARD_W
+                                 / max(1, settings.COLLECTION_CARD_H)))
+        gap = max(3, int(0.004 * _SW))
+        per_row = max(1, (area.w + gap) // (card_w + gap))
+        rows = [missing[i:i + per_row] for i in range(0, len(missing), per_row)]
+        for row_idx, row in enumerate(rows):
+            y = top + row_idx * (card_h + max(2, int(0.003 * _SH)))
+            if y + card_h > area.bottom:
+                break
+            row_w = len(row) * card_w + max(0, len(row) - 1) * gap
+            x = area.centerx - row_w // 2
+            for rank in row:
+                card = self._card_imgs.get((suit, rank))
+                if card:
+                    img = pygame.transform.smoothscale(
+                        card.front_img, (card_w, card_h))
+                    self.window.blit(img, (x, y))
+                else:
+                    fallback = pygame.Rect(x, y, card_w, card_h)
+                    pygame.draw.rect(self.window, (30, 26, 38), fallback,
+                                     border_radius=3)
+                    pygame.draw.rect(self.window, settings.COLLECTION_MAHARAJA_RIM_CLR,
+                                     fallback, 1, border_radius=3)
+                    rank_surf = settings.get_font(
+                        max(8, int(settings.FS_TINY * 0.7)),
+                        bold=True).render(rank, True, settings.COLLECTION_MAHARAJA_BORDER_CLR)
+                    self.window.blit(rank_surf, rank_surf.get_rect(center=fallback.center))
+                x += card_w + gap
 
     def _perform_craft(self):
         """Execute the craft_maharaja API call and celebrate on success."""
@@ -1754,15 +1988,14 @@ class CollectionScreen(MenuScreenMixin, Screen):
         self._cards[mk_key] = int(self._cards.get(mk_key, 0) or 0) + 1
         # Highlight the new MK cell once the reveal is dismissed.
         self._pending_reveal_gains = {mk_key: 1}
-        # Celebratory single-card reveal through the booster overlay. tier=3
-        # earns the biggest reveal celebration (rings + sparkles); the impact
-        # annotations make the label/summary read as a brand-new card.
+        # Celebratory single-card reveal through the booster overlay. The
+        # dedicated Maharaja tier sits above Rare and gets its own glow.
         reveal_card = {
             'suit': suit,
             'rank': settings.RANK_MAHARAJA,
             'value': int(card.get('value', settings.RANK_TO_VALUE.get(
                 settings.RANK_MAHARAJA, 4))),
-            'tier': 3,
+            'tier': settings.COLLECTION_MAHARAJA_TIER,
             '_impact_new_type': self._cards[mk_key] == 1,
             '_impact_owned_before': self._cards[mk_key] - 1,
             '_impact_owned_after': self._cards[mk_key],
@@ -1770,7 +2003,7 @@ class CollectionScreen(MenuScreenMixin, Screen):
         }
         from game.components.booster_reveal import BoosterRevealOverlay
         from utils import sound
-        sound.play('conquer_win')  # big-deal fanfare for a 13-card craft
+        sound.play('craft_success')
         self._reveal_overlay = BoosterRevealOverlay(
             self.window, [reveal_card], pack_type='main',
             title=f'{suit} Maharaja Crafted!')

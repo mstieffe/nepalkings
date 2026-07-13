@@ -2,14 +2,15 @@
 # See LICENSE file in the project root for full license information.
 """Persistent connected-kingdom configuration screen."""
 
+import math
 import os
 import pygame
 from pygame.locals import *
 
 from config import settings
 from game.components.cards.card_img import CardImg
-from game.components.hex_map import _draw_surface_pattern
-from game.components import badge_cosmetics, sigil_cosmetics
+from game.components.hex_map import draw_border_edge
+from game.components import badge_cosmetics, hex_cosmetics, sigil_cosmetics
 from game.components.floating_text import FloatingText, FloatingTextLayer
 from game.screens._menu_base import (
     MenuScreenMixin,
@@ -39,6 +40,8 @@ HANDLED_KINGDOM_CONFIG_ACTIONS = frozenset({
     'equip_cosmetic',
     'cosmetic_sort',
     'cosmetic_filter',
+    'preview_cosmetic',
+    'preview_clear',
     'rename_start',
     'rename_confirm',
     'rename_cancel',
@@ -89,12 +92,15 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         self._cosmetic_sort = {key: 'default' for key in self._cosmetic_scroll}
         self._cosmetic_filter = {key: 'all' for key in self._cosmetic_scroll}
         self._cosmetic_scroll_areas = {}
+        self._cosmetic_scrollbar_rects = {}
         self._cosmetics_panel_scroll = 0
         self._cosmetics_scroll_area = None
         self._cosmetics_content_h = 0
         self._content_scroll = 0
         self._content_scroll_area = None
         self._content_content_h = 0
+        self._content_scrollbar_track = None
+        self._content_scrollbar_thumb = None
         self._button_clip_rect = None
         self._skills_scroll = 0
         self._skills_scroll_area = None
@@ -104,6 +110,10 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         self._rename_confirm_rect = None
         self._rename_cancel_rect = None
         self._pending_purchase = None
+        # Try-on overrides for the style showcase: {'surface_key': 'surface_lava', ...}.
+        # Client-side only — cleared on equip/buy/kingdom switch.
+        self._preview_style_override = {}
+        self._showcase_rect = None
         self._icons = {}
         self._shield_icon = self._load_icon(settings.KINGDOM_SHIELD_ICON_PATH)
         for key, path in settings.KINGDOM_SKILL_ICON_PATHS.items():
@@ -134,6 +144,10 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         self._touch_scroll_target = None  # None | 'content' | 'cosmetics' | 'skills' | ('cosmetic_section', key)
         self._touch_scroll_last_y = 0
         self._touch_scroll_moved = 0
+        self._scrollbar_drag_target = None
+        self._scrollbar_drag_grab_y = 0
+        self._scrollbar_drag_last_y = 0
+        self._scrollbar_drag_moved = 0
         self._kingdom_config_header_rect = None
         self._kingdom_config_cosmetics_rect = None
         self._kingdom_config_shield_rect = None
@@ -653,6 +667,23 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
             self._set_msg(f'Action failed: {exc}')
         return None
 
+    def _style_flourish_pos(self):
+        """Anchor point for equip/unlock celebration floaters."""
+        rect = getattr(self, '_showcase_rect', None)
+        if rect is not None:
+            return rect.center
+        return self._box_rect.center
+
+    def _spawn_style_flourish(self, text, *, color):
+        font = settings.get_font(settings.COLLECT_FLOAT_FONT_SIZE, bold=True)
+        self._floating_text.add(FloatingText(
+            text, self._style_flourish_pos(),
+            color=color,
+            duration_ms=settings.COLLECT_FLOAT_DURATION_MS,
+            rise_px=settings.COLLECT_FLOAT_RISE_PX,
+            font=font,
+        ))
+
     def _buy_cosmetic(self, key):
         data = self._post_action('cosmetics/purchase', {'cosmetic_key': key})
         if data:
@@ -660,12 +691,18 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
                 self._set_msg('Cosmetic already owned')
             else:
                 self._set_msg('Cosmetic unlocked and equipped')
+                self._spawn_style_flourish(
+                    'Unlocked!', color=settings.KINGDOM_CONFIG_GOOD_CLR)
+            self._clear_preview_cosmetic()
             self._fetch_config()
 
     def _equip_cosmetic(self, key):
         data = self._post_action('cosmetics/equip', {'cosmetic_key': key})
         if data:
             self._set_msg('Kingdom style updated')
+            self._spawn_style_flourish(
+                'Style updated!', color=settings.KINGDOM_CONFIG_HIGHLIGHT)
+            self._clear_preview_cosmetic()
             self._fetch_config()
 
     def _catalog_item(self, key):
@@ -936,6 +973,7 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         self._kingdom = kingdoms[idx]
         self.state.kingdom_config_id = self._kingdom.get('id')
         self._quote = None
+        self._clear_preview_cosmetic()
         self._fetch_quote(silent=True)
 
     def _switch_kingdom(self, delta):
@@ -983,13 +1021,21 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
                     return
                 continue
             if event.type == MOUSEBUTTONDOWN and event.button == 1:
+                if self._begin_scrollbar_drag(event.pos):
+                    continue
                 if self._begin_touch_scroll(event.pos):
                     continue
+            if (event.type == MOUSEMOTION
+                    and getattr(self, '_scrollbar_drag_target', None) is not None):
+                self._update_scrollbar_drag(event.pos)
+                continue
             if (event.type == MOUSEMOTION
                     and getattr(self, '_touch_scroll_target', None) is not None):
                 self._update_touch_scroll(event.pos)
                 continue
             if event.type != MOUSEBUTTONUP or event.button != 1:
+                continue
+            if self._end_scrollbar_drag():
                 continue
             # If the gesture turned into a real swipe, swallow the click so
             # we don't trigger a button underneath the user's finger.
@@ -1020,6 +1066,10 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
                     self._cycle_cosmetic_sort(value)
                 elif action == 'cosmetic_filter':
                     self._cycle_cosmetic_filter(value)
+                elif action == 'preview_cosmetic':
+                    self._set_preview_cosmetic(value)
+                elif action == 'preview_clear':
+                    self._clear_preview_cosmetic()
                 elif action == 'rename_start':
                     self._start_rename()
                 elif action == 'upgrade_skill':
@@ -1101,13 +1151,20 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         self._rename_dialog['error'] = self._message or 'Rename failed.'
         return False
 
+    @staticmethod
+    def _cosmetic_item_h():
+        """Single source of truth for shop row height — the draw, wheel and
+        touch-drag paths must all agree or the list bottom becomes
+        unreachable."""
+        return max(44, min(56, int(0.058 * settings.SCREEN_HEIGHT)))
+
     def _scroll_cosmetic_section(self, cosmetic_type, wheel_y):
         unlocked = set((self._kingdom or {}).get('unlocked_cosmetics') or [])
         items = self._catalog_items(cosmetic_type, unlocked=unlocked)
         area = self._cosmetic_scroll_areas.get(cosmetic_type)
         if not area:
             return False
-        item_h = max(30, min(38, int(0.038 * settings.SCREEN_HEIGHT)))
+        item_h = self._cosmetic_item_h()
         max_scroll = max(0, len(items) * item_h - area.h)
         if max_scroll <= 0:
             return False
@@ -1170,6 +1227,88 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         current -= int(round(float(wheel_y or 0) * step))
         self._skills_scroll = max(0, min(max_scroll, current))
 
+    # ── Mouse scrollbar dragging ─────────────────────────────────────
+    def _begin_scrollbar_drag(self, pos):
+        """Claim a mouse drag that starts on a visible scrollbar."""
+        scrollbars = getattr(self, '_cosmetic_scrollbar_rects', {}) or {}
+        for cosmetic_type, metrics in scrollbars.items():
+            track = metrics.get('track')
+            if not track or not track.collidepoint(pos):
+                continue
+            thumb = metrics.get('thumb')
+            self._scrollbar_drag_target = ('cosmetic_section', cosmetic_type)
+            self._scrollbar_drag_grab_y = (
+                pos[1] - thumb.y if thumb and thumb.collidepoint(pos)
+                else (thumb.h // 2 if thumb else 0)
+            )
+            self._scrollbar_drag_last_y = pos[1]
+            self._scrollbar_drag_moved = 0
+            self._update_scrollbar_drag(pos)
+            return True
+
+        track = getattr(self, '_content_scrollbar_track', None)
+        if track and track.collidepoint(pos):
+            thumb = getattr(self, '_content_scrollbar_thumb', None)
+            self._scrollbar_drag_target = 'content'
+            self._scrollbar_drag_grab_y = (
+                pos[1] - thumb.y if thumb and thumb.collidepoint(pos)
+                else (thumb.h // 2 if thumb else 0)
+            )
+            self._scrollbar_drag_last_y = pos[1]
+            self._scrollbar_drag_moved = 0
+            self._update_scrollbar_drag(pos)
+            return True
+        return False
+
+    def _scrollbar_scroll_for_y(self, track, thumb_h, max_scroll, mouse_y):
+        if not track or max_scroll <= 0:
+            return 0
+        thumb_h = max(1, int(thumb_h or 1))
+        travel = max(1, track.h - thumb_h)
+        thumb_y = max(track.y, min(track.bottom - thumb_h,
+                                   mouse_y - self._scrollbar_drag_grab_y))
+        return max(0, min(max_scroll,
+                          int(round(((thumb_y - track.y) / travel) * max_scroll))))
+
+    def _update_scrollbar_drag(self, pos):
+        target = getattr(self, '_scrollbar_drag_target', None)
+        if target is None:
+            return False
+        dy = pos[1] - getattr(self, '_scrollbar_drag_last_y', pos[1])
+        self._scrollbar_drag_last_y = pos[1]
+        self._scrollbar_drag_moved += abs(dy)
+        if isinstance(target, tuple) and target[0] == 'cosmetic_section':
+            cosmetic_type = target[1]
+            metrics = (getattr(self, '_cosmetic_scrollbar_rects', {}) or {}).get(cosmetic_type)
+            if not metrics:
+                return True
+            thumb = metrics.get('thumb')
+            self._cosmetic_scroll[cosmetic_type] = self._scrollbar_scroll_for_y(
+                metrics.get('track'),
+                thumb.h if thumb else 1,
+                int(metrics.get('max_scroll') or 0),
+                pos[1],
+            )
+            return True
+        if target == 'content':
+            track = getattr(self, '_content_scrollbar_track', None)
+            thumb = getattr(self, '_content_scrollbar_thumb', None)
+            area = getattr(self, '_content_scroll_area', None)
+            max_scroll = max(0, int(getattr(self, '_content_content_h', 0) or 0)
+                             - (area.h if area else 0))
+            self._content_scroll = self._scrollbar_scroll_for_y(
+                track, thumb.h if thumb else 1, max_scroll, pos[1])
+            return True
+        return True
+
+    def _end_scrollbar_drag(self):
+        claimed = getattr(self, '_scrollbar_drag_target', None) is not None
+        self._scrollbar_drag_target = None
+        self._scrollbar_drag_grab_y = 0
+        self._scrollbar_drag_last_y = 0
+        self._scrollbar_drag_moved = 0
+        return claimed
+
     # ── Touch-drag scrolling (mobile) ────────────────────────────────
     def _begin_touch_scroll(self, pos):
         """Start tracking a touch-drag if *pos* falls inside a scrollable
@@ -1197,7 +1336,12 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         self._touch_scroll_moved += abs(dy)
         target = self._touch_scroll_target
         if isinstance(target, tuple) and target[0] == 'cosmetic_section':
-            self._drag_cosmetic_section(target[1], dy)
+            # Nested scrolling: whatever the inner list can't consume (it has
+            # no overflow, or it hit its end) moves the page instead, so a
+            # swipe starting on a cosmetic list never gets stuck.
+            leftover = self._drag_cosmetic_section(target[1], dy)
+            if leftover:
+                self._drag_config_content(leftover)
         elif target == 'content':
             self._drag_config_content(dy)
 
@@ -1216,17 +1360,24 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         return was_swipe
 
     def _drag_cosmetic_section(self, cosmetic_type, dy):
+        """Apply a touch-drag delta to one cosmetic list.
+
+        Returns the *unconsumed* part of ``dy`` (list at its end, or no
+        overflow) so the caller can chain it into the page scroll.
+        """
         unlocked = set((self._kingdom or {}).get('unlocked_cosmetics') or [])
         items = self._catalog_items(cosmetic_type, unlocked=unlocked)
         area = self._cosmetic_scroll_areas.get(cosmetic_type)
         if not area:
-            return
-        item_h = max(30, min(38, int(0.038 * settings.SCREEN_HEIGHT)))
+            return dy
+        item_h = self._cosmetic_item_h()
         max_scroll = max(0, len(items) * item_h - area.h)
         if max_scroll <= 0:
-            return
+            return dy
         current = int(self._cosmetic_scroll.get(cosmetic_type, 0) or 0)
-        self._cosmetic_scroll[cosmetic_type] = max(0, min(max_scroll, current - dy))
+        new_scroll = max(0, min(max_scroll, current - dy))
+        self._cosmetic_scroll[cosmetic_type] = new_scroll
+        return dy - (current - new_scroll)
 
     def _drag_config_content(self, dy):
         area = self._content_scroll_area
@@ -1763,86 +1914,194 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
             return f'Current: {current_text}  •  Max level'
         return f'Current: {current_text}  •  Next: {next_text}'
 
-    def _style_preview(self, rect, style):
-        tier_fill = settings.HEX_TIER_FILL.get(2, (100, 110, 90))
-        pygame.draw.rect(self.window, (18, 16, 18), rect, border_radius=8)
-        cx, cy = rect.center
-        radius = min(rect.w, rect.h) // 3
-        points = []
+    # ── Kingdom style showcase (hero preview) ──────────────────────────
+
+    @staticmethod
+    def _hex_corners(cx, cy, radius):
+        pts = []
         for idx in range(6):
-            angle = 3.14159 / 6 + idx * 3.14159 / 3
-            points.append((cx + int(radius * pygame.math.Vector2(1, 0).rotate_rad(angle).x),
-                           cy + int(radius * pygame.math.Vector2(1, 0).rotate_rad(angle).y)))
-        pygame.draw.polygon(self.window, tier_fill, points)
-        self._draw_surface_skin_preview(style.get('surface_key'), points)
-        color_key = style.get('color_key', getattr(settings, 'KINGDOM_COLOR_DEFAULT_KEY', 'color_royal_gold'))
+            angle = idx * math.pi / 3
+            pts.append((cx + radius * math.cos(angle),
+                        cy + radius * math.sin(angle)))
+        return pts
+
+    def _preview_overrides(self):
+        """Lazy accessor — legacy tests construct the screen via __new__."""
+        overrides = getattr(self, '_preview_style_override', None)
+        if overrides is None:
+            overrides = {}
+            self._preview_style_override = overrides
+        return overrides
+
+    def _showcase_style(self):
+        """Equipped style merged with any active try-on overrides."""
+        style = dict(getattr(settings, 'HEX_DEFAULT_OWNER_STYLE', {}))
+        style.update((self._kingdom or {}).get('style') or {})
+        style.update(self._preview_overrides())
+        return style
+
+    def _set_preview_cosmetic(self, key):
+        """Toggle a try-on override for the showcase (client-side only)."""
+        item = self._catalog_item(key)
+        cosmetic_type = item.get('type')
+        if not cosmetic_type:
+            return
+        field = f'{cosmetic_type}_key'
+        overrides = self._preview_overrides()
+        equipped = ((self._kingdom or {}).get('style') or {}).get(field)
+        if key == equipped or overrides.get(field) == key:
+            overrides.pop(field, None)
+        else:
+            overrides[field] = key
+
+    def _clear_preview_cosmetic(self):
+        self._preview_style_override = {}
+
+    def _style_showcase_h(self):
+        return max(128, int(0.20 * settings.SCREEN_HEIGHT))
+
+    def _draw_style_showcase(self, rect, *, clip_rect=None):
+        """Hero preview: a 3-hex cluster rendered with the real cosmetic art
+        (surface, border, ornaments, sigil, badge, owner colour) so players
+        see exactly what a cosmetic looks like on the map before buying."""
+        style = self._showcase_style()
+        previewing = bool(self._preview_overrides())
+        self._showcase_rect = pygame.Rect(rect)
+
+        card = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
+        pygame.draw.rect(card, (16, 14, 18, 235), card.get_rect(),
+                         border_radius=8)
+        self.window.blit(card, rect.topleft)
+
         palette = getattr(settings, 'KINGDOM_COLOR_PALETTE', {}) or {}
-        color_entry = palette.get(color_key) or {}
+        color_entry = palette.get(style.get('color_key')) or {}
         accent = color_entry.get('accent_rgb', settings.HEX_MINE_BORDER_HIGHLIGHT)
-        overlay = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
-        local = [(x - rect.x, y - rect.y) for x, y in points]
-        pygame.draw.polygon(overlay, (*accent[:3], 54), local)
-        self.window.blit(overlay, rect.topleft)
-        border = settings.HEX_BORDER_SKINS.get(style.get('border_key'),
-                                               settings.HEX_BORDER_SKINS['border_simple_gold'])
-        pygame.draw.polygon(self.window, border.get('outer', (90, 70, 40)), points, 5)
-        pygame.draw.polygon(self.window, border.get('main', (250, 221, 0)), points, 3)
-        pygame.draw.polygon(self.window, accent, points, 1)
-        sigil_key = style.get('sigil_key', getattr(settings, 'KINGDOM_SIGIL_DEFAULT_KEY', 'sigil_none'))
-        sigil_surf = sigil_cosmetics.render_sigil(
-            sigil_key,
-            max(14, min(rect.w, rect.h) // 4),
-            accent,
+        frame_clr = settings.KINGDOM_CONFIG_HIGHLIGHT if previewing else accent
+        pygame.draw.rect(self.window, frame_clr, rect, 1, border_radius=8)
+
+        title = 'Previewing — tap to reset' if previewing else 'Your Kingdom Look'
+        title_clr = (settings.KINGDOM_CONFIG_HIGHLIGHT if previewing
+                     else settings.KINGDOM_CONFIG_DIM_CLR)
+        title_surf = self._tiny_font.render(title, True, title_clr)
+        self.window.blit(title_surf, (rect.x + 10, rect.y + 6))
+
+        # Cluster geometry: three mutually-adjacent flat-top hexes.
+        badge_h = max(20, int(rect.h * 0.24))
+        top_y = rect.y + 8 + title_surf.get_height()
+        cluster_h = max(30, rect.bottom - 10 - badge_h - top_y)
+        s = max(12, int(min(cluster_h / 2.9, rect.w / 4.6)))
+        ccx = rect.centerx - int(s * 0.75)
+        ccy = top_y + cluster_h // 2
+        centers = [
+            (ccx, ccy),
+            (ccx + 1.5 * s, ccy - 0.866 * s),
+            (ccx + 1.5 * s, ccy + 0.866 * s),
+        ]
+
+        tier_fill = settings.HEX_TIER_FILL.get(2, (100, 110, 90))
+        surface_key = style.get('surface_key')
+        surface_art = hex_cosmetics.render_surface_art(surface_key, s)
+        emblem = hex_cosmetics.render_center_emblem(surface_key, s)
+        for cx, cy in centers:
+            corners = self._hex_corners(cx, cy, s)
+            pygame.draw.polygon(self.window, tier_fill, corners)
+            if surface_art is not None:
+                self.window.blit(surface_art, (int(cx) - s, int(cy) - s))
+            overlay = pygame.Surface((s * 2, s * 2), pygame.SRCALPHA)
+            local = [(x - cx + s, y - cy + s) for x, y in corners]
+            pygame.draw.polygon(overlay, (*accent[:3], 44), local)
+            self.window.blit(overlay, (int(cx) - s, int(cy) - s))
+        if emblem is not None:
+            cx, cy = centers[0]
+            self.window.blit(emblem, emblem.get_rect(center=(int(cx), int(cy))))
+
+        # Borders: real per-edge cosmetic art on the cluster's outer rim.
+        border_key = style.get('border_key')
+        skin = settings.HEX_BORDER_SKINS.get(
+            border_key, settings.HEX_BORDER_SKINS.get('border_simple_gold', {}))
+        border_palette = (
+            skin.get('outer', settings.HEX_MINE_BORDER_OUTER),
+            skin.get('main', settings.HEX_MINE_BORDER),
+            skin.get('highlight', settings.HEX_MINE_BORDER_HIGHLIGHT),
         )
+        width_bonus = int(skin.get('width_bonus', 0) or 0)
+        outer_w = max(2, int(s * 0.14)) + width_bonus
+        main_w = max(2, int(s * 0.09)) + width_bonus
+        inner_w = max(1, int(s * 0.045))
+        border_style = skin.get('style', 'simple')
+        outer_vertices = []
+        for cx, cy in centers:
+            corners = self._hex_corners(cx, cy, s)
+            for idx in range(6):
+                start = corners[idx]
+                end = corners[(idx + 1) % 6]
+                mid = ((start[0] + end[0]) / 2, (start[1] + end[1]) / 2)
+                internal = any(
+                    (ox, oy) != (cx, cy)
+                    and math.hypot(mid[0] - ox, mid[1] - oy) < s * 1.05
+                    for ox, oy in centers)
+                if internal:
+                    continue
+                draw_border_edge(self.window, border_style, start, end,
+                                 border_palette, outer_w, main_w, inner_w)
+                outer_vertices.append(start)
+                outer_vertices.append(end)
+        ornament = hex_cosmetics.render_vertex_ornament(border_key, s)
+        if ornament is not None:
+            seen = set()
+            for vx, vy in outer_vertices:
+                vkey = (int(round(vx)), int(round(vy)))
+                if vkey in seen:
+                    continue
+                seen.add(vkey)
+                self.window.blit(ornament,
+                                 ornament.get_rect(center=vkey))
+
+        # Sigil at the cluster centroid (matches the map's placement).
+        sigil_key = style.get('sigil_key')
+        sigil_surf = sigil_cosmetics.render_sigil(
+            sigil_key, max(14, int(s * 0.95)), accent)
         if sigil_surf is not None:
-            self.window.blit(sigil_surf,
-                             sigil_surf.get_rect(center=(rect.centerx, rect.y + max(16, rect.h // 4))))
+            centroid_x = sum(c[0] for c in centers) / 3
+            centroid_y = sum(c[1] for c in centers) / 3
+            self.window.blit(
+                sigil_surf,
+                sigil_surf.get_rect(center=(int(centroid_x), int(centroid_y))))
+
+        # Name badge plinth below the cluster, exactly as on the map.
         badge_key = style.get('badge_key', settings.HEX_BADGE_DEFAULT_KEY)
-        badge_h = max(18, min(rect.h // 3, 30))
+        name = str((self._kingdom or {}).get('name') or 'Kingdom')
         shimmer_phase = badge_cosmetics.shimmer_phase_for(
             pygame.time.get_ticks())
         badge_surf = badge_cosmetics.render_badge(
-            badge_key, 'Kingdom', self._small_font,
-            target_h=badge_h, shimmer_phase=shimmer_phase)
-        bx = rect.centerx - badge_surf.get_width() // 2
-        by = rect.bottom - badge_surf.get_height() - 6
-        self.window.blit(badge_surf, (bx, by))
+            badge_key, name, self._small_font,
+            target_h=max(18, badge_h - 8), shimmer_phase=shimmer_phase)
+        max_badge_w = rect.w - 20
+        if badge_surf.get_width() > max_badge_w:
+            scale = max_badge_w / badge_surf.get_width()
+            badge_surf = pygame.transform.smoothscale(
+                badge_surf, (int(badge_surf.get_width() * scale),
+                             int(badge_surf.get_height() * scale)))
+        self.window.blit(
+            badge_surf,
+            badge_surf.get_rect(midbottom=(rect.centerx, rect.bottom - 6)))
 
-    def _draw_surface_skin_preview(self, surface_key, points, seed=0):
-        skin = settings.HEX_SURFACE_SKINS.get(surface_key, {})
-        overlay = skin.get('overlay')
-        pattern = skin.get('pattern')
-        if not overlay and not pattern:
-            return
-        xs = [p[0] for p in points]
-        ys = [p[1] for p in points]
-        rect = pygame.Rect(int(min(xs)), int(min(ys)),
-                           max(1, int(max(xs) - min(xs)) + 1),
-                           max(1, int(max(ys) - min(ys)) + 1))
-        surf = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
-        local = [(x - rect.x, y - rect.y) for x, y in points]
-        if overlay:
-            pygame.draw.polygon(surf, overlay, local)
-        if pattern:
-            pattern_surf = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
-            _draw_surface_pattern(
-                pattern_surf,
-                pattern,
-                skin.get('pattern_clr', (0, 0, 0, 64)),
-                int(seed or 0),
-                max(1, min(rect.w, rect.h) / 2),
-            )
-            mask = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
-            pygame.draw.polygon(mask, (255, 255, 255, 255), local)
-            pattern_surf.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
-            surf.blit(pattern_surf, (0, 0))
-        self.window.blit(surf, rect.topleft)
+        if previewing:
+            reset_rect = rect.clip(clip_rect) if clip_rect else rect
+            if reset_rect.w > 0 and reset_rect.h > 0:
+                self._register_button('preview_clear', None, reset_rect)
 
-    def _draw_cosmetic_chip(self, rect, cosmetic_type, key):
+    def _rarity_frame_clr(self, rarity):
+        colors = getattr(settings, 'COSMETIC_RARITY_COLORS', {}) or {}
+        return colors.get(str(rarity or 'default'), (84, 74, 58))
+
+    def _draw_cosmetic_chip(self, rect, cosmetic_type, key, rarity=None):
         pygame.draw.rect(self.window, (20, 18, 22), rect, border_radius=5)
-        pygame.draw.rect(self.window, (84, 74, 58), rect, 1, border_radius=5)
+        frame_w = 2 if self._rarity_rank(rarity) >= 3 else 1
+        pygame.draw.rect(self.window, self._rarity_frame_clr(rarity), rect,
+                         frame_w, border_radius=5)
         if cosmetic_type == 'badge':
-            badge_h = max(14, min(rect.h - 8, 26))
+            badge_h = max(14, min(rect.h - 8, 30))
             shimmer_phase = badge_cosmetics.shimmer_phase_for(
                 pygame.time.get_ticks())
             badge_surf = badge_cosmetics.render_badge(
@@ -1866,13 +2125,13 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
             entry = palette.get(key) or {}
             accent = entry.get('accent_rgb', (200, 200, 200))
             glow = entry.get('glow_rgb', accent)
-            inner = rect.inflate(-6, -6)
+            inner = rect.inflate(-8, -8)
             pygame.draw.rect(self.window, accent, inner, border_radius=4)
             pygame.draw.rect(self.window, glow, inner, 2, border_radius=4)
             return
 
         if cosmetic_type == 'sigil':
-            sz = min(rect.w, rect.h) - 4
+            sz = min(rect.w, rect.h) - 6
             if key == 'sigil_none':
                 txt = self._tiny_font.render('—', True,
                                              settings.KINGDOM_CONFIG_DIM_CLR)
@@ -1886,28 +2145,35 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
             return
 
         cx, cy = rect.center
-        radius = min(rect.w, rect.h) // 3
-        points = []
-        for idx in range(6):
-            angle = 3.14159 / 6 + idx * 3.14159 / 3
-            points.append((cx + int(radius * pygame.math.Vector2(1, 0).rotate_rad(angle).x),
-                           cy + int(radius * pygame.math.Vector2(1, 0).rotate_rad(angle).y)))
+        radius = max(6, min(rect.w, rect.h) // 2 - 4)
+        points = self._hex_corners(cx, cy, radius)
         fill = settings.HEX_TIER_FILL.get(2, (100, 110, 90))
         if cosmetic_type == 'surface':
+            # Real cached surface art — the actual product, not a swatch.
             pygame.draw.polygon(self.window, fill, points)
-            self._draw_surface_skin_preview(
-                key,
-                points,
-                seed=sum(ord(ch) for ch in str(key)),
-            )
-            pygame.draw.polygon(self.window, (75, 62, 42), points, 2)
+            art = hex_cosmetics.render_surface_art(key, radius)
+            if art is not None:
+                self.window.blit(art, (cx - radius, cy - radius))
+            pygame.draw.polygon(self.window, (75, 62, 42), points, 1)
             return
 
+        # Border chip: true per-edge cosmetic art on a mini hex.
         pygame.draw.polygon(self.window, fill, points)
-        border = settings.HEX_BORDER_SKINS.get(key,
-                                               settings.HEX_BORDER_SKINS['border_simple_gold'])
-        pygame.draw.polygon(self.window, border.get('outer', (90, 70, 40)), points, 4)
-        pygame.draw.polygon(self.window, border.get('main', (250, 221, 0)), points, 2)
+        skin = settings.HEX_BORDER_SKINS.get(
+            key, settings.HEX_BORDER_SKINS['border_simple_gold'])
+        palette = (
+            skin.get('outer', (90, 70, 40)),
+            skin.get('main', (250, 221, 0)),
+            skin.get('highlight', (255, 246, 196)),
+        )
+        border_style = skin.get('style', 'simple')
+        outer_w = max(2, int(radius * 0.18))
+        main_w = max(1, int(radius * 0.12))
+        inner_w = max(1, int(radius * 0.06))
+        for idx in range(6):
+            draw_border_edge(self.window, border_style,
+                             points[idx], points[(idx + 1) % 6],
+                             palette, outer_w, main_w, inner_w)
 
     def _draw_cosmetic_card_bg(self, rect, title):
         surf = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
@@ -1943,13 +2209,15 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         return max(10, int(0.012 * settings.SCREEN_HEIGHT))
 
     def _cosmetic_card_h(self):
-        return max(154, min(220, int(0.170 * settings.SCREEN_HEIGHT)))
+        return max(170, min(240, int(0.195 * settings.SCREEN_HEIGHT)))
 
     def _cosmetics_panel_natural_h(self):
         sections = self._cosmetic_sections()
         card_h = self._cosmetic_card_h()
         gap = self._cosmetic_card_gap()
-        content_h = len(sections) * card_h + max(0, len(sections) - 1) * gap
+        content_h = (self._style_showcase_h() + gap
+                     + len(sections) * card_h
+                     + max(0, len(sections) - 1) * gap)
         return 42 + content_h + 12
 
     def _draw_cosmetics_panel(self, rect):
@@ -1966,14 +2234,21 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
                                max(80, rect.bottom - body_y - 12))
         gap = self._cosmetic_card_gap()
         card_h = self._cosmetic_card_h()
-        content_h = len(sections) * card_h + (len(sections) - 1) * gap
+        showcase_h = self._style_showcase_h()
+        content_h = (showcase_h + gap
+                     + len(sections) * card_h + (len(sections) - 1) * gap)
         self._cosmetics_content_h = content_h
 
         old_clip = self.window.get_clip()
         self.window.set_clip(viewport.clip(old_clip))
         try:
+            showcase_rect = pygame.Rect(viewport.x, viewport.y,
+                                        viewport.w, showcase_h)
+            if showcase_rect.bottom >= viewport.y and showcase_rect.y <= viewport.bottom:
+                self._draw_style_showcase(showcase_rect, clip_rect=viewport)
             for idx, (cosmetic_type, title) in enumerate(sections):
-                card_y = viewport.y + idx * (card_h + gap)
+                card_y = (viewport.y + showcase_h + gap
+                          + idx * (card_h + gap))
                 card_rect = pygame.Rect(viewport.x, card_y, viewport.w, card_h)
                 if card_rect.bottom < viewport.y or card_rect.y > viewport.bottom:
                     continue
@@ -1996,11 +2271,11 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         unlocked = set(self._kingdom.get('unlocked_cosmetics') or [])
         compact_mobile = settings.TOUCH_TARGET_MIN > 0 and rect.w < int(0.42 * _SW)
         if compact_mobile:
-            sort_rect = pygame.Rect(rect.x + 14, rect.y + 36, 84, 24)
-            filter_rect = pygame.Rect(sort_rect.right + 8, rect.y + 36, 78, 24)
+            sort_rect = pygame.Rect(rect.x + 14, rect.y + 36, 96, 24)
+            filter_rect = pygame.Rect(sort_rect.right + 8, rect.y + 36, 88, 24)
         else:
-            sort_rect = pygame.Rect(rect.right - 184, rect.y + 8, 84, 24)
-            filter_rect = pygame.Rect(rect.right - 94, rect.y + 8, 78, 24)
+            sort_rect = pygame.Rect(rect.right - 206, rect.y + 8, 100, 24)
+            filter_rect = pygame.Rect(rect.right - 100, rect.y + 8, 88, 24)
         sort_label = self._fit_text(f"Sort {self._cosmetic_sort_label(cosmetic_type)}",
                                     self._small_font, sort_rect.w - 8)
         filter_label = self._fit_text(f"Show {self._cosmetic_filter_label(cosmetic_type)}",
@@ -2012,18 +2287,10 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
             filter_rect, filter_label, 'cosmetic_filter', cosmetic_type,
             clip_rect=viewport_rect)
 
-        show_preview = rect.h >= 84 and not compact_mobile
-        y = rect.y + (64 if compact_mobile else (42 if show_preview else 36))
-        if show_preview:
-            preview_h = max(30, rect.bottom - y - 10)
-            preview_w = min(92, max(58, int(preview_h * 1.35)))
-            preview = pygame.Rect(rect.x + 14, y, preview_w, preview_h)
-            self._style_preview(preview, dict(style))
-            x = preview.right + 14
-        else:
-            x = rect.x + 14
+        y = rect.y + (64 if compact_mobile else 36)
+        x = rect.x + 14
         items = self._catalog_items(cosmetic_type, unlocked=unlocked)
-        item_h = max(30, min(38, int(0.038 * settings.SCREEN_HEIGHT)))
+        item_h = self._cosmetic_item_h()
         list_rect = pygame.Rect(x, y, rect.right - x - 18, max(28, rect.bottom - y - 12))
         visible_list_rect = list_rect.clip(viewport_rect) if viewport_rect else list_rect
         list_visible = visible_list_rect.w > 0 and visible_list_rect.h > 0
@@ -2058,8 +2325,14 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
             pygame.draw.rect(self.window, (52, 45, 42), track, border_radius=2)
             thumb_h = max(18, int(visible_list_rect.h * visible_list_rect.h / max(visible_list_rect.h, len(items) * item_h)))
             thumb_y = track.y + int((track.h - thumb_h) * (scroll / max_scroll)) if max_scroll else track.y
+            thumb = pygame.Rect(track.x, thumb_y, track.w, thumb_h)
+            self._cosmetic_scrollbar_rects[cosmetic_type] = {
+                'track': track.copy(),
+                'thumb': thumb.copy(),
+                'max_scroll': max_scroll,
+            }
             pygame.draw.rect(self.window, settings.KINGDOM_CONFIG_HIGHLIGHT,
-                             pygame.Rect(track.x, thumb_y, track.w, thumb_h), border_radius=2)
+                             thumb, border_radius=2)
 
     def _cosmetic_sort_label(self, cosmetic_type):
         labels = {
@@ -2084,38 +2357,70 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
                            *, clip_rect=None):
         key = item['key']
         active = key == current_key
+        field = f'{cosmetic_type}_key'
+        previewed = self._preview_overrides().get(field) == key
         bg = settings.KINGDOM_CONFIG_CARD_ACTIVE_BG if active else settings.KINGDOM_CONFIG_CARD_BG
+        if not active:
+            mouse_pos = pygame.mouse.get_pos()
+            hovered = (row.collidepoint(mouse_pos)
+                       and (clip_rect is None
+                            or clip_rect.collidepoint(mouse_pos)))
+            if hovered:
+                bg = tuple(min(255, c + 16) for c in bg[:3]) + tuple(bg[3:])
         pygame.draw.rect(self.window, bg, row, border_radius=6)
+        if previewed:
+            pygame.draw.rect(self.window, settings.KINGDOM_CONFIG_HIGHLIGHT,
+                             row, 1, border_radius=6)
         compact = row.w < 235
-        chip_w = 28 if compact else 32
-        btn_w = 58 if compact else 66
-        price_w = 54 if compact else 72
+        rarity = item.get('rarity')
+        chip_h = row.h - 8
+        chip_w = int(chip_h * (1.8 if cosmetic_type == 'badge' else 1.0))
+        chip_w = min(chip_w, max(30, row.w // 4))
+        btn_w = 58 if compact else 72
         gap = 6
-        chip = pygame.Rect(row.x + 6, row.y + 5, chip_w, row.h - 10)
-        self._draw_cosmetic_chip(chip, cosmetic_type, key)
+        chip = pygame.Rect(row.x + 6, row.y + 4, chip_w, chip_h)
+        self._draw_cosmetic_chip(chip, cosmetic_type, key, rarity)
         btn = pygame.Rect(row.right - gap - btn_w, row.y + 5, btn_w, row.h - 10)
-        price_rect = pygame.Rect(btn.x - gap - price_w, row.y, price_w, row.h)
-        name = item.get('name', key)
-        label_x = chip.right + 6
-        label_w = price_rect.x - label_x - gap
-        draw_price = label_w >= 34
-        if not draw_price:
-            label_w = btn.x - label_x - gap
-        label_text = self._fit_text(name, self._small_font, label_w)
-        label = self._small_font.render(label_text, True, settings.KINGDOM_CONFIG_TEXT_CLR)
-        self.window.blit(label, (label_x, row.y + 5))
 
+        label_x = chip.right + 8
+        label_w = btn.x - label_x - gap
+        name = item.get('name', key)
+        label_text = self._fit_text(name, self._small_font, label_w)
+        label = self._small_font.render(label_text, True,
+                                        settings.KINGDOM_CONFIG_TEXT_CLR)
+        self.window.blit(label, (label_x, row.y + 4))
+
+        # Second line: rarity accent + price / unlock progress.
         is_achievement = item.get('price_gold') is None
         price = int(item.get('price_gold') or 0)
-        if is_achievement:
-            price_text = self._unlock_requirement_text(item)
+        if key in unlocked:
+            status_text = 'Owned'
+        elif is_achievement:
+            status_text = self._unlock_requirement_text(item)
         else:
-            price_text = 'Free' if price <= 0 else f'{price}g'
-        if draw_price:
-            price_surf = self._tiny_font.render(
-                self._fit_text(price_text, self._tiny_font, price_rect.w - 2),
+            status_text = 'Free' if price <= 0 else f'{price}g'
+        rarity_labels = getattr(settings, 'COSMETIC_RARITY_LABELS', {}) or {}
+        rarity_text = rarity_labels.get(str(rarity or 'default'), 'Standard')
+        line2_y = row.y + 4 + label.get_height() + 1
+        rarity_surf = self._tiny_font.render(
+            rarity_text, True, self._rarity_frame_clr(rarity))
+        self.window.blit(rarity_surf, (label_x, line2_y))
+        status_x = label_x + rarity_surf.get_width() + 6
+        status_w = btn.x - status_x - gap
+        if status_w > 20:
+            status_surf = self._tiny_font.render(
+                self._fit_text(f'· {status_text}', self._tiny_font, status_w),
                 True, settings.KINGDOM_CONFIG_DIM_CLR)
-            self.window.blit(price_surf, price_surf.get_rect(center=price_rect.center))
+            self.window.blit(status_surf, (status_x, line2_y))
+
+        # Tapping the row (outside the action button) toggles a try-on
+        # preview in the style showcase above.
+        preview_area = pygame.Rect(row.x, row.y,
+                                   max(0, btn.x - gap - row.x), row.h)
+        if clip_rect is not None:
+            preview_area = preview_area.clip(clip_rect)
+        if preview_area.w > 0 and preview_area.h > 0:
+            self._register_button('preview_cosmetic', key, preview_area)
 
         if key in unlocked:
             action_text = 'Equipped' if active else 'Equip'
@@ -2135,18 +2440,39 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
             self._draw_button(btn, action_text, action, key, disabled=disabled)
 
     def _unlock_requirement_text(self, item):
-        """Format an achievement requirement label for a locked cosmetic."""
+        """Format an achievement requirement label for a locked cosmetic.
+
+        When the server supplies ``sigil_stats`` the label shows live
+        progress ("Conquer 7/10") — seeing the counter tick up is the
+        motivating half of an achievement.
+        """
         kind = item.get('unlock_kind')
         value = int(item.get('unlock_value') or 0)
+        stats = (self._data or {}).get('sigil_stats') or {}
+
+        def _progress(stat_key):
+            if stat_key not in stats:
+                return None
+            return min(int(stats.get(stat_key) or 0), value)
+
         if kind == 'reach_level':
-            return f'Lv {value}'
+            cur = _progress('max_kingdom_level')
+            return f'Lv {cur}/{value}' if cur is not None else f'Lv {value}'
         if kind == 'conquer_lands':
-            return f'Conquer x{value}'
+            cur = _progress('conquer_lands')
+            return (f'Conquer {cur}/{value}' if cur is not None
+                    else f'Conquer x{value}')
         if kind == 'win_battles':
-            return f'Wins x{value}'
+            cur = _progress('win_battles')
+            return f'Wins {cur}/{value}' if cur is not None else f'Wins x{value}'
         if kind == 'win_conquer_battles':
-            return f'Conq.Wins {value}'
+            cur = _progress('win_conquer_battles')
+            return (f'Conq. wins {cur}/{value}' if cur is not None
+                    else f'Conq.Wins {value}')
         if kind == 'own_all_suits':
+            if 'owned_suits_count' in stats:
+                cur = min(int(stats.get('owned_suits_count') or 0), 4)
+                return f'Suits {cur}/4'
             return 'All suits'
         if kind == 'reach_max_tier':
             return 'Max tier'
@@ -2461,8 +2787,11 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         self._draw_menu_chrome()
         self._buttons = []
         self._cosmetic_scroll_areas = {}
+        self._cosmetic_scrollbar_rects = {}
         self._content_scroll_area = None
         self._content_content_h = 0
+        self._content_scrollbar_track = None
+        self._content_scrollbar_thumb = None
         self._button_clip_rect = None
         self._collect_btn_rect = None
         self._rename_icon_rect = None
@@ -2551,9 +2880,11 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
             pygame.draw.rect(self.window, (52, 45, 42), track, border_radius=2)
             thumb_h = max(28, int(track.h * track.h / max(track.h, layout['content_h'])))
             thumb_y = track.y + int((track.h - thumb_h) * (content_scroll / max_scroll))
+            thumb = pygame.Rect(track.x, thumb_y, track.w, thumb_h)
+            self._content_scrollbar_track = track.copy()
+            self._content_scrollbar_thumb = thumb.copy()
             pygame.draw.rect(self.window, settings.KINGDOM_CONFIG_HIGHLIGHT,
-                             pygame.Rect(track.x, thumb_y, track.w, thumb_h),
-                             border_radius=2)
+                             thumb, border_radius=2)
 
         if self._message and not getattr(self.state, 'message_lines', None):
             surf = self._small_font.render(self._message, True, settings.KINGDOM_CONFIG_GOOD_CLR)

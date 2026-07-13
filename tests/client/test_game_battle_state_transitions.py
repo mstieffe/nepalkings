@@ -299,6 +299,36 @@ class TestGameBattleStateTransitions:
         assert game.pending_battle_ready is False
         assert game.battle_ready_shown is False
 
+    def test_royal_decree_clears_stale_civil_war_pick_latches(self):
+        from game.core.game import Game
+
+        initial = _mk_game_dict()
+        initial['mode'] = 'conquer'
+        game = Game(initial, _mk_user_dict(), lightweight=True)
+        game.game_start_notification_checked = True
+        game._last_polled_advancing = 501
+        game.civil_war_awaiting_second = True
+        game.civil_war_defender_second = True
+        game.civil_war_required_color = 'offensive'
+
+        ready = _mk_game_dict()
+        ready['mode'] = 'conquer'
+        ready['battle_modifier'] = [
+            {'type': 'Royal Decree'},
+            {'type': 'Civil War'},
+        ]
+        ready['advancing_figure_id'] = 501
+        ready['advancing_player_id'] = 113
+        ready['defending_figure_id'] = 601
+        ready['turn_player_id'] = 113
+
+        game._apply_game_dict(ready)
+
+        assert game.civil_war_awaiting_second is False
+        assert game.civil_war_defender_second is False
+        assert game.civil_war_required_color is None
+        assert game.pending_battle_ready is True
+
     def test_conquer_game_start_pending_clears_without_summary(self):
         from game.core.game import Game
 

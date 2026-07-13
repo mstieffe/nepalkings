@@ -24,7 +24,12 @@ from game.screens.battle_shop_screen import BattleShopScreen
 from game.components.figures.figure_manager import FigureManager
 from game.components.conquer_effects import EffectsLayer, apply_screen_shake
 from utils.background_poller import BackgroundPoller
-from game.core.game import Game
+from game.core.game import (
+    Game,
+    battle_modifier_types,
+    battle_required_field,
+    civil_war_pick_flow_active,
+)
 import logging
 from datetime import datetime
 
@@ -2173,7 +2178,8 @@ class GameScreen(Screen):
             all_own_figures.extend(fig_list)
         
         modifiers = self.state.game.battle_modifier if isinstance(self.state.game.battle_modifier, list) else []
-        modifier_types = [m.get('type') for m in modifiers]
+        modifier_types = battle_modifier_types(modifiers)
+        required_field = battle_required_field(modifiers)
         
         # Check if opponent's advancing figure has cannot_be_blocked
         # (would block counter-advance for all figures, including instant_charge build+advance)
@@ -2205,11 +2211,15 @@ class GameScreen(Screen):
             if icon and getattr(icon, 'has_deficit', False):
                 continue
             
-            # Peasant War / Civil War: only village figures can advance
-            if 'Peasant War' in modifier_types or 'Civil War' in modifier_types:
-                figure_field = getattr(fig.family, 'field', None) if hasattr(fig, 'family') else None
-                if figure_field != 'village':
-                    continue
+            # Royal Decree overrides the village-only modifiers.  This
+            # precheck must match the server or the client can open a forced
+            # selection phase in which every visible figure is illegal.
+            figure_field = (
+                getattr(fig.family, 'field', None)
+                if hasattr(fig, 'family') else getattr(fig, 'field', None)
+            )
+            if required_field and figure_field != required_field:
+                continue
             
             # This figure can advance
             return True
@@ -2304,9 +2314,9 @@ class GameScreen(Screen):
         )
         
         modifiers = self.state.game.battle_modifier if isinstance(self.state.game.battle_modifier, list) else []
-        modifier_types = [m.get('type') for m in modifiers]
+        modifier_types = battle_modifier_types(modifiers)
         has_blitzkrieg = 'Blitzkrieg' in modifier_types
-        village_only = 'Peasant War' in modifier_types or 'Civil War' in modifier_types
+        required_field = battle_required_field(modifiers)
         skip_must_be_attacked = advancing_cannot_be_blocked or has_blitzkrieg
         
         eligible = []
@@ -2316,7 +2326,11 @@ class GameScreen(Screen):
                 continue
             if hasattr(fig, 'cannot_be_targeted') and fig.cannot_be_targeted:
                 continue
-            if village_only and hasattr(fig, 'family') and fig.family.field != 'village':
+            figure_field = (
+                getattr(fig.family, 'field', None)
+                if hasattr(fig, 'family') else getattr(fig, 'field', None)
+            )
+            if required_field and figure_field != required_field:
                 continue
             if hasattr(fig, 'checkmate') and fig.checkmate:
                 checkmate_fallback.append(fig)
@@ -2771,11 +2785,14 @@ class GameScreen(Screen):
         base_msg = f"Your opponent did not counter-advance.\n\nSelect one of your opponent's figures to face {advancing_figure_name} in battle."
         
         modifiers = self.state.game.battle_modifier if isinstance(self.state.game.battle_modifier, list) else []
-        modifier_types = [m.get('type') for m in modifiers]
-        
-        if 'Peasant War' in modifier_types:
+        modifier_types = battle_modifier_types(modifiers)
+        required_field = battle_required_field(modifiers)
+
+        if required_field == 'castle':
+            base_msg += "\n\nRoyal Decree is active — you may only select castle figures."
+        elif 'Peasant War' in modifier_types:
             base_msg += "\n\nPeasant War is active — you may only select village figures."
-        elif 'Civil War' in modifier_types:
+        elif civil_war_pick_flow_active(modifiers):
             base_msg += "\n\nCivil War is active — you may only select village figures."
         
         modifier_text, modifier_icons = self._get_battle_modifier_info()
@@ -2789,7 +2806,7 @@ class GameScreen(Screen):
             'title': "Select Opponent's Defender",
             'phase': 'defender',
             'tone': 'action',
-            'spell_names': [m for m in ('Civil War', 'Peasant War')
+            'spell_names': [m for m in ('Royal Decree', 'Civil War', 'Peasant War')
                             if m in modifier_types],
             'event_key': f'select_defender:{self.state.game.advancing_figure_id}',
         })
@@ -2814,9 +2831,12 @@ class GameScreen(Screen):
         self.state.game.conquer_own_defender_selection_shown = True
 
         modifiers = self.state.game.battle_modifier if isinstance(self.state.game.battle_modifier, list) else []
-        modifier_types = [m.get('type') for m in modifiers]
+        modifier_types = battle_modifier_types(modifiers)
+        required_field = battle_required_field(modifiers)
         restriction_note = ""
-        if 'Civil War' in modifier_types:
+        if required_field == 'castle':
+            restriction_note = "\n\nRoyal Decree is active — only castle figures may defend."
+        elif civil_war_pick_flow_active(modifiers):
             restriction_note = "\n\nCivil War is active — only village figures may defend."
         elif 'Peasant War' in modifier_types:
             restriction_note = "\n\nPeasant War is active — only village figures may defend."
@@ -4435,8 +4455,11 @@ class GameScreen(Screen):
         
         # Include active modifier name in prompt header
         modifiers = self.state.game.battle_modifier if isinstance(self.state.game.battle_modifier, list) else []
-        modifier_types = [m.get('type') for m in modifiers]
-        if 'Civil War' in modifier_types:
+        modifier_types = battle_modifier_types(modifiers)
+        required_field = battle_required_field(modifiers)
+        if required_field == 'castle':
+            prompt_text = "YOUR FIGURE ADVANCING (Royal Decree)"
+        elif civil_war_pick_flow_active(modifiers):
             prompt_text = "YOUR FIGURE ADVANCING (Civil War)"
         elif 'Peasant War' in modifier_types:
             prompt_text = "YOUR FIGURE ADVANCING (Peasant War)"
@@ -4481,7 +4504,8 @@ class GameScreen(Screen):
         
         # Include active modifier name in prompt header
         modifiers = self.state.game.battle_modifier if isinstance(self.state.game.battle_modifier, list) else []
-        modifier_types = [m.get('type') for m in modifiers]
+        modifier_types = battle_modifier_types(modifiers)
+        required_field = battle_required_field(modifiers)
         
         # Check if advancing figure has cannot_be_blocked
         has_cannot_be_blocked = False
@@ -4495,7 +4519,9 @@ class GameScreen(Screen):
         
         if 'Blitzkrieg' in modifier_types:
             prompt_text = "OPPONENT ADVANCING (Blitzkrieg)"
-        elif 'Civil War' in modifier_types:
+        elif required_field == 'castle':
+            prompt_text = "OPPONENT ADVANCING (Royal Decree)"
+        elif civil_war_pick_flow_active(modifiers):
             prompt_text = "OPPONENT ADVANCING (Civil War)"
         elif 'Peasant War' in modifier_types:
             prompt_text = "OPPONENT ADVANCING (Peasant War)"
@@ -4508,7 +4534,9 @@ class GameScreen(Screen):
             detail_text = "Blitzkrieg — you cannot counter-advance"
         elif has_cannot_be_blocked:
             detail_text = "Cannot be blocked — spend your turn on something else"
-        elif 'Civil War' in modifier_types:
+        elif required_field == 'castle':
+            detail_text = "Royal Decree — counter-advance with a castle figure"
+        elif civil_war_pick_flow_active(modifiers):
             detail_text = "Counter-advance with up to two village figures (same color)"
         elif 'Peasant War' in modifier_types:
             detail_text = "Counter-advance with a village figure or spend your turn"
@@ -4652,11 +4680,14 @@ class GameScreen(Screen):
         
         # Check active battle modifiers
         modifiers = self.state.game.battle_modifier if isinstance(self.state.game.battle_modifier, list) else []
-        modifier_types = [m.get('type') for m in modifiers]
-        
-        if 'Peasant War' in modifier_types:
+        modifier_types = battle_modifier_types(modifiers)
+        required_field = battle_required_field(modifiers)
+
+        if required_field == 'castle':
+            detail_text = "Royal Decree active — select an opponent's castle figure"
+        elif 'Peasant War' in modifier_types:
             detail_text = "Peasant War active — select an opponent's village figure"
-        elif 'Civil War' in modifier_types:
+        elif civil_war_pick_flow_active(modifiers):
             detail_text = "Civil War active — select an opponent's village figure"
         else:
             # Check if must_be_attacked constraint applies
@@ -5052,7 +5083,7 @@ class GameScreen(Screen):
         
         if result.get('success'):
             from utils import sound
-            sound.play('booster_reveal')  # spell-cast sparkle (duel + conquer counter)
+            sound.play_spell(spell.name, counter=True)
             self.need_to_respond_to_spell = False
             self._last_resolved_spell_id = self.state.game.pending_spell_id
 

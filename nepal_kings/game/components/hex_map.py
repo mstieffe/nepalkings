@@ -200,6 +200,205 @@ def _draw_surface_pattern(*_args, **_kwargs):
     return None
 
 
+def draw_border_edge(window, style, start, end, palette,
+                     outer_w, main_w, inner_w):
+    """Render one hex edge in the requested cosmetic border style.
+
+    Module-level so non-map surfaces (e.g. the kingdom-config style
+    showcase) can render true border art without a HexMap instance.
+    """
+    outer_clr, main_clr, highlight_clr = palette
+    if style == 'simple':
+        _draw_capped_line(window, outer_clr, start, end, outer_w)
+        _draw_capped_line(window, main_clr, start, end, main_w)
+        _draw_capped_line(window, highlight_clr, start, end, inner_w)
+        return
+
+    dx = end[0] - start[0]
+    dy = end[1] - start[1]
+    length = math.hypot(dx, dy)
+    if length <= 0:
+        _draw_capped_line(window, main_clr, start, end, main_w)
+        return
+    ux, uy = dx / length, dy / length
+    nx, ny = -uy, ux  # left-perpendicular unit vector
+
+    def at(t, off=0.0):
+        return (start[0] + dx * t + nx * off,
+                start[1] + dy * t + ny * off)
+
+    if style == 'rope_braid':
+        offset = main_w * 0.55
+        strand_w = max(1, int(main_w * 0.55))
+        outer_strand_w = max(1, int(outer_w * 0.55))
+        tick_w = max(1, int(inner_w * 0.85))
+        # Outer dark wash beneath the two strands.
+        _draw_capped_line(window, outer_clr,
+                          at(0, -offset), at(1, -offset), outer_strand_w)
+        _draw_capped_line(window, outer_clr,
+                          at(0, offset), at(1, offset), outer_strand_w)
+        _draw_capped_line(window, main_clr,
+                          at(0, -offset), at(1, -offset), strand_w)
+        _draw_capped_line(window, main_clr,
+                          at(0, offset), at(1, offset), strand_w)
+        # 5 alternating diagonal ticks simulating the braid.
+        ticks = 5
+        for i in range(ticks):
+            t1 = (i + 0.15) / ticks
+            t2 = (i + 0.85) / ticks
+            if i % 2 == 0:
+                a, b = at(t1, -offset), at(t2, offset)
+            else:
+                a, b = at(t1, offset), at(t2, -offset)
+            _draw_capped_line(window, highlight_clr, a, b, tick_w)
+        return
+
+    if style == 'dashed_double':
+        offset = main_w * 0.55
+        dash_w = max(1, int(main_w * 0.55))
+        outer_dash_w = max(1, int(outer_w * 0.55))
+        dashes = 6
+        for i in range(dashes):
+            t1 = (i + 0.05) / dashes
+            t2 = (i + 0.65) / dashes
+            _draw_capped_line(window, outer_clr,
+                              at(t1, -offset), at(t2, -offset), outer_dash_w)
+            _draw_capped_line(window, outer_clr,
+                              at(t1, offset), at(t2, offset), outer_dash_w)
+            _draw_capped_line(window, main_clr,
+                              at(t1, -offset), at(t2, -offset), dash_w)
+            _draw_capped_line(window, main_clr,
+                              at(t1, offset), at(t2, offset), dash_w)
+        return
+
+    if style == 'carved_notches':
+        # Single thick line interrupted by inward notches.
+        _draw_capped_line(window, outer_clr, start, end, outer_w)
+        _draw_capped_line(window, main_clr, start, end, main_w)
+        notch_depth = main_w * 0.55
+        notch_w = max(1, int(main_w * 0.40))
+        for t in (0.18, 0.36, 0.54, 0.72, 0.90):
+            p1 = at(t)
+            p2 = at(t, notch_depth)
+            _draw_capped_line(window, outer_clr, p1, p2, notch_w)
+        _draw_capped_line(window, highlight_clr,
+                          at(0, -inner_w * 0.30),
+                          at(1, -inner_w * 0.30), max(1, inner_w))
+        return
+
+    if style == 'spikes':
+        # Zig-zag main line: alternates above/below the edge axis.
+        steps = 8
+        amp = main_w * 0.65
+        polyline = [start]
+        for i in range(1, steps):
+            t = i / steps
+            off = amp if i % 2 == 1 else -amp
+            polyline.append(at(t, off))
+        polyline.append(end)
+        for i in range(len(polyline) - 1):
+            _draw_capped_line(window, outer_clr,
+                              polyline[i], polyline[i + 1], outer_w)
+        for i in range(len(polyline) - 1):
+            _draw_capped_line(window, main_clr,
+                              polyline[i], polyline[i + 1], main_w)
+        for i in range(len(polyline) - 1):
+            _draw_capped_line(window, highlight_clr,
+                              polyline[i], polyline[i + 1], inner_w)
+        return
+
+    if style == 'gem_cabochons':
+        # Thick metal bar with a single inset cabochon per edge.  One
+        # small deep-toned gem reads as jewellery; chains of large ones
+        # read as a candy necklace around the kingdom.
+        _draw_capped_line(window, outer_clr, start, end, outer_w)
+        _draw_capped_line(window, main_clr, start, end, main_w)
+        _draw_capped_line(window, highlight_clr,
+                          at(0, -main_w * 0.30),
+                          at(1, -main_w * 0.30), max(1, inner_w))
+        gem_r = max(2, int(main_w * 0.55))
+        rim_clr = (max(0, outer_clr[0] - 30), max(0, outer_clr[1] - 30),
+                   max(0, outer_clr[2] - 30))
+        cx, cy = at(0.5)
+        pygame.draw.circle(window, rim_clr,
+                           (int(round(cx)), int(round(cy))), gem_r + 2)
+        pygame.draw.circle(window, outer_clr,
+                           (int(round(cx)), int(round(cy))), gem_r + 1)
+        pygame.draw.circle(window, main_clr,
+                           (int(round(cx)), int(round(cy))), gem_r)
+        hx = cx + nx * gem_r * 0.30 - ux * gem_r * 0.15
+        hy = cy + ny * gem_r * 0.30 - uy * gem_r * 0.15
+        pygame.draw.circle(window, highlight_clr,
+                           (int(round(hx)), int(round(hy))),
+                           max(1, gem_r // 3))
+        return
+
+    if style == 'thorned_vine':
+        _draw_capped_line(window, outer_clr, start, end, outer_w)
+        _draw_capped_line(window, main_clr, start, end, main_w)
+        thorn_h = main_w * 1.2
+        thorn_half = main_w * 0.35
+        for t in (0.18, 0.36, 0.54, 0.72, 0.90):
+            base_pt = at(t)
+            left = at(t - 0.04)
+            right = at(t + 0.04)
+            tip = at(t, -thorn_h)
+            pygame.draw.polygon(window, outer_clr, [
+                (int(round(left[0])), int(round(left[1]))),
+                (int(round(right[0])), int(round(right[1]))),
+                (int(round(tip[0])), int(round(tip[1]))),
+            ])
+            # Thin inner highlight on the thorn.
+            pygame.draw.line(window, highlight_clr,
+                             (int(round(base_pt[0])), int(round(base_pt[1]))),
+                             (int(round(tip[0])), int(round(tip[1]))),
+                             max(1, int(thorn_half)))
+        return
+
+    if style == 'bamboo_stalks':
+        # Segmented cane: solid stalk interrupted by node joints.
+        _draw_capped_line(window, outer_clr, start, end, outer_w)
+        _draw_capped_line(window, main_clr, start, end, main_w)
+        node_w = max(1, int(main_w * 0.7))
+        node_half = main_w * 0.85
+        for t in (0.25, 0.50, 0.75):
+            _draw_capped_line(window, outer_clr,
+                              at(t, -node_half), at(t, node_half), node_w)
+            _draw_capped_line(window, highlight_clr,
+                              at(t + 0.02, -node_half * 0.55),
+                              at(t + 0.02, node_half * 0.55),
+                              max(1, node_w // 2))
+        # Sunlit sheen along one side of the cane.
+        _draw_capped_line(window, highlight_clr,
+                          at(0.06, -main_w * 0.28),
+                          at(0.94, -main_w * 0.28), max(1, inner_w))
+        return
+
+    if style == 'prayer_flags':
+        # Rope with five traditional flags (blue, white, red, green,
+        # yellow) hanging toward the hex interior.
+        rope_outer = max(1, int(outer_w * 0.55))
+        rope_main = max(1, int(main_w * 0.55))
+        _draw_capped_line(window, outer_clr, start, end, rope_outer)
+        _draw_capped_line(window, main_clr, start, end, rope_main)
+        flag_clrs = ((64, 118, 214), (238, 238, 232), (204, 58, 52),
+                     (58, 158, 92), (236, 196, 66))
+        flag_len = max(3.0, main_w * 1.6)
+        for i, clr in enumerate(flag_clrs):
+            t0 = (i + 0.5) / len(flag_clrs)
+            base_a = at(t0 - 0.055)
+            base_b = at(t0 + 0.055)
+            tip = at(t0, flag_len)
+            pygame.draw.polygon(window, clr, [base_a, base_b, tip])
+            pygame.draw.polygon(window, outer_clr, [base_a, base_b, tip], 1)
+        return
+
+    # Unknown style → simple fallback.
+    _draw_capped_line(window, outer_clr, start, end, outer_w)
+    _draw_capped_line(window, main_clr, start, end, main_w)
+    _draw_capped_line(window, highlight_clr, start, end, inner_w)
+
+
 # ═══════════════════════════════════════════════════════════════════
 #  HexTile — data object for a single hex
 # ═══════════════════════════════════════════════════════════════════
@@ -666,6 +865,13 @@ class HexMap:
             and self._dragging
             and self._did_drag
         )
+
+    def cancel_drag(self):
+        """Clear any in-progress pan gesture without changing the camera."""
+        self._dragging = False
+        self._drag_start = None
+        self._drag_cam_start = None
+        self._did_drag = False
 
     # ── Hit testing ─────────────────────────────────────────────────
 
@@ -1680,6 +1886,18 @@ class HexMap:
         subtitle_h = subtitle_font.get_height()
         target_h = max(font.get_height() + subtitle_h + 8,
                        int((font.get_height() + subtitle_h) * 1.25))
+        # Rival nameplates shrink at overview zoom so a cluster of
+        # neighbouring kingdoms' badges stops hiding the land shapes.
+        owner_name_zoom = float(getattr(
+            settings, 'HEX_MAP_OWNER_NAME_MIN_ZOOM', 2.0))
+        compact_font_size = max(8, int(scaled_font_size * 0.74))
+        compact_font = settings.get_font(compact_font_size)
+        compact_subtitle_font = settings.get_font(
+            max(7, int(compact_font_size * 0.68)), bold=True)
+        compact_subtitle_h = compact_subtitle_font.get_height()
+        compact_target_h = max(
+            compact_font.get_height() + compact_subtitle_h + 6,
+            int((compact_font.get_height() + compact_subtitle_h) * 1.20))
         # Suit cluster icon footprint (matches _draw_suit_cluster_icons).
         cluster_icon_sz = max(20, int(sz * 1.05))
         shimmer_phase = badge_cosmetics.shimmer_phase_for(
@@ -1695,6 +1913,13 @@ class HexMap:
             if scy < vp.top - 60 or scy > vp.bottom + 100:
                 continue
 
+            rep_tile = badge_data.get('representative_tile')
+            compact = (self.zoom < owner_name_zoom
+                       and not bool(getattr(rep_tile, 'is_mine', False)))
+            b_font = compact_font if compact else font
+            b_subtitle_font = compact_subtitle_font if compact else subtitle_font
+            b_target_h = compact_target_h if compact else target_h
+
             badge_key = (badge_data.get('badge_key')
                          or settings.HEX_BADGE_DEFAULT_KEY)
             subtitle = badge_data.get('subtitle')
@@ -1703,17 +1928,17 @@ class HexMap:
                     badge_key,
                     str(badge_data['name']),
                     str(subtitle),
-                    font,
-                    subtitle_font=subtitle_font,
-                    target_h=target_h,
+                    b_font,
+                    subtitle_font=b_subtitle_font,
+                    target_h=b_target_h,
                     shimmer_phase=shimmer_phase,
                 )
             else:
                 badge_surf = badge_cosmetics.render_badge(
                     badge_key,
                     str(badge_data['name']),
-                    font,
-                    target_h=target_h,
+                    b_font,
+                    target_h=b_target_h,
                     shimmer_phase=shimmer_phase,
                 )
 
@@ -1762,7 +1987,7 @@ class HexMap:
             # overlap; the identity sigil remains anchored to the cluster so
             # the shifted nameplate still has a clear visual owner.
             base_br = br.copy()
-            lane_step = max(target_h + 4, int(sz * 0.42))
+            lane_step = max(b_target_h + 4, int(sz * 0.42))
             candidates = [0, -lane_step, lane_step,
                           -2 * lane_step, 2 * lane_step]
             for dy in candidates:
@@ -1997,153 +2222,8 @@ class HexMap:
     def _draw_border_edge(self, style, start, end, palette,
                           outer_w, main_w, inner_w):
         """Render a single owned-hex edge in the requested cosmetic style."""
-        outer_clr, main_clr, highlight_clr = palette
-        if style == 'simple':
-            _draw_capped_line(self.window, outer_clr, start, end, outer_w)
-            _draw_capped_line(self.window, main_clr, start, end, main_w)
-            _draw_capped_line(self.window, highlight_clr, start, end, inner_w)
-            return
-
-        dx = end[0] - start[0]
-        dy = end[1] - start[1]
-        length = math.hypot(dx, dy)
-        if length <= 0:
-            _draw_capped_line(self.window, main_clr, start, end, main_w)
-            return
-        ux, uy = dx / length, dy / length
-        nx, ny = -uy, ux  # left-perpendicular unit vector
-
-        def at(t, off=0.0):
-            return (start[0] + dx * t + nx * off,
-                    start[1] + dy * t + ny * off)
-
-        if style == 'rope_braid':
-            offset = main_w * 0.55
-            strand_w = max(1, int(main_w * 0.55))
-            outer_strand_w = max(1, int(outer_w * 0.55))
-            tick_w = max(1, int(inner_w * 0.85))
-            # Outer dark wash beneath the two strands.
-            _draw_capped_line(self.window, outer_clr,
-                              at(0, -offset), at(1, -offset), outer_strand_w)
-            _draw_capped_line(self.window, outer_clr,
-                              at(0, offset), at(1, offset), outer_strand_w)
-            _draw_capped_line(self.window, main_clr,
-                              at(0, -offset), at(1, -offset), strand_w)
-            _draw_capped_line(self.window, main_clr,
-                              at(0, offset), at(1, offset), strand_w)
-            # 5 alternating diagonal ticks simulating the braid.
-            ticks = 5
-            for i in range(ticks):
-                t1 = (i + 0.15) / ticks
-                t2 = (i + 0.85) / ticks
-                if i % 2 == 0:
-                    a, b = at(t1, -offset), at(t2, offset)
-                else:
-                    a, b = at(t1, offset), at(t2, -offset)
-                _draw_capped_line(self.window, highlight_clr, a, b, tick_w)
-            return
-
-        if style == 'dashed_double':
-            offset = main_w * 0.55
-            dash_w = max(1, int(main_w * 0.55))
-            outer_dash_w = max(1, int(outer_w * 0.55))
-            dashes = 6
-            for i in range(dashes):
-                t1 = (i + 0.05) / dashes
-                t2 = (i + 0.65) / dashes
-                _draw_capped_line(self.window, outer_clr,
-                                  at(t1, -offset), at(t2, -offset), outer_dash_w)
-                _draw_capped_line(self.window, outer_clr,
-                                  at(t1, offset), at(t2, offset), outer_dash_w)
-                _draw_capped_line(self.window, main_clr,
-                                  at(t1, -offset), at(t2, -offset), dash_w)
-                _draw_capped_line(self.window, main_clr,
-                                  at(t1, offset), at(t2, offset), dash_w)
-            return
-
-        if style == 'carved_notches':
-            # Single thick line interrupted by inward notches.
-            _draw_capped_line(self.window, outer_clr, start, end, outer_w)
-            _draw_capped_line(self.window, main_clr, start, end, main_w)
-            notch_depth = main_w * 0.55
-            notch_w = max(1, int(main_w * 0.40))
-            for t in (0.18, 0.36, 0.54, 0.72, 0.90):
-                p1 = at(t)
-                p2 = at(t, notch_depth)
-                _draw_capped_line(self.window, outer_clr, p1, p2, notch_w)
-            _draw_capped_line(self.window, highlight_clr,
-                              at(0, -inner_w * 0.30),
-                              at(1, -inner_w * 0.30), max(1, inner_w))
-            return
-
-        if style == 'spikes':
-            # Zig-zag main line: alternates above/below the edge axis.
-            steps = 8
-            amp = main_w * 0.65
-            polyline = [start]
-            for i in range(1, steps):
-                t = i / steps
-                off = amp if i % 2 == 1 else -amp
-                polyline.append(at(t, off))
-            polyline.append(end)
-            for i in range(len(polyline) - 1):
-                _draw_capped_line(self.window, outer_clr,
-                                  polyline[i], polyline[i + 1], outer_w)
-            for i in range(len(polyline) - 1):
-                _draw_capped_line(self.window, main_clr,
-                                  polyline[i], polyline[i + 1], main_w)
-            for i in range(len(polyline) - 1):
-                _draw_capped_line(self.window, highlight_clr,
-                                  polyline[i], polyline[i + 1], inner_w)
-            return
-
-        if style == 'gem_cabochons':
-            # Thick metal bar with 3 gem cabochons inset.
-            _draw_capped_line(self.window, outer_clr, start, end, outer_w)
-            _draw_capped_line(self.window, main_clr, start, end, main_w)
-            _draw_capped_line(self.window, highlight_clr,
-                              at(0, -main_w * 0.30),
-                              at(1, -main_w * 0.30), max(1, inner_w))
-            gem_r = max(2, int(main_w * 0.85))
-            for t in (0.25, 0.50, 0.75):
-                cx, cy = at(t)
-                pygame.draw.circle(self.window, outer_clr,
-                                   (int(round(cx)), int(round(cy))), gem_r + 2)
-                pygame.draw.circle(self.window, main_clr,
-                                   (int(round(cx)), int(round(cy))), gem_r)
-                hx = cx + nx * gem_r * 0.30 - ux * gem_r * 0.15
-                hy = cy + ny * gem_r * 0.30 - uy * gem_r * 0.15
-                pygame.draw.circle(self.window, highlight_clr,
-                                   (int(round(hx)), int(round(hy))),
-                                   max(1, gem_r // 3))
-            return
-
-        if style == 'thorned_vine':
-            _draw_capped_line(self.window, outer_clr, start, end, outer_w)
-            _draw_capped_line(self.window, main_clr, start, end, main_w)
-            thorn_h = main_w * 1.2
-            thorn_half = main_w * 0.35
-            for t in (0.18, 0.36, 0.54, 0.72, 0.90):
-                base_pt = at(t)
-                left = at(t - 0.04)
-                right = at(t + 0.04)
-                tip = at(t, -thorn_h)
-                pygame.draw.polygon(self.window, outer_clr, [
-                    (int(round(left[0])), int(round(left[1]))),
-                    (int(round(right[0])), int(round(right[1]))),
-                    (int(round(tip[0])), int(round(tip[1]))),
-                ])
-                # Thin inner highlight on the thorn.
-                pygame.draw.line(self.window, highlight_clr,
-                                 (int(round(base_pt[0])), int(round(base_pt[1]))),
-                                 (int(round(tip[0])), int(round(tip[1]))),
-                                 max(1, int(thorn_half)))
-            return
-
-        # Unknown style → simple fallback.
-        _draw_capped_line(self.window, outer_clr, start, end, outer_w)
-        _draw_capped_line(self.window, main_clr, start, end, main_w)
-        _draw_capped_line(self.window, highlight_clr, start, end, inner_w)
+        draw_border_edge(self.window, style, start, end, palette,
+                         outer_w, main_w, inner_w)
 
     def _draw_tier_stars(self, cx, cy, tier, sz):
         """Draw one star per tier level."""

@@ -543,6 +543,20 @@ KINGDOM_SIGIL_CATALOG = {
         'unlock_kind': 'conquer_lands',
         'unlock_value': 25,
     },
+    'sigil_yak': {
+        'name': 'Yak',
+        'asset_glyph': 'yak',
+        'rarity': 'rare',
+        'unlock_kind': 'win_battles',
+        'unlock_value': 25,
+    },
+    'sigil_stupa': {
+        'name': 'Stupa',
+        'asset_glyph': 'stupa',
+        'rarity': 'rare',
+        'unlock_kind': 'reach_level',
+        'unlock_value': 15,
+    },
 }
 
 KINGDOM_COSMETIC_CATALOG = {
@@ -720,6 +734,41 @@ KINGDOM_COSMETIC_CATALOG = {
         'rarity': 'epic',
         'price_gold': 2100,
         'asset_key': 'surface_lava',
+    },
+    'surface_sand': {
+        'type': 'surface',
+        'name': 'Windswept Sand',
+        'rarity': 'common',
+        'price_gold': 450,
+        'asset_key': 'surface_sand',
+    },
+    'surface_crystal': {
+        'type': 'surface',
+        'name': 'Crystal Field',
+        'rarity': 'epic',
+        'price_gold': 1900,
+        'asset_key': 'surface_crystal',
+    },
+    'border_bamboo': {
+        'type': 'border',
+        'name': 'Bamboo Border',
+        'rarity': 'common',
+        'price_gold': 400,
+        'asset_key': 'border_bamboo',
+    },
+    'border_prayer_flags': {
+        'type': 'border',
+        'name': 'Prayer Flags Border',
+        'rarity': 'epic',
+        'price_gold': 1850,
+        'asset_key': 'border_prayer_flags',
+    },
+    'badge_wax_seal': {
+        'type': 'badge',
+        'name': 'Wax Seal Plate',
+        'rarity': 'rare',
+        'price_gold': 900,
+        'asset_key': 'badge_wax_seal',
     },
 }
 

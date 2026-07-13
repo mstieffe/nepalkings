@@ -45,12 +45,12 @@ _COL_DEFS = [
 
 _COL_DEFS_KINGDOM = [
     ('#',         0.00, 0.06),
-    ('Player',    0.06, 0.20),
-    ('Lands',     0.26, 0.14),
-    ('Production',0.40, 0.16),
-    ('Conquers',  0.56, 0.14),
-    ('C-Wins',    0.70, 0.14),
-    ('D-Wins',    0.84, 0.16),
+    ('Player',    0.06, 0.22),
+    ('Lands',     0.28, 0.12),
+    ('Gold/h',    0.40, 0.15),
+    ('Attacks',   0.55, 0.15),
+    ('Atk Wins',  0.70, 0.15),
+    ('Def Wins',  0.85, 0.15),
 ]
 
 # Tab geometry
@@ -61,6 +61,7 @@ _TAB_ACTIVE  = (200, 185, 140, 255)
 _TAB_INACTIVE = (80, 75, 65, 180)
 _TAB_TEXT_CLR = (240, 230, 200)
 _TAB_TEXT_ACTIVE = (50, 45, 35)
+_TAB_LABELS = {'duel': 'Duel', 'kingdom': 'Conquer'}
 
 # Scrollbar
 _SCROLLBAR_W   = int(0.006 * _SW)
@@ -75,6 +76,29 @@ _DOT_OFFLINE   = (120, 110, 100)
 
 # Sort column highlight
 _HDR_ACTIVE_CLR = (240, 220, 140)
+
+# Ranking / state accents
+_RANK_COLORS = {
+    1: (250, 211, 92),
+    2: (205, 210, 220),
+    3: (205, 145, 88),
+}
+_SELF_TEXT_CLR = (255, 226, 135)
+_STATUS_TEXT_CLR = (190, 185, 175)
+_STATUS_MUTED_CLR = (140, 135, 125)
+
+
+def _is_ai_ranking_entry(entry):
+    """Recognize AI rows from both current and legacy ranking payloads.
+
+    Current servers can identify bots explicitly.  Older deployed servers do
+    not include that field, but their service-account names use markers that
+    normal player registration cannot contain.
+    """
+    if entry.get('is_ai', False):
+        return True
+    username = str(entry.get('username') or '').strip().casefold()
+    return username.startswith(('[ai]', '{ai}'))
 
 
 def _draw_panel(window, rect, corner_r=None):
@@ -111,10 +135,15 @@ class RankingScreen(MenuScreenMixin, Screen):
         self._init_menu_chrome()
 
         self.rankings = []
+        self._rankings_by_tab = {'duel': [], 'kingdom': []}
+        self._loaded_tabs = set()
+        self._loading = True
+        self._load_failed = False
         self._hovered_row = -1
         self._sort_col = 2           # default sort by Gold
-        self.last_update_time = 0
+        self._sort_desc = True
         self.update_interval = 10000
+        self.last_update_time = pygame.time.get_ticks() - self.update_interval - 1
         self._active_tab = 'duel'    # 'duel' or 'kingdom'
 
         # Scroll
@@ -122,6 +151,7 @@ class RankingScreen(MenuScreenMixin, Screen):
         self._max_scroll = 0
         self._dragging_thumb = False
         self._drag_offset = 0
+        self._touch_scrolling = False
 
         # Fonts
         self._title_font = settings.get_font(settings.SUB_SCREEN_TITLE_FONT_SIZE, bold=True)
@@ -130,6 +160,8 @@ class RankingScreen(MenuScreenMixin, Screen):
         self._hdr_font = settings.get_font(settings.SUB_SCREEN_HEADER_FONT_SIZE)
         self._cell_font = settings.get_font(settings.LIST_BTN_FONT_SIZE)
         self._tab_font = settings.get_font(settings.SUB_SCREEN_HEADER_FONT_SIZE, bold=True)
+        self._status_font = settings.get_font(
+            max(12, int(settings.LIST_BTN_FONT_SIZE * 0.82)))
 
         # Compute fixed layout positions
         self._title_render_y = _TITLE_Y
@@ -160,6 +192,12 @@ class RankingScreen(MenuScreenMixin, Screen):
         # Pre-compute header rects for click detection
         self._rebuild_hdr_rects()
 
+    def on_enter(self):
+        """Refresh promptly while keeping a truthful cached table visible."""
+        self._loading = self._active_tab not in self._loaded_tabs
+        self._load_failed = False
+        self.last_update_time = pygame.time.get_ticks() - self.update_interval - 1
+
     # ── Tab / Column helpers ────────────────────────────────────────
 
     def _rebuild_hdr_rects(self):
@@ -176,6 +214,21 @@ class RankingScreen(MenuScreenMixin, Screen):
     def _active_sort_keys(self):
         return _SORT_KEYS_KINGDOM if self._active_tab == 'kingdom' else _SORT_KEYS
 
+    def _switch_tab(self, tab_name):
+        if tab_name == self._active_tab or tab_name not in self._tab_rects:
+            return
+        self._active_tab = tab_name
+        self._sort_col = 2
+        self._sort_desc = True
+        self._scroll_y = 0
+        self._loading = tab_name not in self._loaded_tabs
+        self._load_failed = False
+        self._rebuild_hdr_rects()
+        self._sort_current_rankings()
+        # The next update starts this tab's refresh immediately, regardless of
+        # how recently the previous tab was refreshed.
+        self.last_update_time = pygame.time.get_ticks() - self.update_interval - 1
+
     # ── Data ──────────────────────────────────────────────────────
 
     def _refresh(self):
@@ -183,18 +236,53 @@ class RankingScreen(MenuScreenMixin, Screen):
             raw = fetch_kingdom_rankings()
         else:
             raw = fetch_rankings()
-            # Pre-compute W/L ratio for duel rankings
-            for r in raw:
-                losses = r.get('losses', 0)
-                wins = r.get('wins', 0)
-                r['wl_ratio'] = wins / losses if losses > 0 else float(wins)
+        self._apply_rankings(raw)
 
-        # Sort
+    def _apply_rankings(self, raw):
+        """Prepare one server result and make it the active tab snapshot."""
+        if raw is None:
+            self._loading = False
+            self._load_failed = True
+            return
+
+        # Keep compatibility with older deployed endpoints that return AI
+        # service accounts without an explicit ``is_ai`` field.
+        prepared = [dict(r) for r in raw if not _is_ai_ranking_entry(r)]
+        if self._active_tab == 'duel':
+            for row in prepared:
+                losses = row.get('losses', 0)
+                wins = row.get('wins', 0)
+                row['wl_ratio'] = wins / losses if losses > 0 else float(wins)
+
+        self._rankings_by_tab[self._active_tab] = prepared
+        self._loaded_tabs.add(self._active_tab)
+        self._loading = False
+        self._load_failed = False
+        self._sort_current_rankings()
+
+    def _sort_current_rankings(self):
         sort_keys = self._active_sort_keys()
-        key_name, desc = sort_keys.get(self._sort_col, ('gold', True))
-        raw.sort(key=lambda r: r.get(key_name, 0), reverse=desc)
-        self.rankings = raw
+        key_name, _default_desc = sort_keys.get(self._sort_col, ('gold', True))
+        source = self._rankings_by_tab.get(self._active_tab, [])
+        self.rankings = sorted(
+            source,
+            key=lambda row: row.get(key_name, 0),
+            reverse=self._sort_desc,
+        )
+        self._update_scroll_bounds()
 
+    def _select_sort_column(self, idx):
+        if idx not in self._active_sort_keys():
+            return
+        if idx == self._sort_col:
+            self._sort_desc = not self._sort_desc
+        else:
+            self._sort_col = idx
+            self._sort_desc = True
+        self._scroll_y = 0
+        self._sort_current_rankings()
+
+    def _update_scroll_bounds(self):
         n = len(self.rankings)
         self._content_h = n * (_ROW_H + _ROW_GAP) - (_ROW_GAP if n else 0)
         self._max_scroll = max(0, self._content_h - self._viewport_h)
@@ -223,9 +311,41 @@ class RankingScreen(MenuScreenMixin, Screen):
         track_x = _BOX_X + _BOX_W - _BOX_PAD - _SCROLLBAR_W
         return pygame.Rect(track_x, self._rows_top, _SCROLLBAR_W, self._viewport_h)
 
+    @staticmethod
+    def _fit_text(font, text, max_width):
+        """Ellipsize a cell label so it cannot spill into the next column."""
+        text = str(text)
+        if max_width <= 0:
+            return ''
+        if font.size(text)[0] <= max_width:
+            return text
+        ellipsis = '…'
+        clipped = text
+        while clipped and font.size(clipped + ellipsis)[0] > max_width:
+            clipped = clipped[:-1]
+        return clipped + ellipsis if clipped else ellipsis
+
+    @staticmethod
+    def _format_count(value):
+        try:
+            return f"{int(value or 0):,}"
+        except (TypeError, ValueError):
+            return '0'
+
+    @staticmethod
+    def _format_rate(value):
+        try:
+            rendered = f"{float(value or 0):,.1f}"
+        except (TypeError, ValueError):
+            return '0'
+        return rendered.rstrip('0').rstrip('.')
+
     # ── Rendering ─────────────────────────────────────────────────
 
     def render(self):
+        # Some previously rendered overlays use a temporary clip; rankings
+        # owns the full canvas and must not inherit that drawing boundary.
+        self.window.set_clip(None)
         self._draw_menu_chrome()
 
         # Outer box
@@ -244,11 +364,22 @@ class RankingScreen(MenuScreenMixin, Screen):
             tab_surf = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
             pygame.draw.rect(tab_surf, bg, tab_surf.get_rect(), border_radius=6)
             self.window.blit(tab_surf, rect.topleft)
-            label = tab_name.capitalize()
+            label = _TAB_LABELS[tab_name]
             lbl_surf = self._tab_font.render(label, True, txt_clr)
             lx = rect.x + (rect.w - lbl_surf.get_width()) // 2
             ly = rect.y + (rect.h - lbl_surf.get_height()) // 2
             self.window.blit(lbl_surf, (lx, ly))
+
+        # Explain the duel-only status dot without consuming table space.
+        if self._active_tab == 'duel':
+            legend = self._status_font.render('Online', True, _STATUS_MUTED_CLR)
+            legend_right = _TABLE_X + _TABLE_W
+            legend_y = self._tab_rects['duel'].centery
+            dot_x = legend_right - legend.get_width() - int(0.012 * _SW)
+            pygame.draw.circle(self.window, _DOT_ONLINE,
+                               (dot_x, legend_y), max(2, _DOT_RADIUS - 1))
+            self.window.blit(legend, legend.get_rect(
+                midleft=(dot_x + int(0.008 * _SW), legend_y)))
 
         # Table header
         col_defs = self._active_col_defs()
@@ -256,9 +387,35 @@ class RankingScreen(MenuScreenMixin, Screen):
         cell_pad = int(0.012 * _SW)
         hdr_text_y = self._hdr_y + (_HEADER_H - self._hdr_font.get_height()) // 2
         for idx, (label, _, _) in enumerate(col_defs):
-            clr = _HDR_ACTIVE_CLR if idx == self._sort_col and idx in sort_keys else settings.SUB_SCREEN_HEADER_CLR
+            is_active_sort = idx == self._sort_col and idx in sort_keys
+            clr = _HDR_ACTIVE_CLR if is_active_sort else settings.SUB_SCREEN_HEADER_CLR
+            arrow_space = int(0.012 * _SW) if is_active_sort else 0
+            max_w = self._hdr_rects[idx].w - 2 * cell_pad - arrow_space
+            label = self._fit_text(self._hdr_font, label, max_w)
             surf = self._hdr_font.render(label, True, clr)
-            self.window.blit(surf, (self._col_x(idx) + cell_pad, hdr_text_y))
+            text_x = self._col_x(idx) + cell_pad
+            self.window.blit(surf, (text_x, hdr_text_y))
+            if is_active_sort:
+                arrow_w = max(4, int(0.006 * _SW))
+                arrow_h = max(3, int(0.006 * _SH))
+                arrow_x = min(
+                    text_x + surf.get_width() + int(0.004 * _SW),
+                    self._hdr_rects[idx].right - cell_pad - arrow_w,
+                )
+                arrow_y = self._hdr_y + _HEADER_H // 2
+                if self._sort_desc:
+                    points = [
+                        (arrow_x, arrow_y - arrow_h // 2),
+                        (arrow_x + arrow_w, arrow_y - arrow_h // 2),
+                        (arrow_x + arrow_w // 2, arrow_y + arrow_h // 2),
+                    ]
+                else:
+                    points = [
+                        (arrow_x + arrow_w // 2, arrow_y - arrow_h // 2),
+                        (arrow_x, arrow_y + arrow_h // 2),
+                        (arrow_x + arrow_w, arrow_y + arrow_h // 2),
+                    ]
+                pygame.draw.polygon(self.window, clr, points)
 
         # Separator
         pygame.draw.line(self.window, settings.SUB_SCREEN_PANEL_BORDER_CLR,
@@ -266,13 +423,36 @@ class RankingScreen(MenuScreenMixin, Screen):
 
         # Rows
         if not self.rankings:
-            hint = self._cell_font.render("No players yet", True, (140, 140, 140))
-            self.window.blit(hint, (_TABLE_X + cell_pad, self._rows_top + int(0.01 * _SH)))
+            self._draw_table_status()
         else:
             self._draw_rows(cell_pad)
 
         self._draw_close_x_button()
         self._draw_menu_overlay()
+
+    def _draw_table_status(self):
+        if self._loading:
+            title = f"Loading {_TAB_LABELS[self._active_tab]} rankings…"
+            detail = 'Fetching the latest standings.'
+        elif self._load_failed:
+            title = 'Rankings unavailable'
+            detail = 'We\'ll retry automatically.'
+        elif self._active_tab == 'kingdom':
+            title = 'No conquerors yet'
+            detail = 'Claim land or attempt a conquest to join the standings.'
+        else:
+            title = 'No ranked players yet'
+            detail = 'Player standings will appear here.'
+
+        center_x = _TABLE_X + _TABLE_W // 2
+        title_surf = self._cell_font.render(title, True, _STATUS_TEXT_CLR)
+        detail_surf = self._status_font.render(detail, True, _STATUS_MUTED_CLR)
+        title_y = self._rows_top + int(0.055 * _SH)
+        self.window.blit(title_surf, title_surf.get_rect(
+            centerx=center_x, y=title_y))
+        self.window.blit(detail_surf, detail_surf.get_rect(
+            centerx=center_x,
+            y=title_y + title_surf.get_height() + int(0.008 * _SH)))
 
     def _draw_close_x_button(self):
         r = self._btn_close_rect
@@ -320,8 +500,17 @@ class RankingScreen(MenuScreenMixin, Screen):
             bdr = settings.LIST_BTN_BORDER_HOVER_CLR if (is_hover or is_self) else settings.LIST_BTN_BORDER_CLR
             pygame.draw.rect(self.window, bdr, rect, settings.LIST_BTN_BORDER_W, border_radius=r)
 
-            txt_clr = settings.LIST_BTN_TEXT_HOVER_CLR if is_hover else settings.LIST_BTN_TEXT_CLR
+            if is_hover:
+                txt_clr = settings.LIST_BTN_TEXT_HOVER_CLR
+            elif is_self:
+                txt_clr = _SELF_TEXT_CLR
+            else:
+                txt_clr = settings.LIST_BTN_TEXT_CLR
             text_y = rect.y + (rect.h - self._cell_font.get_height()) // 2
+
+            player_name = entry.get('username', '—')
+            if is_self:
+                player_name = f'{player_name} (You)'
 
             # W/L display
             if self._active_tab == 'duel':
@@ -329,26 +518,31 @@ class RankingScreen(MenuScreenMixin, Screen):
                 wl_str = f"{wl:.1f}" if entry.get('losses', 0) > 0 else f"{entry.get('wins', 0)}"
                 cells = [
                     str(i + 1),
-                    entry.get('username', '—'),
-                    str(entry.get('gold', 0)),
-                    str(entry.get('total_games', 0)),
-                    str(entry.get('wins', 0)),
-                    str(entry.get('losses', 0)),
+                    player_name,
+                    self._format_count(entry.get('gold', 0)),
+                    self._format_count(entry.get('total_games', 0)),
+                    self._format_count(entry.get('wins', 0)),
+                    self._format_count(entry.get('losses', 0)),
                     wl_str,
                 ]
             else:
                 cells = [
                     str(i + 1),
-                    entry.get('username', '—'),
-                    str(entry.get('lands_owned', 0)),
-                    str(entry.get('total_gold_rate', 0)),
-                    str(entry.get('conquer_attempts', 0)),
-                    str(entry.get('conquer_wins', 0)),
-                    str(entry.get('defence_wins', 0)),
+                    player_name,
+                    self._format_count(entry.get('lands_owned', 0)),
+                    self._format_rate(entry.get('total_gold_rate', 0)),
+                    self._format_count(entry.get('conquer_attempts', 0)),
+                    self._format_count(entry.get('conquer_wins', 0)),
+                    self._format_count(entry.get('defence_wins', 0)),
                 ]
             for idx, text in enumerate(cells):
-                x_off = cell_pad + (int(0.018 * _SW) if idx == 1 else 0)
-                surf = self._cell_font.render(text, True, txt_clr)
+                has_status_dot = idx == 1 and self._active_tab == 'duel'
+                x_off = cell_pad + (int(0.018 * _SW) if has_status_dot else 0)
+                col_w = int(self._active_col_defs()[idx][2] * _TABLE_W)
+                text = self._fit_text(
+                    self._cell_font, text, col_w - x_off - cell_pad)
+                cell_clr = _RANK_COLORS.get(i + 1, txt_clr) if idx == 0 else txt_clr
+                surf = self._cell_font.render(text, True, cell_clr)
                 self.window.blit(surf, (self._col_x(idx) + x_off, text_y))
 
             # Online dot next to player name (duel tab only)
@@ -385,13 +579,13 @@ class RankingScreen(MenuScreenMixin, Screen):
             self._ranking_poller = BackgroundPoller(
                 fetch_rankings,
                 async_get_url=f'{settings.SERVER_URL}/auth/get_rankings',
-                async_transform=lambda resp: resp.json().get('rankings', []) if resp.status_code == 200 else [],
+                async_transform=lambda resp: resp.json().get('rankings', []) if resp.status_code == 200 else None,
             )
         if not hasattr(self, '_kingdom_poller'):
             self._kingdom_poller = BackgroundPoller(
                 fetch_kingdom_rankings,
                 async_get_url=f'{settings.SERVER_URL}/kingdom/rankings',
-                async_transform=lambda resp: resp.json().get('rankings', []) if resp.status_code == 200 else [],
+                async_transform=lambda resp: resp.json().get('rankings', []) if resp.status_code == 200 else None,
             )
         poller = self._kingdom_poller if self._active_tab == 'kingdom' else self._ranking_poller
         now = pygame.time.get_ticks()
@@ -401,20 +595,7 @@ class RankingScreen(MenuScreenMixin, Screen):
                 poller.poll()
         if poller.has_result():
             raw = poller.result
-            if raw is not None:
-                if self._active_tab == 'duel':
-                    for r in raw:
-                        losses = r.get('losses', 0)
-                        wins = r.get('wins', 0)
-                        r['wl_ratio'] = wins / losses if losses > 0 else float(wins)
-                sort_keys = self._active_sort_keys()
-                key_name, desc = sort_keys.get(self._sort_col, ('gold', True))
-                raw.sort(key=lambda r: r.get(key_name, 0), reverse=desc)
-                self.rankings = raw
-                n = len(self.rankings)
-                self._content_h = n * (_ROW_H + _ROW_GAP) - (_ROW_GAP if n else 0)
-                self._max_scroll = max(0, self._content_h - self._viewport_h)
-                self._scroll_y = min(self._scroll_y, self._max_scroll)
+            self._apply_rankings(raw)
 
         # Hover detection
         mx, my = pygame.mouse.get_pos()
@@ -460,20 +641,13 @@ class RankingScreen(MenuScreenMixin, Screen):
                 # Tab click
                 for tab_name, tab_rect in self._tab_rects.items():
                     if tab_rect.collidepoint(event.pos) and tab_name != self._active_tab:
-                        self._active_tab = tab_name
-                        self._sort_col = 2
-                        self._scroll_y = 0
-                        self.rankings = []
-                        self.last_update_time = 0  # force immediate refresh
-                        self._rebuild_hdr_rects()
+                        self._switch_tab(tab_name)
                         break
 
                 # Header click to toggle sort
                 for idx in self._active_sort_keys():
                     if self._hdr_rects[idx].collidepoint(event.pos):
-                        self._sort_col = idx
-                        self._scroll_y = 0
-                        self._refresh()
+                        self._select_sort_column(idx)
                         break
 
                 # Scrollbar thumb drag

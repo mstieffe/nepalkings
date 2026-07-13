@@ -546,6 +546,26 @@ class TestViewportEventGating:
         release = SimpleNamespace(type=pygame.MOUSEBUTTONUP, button=1, pos=(10, 10))
         assert hm.is_drag_release(release) is True
 
+    def test_cancel_drag_clears_pending_drag_release(self):
+        from game.components.hex_map import HexMap
+        from config import settings
+        import pygame
+        window = pygame.display.get_surface()
+        viewport = pygame.Rect(100, 100, 300, 200)
+        hm = HexMap([_make_land(0, 0), _make_land(8, 0)], window,
+                    viewport_rect=viewport)
+        start = viewport.center
+
+        hm.handle_event(SimpleNamespace(
+            type=pygame.MOUSEBUTTONDOWN, button=1, pos=start))
+        hm.handle_event(SimpleNamespace(
+            type=pygame.MOUSEMOTION,
+            pos=(start[0] + settings.HEX_MAP_DRAG_THRESHOLD + 5, start[1])))
+        hm.cancel_drag()
+
+        release = SimpleNamespace(type=pygame.MOUSEBUTTONUP, button=1, pos=(10, 10))
+        assert hm.is_drag_release(release) is False
+
 
 class TestHexMapVisualSemantics:
 

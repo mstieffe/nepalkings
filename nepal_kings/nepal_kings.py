@@ -407,6 +407,11 @@ class Client:
 
     async def run_screen(self, screen):
         scr = self.screens[screen]
+        try:
+            from utils import music
+            music.play_for_screen(screen)
+        except Exception:
+            pass
         if hasattr(scr, 'on_enter'):
             scr.on_enter()
         while self.state.screen == screen:

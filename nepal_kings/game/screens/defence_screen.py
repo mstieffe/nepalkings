@@ -20,6 +20,7 @@ from game.screens.loot_risk_tutorial import (
     open_loot_risk_tutorial,
 )
 from game.core.card_source import CollectionCardSource
+from game.core.game import battle_required_field
 from game.core.figure_buffs import apply_buffs_allies_to_icon_map
 from game.core.kingdom_game_proxy import KingdomGameProxy
 from game.components.cards.card import Card
@@ -941,7 +942,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
                 self._rebuild_figure_objects()
                 self._refresh_collection()
                 self.state.set_msg('Defence saved')
-                sound.play('figure_place')
+                sound.play('defence_set')
                 return True
             problems = data.get('problems') or [data.get('message', 'Could not save defence')]
             self._show_problem_dialogue('Cannot Save Defence', problems)
@@ -2444,13 +2445,24 @@ class DefenceScreen(MenuScreenMixin, Screen):
     def _figure_object(self, figure_id):
         return next((f for f in self._figure_objects if f.id == figure_id), None)
 
-    def _battle_modifier_requires_village(self):
-        if self._config.get('prelude_spell_name') in ('Peasant War', 'Civil War'):
-            return True
+    def _battle_required_field(self):
+        modifiers = []
+        prelude = self._config.get('prelude_spell_name')
+        if prelude:
+            modifiers.append({'type': prelude})
         modifier = self._config.get('battle_modifier') or {}
-        return isinstance(modifier, dict) and modifier.get('type') in ('Peasant War', 'Civil War')
+        if isinstance(modifier, dict):
+            modifiers.append(modifier)
+        elif isinstance(modifier, list):
+            modifiers.extend(modifier)
+        return battle_required_field(modifiers)
+
+    def _battle_modifier_requires_village(self):
+        return self._battle_required_field() == 'village'
 
     def _civil_war_battle_strategy(self):
+        if self._battle_required_field() == 'castle':
+            return False
         if self._config.get('prelude_spell_name') == 'Civil War':
             return True
         modifier = self._config.get('battle_modifier') or {}
@@ -2467,7 +2479,10 @@ class DefenceScreen(MenuScreenMixin, Screen):
             return 'This figure cannot counter-advance because it cannot attack'
         if getattr(fig, 'cannot_defend', False):
             return 'This figure cannot counter-advance because it cannot defend'
-        if self._battle_modifier_requires_village() and getattr(fig.family, 'field', None) != 'village':
+        required_field = self._battle_required_field()
+        if required_field and getattr(fig.family, 'field', None) != required_field:
+            if required_field == 'castle':
+                return 'Royal Decree requires castle battle figures'
             return 'This battle modifier requires village figures'
         return None
 
@@ -2796,11 +2811,11 @@ class DefenceScreen(MenuScreenMixin, Screen):
         moves = self._config.get('battle_moves', [])
 
         prelude = self._config.get('prelude_spell_name')
-        village_only = prelude in ('Peasant War', 'Civil War')
+        required_field = self._battle_required_field()
 
         has_valid_figure = any(
             not f.get('has_deficit', False)
-            and (not village_only or f.get('field') == 'village')
+            and (not required_field or f.get('field') == required_field)
             for f in figures
         )
         has_moves = len(moves) == 3
@@ -2843,7 +2858,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
         figures = self._config.get('figures', [])
         moves = self._config.get('battle_moves', [])
         prelude = self._config.get('prelude_spell_name')
-        village_only = prelude in ('Peasant War', 'Civil War')
+        required_field = self._battle_required_field()
 
         if not figures:
             problems.append('No figures on the field.')
@@ -2851,12 +2866,17 @@ class DefenceScreen(MenuScreenMixin, Screen):
             can_fight = [f for f in figures if not f.get('has_deficit', False)]
             if not can_fight:
                 problems.append('All figures have a resource deficit.')
-            elif village_only:
-                village_fighters = [f for f in can_fight if f.get('field') == 'village']
-                if not village_fighters:
+            elif required_field:
+                field_fighters = [
+                    f for f in can_fight if f.get('field') == required_field
+                ]
+                if not field_fighters:
+                    modifier_name = (
+                        'Royal Decree' if required_field == 'castle' else prelude
+                    )
                     problems.append(
-                        f'{prelude} is selected \u2014 only village figures can fight, '
-                        'but none of your village figures are available.'
+                        f'{modifier_name} is selected \u2014 only {required_field} figures can fight, '
+                        f'but none of your {required_field} figures are available.'
                     )
 
         if len(moves) < 3:

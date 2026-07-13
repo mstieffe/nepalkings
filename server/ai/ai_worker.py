@@ -1257,7 +1257,9 @@ def _conquer_civil_war_second_pick_pending(game, ai_player_id):
     if not game or game.mode != 'conquer':
         return False
     modifiers = game.battle_modifier if isinstance(game.battle_modifier, list) else []
-    if not any(m.get('type') == 'Civil War' for m in modifiers):
+    from game_service.figure_rule_helpers import battle_required_field
+    if (battle_required_field(modifiers) == 'castle'
+            or not any(m.get('type') == 'Civil War' for m in modifiers)):
         return False
     if game.turn_player_id != ai_player_id or not game.advancing_figure_id:
         return False

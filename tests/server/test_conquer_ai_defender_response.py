@@ -306,6 +306,24 @@ def test_ai_defender_skips_civil_war_second_when_no_legal_figure(app, db, monkey
         assert skip_log is not None, "skip_civil_war_second was never called"
 
 
+def test_royal_decree_suppresses_ai_civil_war_second_pick_state():
+    game = SimpleNamespace(
+        mode='conquer',
+        battle_modifier=[
+            {'type': 'Civil War'},
+            {'type': 'Royal Decree'},
+        ],
+        turn_player_id=2,
+        advancing_figure_id=10,
+        advancing_figure_id_2=None,
+        advancing_player_id=1,
+        defending_figure_id=20,
+        defending_figure_id_2=None,
+    )
+
+    assert ai_worker._conquer_civil_war_second_pick_pending(game, 2) is False
+
+
 def test_civil_war_counter_second_ignores_resting_figures(app, db):
     """A resting village figure must not count as an eligible Civil War second.
 

@@ -88,13 +88,20 @@ def _screen_base():
     screen._cosmetic_sort = {key: 'default' for key in screen._cosmetic_scroll}
     screen._cosmetic_filter = {key: 'all' for key in screen._cosmetic_scroll}
     screen._cosmetic_scroll_areas = {}
+    screen._cosmetic_scrollbar_rects = {}
     screen._cosmetics_panel_scroll = 0
     screen._cosmetics_scroll_area = None
     screen._cosmetics_content_h = 0
     screen._content_scroll = 0
     screen._content_scroll_area = None
     screen._content_content_h = 0
+    screen._content_scrollbar_track = None
+    screen._content_scrollbar_thumb = None
     screen._button_clip_rect = None
+    screen._scrollbar_drag_target = None
+    screen._scrollbar_drag_grab_y = 0
+    screen._scrollbar_drag_last_y = 0
+    screen._scrollbar_drag_moved = 0
     screen._rename_dialog = None
     screen._rename_input_rect = None
     screen._rename_confirm_rect = None
@@ -516,7 +523,7 @@ class TestKingdomConfigInteractions:
         assert screen._skills_scroll_area is None
         assert screen._cosmetics_panel_scroll == 0
         assert 'badge' in screen._cosmetic_scroll_areas
-        item_h = max(30, min(38, int(0.038 * settings.SCREEN_HEIGHT)))
+        item_h = KingdomConfigScreen._cosmetic_item_h()
         assert screen._cosmetic_scroll_areas['badge'].h >= item_h * 2
 
         assert KingdomConfigScreen._scroll_cosmetics_panel(screen, -1) is False
@@ -528,6 +535,140 @@ class TestKingdomConfigInteractions:
         for action, _value, rect in screen._buttons:
             if action not in page_actions:
                 assert screen._content_scroll_area.contains(rect)
+
+    def test_cosmetic_wheel_scroll_reaches_last_row(self):
+        """Draw, wheel and drag paths must agree on the row height, or the
+        bottom rows of each cosmetic list become unreachable (regression)."""
+        from config import settings
+        KingdomConfigScreen, screen = _screen_base()
+        screen._kingdom = _kingdom_payload()
+        screen._gold = 5000
+        screen._catalog = {
+            f'badge_{idx}': {
+                'type': 'badge',
+                'name': f'Badge {idx}',
+                'price_gold': idx * 100,
+            }
+            for idx in range(9)
+        }
+
+        rect = pygame.Rect(20, 20, settings.KINGDOM_CONFIG_LEFT_W,
+                           screen._cosmetic_card_h())
+        KingdomConfigScreen._draw_cosmetic_section(
+            screen, rect, 'badge', 'Kingdom Badge')
+
+        item_h = KingdomConfigScreen._cosmetic_item_h()
+        area = screen._cosmetic_scroll_areas['badge']
+        expected_max = 9 * item_h - area.h
+        assert expected_max > 0
+
+        for _ in range(60):
+            KingdomConfigScreen._scroll_cosmetic_section(screen, 'badge', -1)
+        assert screen._cosmetic_scroll['badge'] == expected_max
+
+        # A re-draw must not clamp the wheel-set offset back down.
+        KingdomConfigScreen._draw_cosmetic_section(
+            screen, rect, 'badge', 'Kingdom Badge')
+        assert screen._cosmetic_scroll['badge'] == expected_max
+
+    def test_cosmetic_scrollbar_drag_down_scrolls_down(self):
+        from config import settings
+        KingdomConfigScreen, screen = _screen_base()
+        screen._kingdom = _kingdom_payload()
+        screen._gold = 5000
+        screen._catalog = {
+            f'badge_{idx}': {
+                'type': 'badge',
+                'name': f'Badge {idx}',
+                'price_gold': idx * 100,
+            }
+            for idx in range(10)
+        }
+
+        rect = pygame.Rect(20, 20, settings.KINGDOM_CONFIG_LEFT_W,
+                           screen._cosmetic_card_h())
+        KingdomConfigScreen._draw_cosmetic_section(
+            screen, rect, 'badge', 'Kingdom Badge')
+
+        metrics = screen._cosmetic_scrollbar_rects['badge']
+        thumb = metrics['thumb']
+        track = metrics['track']
+        assert screen._cosmetic_scroll['badge'] == 0
+
+        assert KingdomConfigScreen._begin_scrollbar_drag(screen, thumb.center) is True
+        KingdomConfigScreen._update_scrollbar_drag(
+            screen, (thumb.centerx, min(track.bottom - 1, thumb.centery + 50)))
+
+        assert screen._cosmetic_scroll['badge'] > 0
+        assert KingdomConfigScreen._end_scrollbar_drag(screen) is True
+
+    def test_content_scrollbar_drag_down_scrolls_down(self):
+        KingdomConfigScreen, screen = _screen_base()
+        screen._kingdom = _kingdom_payload()
+        screen._gold = 5000
+        screen._catalog = {}
+        for cosmetic_type in ('badge', 'border', 'surface', 'color', 'sigil'):
+            for idx in range(8):
+                screen._catalog[f'{cosmetic_type}_{idx}'] = {
+                    'type': cosmetic_type,
+                    'name': f'{cosmetic_type.title()} {idx}',
+                    'price_gold': idx * 100,
+                }
+        screen._kingdom['skills'] = {
+            f'skill_{idx}': {
+                'name': f'Skill {idx}',
+                'description': 'Improves the kingdom configuration.',
+                'level': idx % 3,
+                'max_level': 5,
+                'next_cost': 1,
+            }
+            for idx in range(8)
+        }
+
+        KingdomConfigScreen.render(screen)
+        thumb = screen._content_scrollbar_thumb
+        track = screen._content_scrollbar_track
+        assert thumb is not None
+        assert track is not None
+        assert screen._content_scroll == 0
+
+        assert KingdomConfigScreen._begin_scrollbar_drag(screen, thumb.center) is True
+        KingdomConfigScreen._update_scrollbar_drag(
+            screen, (thumb.centerx, min(track.bottom - 1, thumb.centery + 50)))
+
+        assert screen._content_scroll > 0
+        assert KingdomConfigScreen._end_scrollbar_drag(screen) is True
+
+    def test_touch_drag_chains_to_page_scroll_at_list_end(self):
+        """A swipe starting on a cosmetic list keeps scrolling the page once
+        the inner list is exhausted instead of getting stuck."""
+        KingdomConfigScreen, screen = _screen_base()
+        screen._kingdom = _kingdom_payload()
+        screen._gold = 5000
+        screen._catalog = {}
+        for cosmetic_type in ('badge', 'border', 'surface', 'color', 'sigil'):
+            for idx in range(8):
+                screen._catalog[f'{cosmetic_type}_{idx}'] = {
+                    'type': cosmetic_type,
+                    'name': f'{cosmetic_type.title()} {idx}',
+                    'price_gold': idx * 100,
+                }
+
+        KingdomConfigScreen.render(screen)
+        area = screen._cosmetic_scroll_areas['badge']
+        pos = area.center
+
+        assert KingdomConfigScreen._begin_touch_scroll(screen, pos) is True
+        KingdomConfigScreen._update_touch_scroll(
+            screen, (pos[0], pos[1] - 10000))
+
+        item_h = KingdomConfigScreen._cosmetic_item_h()
+        unlocked = set(screen._kingdom.get('unlocked_cosmetics') or [])
+        items = screen._catalog_items('badge', unlocked=unlocked)
+        inner_max = max(0, len(items) * item_h - area.h)
+        assert screen._cosmetic_scroll['badge'] == inner_max
+        assert screen._content_scroll > 0
+        assert KingdomConfigScreen._end_touch_scroll(screen) is True
 
     def test_iphone_se_cosmetics_and_shield_controls_do_not_overlap(self):
         _run_mobile_geometry_check("""

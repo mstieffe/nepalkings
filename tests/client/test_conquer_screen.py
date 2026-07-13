@@ -194,6 +194,37 @@ class TestBattleReadiness:
         screen = self._screen_with_config(figs, moves)
         assert screen._is_battle_ready() is True
 
+    def test_royal_decree_requires_advanceable_castle_figure(self):
+        figures = [
+            {
+                'id': 1,
+                'has_deficit': False,
+                'cannot_attack': False,
+                'field': 'village',
+            },
+        ]
+        moves = [
+            {'id': 1, 'round_index': 0},
+            {'id': 2, 'round_index': 1},
+            {'id': 3, 'round_index': 2},
+        ]
+        screen = self._screen_with_config(figures, moves)
+        screen._config['prelude_spell_name'] = 'Royal Decree'
+
+        assert screen._is_battle_ready() is False
+        assert any(
+            'castle figure' in problem.lower()
+            for problem in screen._get_battle_problems()
+        )
+
+        screen._config['figures'].append({
+            'id': 2,
+            'has_deficit': False,
+            'cannot_attack': False,
+            'field': 'castle',
+        })
+        assert screen._is_battle_ready() is True
+
     def test_ready_with_deficit_and_non_deficit_figures(self):
         figs = [
             {'id': 1, 'has_deficit': True, 'field': 'castle'},

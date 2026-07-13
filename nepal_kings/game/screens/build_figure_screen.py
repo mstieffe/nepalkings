@@ -12,6 +12,7 @@ from game.components.cards.card import Card
 from game.components.buttons.confirm_button import ConfirmButton
 from game.components.figures.figure_db_service import FigureDbService
 from game.core.card_source import CollectionCardSource, GameCardSource
+from game.core.game import battle_required_field
 from utils.utils import ColorTogglePill
 from utils import collection_service, http_compat as requests
 from game.components.castle_cap_indicator import (
@@ -324,16 +325,17 @@ class BuildFigureScreen(SubScreen):
         # Check battle modifiers
         modifiers = game.battle_modifier if isinstance(game.battle_modifier, list) else []
         modifier_types = [m.get('type') for m in modifiers]
+        required_field = battle_required_field(modifiers)
 
         # Blitzkrieg: defender cannot counter-advance
         if 'Blitzkrieg' in modifier_types and is_counter:
             return False, True, 'blitzkrieg'
 
-        # Peasant War / Civil War: only village figures can advance
-        if 'Peasant War' in modifier_types or 'Civil War' in modifier_types:
+        if required_field:
             fig_field = getattr(figure.family, 'field', None) if hasattr(figure, 'family') else None
-            if fig_field != 'village':
-                return False, is_counter, 'village_only'
+            if fig_field != required_field:
+                reason = 'royal_decree' if required_field == 'castle' else 'village_only'
+                return False, is_counter, reason
 
         # cannot_attack check
         if getattr(figure, 'cannot_attack', False):

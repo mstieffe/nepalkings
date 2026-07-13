@@ -1586,6 +1586,7 @@ def _compute_user_sigil_stats(user_id):
         'win_battles': int(win_battles),
         'win_conquer_battles': int(win_conquer),
         'owns_all_suits': len(owned_suits) >= 4,
+        'owned_suits_count': len(owned_suits),
         'reach_max_tier': has_max_tier,
     }
 
@@ -2210,9 +2211,22 @@ def check_defence_incomplete(land_id, user_id):
     if not figures:
         return True
 
-    # Check if at least one figure is not in deficit
+    # Check if at least one figure can participate in the configured field
+    # restriction. Royal Decree needs a castle even when the strategy is a
+    # counter spell rather than a preselected battle figure.
     deficit_map = {fig.id: check_land_config_deficit(fig, figures) for fig in figures}
-    has_valid_figure = any(not deficit_map.get(fig.id, False) for fig in figures)
+    from game_service.figure_rule_helpers import (
+        battle_required_field,
+        config_strategy_modifiers,
+        figure_can_counter_advance,
+    )
+    strategy_modifiers = config_strategy_modifiers(cfg)
+    required_field = battle_required_field(strategy_modifiers)
+    has_valid_figure = any(
+        not deficit_map.get(fig.id, False)
+        and (not required_field or fig.field == required_field)
+        for fig in figures
+    )
     if not has_valid_figure:
         return True
 
@@ -2234,12 +2248,6 @@ def check_defence_incomplete(land_id, user_id):
         battle_fig = figures_by_id.get(cfg.battle_figure_id)
         if not battle_fig:
             return True
-        from game_service.figure_rule_helpers import (
-            battle_required_field,
-            config_strategy_modifiers,
-            figure_can_counter_advance,
-        )
-        required_field = battle_required_field(config_strategy_modifiers(cfg))
         if not figure_can_counter_advance(
             battle_fig,
             required_field=required_field,
@@ -2249,7 +2257,7 @@ def check_defence_incomplete(land_id, user_id):
 
         is_civil_war = required_field != 'castle' and any(
             mod.get('type') == 'Civil War'
-            for mod in config_strategy_modifiers(cfg)
+            for mod in strategy_modifiers
             if isinstance(mod, dict)
         )
         if is_civil_war:

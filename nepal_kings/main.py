@@ -388,7 +388,9 @@ def main():
                     or '--settings' in sys.argv or '-s' in sys.argv)
 
     # Sound preference (reads ~/.nepalkings/resolution.json)
+    from utils import music as _music
     from utils import sound as _sound
+    _music.init()
     _sound.init()
 
     saved = _load_saved()
@@ -516,7 +518,9 @@ if __name__ == '__main__':
         _haptics.init()
 
         # ── Sound effects ──────────────────────────────────────────
+        from utils import music as _music
         from utils import sound as _sound
+        _music.init()
         _sound.init()
 
         from nepal_kings import Client

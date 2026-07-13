@@ -26,6 +26,7 @@ _CARDS_PER_PACK = 3
 _REVEAL_ALL_STAGGER_MS = 95
 _UNCOMMON_CELEBRATION_MS = 760
 _RARE_CELEBRATION_MS = 1120
+_MAHARAJA_CELEBRATION_MS = 1480
 
 # Close / nav buttons. On mobile they are widened and given a touch-friendly
 # height floor so the labels stay readable and tappable after CSS downscaling.
@@ -72,6 +73,10 @@ def _tier_glow_image(tier, base_glow):
 
 def _card_tier(card, pack_type='main'):
     """Return the booster tier for a drawn card, falling back to rank inference."""
+    rank = card.get('rank') if isinstance(card, dict) else None
+    if rank == settings.RANK_MAHARAJA:
+        return settings.COLLECTION_MAHARAJA_TIER
+
     try:
         tier = int(card.get('tier', 0))
         if tier in settings.COLLECTION_TIER_LABELS:
@@ -79,7 +84,6 @@ def _card_tier(card, pack_type='main'):
     except (TypeError, ValueError, AttributeError):
         pass
 
-    rank = card.get('rank') if isinstance(card, dict) else None
     if pack_type == 'side':
         return settings.COLLECTION_SIDE_RANK_TO_TIER.get(rank, 1)
     if pack_type == 'main':
@@ -94,6 +98,10 @@ def _impact_badge_label(card):
     if not isinstance(card, dict) or '_impact_owned_after' not in card:
         return ''
     return 'NEW' if card.get('_impact_new_type') else ''
+
+
+def _is_maharaja_tier(tier):
+    return tier == settings.COLLECTION_MAHARAJA_TIER
 
 
 class BoosterRevealOverlay:
@@ -163,9 +171,11 @@ class BoosterRevealOverlay:
         glow_path = 'img/glow/rect/'
         self._glow_base = _load_scaled_image(
             glow_path + 'white.png', (self._glow_w, self._glow_h))
+        glow_tiers = set(settings.COLLECTION_TIER_LABELS)
+        glow_tiers.update(settings.COLLECTION_TIER_GLOW_TINTS)
         self._tier_glows = {
             tier: _tier_glow_image(tier, self._glow_base)
-            for tier in settings.COLLECTION_TIER_LABELS
+            for tier in sorted(glow_tiers)
         }
 
         # Close button (appears when all revealed)
@@ -392,7 +402,10 @@ class BoosterRevealOverlay:
 
     def _draw_revealed_card(self, i, slot, hovered):
         tier = self._tiers[i]
-        self._draw_tier_glow(slot, tier, pulse=(tier == 3))
+        self._draw_tier_glow(
+            slot, tier,
+            pulse=(tier == 3 or _is_maharaja_tier(tier)),
+        )
 
         if hovered:
             img = self._front_imgs_big[i]
@@ -437,6 +450,8 @@ class BoosterRevealOverlay:
 
     @staticmethod
     def _celebration_duration_for_tier(tier):
+        if _is_maharaja_tier(tier):
+            return _MAHARAJA_CELEBRATION_MS
         if tier == 3:
             return _RARE_CELEBRATION_MS
         if tier == 2:
@@ -463,18 +478,24 @@ class BoosterRevealOverlay:
         if progress is None:
             return
         color = settings.COLLECTION_TIER_COLORS.get(tier, (255, 220, 90))
-        strength = 1.0 if tier == 3 else 0.58
+        strength = (
+            1.35 if _is_maharaja_tier(tier)
+            else 1.0 if tier == 3
+            else 0.58
+        )
         self._draw_celebration_rings(slot, color, tier, progress, strength)
         self._draw_celebration_sparkles(i, slot, color, tier, progress, strength)
 
     def _draw_celebration_rings(self, slot, color, tier, progress, strength):
-        ring_count = 2 if tier == 3 else 1
+        maharaja = _is_maharaja_tier(tier)
+        ring_count = 3 if maharaja else 2 if tier == 3 else 1
         for ring_idx in range(ring_count):
             local_t = max(0.0, min(1.0, progress * 1.2 - ring_idx * 0.18))
             if local_t <= 0.0:
                 continue
             pulse = math.sin(math.pi * local_t)
-            alpha = int((120 if tier == 3 else 82) * strength * (1.0 - local_t) * (0.65 + 0.35 * pulse))
+            base_alpha = 148 if maharaja else 120 if tier == 3 else 82
+            alpha = int(base_alpha * strength * (1.0 - local_t) * (0.65 + 0.35 * pulse))
             if alpha <= 0:
                 continue
             inflate_x = int(slot.w * (0.28 + 0.55 * local_t + ring_idx * 0.16))
@@ -485,27 +506,29 @@ class BoosterRevealOverlay:
                 surf,
                 (*color, alpha),
                 surf.get_rect().inflate(-2, -2),
-                max(1, 2 if tier == 3 else 1),
+                max(1, 3 if maharaja else 2 if tier == 3 else 1),
             )
             self.window.blit(surf, ring_rect.topleft)
 
     def _draw_celebration_sparkles(self, i, slot, color, tier, progress, strength):
-        count = 10 if tier == 3 else 6
+        maharaja = _is_maharaja_tier(tier)
+        count = 16 if maharaja else 10 if tier == 3 else 6
         now = pygame.time.get_ticks()
         orbit = (now % 1200) / 1200.0
         fade = max(0.0, 1.0 - progress)
         for k in range(count):
             angle = (2.0 * math.pi * (k / count) + i * 0.41
-                     + orbit * (1.35 if tier == 3 else 0.62))
+                     + orbit * (1.75 if maharaja else 1.35 if tier == 3 else 0.62))
             wobble = 0.5 + 0.5 * math.sin((progress * 6.0 + k) * math.pi)
-            alpha = int((160 if tier == 3 else 105) * strength * fade * (0.45 + 0.55 * wobble))
+            base_alpha = 190 if maharaja else 160 if tier == 3 else 105
+            alpha = int(base_alpha * strength * fade * (0.45 + 0.55 * wobble))
             if alpha <= 0:
                 continue
             rx = slot.w * (0.74 + 0.20 * math.sin(k * 1.7 + progress * math.pi))
             ry = slot.h * (0.62 + 0.14 * math.cos(k * 1.3 + progress * math.pi))
             x = int(slot.centerx + math.cos(angle) * rx)
             y = int(slot.centery + math.sin(angle) * ry)
-            size = max(1, int((3 if tier == 3 else 2) * (0.7 + wobble)))
+            size = max(1, int((4 if maharaja else 3 if tier == 3 else 2) * (0.7 + wobble)))
             sparkle_rect = pygame.Rect(x - size * 2, y - size * 2, size * 4, size * 4)
             surf = pygame.Surface(sparkle_rect.size, pygame.SRCALPHA)
             centre = surf.get_rect().center
@@ -515,8 +538,12 @@ class BoosterRevealOverlay:
             pygame.draw.line(surf, (*color, alpha),
                              (centre[0], centre[1] - size),
                              (centre[0], centre[1] + size), 1)
-            if tier == 3:
+            if tier == 3 or maharaja:
                 pygame.draw.circle(surf, (*color, min(255, alpha + 35)), centre, 1)
+            if maharaja:
+                rim = settings.COLLECTION_MAHARAJA_RIM_CLR
+                pygame.draw.circle(surf, (*rim, min(255, alpha + 18)),
+                                   centre, max(1, size // 2), 1)
             self.window.blit(surf, sparkle_rect.topleft)
 
     def _draw_card_labels(self, i, slot):
@@ -534,7 +561,11 @@ class BoosterRevealOverlay:
             now = pygame.time.get_ticks()
             pulse_ms = max(1, settings.COLLECTION_REVEAL_RARE_PULSE_MS)
             phase = (now % pulse_ms) / pulse_ms
-            scale = 1.0 + (0.14 if tier == 3 else 0.08) * (1.0 - abs(0.5 - phase) * 2.0)
+            scale = 1.0 + (
+                0.20 if _is_maharaja_tier(tier)
+                else 0.14 if tier == 3
+                else 0.08
+            ) * (1.0 - abs(0.5 - phase) * 2.0)
             if abs(scale - 1.0) > 0.01:
                 gw = max(1, int(glow.get_width() * scale))
                 gh = max(1, int(glow.get_height() * scale))
@@ -549,7 +580,12 @@ class BoosterRevealOverlay:
         hard edge.
         """
         color = settings.COLLECTION_TIER_COLORS.get(tier, (210, 210, 210))
-        peak_alpha = 80 if tier == 3 else 62 if tier == 2 else 52
+        peak_alpha = (
+            112 if _is_maharaja_tier(tier)
+            else 80 if tier == 3
+            else 62 if tier == 2
+            else 52
+        )
         halo_rect = slot.inflate(int(slot.w * 1.2), int(slot.h * 0.75))
         halo = pygame.Surface((halo_rect.w, halo_rect.h), pygame.SRCALPHA)
         layers = 8
@@ -612,7 +648,11 @@ class BoosterRevealOverlay:
                 self._reveal_started_at[i] = now + reveal_index * _REVEAL_ALL_STAGGER_MS
                 reveal_index += 1
             from utils import sound
-            sound.play('booster_reveal')
+            rare_hidden = any(
+                state == 'revealing' and self._tiers[i] >= 3
+                for i, state in enumerate(self._states)
+            )
+            sound.play('rare_card_reveal' if rare_hidden else 'booster_reveal')
             return False
 
         if self.all_revealed:
@@ -626,7 +666,8 @@ class BoosterRevealOverlay:
                 self._states[i] = 'revealing'
                 self._reveal_started_at[i] = pygame.time.get_ticks()
                 from utils import sound
-                sound.play('booster_reveal')
+                sound.play('rare_card_reveal' if self._tiers[i] >= 3
+                           else 'booster_reveal')
                 break
 
         return False

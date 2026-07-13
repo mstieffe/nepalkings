@@ -1,10 +1,8 @@
 # Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
 # See LICENSE file in the project root for full license information.
-"""Unit tests for the RankingScreen toggle between Duel and Kingdom tabs."""
-import pytest
+"""Unit tests for the RankingScreen toggle between Duel and Conquer tabs."""
 from unittest.mock import patch, MagicMock
 import pygame
-from pygame.locals import MOUSEBUTTONDOWN
 
 
 def _make_state():
@@ -79,10 +77,66 @@ class TestRankingToggle:
     def test_tab_switch_resets_sort_col(self):
         screen = _make_screen()
         screen._sort_col = 5
-        # Simulate switching to kingdom
-        screen._active_tab = 'kingdom'
-        screen._sort_col = 2  # reset as the code does
+        screen._sort_desc = False
+
+        screen._switch_tab('kingdom')
+
+        assert screen._active_tab == 'kingdom'
         assert screen._sort_col == 2
+        assert screen._sort_desc is True
+
+    def test_tab_switch_uses_cached_rows_without_empty_flash(self):
+        screen = _make_screen()
+        cached = [{'username': 'builder', 'lands_owned': 3}]
+        screen._rankings_by_tab['kingdom'] = cached
+        screen._loaded_tabs.add('kingdom')
+
+        screen._switch_tab('kingdom')
+
+        assert screen.rankings == cached
+        assert screen._loading is False
+
+    def test_ai_rows_are_filtered_from_current_and_legacy_payloads(self):
+        screen = _make_screen()
+        screen._apply_rankings([
+            {'username': 'human', 'gold': 10, 'wins': 1, 'losses': 1},
+            {'username': 'bot', 'gold': 999, 'wins': 8, 'losses': 0,
+             'is_ai': True},
+            {'username': '[AI] Strategos', 'gold': 999, 'wins': 8,
+             'losses': 0},
+            {'username': '{AI} Strategos', 'gold': 999, 'wins': 8,
+             'losses': 0},
+        ])
+
+        assert [row['username'] for row in screen.rankings] == ['human']
+
+    def test_sort_header_toggles_direction_without_refetching(self):
+        screen = _make_screen()
+        screen._apply_rankings([
+            {'username': 'rich', 'gold': 20, 'wins': 0, 'losses': 0},
+            {'username': 'poor', 'gold': 5, 'wins': 0, 'losses': 0},
+        ])
+        assert [row['username'] for row in screen.rankings] == ['rich', 'poor']
+
+        with patch('game.screens.ranking_screen.fetch_rankings') as fetch:
+            screen._select_sort_column(2)
+
+        fetch.assert_not_called()
+        assert screen._sort_desc is False
+        assert [row['username'] for row in screen.rankings] == ['poor', 'rich']
+
+    def test_conquer_tab_uses_player_facing_label(self):
+        from game.screens.ranking_screen import _TAB_LABELS
+
+        assert _TAB_LABELS['kingdom'] == 'Conquer'
+
+    def test_long_cell_text_is_ellipsized(self):
+        screen = _make_screen()
+
+        fitted = screen._fit_text(screen._cell_font, 'A very long player name', 30)
+
+        assert fitted.endswith('…')
+        assert screen._cell_font.size(fitted)[0] <= 30
 
     def test_kingdom_cells_use_correct_keys(self):
         """Verify kingdom rankings data keys match expected fields."""

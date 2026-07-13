@@ -245,7 +245,7 @@ class SettingsScreen(MenuScreenMixin, Screen):
 
     def _toggle_specs(self):
         """Return the list of toggle rows to draw: (key, label, value, enabled, hint)."""
-        from utils import sound
+        from utils import music, sound
         ud = getattr(self.state, 'user_dict', None) or {}
         has_email = bool(ud.get('has_email'))
         notify_on = bool(ud.get('notify_emails_enabled', True))
@@ -258,6 +258,8 @@ class SettingsScreen(MenuScreenMixin, Screen):
         return [
             ('sound', 'Sound effects', sound.is_enabled(), True,
              'Card, battle, and interface sounds.'),
+            ('music', 'Background music', music.is_enabled(), True,
+             'Low-volume themes for menus, kingdoms, and battles.'),
             ('notify_emails', 'Email notifications', notify_on,
              bool(ud) and has_email, email_hint),
         ]
@@ -265,6 +267,7 @@ class SettingsScreen(MenuScreenMixin, Screen):
     def _draw_toggle_rows(self, y, mx, my):
         """Draw all toggle rows starting at y; returns the y below them."""
         self._toggle_rects = {}
+        compact = len(self._choices) >= 9
         sec_surf = self._section_font.render('Preferences', True, _SECTION_CLR)
         self.window.blit(sec_surf, (_BOX_X + int(0.04 * _SW), y))
         y += sec_surf.get_height() + int(0.008 * _SH)
@@ -272,7 +275,8 @@ class SettingsScreen(MenuScreenMixin, Screen):
         row_x = _BOX_X + (_BOX_W - _RES_BTN_W) // 2
         pill_w = int(0.055 * _SW)
         for key, label, value, enabled, hint in self._toggle_specs():
-            row = pygame.Rect(row_x, y, _RES_BTN_W, _RES_BTN_H)
+            row_h = int(0.030 * _SH) if compact else _RES_BTN_H
+            row = pygame.Rect(row_x, y, _RES_BTN_W, row_h)
             hover = enabled and row.collidepoint(mx, my)
             bg = settings.LIST_BTN_BG_HOVER_CLR if hover else settings.LIST_BTN_BG_CLR
             bdr = (settings.LIST_BTN_BORDER_HOVER_CLR if hover
@@ -305,11 +309,12 @@ class SettingsScreen(MenuScreenMixin, Screen):
                                     pill.y + (pill.h - ptxt.get_height()) // 2))
             if enabled:
                 self._toggle_rects[key] = row
-            y += row.h + int(0.004 * _SH)
+            y += row.h + int((0.002 if compact else 0.004) * _SH)
 
-            hint_surf = self._hint_font.render(hint, True, _HINT_CLR)
-            self.window.blit(hint_surf, (row.x + int(0.015 * _SW), y))
-            y += hint_surf.get_height() + int(0.008 * _SH)
+            if not compact:
+                hint_surf = self._hint_font.render(hint, True, _HINT_CLR)
+                self.window.blit(hint_surf, (row.x + int(0.015 * _SW), y))
+                y += hint_surf.get_height() + int(0.008 * _SH)
         return y
 
     def _handle_toggle_click(self, pos):
@@ -321,6 +326,9 @@ class SettingsScreen(MenuScreenMixin, Screen):
                 sound.set_enabled(not sound.is_enabled())
                 if sound.is_enabled():
                     sound.play('ui_click')
+            elif key == 'music':
+                from utils import music
+                music.set_enabled(not music.is_enabled())
             elif key == 'notify_emails':
                 ud = self.state.user_dict or {}
                 new_value = not bool(ud.get('notify_emails_enabled', True))

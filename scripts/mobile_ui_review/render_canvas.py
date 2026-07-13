@@ -69,6 +69,8 @@ BOOSTER_REVEAL_ALIASES = {
 COLLECTION_SCREEN_ALIASES = {
     "collection": "default",
     "collection_profile": "profile",
+    "collection_maharaja_craft": "maharaja_craft",
+    "collection_maharaja_craft_ready": "maharaja_craft_ready",
     "collection_locked": "locked",
     "collection_loading": "loading",
     "collection_error": "error",
@@ -1074,6 +1076,15 @@ def populate_kingdom_config(screen, section: str) -> None:
         "kingdoms": [kingdom],
         "rename_price_gold": 150,
         "vault_default_cap": 50,
+        "sigil_stats": {
+            "max_kingdom_level": 7,
+            "conquer_lands": 6,
+            "win_battles": 14,
+            "win_conquer_battles": 4,
+            "owns_all_suits": False,
+            "owned_suits_count": 3,
+            "reach_max_tier": False,
+        },
     }
     screen._catalog = screen._data["catalog"]
     screen._kingdom = kingdom
@@ -1205,6 +1216,15 @@ def prepare_screen(client, screen_name: str):
         variant = COLLECTION_SCREEN_ALIASES[screen_name]
         if variant == "profile":
             screen._open_profile_dialogue("Hearts", "A")
+        elif variant == "maharaja_craft":
+            screen._open_craft_dialogue("Hearts")
+        elif variant == "maharaja_craft_ready":
+            from config import settings
+            for rank in settings.MAHARAJA_CRAFT_RANKS:
+                screen._cards[("Hearts", rank)] = max(
+                    1, screen._cards.get(("Hearts", rank), 0))
+                screen._locked[("Hearts", rank)] = 0
+            screen._open_craft_dialogue("Hearts")
         elif variant == "locked":
             screen._show_locked_cards = True
         elif variant in {"loading", "error"}:

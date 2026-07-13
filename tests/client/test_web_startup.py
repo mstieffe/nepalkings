@@ -173,3 +173,14 @@ def test_web_loader_requires_python_ready_and_canvas_ready():
     index_html = (repo_root / 'nepal_kings/web/index.html').read_text()
 
     assert 'if (pyReady && canvasUp) done = true;' in index_html
+
+
+def test_web_audio_gate_requires_real_user_gesture():
+    repo_root = Path(__file__).resolve().parents[2]
+    index_html = (repo_root / 'nepal_kings/web/index.html').read_text()
+
+    assert 'ume_block : 1' in index_html
+    assert 'window.nk_prepare_audio_gate' in index_html
+    assert "new Audio(cdn + 'empty.ogg')" in index_html
+    assert 'while not platform.window.MM.UME:' in index_html
+    assert "document.getElementById('canvas').click()" not in index_html

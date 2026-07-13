@@ -379,6 +379,27 @@ class TestCollectionSettings:
         common = COLLECTION_TIER_COLORS[1]
         assert common[0] == common[1] == common[2]
 
+    def test_maharaja_palette_sits_above_rare_gold(self):
+        from config.collection_settings import (
+            COLLECTION_MAHARAJA_BORDER_CLR,
+            COLLECTION_MAHARAJA_GLOW_CLR,
+            COLLECTION_MAHARAJA_TIER,
+            COLLECTION_TIER_BORDER_COLORS,
+            COLLECTION_TIER_COLORS,
+            COLLECTION_TIER_GLOW_TINTS,
+            COLLECTION_TIER_LABELS,
+        )
+        rare_tier = 3
+
+        assert COLLECTION_MAHARAJA_TIER > max(COLLECTION_TIER_LABELS)
+        assert COLLECTION_MAHARAJA_BORDER_CLR != COLLECTION_TIER_BORDER_COLORS[rare_tier][:3]
+        assert COLLECTION_MAHARAJA_GLOW_CLR != COLLECTION_TIER_COLORS[rare_tier]
+        assert COLLECTION_MAHARAJA_GLOW_CLR[2] > 240
+        assert COLLECTION_MAHARAJA_GLOW_CLR[1] < COLLECTION_MAHARAJA_GLOW_CLR[0]
+        assert COLLECTION_MAHARAJA_GLOW_CLR[1] < COLLECTION_MAHARAJA_GLOW_CLR[2]
+        assert (COLLECTION_TIER_GLOW_TINTS[COLLECTION_MAHARAJA_TIER]
+                != COLLECTION_TIER_GLOW_TINTS[rare_tier])
+
     def test_pack_preview_metadata_has_no_odds_or_contents(self):
         from config.collection_settings import COLLECTION_PACK_PREVIEWS
         assert set(COLLECTION_PACK_PREVIEWS['main']) == {'title'}
@@ -544,6 +565,31 @@ class TestBoosterRevealLayout:
             overlay._draw_hidden_card(i, slot, hovered=(i == 1))
 
         assert calls == [(1, False), (2, True), (3, False)]
+
+    def test_maharaja_reveal_uses_premium_tier_even_if_marked_rare(self):
+        import pygame
+        from config import settings
+        from game.components.booster_reveal import BoosterRevealOverlay
+
+        window = pygame.display.get_surface() or pygame.display.set_mode(
+            (settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+        overlay = BoosterRevealOverlay(window, [
+            {'suit': 'Hearts', 'rank': 'MK', 'value': 4, 'tier': 3},
+        ], title='Hearts Maharaja Crafted!')
+
+        assert overlay._tiers == [settings.COLLECTION_MAHARAJA_TIER]
+        assert settings.COLLECTION_MAHARAJA_TIER in overlay._tier_glows
+
+        calls = []
+        overlay._draw_tier_glow = lambda _slot, tier, pulse=False: calls.append(
+            (tier, pulse))
+        overlay._draw_hidden_card(0, overlay._slots[0], hovered=False)
+
+        assert calls == [(settings.COLLECTION_MAHARAJA_TIER, False)]
+
+        calls.clear()
+        overlay._draw_revealed_card(0, overlay._slots[0], hovered=False)
+        assert calls == [(settings.COLLECTION_MAHARAJA_TIER, True)]
 
     def test_reveal_close_button_does_not_overlap_card_labels(self):
         import pygame
@@ -898,6 +944,91 @@ def test_maharaja_craft_button_disabled_when_not_ready():
     craft_btn = next(b for b in screen._craft_dialogue.buttons
                      if b.text.lower() == 'craft')
     assert craft_btn.disabled is True
+    assert screen._craft_ready == 12
+    assert screen._craft_total == 13
+    assert screen._craft_missing == ['K']
+    assert screen._craft_dialogue.message_after_images == '\n\n\n'
+
+
+def test_maharaja_craft_dialogue_promotes_single_figure_use(monkeypatch):
+    import pygame
+    from config import settings
+    from game.screens.collection_screen import CollectionScreen
+    from utils import card_uses
+
+    window = pygame.display.get_surface() or pygame.display.set_mode(
+        (settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+    icon = pygame.Surface((48, 48), pygame.SRCALPHA)
+    screen = object.__new__(CollectionScreen)
+    screen.window = window
+    screen._cards = {('Hearts', r): 1 for r in settings.RANKS}
+    screen._locked = {}
+    screen._card_imgs = {
+        ('Hearts', 'MK'): SimpleNamespace(
+            front_img=pygame.Surface((60, 90), pygame.SRCALPHA))
+    }
+    screen._profile_dialogue = None
+    screen._profile_card = None
+    screen._profile_pinned_tooltip = None
+
+    monkeypatch.setattr(card_uses, 'get_card_uses', lambda _suit, _rank: {
+        'figures': [('Djungle Maharaja', icon, 'Primordial offensive king.')],
+        'spells': [],
+        'battle_moves': [],
+    })
+
+    screen._open_craft_dialogue('Hearts')
+
+    dialogue = screen._craft_dialogue
+    assert dialogue.title == 'Craft Hearts Maharaja'
+    assert 'Legendary Castle Card' in dialogue.message
+    assert 'Djungle Maharaja' in dialogue.message
+    assert dialogue._lead_items
+    assert dialogue.message_after_images == '\n\n\n'
+    assert screen._craft_ready == 13
+    assert screen._craft_total == 13
+    assert screen._craft_missing == []
+    assert len(dialogue.image_groups) == 1
+
+    group = dialogue.image_groups[0]
+    assert group['title'] == 'Builds: 1 figure'
+    assert group['note_prefix'] == 'Djungle Maharaja'
+    assert group['feature_item'] is True
+    assert group['badge_icon'] is None
+    assert 'Power 16 castle' in group['description']
+    assert 'Supports 3 village slots and 2 military slots' in group['description']
+    assert 'villagers +' not in group['description']
+    assert 'warriors' not in group['description']
+    assert 'checkmate' not in group['description'].lower()
+
+
+def test_maharaja_craft_progress_overlay_draws_missing_card_thumbnails():
+    import pygame
+    from config import settings
+    from game.screens.collection_screen import CollectionScreen
+    from game.components.cards.card_img import CardImg
+
+    window = pygame.Surface((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT), pygame.SRCALPHA)
+    screen = object.__new__(CollectionScreen)
+    screen.window = window
+    screen._cards = {('Spades', r): 1 for r in settings.RANKS}
+    screen._locked = {('Spades', 'K'): 1}
+    screen._card_imgs = {
+        ('Spades', rank): CardImg(window, 'Spades', rank, 60, 90)
+        for rank in settings.RANKS + [settings.RANK_MAHARAJA]
+    }
+    screen._profile_dialogue = None
+    screen._profile_card = None
+    screen._profile_pinned_tooltip = None
+
+    screen._open_craft_dialogue('Spades')
+    area = screen._craft_progress_area(screen._craft_dialogue)
+    before = pygame.image.tobytes(window.subsurface(area).copy(), 'RGBA')
+
+    screen._draw_craft_progress_overlay()
+
+    after = pygame.image.tobytes(window.subsurface(area).copy(), 'RGBA')
+    assert before != after
 
 
 def test_open_booster_confirmation_offers_open_all_for_multiple_packs():

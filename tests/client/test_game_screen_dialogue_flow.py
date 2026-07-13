@@ -1265,6 +1265,65 @@ class TestGameScreenDialogueFlow:
 
         assert GameScreen._check_any_defender_selectable(game_screen) is True
 
+    def test_royal_decree_overrides_civil_war_in_selection_prechecks(self):
+        GameScreen, game_screen, _notifications = _make_conquer_game_screen()
+
+        own_village = SimpleNamespace(
+            id=101,
+            player_id=10,
+            family=SimpleNamespace(field='village'),
+            cannot_attack=False,
+        )
+        own_castle = SimpleNamespace(
+            id=102,
+            player_id=10,
+            family=SimpleNamespace(field='castle'),
+            cannot_attack=False,
+        )
+        opponent_village = SimpleNamespace(
+            id=201,
+            player_id=20,
+            family=SimpleNamespace(field='village'),
+            cannot_defend=False,
+            cannot_be_targeted=False,
+            checkmate=False,
+        )
+        opponent_castle = SimpleNamespace(
+            id=202,
+            player_id=20,
+            family=SimpleNamespace(field='castle'),
+            cannot_defend=False,
+            cannot_be_targeted=False,
+            checkmate=True,
+        )
+        field = SimpleNamespace(
+            categorized_figures={
+                'self': {'village': [own_village], 'castle': []},
+                'opponent': {
+                    'village': [opponent_village],
+                    'castle': [opponent_castle],
+                },
+            },
+            figures=[own_village, opponent_village, opponent_castle],
+            icon_cache={},
+        )
+        game_screen.subscreens = {'field': field}
+        game_screen.state.game.battle_modifier = [
+            {'type': 'Royal Decree'},
+            {'type': 'Civil War'},
+        ]
+        game_screen.state.game.advancing_figure_id = None
+        game_screen.state.game.advancing_player_id = None
+
+        # The old precheck saw Civil War and opened a village selection that
+        # the server rejected under Royal Decree, stranding the game.
+        assert GameScreen._check_any_figure_can_advance(game_screen) is False
+        assert GameScreen._check_any_defender_selectable(game_screen) is True
+
+        field.categorized_figures['self']['castle'] = [own_castle]
+        field.figures.append(own_castle)
+        assert GameScreen._check_any_figure_can_advance(game_screen) is True
+
 
 class TestGameScreenVictoryReviewRouting:
     """The game_screen ack handlers must route to Victory Review the same

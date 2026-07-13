@@ -62,6 +62,12 @@ def _has_own_war_modifier(game_dict, ai_player):
     if ai_id is None:
         return False
 
+    # Royal Decree replaces the village-war response policy with the normal
+    # castle-only pool; do not force a Civil War/Peasant War branch merely
+    # because its modifier entry is still present in the stack.
+    if _battle_required_field_from_dict(game_dict) == 'castle':
+        return False
+
     modifiers = game_dict.get('battle_modifier') if isinstance(game_dict.get('battle_modifier'), list) else []
     for mod in modifiers:
         if mod.get('type') not in ('Civil War', 'Peasant War'):
