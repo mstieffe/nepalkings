@@ -254,6 +254,9 @@ class Game:
         self.battle_round = game_dict.get('battle_round', 0)  # current battle round (0-2)
         self.battle_turn_player_id = game_dict.get('battle_turn_player_id')  # whose turn in battle
         self.battle_skipped_rounds = game_dict.get('battle_skipped_rounds') or {}
+        # Viewer-oriented authoritative score supplied by get_battle_state
+        # once all three conquer tactic rounds are complete.
+        self.battle_total_diff = game_dict.get('battle_total_diff')
         # Conquer per-round 60s timer (unix timestamp) — None when no timer.
         self.conquer_round_deadline_ts = game_dict.get('conquer_round_deadline_ts')
         self.conquer_round_timeout_sec = game_dict.get('conquer_round_timeout_sec')

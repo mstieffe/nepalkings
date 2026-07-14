@@ -292,9 +292,93 @@ class ConquerRoundLedger:
             for y, o in zip(you_per, opp_per)
         )
 
+    def _authoritative_total_diff(self, you_per, opp_per):
+        """Completed-battle total in the local player's perspective.
+
+        In-progress totals remain client-side so the reveal tally can animate
+        immediately.  Once all three rounds are complete, prefer the server's
+        viewer-oriented total.  This avoids a last-frame jump when battle
+        resolution clears/destroys a fighter or when complex support effects
+        differ from the lightweight display calculation.
+
+        Result payloads also persist the authoritative figure/tactic split;
+        use that as a reconnect/result-screen fallback.
+        """
+        game = self._game()
+        if game is None:
+            return None
+        last_result = getattr(game, 'last_battle_result', None)
+        rounds_complete = (
+            len(you_per) >= 3
+            and len(opp_per) >= 3
+            and all(move is not None for move in you_per[:3])
+            and all(move is not None for move in opp_per[:3])
+        )
+        if not rounds_complete and not last_result:
+            return None
+        # Let the final reveal finish its local count-up. The authoritative
+        # value takes over on DONE, which is the exact point where the old
+        # lightweight total could otherwise remain wrong.
+        if not last_result and any(self._reveal_stage(idx) is not None
+                                   for idx in range(3)):
+            return None
+
+        # The immediate finish response is already oriented to its caller.
+        if (isinstance(last_result, dict)
+                and last_result.get('total_diff') is not None):
+            try:
+                return int(last_result.get('total_diff'))
+            except (TypeError, ValueError):
+                pass
+
+        server_total = getattr(game, 'battle_total_diff', None)
+        if server_total is not None:
+            try:
+                return int(server_total)
+            except (TypeError, ValueError):
+                pass
+
+        if not isinstance(last_result, dict):
+            return None
+        if (last_result.get('fig_diff') is None
+                or last_result.get('round_diff') is None):
+            return None
+        try:
+            total = (int(last_result.get('fig_diff') or 0)
+                     + int(last_result.get('round_diff') or 0))
+        except (TypeError, ValueError):
+            return None
+
+        # Winner identity is perspective-safe even when Invader Swap made
+        # the original conquer attacker defend during the actual clash.
+        winner_id = (
+            last_result.get('winner_player_id')
+            or last_result.get('winner')
+            or last_result.get('fold_winner_id')
+        )
+        player_id = getattr(game, 'player_id', None)
+        if winner_id is not None and player_id is not None:
+            magnitude = abs(total)
+            return (magnitude if self._same_id(winner_id, player_id)
+                    else -magnitude)
+        if total == 0:
+            return 0
+
+        is_attacker = getattr(
+            self._parent, '_is_current_player_conquer_attacker', None)
+        if not callable(is_attacker):
+            return None
+        try:
+            return total if is_attacker(last_result) else -total
+        except Exception:
+            return None
+
     def current_total_diff(self) -> int:
         """Public: cumulative gated total (figure diff + revealed rounds)."""
         you_per, opp_per = self._played_per_round_pair()
+        authoritative = self._authoritative_total_diff(you_per, opp_per)
+        if authoritative is not None:
+            return authoritative
         return self._total_diff(you_per, opp_per)
 
     def _reveal_total_adjustment(self, you_per, opp_per) -> int:
@@ -823,6 +907,10 @@ class ConquerRoundLedger:
         self.window.blit(ts, ts.get_rect(midtop=(rect.centerx, rect.top + 3)))
 
         total_diff = self._ghost_total_diff(you_per, opp_per, ghost_preview)
+        if ghost_preview is None:
+            authoritative = self._authoritative_total_diff(you_per, opp_per)
+            if authoritative is not None:
+                total_diff = authoritative
         played_count = sum(1 for y, o in zip(you_per, opp_per) if y and o)
         game = self._game()
         last_result = getattr(game, 'last_battle_result', None) if game else None

@@ -2178,6 +2178,32 @@ def test_battle_state_poll_applies_timer_and_active_spells():
     assert game._figures_data_version == 4
 
 
+def test_battle_state_poll_applies_authoritative_final_total():
+    ConquerGameScreen = _conquer_screen_class()
+    screen = ConquerGameScreen.__new__(ConquerGameScreen)
+    game = SimpleNamespace(
+        battle_confirmed=True,
+        battle_turn_player_id=None,
+        battle_round=2,
+        battle_total_diff=None,
+        conquer_resolution_step=0,
+        _game_data_version=7,
+    )
+    screen.state = SimpleNamespace(game=game)
+
+    ConquerGameScreen._apply_battle_state_result(screen, {
+        'success': True,
+        'battle_round': 2,
+        'battle_turn_player_id': None,
+        'player_tactics': [],
+        'opponent_tactics': [],
+        'battle_total_diff': -9,
+    })
+
+    assert game.battle_total_diff == -9
+    assert game._game_data_version == 8
+
+
 def test_battle_state_poll_skips_game_version_bump_when_snapshot_is_unchanged():
     ConquerGameScreen = _conquer_screen_class()
     screen = ConquerGameScreen.__new__(ConquerGameScreen)

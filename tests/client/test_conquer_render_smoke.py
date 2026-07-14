@@ -1800,6 +1800,107 @@ def test_round_ledger_current_total_diff_public():
     assert ledger.current_total_diff() == 8
 
 
+def test_round_ledger_completed_battle_prefers_server_total():
+    from game.components.conquer_round_ledger import ConquerRoundLedger
+
+    game = SimpleNamespace(
+        last_battle_result=None,
+        battle_total_diff=11,
+    )
+    you_per = [
+        _move(1, value=5, played_round=0),
+        _move(2, value=4, played_round=1),
+        _move(3, value=3, played_round=2),
+    ]
+    opp_per = [
+        _move(4, value=4, played_round=0),
+        _move(5, value=4, played_round=1),
+        _move(6, value=4, played_round=2),
+    ]
+    parent = SimpleNamespace(
+        window=pygame.Surface((100, 100)),
+        state=SimpleNamespace(game=game),
+        _conquer_lane_figure_diff=lambda: 6,
+        _conquer_lane_played_tactics=lambda: (you_per, opp_per),
+    )
+    ledger = ConquerRoundLedger(parent)
+
+    # The lightweight local calculation is 6 + (1 + 0 - 1) = 6, but the
+    # completed ledger must show the server-authoritative final value.
+    assert ledger._total_diff(you_per, opp_per) == 6
+    assert ledger.current_total_diff() == 11
+
+
+def test_round_ledger_waits_for_final_reveal_before_server_total():
+    from game.components.conquer_round_ledger import ConquerRoundLedger
+
+    stage = {'stage': 'tally', 'opp_visible': True, 'diff_factor': 0.5}
+    game = SimpleNamespace(last_battle_result=None, battle_total_diff=11)
+    you_per = [_move(idx, value=5, played_round=idx) for idx in range(3)]
+    opp_per = [_move(idx + 10, value=4, played_round=idx) for idx in range(3)]
+    parent = SimpleNamespace(
+        window=pygame.Surface((100, 100)),
+        state=SimpleNamespace(game=game),
+        _conquer_lane_figure_diff=lambda: 0,
+        _conquer_lane_played_tactics=lambda: (you_per, opp_per),
+        conquer_round_reveal_stage=lambda idx: stage if idx == 2 else None,
+    )
+    ledger = ConquerRoundLedger(parent)
+
+    assert ledger.current_total_diff() == 3
+    stage.clear()
+    parent.conquer_round_reveal_stage = lambda _idx: None
+    assert ledger.current_total_diff() == 11
+
+
+def test_round_ledger_result_breakdown_restores_defender_total():
+    from game.components.conquer_round_ledger import ConquerRoundLedger
+
+    game = SimpleNamespace(
+        player_id=2,
+        last_battle_result={
+            'fig_diff': 5,
+            'round_diff': 3,
+            'winner_player_id': 1,
+        },
+        battle_total_diff=None,
+    )
+    parent = SimpleNamespace(
+        window=pygame.Surface((100, 100)),
+        state=SimpleNamespace(game=game),
+        _conquer_lane_played_tactics=lambda: ([None] * 3, [None] * 3),
+        _is_current_player_conquer_attacker=lambda _result: False,
+    )
+    ledger = ConquerRoundLedger(parent)
+
+    assert ledger.current_total_diff() == -8
+
+
+def test_round_ledger_result_uses_winner_identity_after_invader_swap():
+    from game.components.conquer_round_ledger import ConquerRoundLedger
+
+    game = SimpleNamespace(
+        player_id=7,
+        last_battle_result={
+            # Stored in the actual advancing side's perspective. The local
+            # player won despite not being the original conquer attacker.
+            'fig_diff': 4,
+            'round_diff': 2,
+            'winner_player_id': 7,
+        },
+        battle_total_diff=None,
+    )
+    parent = SimpleNamespace(
+        window=pygame.Surface((100, 100)),
+        state=SimpleNamespace(game=game),
+        _conquer_lane_played_tactics=lambda: ([None] * 3, [None] * 3),
+        _is_current_player_conquer_attacker=lambda _result: False,
+    )
+    ledger = ConquerRoundLedger(parent)
+
+    assert ledger.current_total_diff() == 6
+
+
 def test_round_ledger_reveal_total_adjustment_glides_with_tally():
     from game.components.conquer_round_ledger import ConquerRoundLedger
 

@@ -4788,6 +4788,8 @@ class ConquerGameScreen(GameScreen):
                 _update_game_attr(attr, result.get(attr))
         if 'battle_skipped_rounds' in result:
             _update_game_attr('battle_skipped_rounds', result.get('battle_skipped_rounds') or {})
+        if 'battle_total_diff' in result:
+            _update_game_attr('battle_total_diff', result.get('battle_total_diff'))
         if 'conquer_round_deadline_ts' in result:
             _update_game_attr('conquer_round_deadline_ts', result.get('conquer_round_deadline_ts'))
         if 'conquer_round_timeout_sec' in result:

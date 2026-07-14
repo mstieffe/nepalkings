@@ -6521,6 +6521,17 @@ def get_battle_state():
                         'revealed_step_index': tactic.revealed_step_index,
                         'discarded_step_index': tactic.discarded_step_index,
                     })
+        battle_complete = _battle_all_rounds_complete(game)
+        battle_total_diff = None
+        if (battle_complete
+                and game.advancing_figure_id
+                and game.defending_figure_id):
+            advancing_total_diff = _compute_server_total_diff(game)
+            battle_total_diff = (
+                advancing_total_diff
+                if game.advancing_player_id == player_id
+                else -advancing_total_diff
+            )
         payload = {
             'success': True,
             'battle_confirmed': bool(game.battle_confirmed),
@@ -6537,7 +6548,13 @@ def get_battle_state():
             'player_tactics': player_tactics,
             'opponent_tactics': opponent_tactics,
             'battle_skipped_rounds': game.battle_skipped_rounds or {},
-            'battle_complete': _battle_all_rounds_complete(game),
+            'battle_complete': battle_complete,
+            # The ledger can estimate each in-progress round locally for its
+            # reveal animation, but the completed battle must use the same
+            # authoritative calculation as finish_battle.  Orient the value
+            # to this viewer (you - opponent), not to attacker/defender, so
+            # both clients render the same outcome from their own side.
+            'battle_total_diff': battle_total_diff,
             'conquer_resolution_step': int(getattr(game, 'conquer_resolution_step', 0) or 0),
             'conquer_round_deadline_ts': deadline,
             'conquer_round_timeout_sec': CONQUER_ROUND_TIMEOUT_SEC if deadline is not None else None,

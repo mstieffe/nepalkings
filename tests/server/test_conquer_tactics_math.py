@@ -414,6 +414,43 @@ def test_conquer_tactics_total_diff_counts_distance_attack_on_call_figure(db):
     assert total == 3
 
 
+def test_completed_battle_state_returns_authoritative_total_for_each_viewer(app, db):
+    client = app.test_client()
+    game, attacker, defender, _attacker_fig, _defender_fig = _setup_tactics_battle(
+        db.session)
+    for round_idx in range(3):
+        _add_tactic(
+            db.session, game, attacker,
+            family_name='Dagger', rank='10', value=10,
+            played_round=round_idx,
+        )
+        _add_tactic(
+            db.session, game, defender,
+            family_name='Dagger', rank='7', value=7,
+            played_round=round_idx,
+        )
+    game.battle_round = 2
+    game.battle_turn_player_id = None
+    db.session.commit()
+
+    attacker_resp = client.get(
+        '/games/get_battle_state',
+        query_string={'game_id': game.id, 'player_id': attacker.id},
+        headers=_auth_headers(attacker.user_id),
+    )
+    defender_resp = client.get(
+        '/games/get_battle_state',
+        query_string={'game_id': game.id, 'player_id': defender.id},
+        headers=_auth_headers(defender.user_id),
+    )
+
+    assert attacker_resp.status_code == 200, attacker_resp.get_json()
+    assert defender_resp.status_code == 200, defender_resp.get_json()
+    assert attacker_resp.get_json()['battle_complete'] is True
+    assert attacker_resp.get_json()['battle_total_diff'] == 9
+    assert defender_resp.get_json()['battle_total_diff'] == -9
+
+
 def test_conquer_tactics_cleanup_returns_only_unplayed_runtime_cards(db):
     game, attacker, _defender, _attacker_fig, _defender_fig = _setup_tactics_battle(db.session)
     played_tactic, played_card, _played_b = _add_tactic(
