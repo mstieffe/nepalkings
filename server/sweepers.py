@@ -113,9 +113,17 @@ def start_stuck_conquer_sweeper(app, interval_seconds=None):
         while True:
             try:
                 with app.app_context():
-                    sweep_stuck_conquer_games()
-                    from region_service import reconcile_region_champions
-                    reconcile_region_champions(commit=True)
+                    from models import db
+                    try:
+                        sweep_stuck_conquer_games()
+                    except Exception:
+                        db.session.rollback()
+                        raise
+                    finally:
+                        # The daemon owns a long-lived thread.  Always release
+                        # its scoped session so SQLite does not keep a lock
+                        # across sleep cycles after a commit or exception.
+                        db.session.remove()
             except Exception:
                 logger.exception("[STUCK_SWEEP] iteration failed")
             time.sleep(interval_seconds)
