@@ -10,6 +10,11 @@ from game.components.cards.card_img import CardImg
 from config import settings
 from game.core.input_state import get_pressed as _get_pressed
 
+
+_CLONE_AURA_GLOW_SCALE = 1.06
+_CLONE_AURA_RING_RADIUS_SCALE = 0.49
+
+
 class FigureIcon:
     # Class-level cache for base glow images (loaded once for all instances)
     _glow_cache = {}
@@ -807,10 +812,10 @@ class FieldFigureIcon(FigureIcon):
 
         # Blue clone aura — permanently drawn behind Copy Figure clones so a
         # copied figure is always recognisable regardless of hover/select
-        # state. Moderately oversized: haloes past the normal glow without
-        # swamping neighbouring figures.
-        clone_size = int(normal_glow_size * 1.22)
-        clone_size_big = int(big_glow_size * 1.16)
+        # state. Keep it only slightly larger than the standard glow so it
+        # identifies the clone without crowding neighbouring figures.
+        clone_size = int(normal_glow_size * _CLONE_AURA_GLOW_SCALE)
+        clone_size_big = int(big_glow_size * _CLONE_AURA_GLOW_SCALE)
         self.glow_clone = pygame.transform.smoothscale(
             cache['blue'], (clone_size, clone_size))
         self.glow_clone_big = pygame.transform.smoothscale(
@@ -844,7 +849,10 @@ class FieldFigureIcon(FigureIcon):
         self.window.blit(aura, rect.topleft, special_flags=pygame.BLEND_RGBA_ADD)
         # A crisp pulsing ring hugging the frame for an unmistakable outline.
         try:
-            ring_r = int(max(self.rect_frame.width, self.rect_frame.height) * 0.54)
+            ring_r = int(
+                max(self.rect_frame.width, self.rect_frame.height)
+                * _CLONE_AURA_RING_RADIUS_SCALE
+            )
         except Exception:
             ring_r = int(glow.get_width() * 0.28)
         ring_r = max(7, ring_r)

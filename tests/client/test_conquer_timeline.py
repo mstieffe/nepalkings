@@ -5,6 +5,7 @@
 from types import SimpleNamespace
 
 import pygame
+import pytest
 
 
 def _make_game(**overrides):
@@ -1306,6 +1307,64 @@ def test_counter_spell_step_appears_between_attacker_and_defender_after_cast():
     assert 'Poison' in counter.info_headline
     assert 'receives -6 battle power' in counter.info_body
     assert [a.get('kind') for a in counter.info_assets[:2]] == ['spell', 'figure']
+
+
+@pytest.mark.parametrize('spell_name, effect_data, expected_text', [
+    (
+        'Draw 4 MainCards',
+        {'counter_origin': True, 'counter_status': 'executed', 'cards_drawn': 4},
+        'drew 4 main card(s)',
+    ),
+    (
+        'Copy Figure',
+        {
+            'counter_origin': True,
+            'counter_status': 'executed',
+            'source_figure_snapshot': {'name': 'Small Rice Farm'},
+        },
+        'created a battle clone of Small Rice Farm',
+    ),
+    (
+        'Landslide',
+        {
+            'counter_origin': True,
+            'counter_status': 'executed',
+            'battle_modifier_added': 'Landslide',
+        },
+        'land suit bonus is inverted',
+    ),
+])
+def test_expanded_counter_spell_timeline_copy_is_truthful(
+    spell_name, effect_data, expected_text,
+):
+    from game.screens.conquer_flow import derive_conquer_timeline
+
+    game = _make_game(
+        opponent_name='Rival',
+        advancing_figure_id=10,
+        advancing_player_id=1,
+        cached_active_spells=[{
+            'id': 188,
+            'player_id': 2,
+            'spell_name': spell_name,
+            'effect_data': effect_data,
+        }],
+    )
+
+    counter = {
+        step.kind: step
+        for step in derive_conquer_timeline(game, _make_state(game), None, None)
+    }['counter']
+
+    assert expected_text in counter.info_body
+    assert counter.info_assets[0] == {'kind': 'spell', 'name': spell_name}
+    if spell_name == 'Landslide':
+        assert counter.info_assets[1] == {
+            'kind': 'resource',
+            'label': 'Land suit bonus',
+            'value': 'Inverted',
+            'tone': 'warning',
+        }
 
 
 def test_counter_spell_step_stays_hidden_before_cast():

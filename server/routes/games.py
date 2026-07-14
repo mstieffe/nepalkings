@@ -13,6 +13,12 @@ from game_service.deck_manager import DeckManager
 from game_service.conquer_prelude_replay_targets import (
     conquer_destroyed_replay_targets_for_prelude,
 )
+from game_service.conquer_counter_spells import (
+    CONQUER_COUNTER_GREED_SPELLS,
+    CONQUER_DEFENCE_COUNTER_SPELLS,
+    CONQUER_TARGETED_COUNTER_SPELLS,
+    pick_random_copy_figure_target,
+)
 from game_service.conquer_tactics_idempotency import (
     game_lock as _conquer_game_lock,
     get_cached_response as _conquer_idem_get,
@@ -532,7 +538,7 @@ def _conquer_defender_counter_advance_disabled(game):
     cfg = db.session.get(LandConfig, game.defence_config_id) if game.defence_config_id else None
     has_counter_spell = False
     if cfg and cfg.counter_spell_name:
-        has_counter_spell = cfg.counter_spell_name != 'Explosion'
+        has_counter_spell = cfg.counter_spell_name in CONQUER_DEFENCE_COUNTER_SPELLS
         if cfg.counter_spell_name == 'Health Boost':
             counter_target = db.session.get(LandConfigFigure, cfg.counter_spell_target_figure_id)
             has_counter_spell = bool(counter_target and counter_target.config_id == cfg.id
@@ -695,7 +701,35 @@ def _resolve_conquer_counter_target(game, defender_player, cfg, spell_name):
         if target and not getattr(target, 'checkmate', False):
             return target.id
         return None
+    if spell_name == 'Copy Figure':
+        candidates = Figure.query.filter(
+            Figure.game_id == game.id,
+            Figure.player_id != defender_player.id,
+        ).all()
+        candidates = [
+            figure for figure in candidates
+            if not _figure_has_family_skill(figure, 'cannot_be_targeted')
+        ]
+        target = pick_random_copy_figure_target(candidates)
+        return target.id if target else None
     return None
+
+
+def _execute_landslide_counter_spell(spell, game, defender_player):
+    """Install Landslide after advance without changing figure legality."""
+    modifiers = list(game.battle_modifier or [])
+    modifiers.append({
+        'type': 'Landslide',
+        'caster_id': defender_player.id,
+        'spell_id': spell.id,
+    })
+    game.battle_modifier = modifiers
+    return {
+        'spell_name': 'Landslide',
+        'spell_type': 'enchantment',
+        'effect': 'Land bonus inverted for this battle',
+        'battle_modifier_added': 'Landslide',
+    }
 
 
 def _consume_conquer_defender_response(game, defender_player):
@@ -2884,13 +2918,11 @@ def conquer_defender_counter_spell():
         cfg, spell_name, spell_data = _get_conquer_counter_spell_config(game, defender_player)
         if not cfg or not spell_name:
             return jsonify({'success': False, 'message': 'No counter spell configured'}), 400
-        if spell_name == 'Explosion':
-            return jsonify({'success': False, 'message': 'Explosion is not allowed as a counter spell'}), 400
-        if spell_name not in {'Dump Cards', 'Forced Deal', 'Poison', 'Health Boost'}:
+        if spell_name not in CONQUER_DEFENCE_COUNTER_SPELLS:
             return jsonify({'success': False, 'message': f'Unsupported counter spell: {spell_name}'}), 400
 
         target_figure_id = _resolve_conquer_counter_target(game, defender_player, cfg, spell_name)
-        if spell_name in {'Poison', 'Health Boost'} and not target_figure_id:
+        if spell_name in CONQUER_TARGETED_COUNTER_SPELLS and not target_figure_id:
             _consume_conquer_defender_response(game, defender_player)
             log_entry = LogEntry(
                 game_id=game.id,
@@ -2924,7 +2956,8 @@ def conquer_defender_counter_spell():
             game_id=game.id,
             player_id=defender_player.id,
             spell_name=spell_name,
-            spell_type='greed' if spell_name in {'Dump Cards', 'Forced Deal'} else 'enchantment',
+            spell_type=('greed' if spell_name in CONQUER_COUNTER_GREED_SPELLS
+                        else 'enchantment'),
             spell_family_name=spell_name,
             suit='Hearts',
             target_figure_id=target_figure_id,
@@ -2936,8 +2969,15 @@ def conquer_defender_counter_spell():
         db.session.add(spell)
         db.session.flush()
 
-        from routes.spells import _execute_spell
-        result = _execute_spell(spell, game, defender_player)
+        if spell_name == 'Landslide':
+            result = _execute_landslide_counter_spell(
+                spell,
+                game,
+                defender_player,
+            )
+        else:
+            from routes.spells import _execute_spell
+            result = _execute_spell(spell, game, defender_player)
         post_data = dict(spell.effect_data or {})
         post_data['counter_origin'] = True
         post_data['conquer_counter_context'] = counter_context
@@ -2951,7 +2991,8 @@ def conquer_defender_counter_spell():
             for key in (
                     'drawn_cards', 'cards_given', 'cards_received',
                     'caster_dumped', 'opponent_dumped',
-                    'battle_moves_added', 'opponent_battle_moves_added'):
+                    'battle_moves_added', 'opponent_battle_moves_added',
+                    'battle_modifier_added'):
                 if key in result:
                     post_data[key] = result[key]
         spell.effect_data = post_data

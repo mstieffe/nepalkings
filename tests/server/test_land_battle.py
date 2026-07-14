@@ -1847,6 +1847,44 @@ class TestConquerPreludeTargeting:
 class TestConquerCounterSpells:
     """Conquer defender counter spell response behavior."""
 
+    @pytest.mark.parametrize('spell_name, free_cards', [
+        ('Draw 2 MainCards', [('8', 'Hearts', 8)]),
+        ('Draw 4 MainCards', [('8', 'Hearts', 8), ('8', 'Diamonds', 8)]),
+        ('Copy Figure', [('10', 'Hearts', 10), ('10', 'Diamonds', 10)]),
+        ('Landslide', [('2', 'Hearts', 2), ('2', 'Diamonds', 2)]),
+    ])
+    def test_defence_counter_config_accepts_expanded_pool(
+        self, app, db, spell_name, free_cards,
+    ):
+        with app.app_context():
+            defender = _make_user(
+                db,
+                username=f'def_counter_config_{spell_name.replace(" ", "_")}',
+            )
+            land = _make_land(db, tier=1, owner_user_id=defender.id)
+            _make_defence_config(db, defender, land)
+            for rank, suit, value in free_cards:
+                db.session.add(CollectionCard(
+                    user_id=defender.id,
+                    rank=rank,
+                    suit=suit,
+                    value=value,
+                    locked=False,
+                ))
+            db.session.commit()
+
+            client = app.test_client()
+            resp = client.post('/kingdom/defence/set_counter_spell', json={
+                'land_id': land.id,
+                'spell_name': spell_name,
+                'clear_battle_figure': True,
+            }, headers=_auth_headers(app, defender))
+
+            assert resp.status_code == 200, resp.get_json()
+            payload = resp.get_json()
+            assert payload['config']['counter_spell_name'] == spell_name
+            assert payload['config']['battle_figure_id'] is None
+
     def test_defence_counter_explosion_rejected(self, app, db):
         with app.app_context():
             defender = _make_user(db, username='def_counter_reject')
@@ -1995,7 +2033,146 @@ class TestConquerCounterSpells:
             assert game.turn_player_id == atk_player.id
             assert game.defending_figure_id is None
 
+    def test_counter_copy_figure_mirrors_random_defender_prelude_rule(
+        self, app, db, monkeypatch,
+    ):
+        with app.app_context():
+            attacker = _make_user(db, username='atk_counter_copy')
+            defender = _make_user(db, username='def_counter_copy')
+
+            land = _make_land(db, tier=1, owner_user_id=defender.id)
+            atk_cfg = _make_conquer_config(db, attacker, land)
+            weak_cfg = _add_conquer_config_figure(
+                db,
+                atk_cfg,
+                attacker,
+                family_name='Counter Copy Scout',
+                name='Counter Copy Scout',
+                field='military',
+            )
+            def_cfg = _make_defence_config(db, defender, land)
+            def_cfg.battle_figure_id = None
+            def_cfg.counter_spell_name = 'Copy Figure'
+            def_cfg.counter_spell_data = {}
+            db.session.commit()
+
+            client = app.test_client()
+            atk_headers = _auth_headers(app, attacker)
+            def_headers = _auth_headers(app, defender)
+            start = client.post('/kingdom/conquer/start_battle',
+                                json={'land_id': land.id}, headers=atk_headers)
+            assert start.status_code == 200, start.get_json()
+            game = db.session.get(Game, start.get_json()['game_id'])
+            atk_player = db.session.get(Player, game.invader_player_id)
+            def_player = next(p for p in game.players if p.user_id == defender.id)
+
+            attacker_figures = Figure.query.filter_by(
+                game_id=game.id,
+                player_id=atk_player.id,
+            ).all()
+            advancing = next(
+                figure for figure in attacker_figures
+                if figure.source_config_figure_id == weak_cfg.id
+            )
+
+            import game_service.conquer_counter_spells as counter_rules
+            monkeypatch.setattr(
+                counter_rules.secrets,
+                'choice',
+                lambda candidates: next(
+                    figure for figure in candidates
+                    if figure.id == advancing.id
+                ),
+            )
+
+            advance = client.post('/games/advance_figure', json={
+                'game_id': game.id,
+                'player_id': atk_player.id,
+                'figure_id': advancing.id,
+            }, headers=atk_headers)
+            assert advance.status_code == 200, advance.get_json()
+
+            counter = client.post('/games/conquer_defender_counter_spell', json={
+                'game_id': game.id,
+                'player_id': def_player.id,
+            }, headers=def_headers)
+            assert counter.status_code == 200, counter.get_json()
+
+            spell = ActiveSpell.query.filter_by(
+                game_id=game.id,
+                player_id=def_player.id,
+                spell_name='Copy Figure',
+            ).one()
+            effect_data = spell.effect_data or {}
+            assert effect_data.get('source_figure_id') == advancing.id
+            copied = db.session.get(Figure, effect_data.get('copied_figure_id'))
+            assert copied is not None
+            assert copied.player_id == def_player.id
+            assert copied.checkmate is False
+
+    def test_counter_landslide_inverts_bonus_without_changing_advance(self, app, db):
+        with app.app_context():
+            attacker = _make_user(db, username='atk_counter_landslide')
+            defender = _make_user(db, username='def_counter_landslide')
+
+            land = _make_land(db, tier=1, owner_user_id=defender.id)
+            _make_conquer_config(db, attacker, land)
+            def_cfg = _make_defence_config(db, defender, land)
+            def_cfg.battle_figure_id = None
+            def_cfg.counter_spell_name = 'Landslide'
+            def_cfg.counter_spell_data = {}
+            db.session.commit()
+
+            client = app.test_client()
+            atk_headers = _auth_headers(app, attacker)
+            def_headers = _auth_headers(app, defender)
+            start = client.post('/kingdom/conquer/start_battle',
+                                json={'land_id': land.id}, headers=atk_headers)
+            assert start.status_code == 200, start.get_json()
+            game = db.session.get(Game, start.get_json()['game_id'])
+            atk_player = db.session.get(Player, game.invader_player_id)
+            def_player = next(p for p in game.players if p.user_id == defender.id)
+            advancing = Figure.query.filter_by(
+                game_id=game.id,
+                player_id=atk_player.id,
+            ).first()
+
+            advance = client.post('/games/advance_figure', json={
+                'game_id': game.id,
+                'player_id': atk_player.id,
+                'figure_id': advancing.id,
+            }, headers=atk_headers)
+            assert advance.status_code == 200, advance.get_json()
+
+            counter = client.post('/games/conquer_defender_counter_spell', json={
+                'game_id': game.id,
+                'player_id': def_player.id,
+            }, headers=def_headers)
+            assert counter.status_code == 200, counter.get_json()
+
+            db.session.refresh(game)
+            assert game.advancing_figure_id == advancing.id
+            assert game.advancing_player_id == atk_player.id
+            assert game.defending_figure_id is None
+            assert game.turn_player_id == atk_player.id
+            assert any(
+                modifier.get('type') == 'Landslide'
+                for modifier in game.battle_modifier
+            )
+            from routes.games import _effective_land_bonus_value
+            assert _effective_land_bonus_value(game, land.suit_bonus_value) == -3
+
+            spell = ActiveSpell.query.filter_by(
+                game_id=game.id,
+                player_id=def_player.id,
+                spell_name='Landslide',
+            ).one()
+            assert (spell.effect_data or {}).get('battle_modifier_added') == 'Landslide'
+            assert (spell.effect_data or {}).get('counter_status') == 'executed'
+
     @pytest.mark.parametrize('spell_name, expected_attacker_moves, expected_defender_moves, expected_added', [
+        ('Draw 2 MainCards', 3, 5, 2),
+        ('Draw 4 MainCards', 3, 7, 4),
         ('Forced Deal', 3, 3, 2),
         ('Dump Cards', 5, 5, 5),
     ])

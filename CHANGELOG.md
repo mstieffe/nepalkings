@@ -45,6 +45,12 @@ and the operational safety net to keep early adopters.
 
 ### Changed
 
+- **Broader Conquer defence counters.** Defence configurations can now use
+  Draw 2 MainCards, Draw 4 MainCards, Copy Figure, and Landslide as automated
+  counter responses. Counter Copy Figure mirrors the automated prelude rule
+  (uniformly random targetable enemy figure, avoiding hidden-power leaks);
+  copied figures use a tighter blue aura. Landslide inverts only the land
+  battle bonus after advance. Explosion remains excluded.
 - **Conquer-first onboarding.** The new-player journey now runs
   boosters → first conquest → first duel, so players reach a real battle
   within minutes. Main menu leads with Kingdom over Duel; beginner AI duel

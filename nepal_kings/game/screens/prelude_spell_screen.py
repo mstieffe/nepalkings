@@ -26,7 +26,7 @@ class PreludeSpellScreen(SubScreen):
     def __init__(self, window, state, x=0.0, y=0.0, title=None,
                  card_source=None, mode='conquer',
                  allowed_spells=None, server_endpoint=None, land_id=None,
-                 extra_payload=None):
+                 extra_payload=None, description_overrides=None):
         """
         Parameters
         ----------
@@ -55,6 +55,7 @@ class PreludeSpellScreen(SubScreen):
         self.server_endpoint = server_endpoint
         self.land_id = land_id
         self.extra_payload = dict(extra_payload or {})
+        self.description_overrides = dict(description_overrides or {})
 
         # Spell manager
         self.spell_manager = SpellManager()
@@ -197,6 +198,9 @@ class PreludeSpellScreen(SubScreen):
         return {'greed': 'Greed Spell', 'enchantment': 'Enchantment Spell',
                 'tactics': 'Tactics Spell'}.get(spell_type, spell_type.capitalize())
 
+    def _family_description(self, family):
+        return self.description_overrides.get(family.name, family.description)
+
     # ── Update ──────────────────────────────────────────────────────
 
     def update(self, game):
@@ -247,7 +251,7 @@ class PreludeSpellScreen(SubScreen):
                     self.scroll_text_list = [
                         {
                             'title': spell.name,
-                            'text': spell.family.description,
+                            'text': self._family_description(spell.family),
                             'cards': spell.cards,
                             'spell_type': self._format_spell_type(spell.family.type),
                             'counterable': spell.counterable,
@@ -262,7 +266,7 @@ class PreludeSpellScreen(SubScreen):
                         given, missing = self.get_given_and_missing_cards(spell)
                         self.scroll_text_list.append({
                             'title': spell.name,
-                            'text': spell.family.description,
+                            'text': self._family_description(spell.family),
                             'spell_type': self._format_spell_type(spell.family.type),
                             'counterable': spell.counterable,
                             'ceasefire': spell.possible_during_ceasefire,

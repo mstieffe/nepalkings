@@ -153,6 +153,23 @@ def test_defence_picker_lists_new_spells(spell_manager):
     assert shown == set(_DEFENCE_PRELUDE_SPELLS)
 
 
+def test_defence_counter_picker_lists_expanded_safe_pool():
+    from game.screens.defence_screen import (
+        _DEFENCE_COUNTER_DESCRIPTION_OVERRIDES,
+        _DEFENCE_COUNTER_SPELLS,
+    )
+
+    assert _DEFENCE_COUNTER_SPELLS == [
+        'Draw 2 MainCards', 'Draw 4 MainCards', 'Dump Cards', 'Forced Deal',
+        'Poison', 'Health Boost', 'Copy Figure', 'Landslide',
+    ]
+    assert 'Explosion' not in _DEFENCE_COUNTER_SPELLS
+    assert 'Royal Decree' not in _DEFENCE_COUNTER_SPELLS
+    copy_text = _DEFENCE_COUNTER_DESCRIPTION_OVERRIDES['Copy Figure']
+    assert 'random targetable enemy figure' in copy_text
+    assert 'advancing figure' not in copy_text
+
+
 def _assert_picker_geometry(picker):
     """All icon cells stay inside the details panel and never overlap."""
     from config import settings
@@ -832,6 +849,32 @@ def test_field_icon_detects_clone_and_draws_aura():
     icon.figure = SimpleNamespace(is_clone=True)
     icon._draw_clone_aura(4, big=False)
     icon._draw_clone_aura(4, big=True)
+
+
+def test_clone_aura_glow_stays_close_to_standard_glow(monkeypatch):
+    from config import settings
+    from game.components.figures.figure_icon import FieldFigureIcon
+
+    base = pygame.Surface((16, 16), pygame.SRCALPHA)
+    cache = {
+        color: base.copy()
+        for color in ('black', 'white', 'yellow', 'orange', 'blue')
+    }
+    monkeypatch.setattr(
+        FieldFigureIcon,
+        '_load_base_glow_images',
+        classmethod(lambda _cls: cache),
+    )
+
+    icon = object.__new__(FieldFigureIcon)
+    icon.is_castle_figure = False
+    icon.glow_img = None
+    icon.load_glow_effects()
+
+    normal_size = int(settings.FIGURE_ICON_GLOW_WIDTH)
+    big_size = int(settings.FIGURE_ICON_GLOW_BIG_WIDTH)
+    assert normal_size < icon.glow_clone.get_width() <= int(normal_size * 1.08)
+    assert big_size < icon.glow_clone_big.get_width() <= int(big_size * 1.08)
 
 
 def test_copy_ghost_effect_one_shot():

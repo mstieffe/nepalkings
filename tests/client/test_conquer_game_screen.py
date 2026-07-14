@@ -9,6 +9,7 @@ import sys
 from types import SimpleNamespace
 
 import pygame
+import pytest
 
 
 APP_DIR = Path(__file__).resolve().parents[2] / 'nepal_kings'
@@ -1261,7 +1262,8 @@ def test_conquer_modifier_prelude_spawns_banner_and_duel_lane_pulse():
     assert effects.pulses[0][0] == lane_rect
 
 
-def test_conquer_modifier_counter_spawns_banner_and_duel_lane_pulse():
+@pytest.mark.parametrize('spell_name', ['Blitzkrieg', 'Landslide'])
+def test_conquer_modifier_counter_spawns_banner_and_duel_lane_pulse(spell_name):
     ConquerGameScreen = _conquer_screen_class()
     screen = ConquerGameScreen.__new__(ConquerGameScreen)
     screen.window = pygame.Surface((900, 620), pygame.SRCALPHA)
@@ -1269,10 +1271,10 @@ def test_conquer_modifier_counter_spawns_banner_and_duel_lane_pulse():
     active_spell = {
         'id': 503,
         'player_id': 20,
-        'spell_name': 'Blitzkrieg',
+        'spell_name': spell_name,
         'effect_data': {
             'counter_origin': True,
-            'battle_modifier_added': 'Blitzkrieg',
+            'battle_modifier_added': spell_name,
         },
     }
     game = SimpleNamespace(
@@ -1283,7 +1285,7 @@ def test_conquer_modifier_counter_spawns_banner_and_duel_lane_pulse():
         battle_round=0,
         battle_confirmed=False,
         cached_active_spells=[active_spell],
-        battle_modifier=[{'type': 'Blitzkrieg', 'caster_id': 20, 'spell_id': 503}],
+        battle_modifier=[{'type': spell_name, 'caster_id': 20, 'spell_id': 503}],
     )
     screen.state = SimpleNamespace(game=game)
     screen._conquer_lane_figure_rects = []
@@ -1300,7 +1302,7 @@ def test_conquer_modifier_counter_spawns_banner_and_duel_lane_pulse():
         def derive_display_steps(self, _screen):
             return [SimpleNamespace(
                 kind='counter',
-                icon_payload='Blitzkrieg',
+                icon_payload=spell_name,
                 owner='Rival',
                 active=True,
                 completed=False,
@@ -1326,7 +1328,7 @@ def test_conquer_modifier_counter_spawns_banner_and_duel_lane_pulse():
 
     ConquerGameScreen._pump_conquer_spell_animations(screen)
 
-    assert effects.banners[0][0] == 'Blitzkrieg'
+    assert effects.banners[0][0] == spell_name
     assert effects.pulses[0][0] == lane_rect
 
 

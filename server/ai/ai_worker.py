@@ -30,6 +30,7 @@ from ai.card_change_strategy import (
     summarize_side_change,
 )
 from ai import duel_strategy
+from game_service.conquer_counter_spells import CONQUER_DEFENCE_COUNTER_SPELLS
 
 logger = logging.getLogger('nepalkings.ai.worker')
 
@@ -1005,7 +1006,7 @@ def _conquer_should_cast_counter_spell(game, ai_player_id):
     counter_spell_name = cfg.counter_spell_name if cfg else _conquer_template_counter_spell(game)
     if not counter_spell_name:
         return False
-    if counter_spell_name == 'Explosion':
+    if counter_spell_name not in CONQUER_DEFENCE_COUNTER_SPELLS:
         return False
     # Civil War: only cast a counter spell on the first advance per round.
     already_cast = LogEntry.query.filter_by(
@@ -1017,11 +1018,11 @@ def _conquer_should_cast_counter_spell(game, ai_player_id):
     if already_cast:
         return False
     if not cfg:
-        return counter_spell_name in {'Dump Cards', 'Forced Deal', 'Poison', 'Health Boost'}
+        return counter_spell_name in CONQUER_DEFENCE_COUNTER_SPELLS
     if counter_spell_name == 'Health Boost':
         target = db.session.get(LandConfigFigure, cfg.counter_spell_target_figure_id)
         return bool(target and target.config_id == cfg.id and not getattr(target, 'checkmate', False))
-    return counter_spell_name in {'Dump Cards', 'Forced Deal', 'Poison'}
+    return counter_spell_name in CONQUER_DEFENCE_COUNTER_SPELLS
 
 
 def _conquer_pick_counter_advance_figure(game, ai_player_id):

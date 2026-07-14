@@ -9,6 +9,8 @@ configured battle figure — never silently skip the response window.
 """
 from types import SimpleNamespace
 
+import pytest
+
 from models import (
     db, ActiveSpell, Figure, Game, Player,
 )
@@ -183,17 +185,27 @@ def test_ai_defender_counter_advances_when_only_battle_figure(app, db, monkeypat
         )
 
 
-def test_ai_defender_casts_counter_spell_when_only_spell(app, db, monkeypatch):
+@pytest.mark.parametrize('spell_name', [
+    'Poison',
+    'Draw 2 MainCards',
+    'Draw 4 MainCards',
+    'Copy Figure',
+    'Landslide',
+])
+def test_ai_defender_casts_counter_spell_when_only_spell(
+    app, db, monkeypatch, spell_name,
+):
     """Defender with only a counter spell must cast it (no battle figure)."""
     with app.app_context():
-        attacker = _make_user(db, username='atk_only_sp')
-        defender = _make_user(db, username='def_only_sp')
+        slug = spell_name.lower().replace(' ', '_')
+        attacker = _make_user(db, username=f'atk_only_sp_{slug}')
+        defender = _make_user(db, username=f'def_only_sp_{slug}')
 
         land = _make_land(db, tier=1, owner_user_id=defender.id)
         _make_conquer_config(db, attacker, land)
         def_cfg = _make_defence_config(db, defender, land)
         def_cfg.battle_figure_id = None
-        def_cfg.counter_spell_name = 'Poison'
+        def_cfg.counter_spell_name = spell_name
         def_cfg.counter_spell_data = {}
         db.session.commit()
 
@@ -229,7 +241,7 @@ def test_ai_defender_casts_counter_spell_when_only_spell(app, db, monkeypatch):
         casted = ActiveSpell.query.filter_by(
             game_id=game_id,
             player_id=def_player.id,
-            spell_name='Poison',
+            spell_name=spell_name,
         ).first()
         assert casted is not None, "AI defender failed to cast counter spell"
 

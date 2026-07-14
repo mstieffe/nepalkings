@@ -577,13 +577,31 @@ class TestCopyFigure:
             assert copied.serialize().get('is_clone') is True
             assert maharaja.is_clone is False
 
-    def test_defender_copy_auto_targets_deterministically(self, app, db):
+    def test_defender_copy_auto_targets_random_valid_figure(
+        self, app, db, monkeypatch,
+    ):
         with app.app_context():
             attacker, defender, land, atk_cfg, def_cfg = self._setup(
                 app, db, attacker_prelude=False)
             def_cfg.prelude_spell_name = 'Copy Figure'
             def_cfg.prelude_spell_data = {}
             db.session.commit()
+
+            # Force the random chooser to take the last valid target. The
+            # route must honor a valid random result rather than ranking by
+            # hidden base power.
+            import game_service.conquer_counter_spells as counter_rules
+            chosen = {}
+
+            def choose_last(candidates):
+                chosen['figure_id'] = candidates[-1].id
+                return candidates[-1]
+
+            monkeypatch.setattr(
+                counter_rules.secrets,
+                'choice',
+                choose_last,
+            )
 
             client, headers, game = _start_battle(app, attacker, land)
             atk_player = _game_player(game, attacker)
@@ -596,18 +614,7 @@ class TestCopyFigure:
             data = spell.effect_data or {}
             assert data.get('prelude_status') == 'executed'
 
-            # Deterministic rule: highest base power, then lowest figure ID.
-            from routes.games import _compute_figure_base_power
-            candidates = Figure.query.filter_by(
-                game_id=game.id, player_id=atk_player.id).all()
-            candidates = [
-                f for f in candidates
-                if f.id != data.get('copied_figure_id')
-            ]
-            expected = sorted(
-                candidates,
-                key=lambda f: (-_compute_figure_base_power(f), f.id))[0]
-            assert data.get('source_figure_id') == expected.id
+            assert data.get('source_figure_id') == chosen['figure_id']
 
             copied = db.session.get(Figure, data.get('copied_figure_id'))
             assert copied is not None

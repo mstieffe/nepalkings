@@ -28,6 +28,10 @@ from game_service.deck_manager import DeckManager
 from game_service.conquer_prelude_replay_targets import (
     conquer_destroyed_replay_targets_for_prelude,
 )
+from game_service.conquer_counter_spells import (
+    CONQUER_DEFENCE_COUNTER_SPELLS,
+    pick_random_copy_figure_target,
+)
 from ai.defence.generator import get_ai_defence_template_for_land
 import server_settings as config
 from analytics import track
@@ -1464,9 +1468,7 @@ _DEFENCE_PRELUDE_SPELLS = frozenset({
     'Royal Decree', 'Copy Figure', 'Landslide', 'Draw 4 MainCards',
 })
 
-_DEFENCE_COUNTER_SPELLS = frozenset({
-    'Dump Cards', 'Forced Deal', 'Poison', 'Health Boost',
-})
+_DEFENCE_COUNTER_SPELLS = CONQUER_DEFENCE_COUNTER_SPELLS
 
 # Spells that must also be recorded in game.battle_modifier for existing
 # game logic (advance restrictions, turn updates, ceasefire, etc.)
@@ -5476,9 +5478,9 @@ def _create_prelude_spell(game, player, spell_name, spell_data, game_figures,
                 spell.target_figure_id = chosen_target.id
             elif target_resolution == 'defence_auto':
                 if spell_name == 'Copy Figure':
-                    # Copy Figure defender auto-target is fixed by rule:
-                    # highest base power, then lowest figure ID.
-                    chosen_target = _pick_deterministic_prelude_target(valid_targets)
+                    # Do not leak which hidden enemy figure has the highest
+                    # base power: automated defence copies uniformly at random.
+                    chosen_target = pick_random_copy_figure_target(valid_targets)
                 else:
                     chosen_target = _pick_defence_prelude_target(
                         valid_targets,
@@ -5677,10 +5679,9 @@ def conquer_start_battle():
 
         has_battle_fig = (def_cfg.battle_figure_id is not None)
         has_counter_spell = (
-            def_cfg.counter_spell_name is not None or def_cfg.spell_name is not None
+            def_cfg.counter_spell_name in CONQUER_DEFENCE_COUNTER_SPELLS
+            or def_cfg.spell_name is not None
         )
-        if def_cfg.counter_spell_name == 'Explosion':
-            has_counter_spell = False
         if def_cfg.counter_spell_name == 'Health Boost':
             counter_target = db.session.get(
                 LandConfigFigure,

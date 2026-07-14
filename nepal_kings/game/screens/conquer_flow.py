@@ -752,9 +752,11 @@ def _prelude_effect_line(spell_info: dict, *, own: bool) -> str:
             return f'Fill up to 10: main hand already at {current_total}; no cards drawn.'
         return f'Fill up to 10: drew {drawn_count} main card(s).'
 
-    if spell_name in ('Draw 2 MainCards', 'Draw 2 SideCards'):
+    if spell_name in ('Draw 2 MainCards', 'Draw 2 SideCards',
+                      'Draw 4 MainCards'):
         drawn = effect_data.get('drawn_cards') or []
-        drawn_count = effect_data.get('cards_drawn', len(drawn) or 2)
+        fallback_count = 4 if spell_name == 'Draw 4 MainCards' else 2
+        drawn_count = effect_data.get('cards_drawn', len(drawn) or fallback_count)
         card_type = effect_data.get('card_type') or ('side' if 'Side' in spell_name else 'main')
         return f'{spell_name}: drew {drawn_count} {card_type} card(s).'
 
@@ -787,6 +789,15 @@ def _prelude_effect_line(spell_info: dict, *, own: bool) -> str:
 
     if spell_name == 'Invader Swap':
         return 'Invader Swap: the battle roles changed before the first advance.'
+
+    if spell_name == 'Copy Figure':
+        source = effect_data.get('source_figure_snapshot') or {}
+        source_name = source.get('name') or source.get('family_name') or target_name
+        return (f'Copy Figure: created a battle clone of {source_name}.'
+                if source_name else 'Copy Figure: created an enemy battle clone.')
+
+    if spell_name == 'Landslide':
+        return 'Landslide: the land suit bonus is inverted for this battle.'
 
     if spell_name == 'Blitzkrieg':
         return 'Blitzkrieg: defender counter-advance is blocked; the attacker chooses the defender.'
@@ -1017,6 +1028,8 @@ def _prelude_info_assets(spells: List[dict], *, own: bool,
             card_count = effect_data.get('card_count')
             if card_count is not None:
                 assets.append(_resource_asset('Cards returned', card_count, 'warning'))
+        elif spell_name == 'Landslide':
+            assets.append(_resource_asset('Land suit bonus', 'Inverted', 'warning'))
 
     return tuple(assets)
 

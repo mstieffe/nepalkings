@@ -101,8 +101,17 @@ _DEFENCE_PRELUDE_SPELLS = [
 ]
 
 _DEFENCE_COUNTER_SPELLS = [
-    'Dump Cards', 'Forced Deal', 'Poison', 'Health Boost',
+    'Draw 2 MainCards', 'Draw 4 MainCards', 'Dump Cards', 'Forced Deal',
+    'Poison', 'Health Boost', 'Copy Figure', 'Landslide',
 ]
+
+_DEFENCE_COUNTER_DESCRIPTION_OVERRIDES = {
+    'Copy Figure': (
+        'When an enemy figure advances, automatically copy one random '
+        'targetable enemy figure. Its full-power clone joins your defence '
+        'for this battle and is never a Checkmate figure.'
+    ),
+}
 
 _RED_SUITS = {'Hearts', 'Diamonds'}
 _BLACK_SUITS = {'Clubs', 'Spades'}
@@ -2756,6 +2765,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
             server_endpoint='/kingdom/defence/draft/set_counter_spell',
             land_id=self._land_id,
             extra_payload={'clear_battle_figure': True} if had_battle_figure else None,
+            description_overrides=_DEFENCE_COUNTER_DESCRIPTION_OVERRIDES,
         )
         self._subscreen_obj._on_done = self._close_subscreen
         self._active_subscreen = 'counter_spell'
