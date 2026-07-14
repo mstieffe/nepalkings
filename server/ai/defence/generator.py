@@ -22,6 +22,8 @@ from ai.defence.config import (
     AI_DEFENCE_SUITS,
     AI_DEFENCE_TIER_NAMES,
 )
+from ai.figure_recipes import FAMILY_SKILLS
+from game_service.figure_rule_helpers import battle_required_field
 
 logger = logging.getLogger('nk.ai.defence.generator')
 
@@ -230,25 +232,15 @@ def _is_black_land_fortress_free(primary_suit: str, rules: dict[str, Any],
     return rng.random() < min(1.0, max(0.0, chance))
 
 
-def _core_suit_for_role(role: str, primary_suit: str, core_index: int,
-                        rules: dict[str, Any], rng: random.Random,
+def _core_suit_for_role(role: str, primary_suit: str, rng: random.Random,
                         fortress_free_black: bool) -> str:
-    # Always keep at least one land-suit figure anchor.
-    if core_index == 0:
-        return primary_suit
-
+    # Guaranteed core roles must keep the land's color so their production
+    # chain remains self-sufficient. In particular, a cross-color core farm
+    # can otherwise be deleted by resource repair, leaving a castle-only
+    # defence that instantly loses under Peasant War / Civil War.
     if fortress_free_black and role in _FORTRESS_ROLES:
         return _opposite_color_suit(primary_suit, rng)
 
-    # If a black land is not in its fortress-free variant, keep guaranteed
-    # fortress roles black so fortress-free frequency is controlled by the
-    # explicit tier setting rather than incidental cross-color rolls.
-    if _suit_color(primary_suit) == 'black' and role in _FORTRESS_ROLES:
-        return primary_suit
-
-    chance = float(rules.get('core_cross_color_chance', 0) or 0)
-    if chance > 0 and rng.random() < min(1.0, max(0.0, chance)):
-        return _opposite_color_suit(primary_suit, rng)
     return primary_suit
 
 
@@ -346,8 +338,35 @@ def template_resource_deficit_map(figures: list[dict[str, Any]]) -> dict[int, bo
     return result
 
 
+def _template_figure_has_skill(figure: dict[str, Any], skill_name: str) -> bool:
+    if bool(figure.get(skill_name)):
+        return True
+    family = figure.get('family_name') or figure.get('name')
+    return bool((FAMILY_SKILLS.get(family) or {}).get(skill_name))
+
+
+def _eligible_battle_figure_indices(
+        figures: list[dict[str, Any]], *, required_field: str | None = None,
+) -> list[int]:
+    deficit_map = template_resource_deficit_map(figures)
+    return [
+        idx
+        for idx, figure in enumerate(figures)
+        if not deficit_map.get(idx, False)
+        and (not required_field or figure.get('field') == required_field)
+        and not _template_figure_has_skill(figure, 'cannot_attack')
+        and not _template_figure_has_skill(figure, 'cannot_defend')
+    ]
+
+
+def _prelude_required_field(prelude_spell_name: str | None) -> str | None:
+    if not prelude_spell_name:
+        return None
+    return battle_required_field([{'type': prelude_spell_name}])
+
+
 def validate_ai_defence_template(template: dict[str, Any]) -> bool:
-    """Return True when a generated AI template is structurally safe."""
+    """Return True when a generated AI template is structurally and legally safe."""
     figures = list(template.get('figures') or [])
     moves = list(template.get('battle_moves') or [])
     if not figures or len(moves) != 3:
@@ -356,6 +375,29 @@ def validate_ai_defence_template(template: dict[str, Any]) -> bool:
         return False
     battle_idx = int(template.get('battle_figure_index', 0) or 0)
     if battle_idx < 0 or battle_idx >= len(figures):
+        return False
+    # AI lands must always be able to answer an attacker-cast village-only
+    # modifier. Otherwise Peasant War / Civil War becomes an automatic
+    # conquest regardless of the AI template's own prelude.
+    if not _eligible_battle_figure_indices(figures, required_field='village'):
+        return False
+    # Castle-only Royal Decree needs the symmetric guarantee as well.
+    if not _eligible_battle_figure_indices(figures, required_field='castle'):
+        return False
+    prelude = template.get('prelude_spell_name')
+    required_field = _prelude_required_field(prelude)
+    legal_indices = _eligible_battle_figure_indices(
+        figures,
+        required_field=required_field,
+    )
+    if not legal_indices or battle_idx not in legal_indices:
+        return False
+    # Automated Health Boost preludes/counters cannot target Checkmate
+    # figures. Keep at least one valid own target whenever either is selected.
+    if ('Health Boost' in {
+            prelude,
+            template.get('counter_spell_name'),
+    } and not any(not figure.get('checkmate', False) for figure in figures)):
         return False
     fields = {fig.get('field') for fig in figures}
     required_call_fields = {
@@ -371,7 +413,8 @@ def validate_ai_defence_template(template: dict[str, Any]) -> bool:
 
 
 def _repair_resource_deficits(figures: list[dict[str, Any]], tier: int,
-                              primary_suit: str, rng: random.Random) -> list[dict[str, Any]]:
+                              primary_suit: str, rng: random.Random,
+                              *, protected_count: int = 0) -> list[dict[str, Any]]:
     repaired = list(figures)
     castle_cap = int(tier)
     for _ in range(20):
@@ -395,6 +438,8 @@ def _repair_resource_deficits(figures: list[dict[str, Any]], tier: int,
                 # is not itself a castle figure) to bring totals back in line.
                 victim_idx = None
                 for idx, fig in enumerate(repaired):
+                    if idx < protected_count:
+                        continue
                     if (fig.get('field') or '').lower() == 'castle':
                         continue
                     if int((fig.get('requires') or {}).get(resource, 0) or 0) > 0:
@@ -409,6 +454,27 @@ def _repair_resource_deficits(figures: list[dict[str, Any]], tier: int,
             added = True
         if not added:
             break
+
+    # Provider chains can occasionally exceed the fixed castle production
+    # cap: e.g. an elite military figure needs both a farm and manufactory,
+    # but those providers together need more villagers than the tier's
+    # castles produce. If provider addition cannot converge, prune only the
+    # optional deficit figures. Guaranteed core roles remain untouched.
+    for _ in range(len(repaired)):
+        deficit_map = template_resource_deficit_map(repaired)
+        if repaired and not any(deficit_map.values()):
+            return repaired
+        victim_idx = next(
+            (
+                idx
+                for idx, has_deficit in deficit_map.items()
+                if has_deficit and idx >= protected_count
+            ),
+            None,
+        )
+        if victim_idx is None:
+            break
+        repaired.pop(victim_idx)
     return repaired
 
 
@@ -479,17 +545,32 @@ def _build_battle_moves(figures: list[dict[str, Any]], primary_suit: str,
 
 
 def _battle_figure_index(figures: list[dict[str, Any]], tier: int,
-                         primary_suit: str) -> int:
-    preferred_fields = ['military', 'castle', 'village'] if tier >= 3 else ['village', 'castle']
+                         primary_suit: str,
+                         prelude_spell_name: str | None = None) -> int:
+    required_field = _prelude_required_field(prelude_spell_name)
+    legal_indices = set(_eligible_battle_figure_indices(
+        figures,
+        required_field=required_field,
+    ))
+    if not legal_indices:
+        return 0
+
+    preferred_fields = (
+        [required_field]
+        if required_field else
+        (['military', 'castle', 'village'] if tier >= 3 else ['village', 'castle'])
+    )
     for field in preferred_fields:
         for idx, fig in enumerate(figures):
-            if fig.get('field') == field and fig.get('suit') == primary_suit:
+            if (idx in legal_indices
+                    and fig.get('field') == field
+                    and fig.get('suit') == primary_suit):
                 return idx
     for field in preferred_fields:
         for idx, fig in enumerate(figures):
-            if fig.get('field') == field:
+            if idx in legal_indices and fig.get('field') == field:
                 return idx
-    return 0
+    return min(legal_indices)
 
 
 def _pick_scripted_spell(rules: dict[str, Any], key: str,
@@ -550,21 +631,20 @@ def generate_ai_defence_template_for_land(land: Any) -> dict[str, Any]:
     primary_suit = _normalize_suit(getattr(land, 'suit_bonus_suit', None), rng)
     fortress_free_black = _is_black_land_fortress_free(primary_suit, rules, rng)
 
+    core_roles = list(rules.get('core_roles', []))
     figures = [
         _make_figure(
             role,
             _core_suit_for_role(
                 role,
                 primary_suit,
-                idx,
-                rules,
                 rng,
                 fortress_free_black,
             ),
             tier,
             rng,
         )
-        for idx, role in enumerate(rules.get('core_roles', []))
+        for role in core_roles
     ]
 
     lo, hi = rules.get('optional_count_range', (0, 0))
@@ -580,7 +660,9 @@ def generate_ai_defence_template_for_land(land: Any) -> dict[str, Any]:
     castle_need = max(0, int(tier) - castle_have)
     for _ in range(castle_need):
         role = 'maharaja' if rng.random() < EXTRA_CASTLE_MAHARAJA_CHANCE else 'king'
-        cross_chance = float(rules.get('core_cross_color_chance', 0) or 0)
+        cross_chance = float(
+            rules.get('extra_castle_cross_color_chance', 0) or 0
+        )
         if cross_chance > 0 and rng.random() < min(1.0, max(0.0, cross_chance)):
             suit = _opposite_color_suit(primary_suit, rng)
         else:
@@ -601,7 +683,13 @@ def generate_ai_defence_template_for_land(land: Any) -> dict[str, Any]:
         if chosen is not None:
             figures.append(chosen)
 
-    figures = _repair_resource_deficits(figures, tier, primary_suit, rng)
+    figures = _repair_resource_deficits(
+        figures,
+        tier,
+        primary_suit,
+        rng,
+        protected_count=len(core_roles),
+    )
 
     final_castle = _count_castle_figures(figures)
     if final_castle != int(tier):
@@ -621,7 +709,12 @@ def generate_ai_defence_template_for_land(land: Any) -> dict[str, Any]:
         'ai_name': f'{primary_suit} {AI_DEFENCE_TIER_NAMES.get(tier, "Defenders")}',
         'figures': figures,
         'battle_moves': moves,
-        'battle_figure_index': _battle_figure_index(figures, tier, primary_suit),
+        'battle_figure_index': _battle_figure_index(
+            figures,
+            tier,
+            primary_suit,
+            prelude_spell,
+        ),
         'battle_modifier': None,
         'spell': None,
         'prelude_spell_name': prelude_spell,

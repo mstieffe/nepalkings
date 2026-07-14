@@ -627,8 +627,8 @@ class TestDefenceBattleFigure:
         assert rv.status_code == 400
         assert 'spell' in rv.get_json()['message'].lower()
 
-    def test_civil_war_requires_two_figures(self, client, db, two_users,
-                                             auth_headers_user1):
+    def test_civil_war_allows_one_figure_with_optional_second(
+            self, client, db, two_users, auth_headers_user1):
         u1, _ = two_users
         land = _add_land(db, owner_id=u1.id)
         c1 = _add_collection_card(db, u1.id, 'Clubs', 'J', 11)
@@ -648,8 +648,10 @@ class TestDefenceBattleFigure:
         rv = client.post('/kingdom/defence/set_battle_figure',
                          headers=auth_headers_user1,
                          json={'land_id': land.id, 'figure_id': fig_id})
-        assert rv.status_code == 400
-        assert 'two' in rv.get_json()['message'].lower()
+        assert rv.status_code == 200
+        cfg = rv.get_json()['config']
+        assert cfg['battle_figure_id'] == fig_id
+        assert cfg['battle_figure_id_2'] is None
 
     def test_civil_war_same_color(self, client, db, two_users, auth_headers_user1):
         """Civil War: both figures must be the same color."""
@@ -1020,6 +1022,42 @@ def _create_complete_active_defence(client, db, user_id, headers, land):
 
 
 class TestDefenceDraftLifecycle:
+
+    def test_clear_active_removes_draft_and_active_and_unlocks_cards(
+            self, client, db, two_users, auth_headers_user1):
+        u1, _ = two_users
+        land = _add_land(db, owner_id=u1.id)
+        active = _create_complete_active_defence(
+            client, db, u1.id, auth_headers_user1, land)
+        card_ids = {
+            *(active.figures[0].card_ids or []),
+            *(move.card_id for move in active.battle_moves),
+        }
+
+        rv = client.post('/kingdom/defence/draft/open',
+                         headers=auth_headers_user1,
+                         json={'land_id': land.id})
+        assert rv.status_code == 200
+        assert LandConfig.query.filter_by(
+            user_id=u1.id, config_type='defence', land_id=land.id,
+            status='draft',
+        ).first() is not None
+
+        rv = client.post('/kingdom/defence/clear_active',
+                         headers=auth_headers_user1,
+                         json={'land_id': land.id})
+
+        assert rv.status_code == 200
+        assert rv.get_json()['success'] is True
+        assert LandConfig.query.filter_by(
+            user_id=u1.id, config_type='defence', land_id=land.id,
+        ).count() == 0
+        assert db.session.get(Land, land.id).defence_config_id is None
+        cards = CollectionCard.query.filter(CollectionCard.id.in_(card_ids)).all()
+        assert len(cards) == len(card_ids)
+        assert all(card.locked is False for card in cards)
+        assert all(card.lock_type is None for card in cards)
+        assert all(card.lock_ref_id is None for card in cards)
 
     def test_draft_edit_does_not_change_active_and_discard_unlocks_draft_cards(
             self, client, db, two_users, auth_headers_user1):

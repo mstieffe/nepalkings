@@ -2379,7 +2379,7 @@ def check_defence_incomplete(land_id, user_id):
             for mod in strategy_modifiers
             if isinstance(mod, dict)
         )
-        if is_civil_war:
+        if is_civil_war and cfg.battle_figure_id_2:
             battle_fig_2 = figures_by_id.get(cfg.battle_figure_id_2)
             if not battle_fig_2 or battle_fig_2.id == battle_fig.id:
                 return True

@@ -68,11 +68,16 @@ if _sys.platform == "emscripten":
     class _Response:
         """Mimics ``requests.Response``."""
 
-        __slots__ = ('status_code', 'text', '_json_cache', '_json_parsed')
+        __slots__ = ('status_code', 'text', 'headers', '_json_cache', '_json_parsed')
 
-        def __init__(self, status_code, text):
+        def __init__(self, status_code, text, content_type=''):
             self.status_code = status_code
             self.text = text
+            # Several screens use requests' response headers to decide whether
+            # an error/success body is JSON.  Keep the web response compatible
+            # with that interface instead of raising AttributeError after an
+            # otherwise successful XHR.
+            self.headers = {'content-type': content_type or ''}
             self._json_cache = None
             self._json_parsed = False
 
@@ -144,7 +149,8 @@ if _sys.platform == "emscripten":
             f"{ct_line}"
             f"{auth_line}"
             f"x.send({body_js});"
-            f"return {{s:x.status,t:x.responseText||''}};"
+            f"return {{s:x.status,t:x.responseText||'',"
+            f"c:x.getResponseHeader('Content-Type')||''}};"
             f"}})()"
         )
         result = _embed.js(js)
@@ -152,7 +158,7 @@ if _sys.platform == "emscripten":
             raise RequestException("XHR: embed.js() returned None")
         status = int(result["s"])
         _check_auth_response(status)
-        return _Response(status, str(result["t"]))
+        return _Response(status, str(result["t"]), str(result["c"] or ''))
 
     # -- public API (matches requests.get / requests.post) ------
 
@@ -201,8 +207,9 @@ if _sys.platform == "emscripten":
             f"var x=new XMLHttpRequest();"
             f"x.open('GET','{full_url}',true);"
             f"{auth_js}"
-            f"x.onload=function(){{window._axr[{rid}]={{s:x.status,t:x.responseText||''}};}};"
-            f"x.onerror=function(){{window._axr[{rid}]={{s:0,t:'network error'}};}};"
+            f"x.onload=function(){{window._axr[{rid}]={{s:x.status,t:x.responseText||'',"
+            f"c:x.getResponseHeader('Content-Type')||''}};}};"
+            f"x.onerror=function(){{window._axr[{rid}]={{s:0,t:'network error',c:''}};}};"
             f"x.send();"
             f"}})()"
         )
@@ -226,8 +233,9 @@ if _sys.platform == "emscripten":
             f"x.open('POST','{full_url}',true);"
             f"x.setRequestHeader('Content-Type','application/x-www-form-urlencoded');"
             f"{auth_js}"
-            f"x.onload=function(){{window._axr[{rid}]={{s:x.status,t:x.responseText||''}};}};"
-            f"x.onerror=function(){{window._axr[{rid}]={{s:0,t:'network error'}};}};"
+            f"x.onload=function(){{window._axr[{rid}]={{s:x.status,t:x.responseText||'',"
+            f"c:x.getResponseHeader('Content-Type')||''}};}};"
+            f"x.onerror=function(){{window._axr[{rid}]={{s:0,t:'network error',c:''}};}};"
             f"x.send({body_js});"
             f"}})()"
         )
@@ -252,8 +260,9 @@ if _sys.platform == "emscripten":
             f"x.open('POST','{full_url}',true);"
             f"x.setRequestHeader('Content-Type','application/json');"
             f"{auth_js}"
-            f"x.onload=function(){{window._axr[{rid}]={{s:x.status,t:x.responseText||''}};}};"
-            f"x.onerror=function(){{window._axr[{rid}]={{s:0,t:'network error'}};}};"
+            f"x.onload=function(){{window._axr[{rid}]={{s:x.status,t:x.responseText||'',"
+            f"c:x.getResponseHeader('Content-Type')||''}};}};"
+            f"x.onerror=function(){{window._axr[{rid}]={{s:0,t:'network error',c:''}};}};"
             f"x.send({body_js});"
             f"}})()"
         )
@@ -275,7 +284,7 @@ if _sys.platform == "emscripten":
             return None
         status = int(result["s"])
         _check_auth_response(status)
-        return _Response(status, str(result["t"]))
+        return _Response(status, str(result["t"]), str(result["c"] or ''))
 
 else:
     # ── Desktop: use requests with auto-injected auth ──────────────

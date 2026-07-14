@@ -7,7 +7,7 @@ This module intentionally keeps AI land defence balancing out of
 ``ai/defence/generator.py`` turns them into concrete battle templates.
 """
 
-AI_DEFENCE_GENERATOR_VERSION = 6
+AI_DEFENCE_GENERATOR_VERSION = 7
 
 AI_DEFENCE_SUITS = ('Hearts', 'Diamonds', 'Clubs', 'Spades')
 AI_DEFENCE_RED_SUITS = ('Hearts', 'Diamonds')
@@ -436,19 +436,22 @@ AI_DEFENCE_FIGURE_CATALOG = {
 #     * Prelude is fully optional.
 #     * Counter is optional too because AI templates always set
 #       ``battle_figure_index`` (the counter-advance figure).
-#   Available preludes: ``Dump Cards``, ``Forced Deal``, ``Poison``,
-#   ``Health Boost``, ``Explosion``, ``Peasant War``, ``Civil War``.
+#   Available preludes include greed, targeted, and field-restriction spells
+#   from the defence-prelude allowlist (including ``Peasant War``,
+#   ``Civil War``, and ``Royal Decree``).
 #   Available counters: ``Dump Cards``, ``Forced Deal``, ``Poison``,
 #   ``Health Boost``.
-#   Targeted spells (``Poison``, ``Explosion``, ``Health Boost``) auto-resolve
+#   Targeted spells (``Poison``, ``Explosion``, ``Health Boost``,
+#   ``Copy Figure``) auto-resolve
 #   their target at battle start (defender heuristic) so no extra data is
 #   required in the template.  Battle-modifier preludes (``Peasant War``,
 #   ``Civil War``) append to ``game.battle_modifier`` like player-cast spells.
 
-# ``core_cross_color_chance`` / ``optional_suit_weights``
-#   Controls suit-color variety. Core roles keep the first figure as a land-suit
-#   anchor, then can occasionally use opposite-color variants. Optional figures
-#   choose between primary suit, same-color alternate suit and opposite color.
+# ``extra_castle_cross_color_chance`` / ``optional_suit_weights``
+#   Controls suit-color variety. Guaranteed core roles stay in the land's
+#   primary color so their production chain cannot be deleted by resource
+#   repair. Extra castle figures and optional figures may use the opposite
+#   color according to these weights.
 #
 # ``black_land_fortress_free_chance``
 #   Chance that a black-suit land converts all generated Wooden/Stone Fortress
@@ -482,7 +485,7 @@ AI_DEFENCE_GENERATION_RULES = {
         ],
         'number_ranks': ['7', '8', '9'],
         'battle_plan': 'sentinel',
-        'core_cross_color_chance': 0.30,
+        'extra_castle_cross_color_chance': 0.30,
         'optional_suit_weights': {'primary': 6, 'same_color': 1, 'opposite_color': 3},
         'black_land_fortress_free_chance': 0.45,
         'prelude_spell_weights': [
@@ -530,7 +533,7 @@ AI_DEFENCE_GENERATION_RULES = {
         ],
         'number_ranks': ['8', '9', '10'],
         'battle_plan': 'apex',
-        'core_cross_color_chance': 0.32,
+        'extra_castle_cross_color_chance': 0.32,
         'optional_suit_weights': {'primary': 5, 'same_color': 2, 'opposite_color': 3},
         'black_land_fortress_free_chance': 0.30,
         'prelude_spell_weights': [
@@ -578,7 +581,7 @@ AI_DEFENCE_GENERATION_RULES = {
         ],
         'number_ranks': ['9', '10'],
         'battle_plan': 'apex',
-        'core_cross_color_chance': 0.30,
+        'extra_castle_cross_color_chance': 0.30,
         'optional_suit_weights': {'primary': 5, 'same_color': 2, 'opposite_color': 3},
         'black_land_fortress_free_chance': 0.18,
         'prelude_spell_weights': [
@@ -625,7 +628,7 @@ AI_DEFENCE_GENERATION_RULES = {
         ],
         'number_ranks': ['9', '10'],
         'battle_plan': 'overlord',
-        'core_cross_color_chance': 0.28,
+        'extra_castle_cross_color_chance': 0.28,
         'optional_suit_weights': {'primary': 5, 'same_color': 2, 'opposite_color': 3},
         'black_land_fortress_free_chance': 0.12,
         'prelude_spell_weights': [
@@ -672,7 +675,7 @@ AI_DEFENCE_GENERATION_RULES = {
         ],
         'number_ranks': ['10'],
         'battle_plan': 'overlord',
-        'core_cross_color_chance': 0.30,
+        'extra_castle_cross_color_chance': 0.30,
         'optional_suit_weights': {'primary': 4, 'same_color': 2, 'opposite_color': 4},
         'black_land_fortress_free_chance': 0.10,
         'prelude_spell_weights': [
@@ -717,7 +720,7 @@ AI_DEFENCE_GENERATION_RULES = {
         ],
         'number_ranks': ['10'],
         'battle_plan': 'overlord',
-        'core_cross_color_chance': 0.32,
+        'extra_castle_cross_color_chance': 0.32,
         'optional_suit_weights': {'primary': 4, 'same_color': 2, 'opposite_color': 4},
         'black_land_fortress_free_chance': 0.08,
         'prelude_spell_weights': [

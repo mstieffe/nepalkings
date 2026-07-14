@@ -17,6 +17,8 @@ from ai.defence.generator import (
     template_resource_deficit_map,
     validate_ai_defence_template,
 )
+from ai.figure_recipes import FAMILY_SKILLS
+from game_service.figure_rule_helpers import battle_required_field
 
 
 def _land(tier=1, suit='Hearts', seed=123, land_id=1, col=4, row=5):
@@ -44,6 +46,16 @@ def _has_fortress(template):
     return any(
         fig['family_name'] in {'Wooden Fortress', 'Stone Fortress'}
         for fig in template['figures']
+    )
+
+
+def _can_counter_advance(figure):
+    skills = FAMILY_SKILLS.get(figure.get('family_name')) or {}
+    return not (
+        figure.get('cannot_attack')
+        or figure.get('cannot_defend')
+        or skills.get('cannot_attack')
+        or skills.get('cannot_defend')
     )
 
 
@@ -130,6 +142,99 @@ class TestAiDefenceGenerator:
             for suit in AI_DEFENCE_SUITS:
                 template = get_ai_defence_template_for_land(_land(tier=tier, suit=suit))
                 assert not any(template_resource_deficit_map(template['figures']).values())
+
+    def test_generated_templates_always_have_legal_castle_and_village_defenders(self):
+        for tier in (1, 2, 3, 4, 5, 6):
+            for suit in AI_DEFENCE_SUITS:
+                for seed in range(200):
+                    template = get_ai_defence_template_for_land(
+                        _land(
+                            tier=tier,
+                            suit=suit,
+                            seed=seed,
+                            land_id=8000 + tier * 1000 + seed,
+                        )
+                    )
+                    assert not template['ai_name'].startswith('Fallback')
+                    deficits = template_resource_deficit_map(template['figures'])
+                    for required_field in ('castle', 'village'):
+                        assert any(
+                            figure['field'] == required_field
+                            and not deficits[index]
+                            and _can_counter_advance(figure)
+                            for index, figure in enumerate(template['figures'])
+                        ), (tier, suit, seed, required_field, template)
+
+    def test_neutral_support_chain_does_not_collapse_to_fallback(self):
+        # Regression for a tier-2 neutral land whose elite military draw
+        # needs both food and armor providers. Those providers can exceed the
+        # tier's villager capacity; repair must prune the optional deficit
+        # figure instead of discarding the guaranteed farm or falling back.
+        land = SimpleNamespace(
+            id=4406,
+            col=85,
+            row=45,
+            tier=2,
+            suit_bonus_suit='Neutral',
+            suit_bonus_value=0,
+            ai_template_index=147709450,
+        )
+
+        template = get_ai_defence_template_for_land(land)
+
+        assert not template['ai_name'].startswith('Fallback')
+        assert validate_ai_defence_template(template)
+
+    def test_battle_figure_obeys_prelude_and_figure_skill_legality(self):
+        for tier in (1, 2, 3, 4, 5, 6):
+            for suit in AI_DEFENCE_SUITS:
+                for seed in range(200):
+                    template = get_ai_defence_template_for_land(
+                        _land(
+                            tier=tier,
+                            suit=suit,
+                            seed=seed,
+                            land_id=16000 + tier * 1000 + seed,
+                        )
+                    )
+                    battle_idx = template['battle_figure_index']
+                    battle_figure = template['figures'][battle_idx]
+                    required_field = battle_required_field([{
+                        'type': template['prelude_spell_name'],
+                    }])
+                    assert not template_resource_deficit_map(
+                        template['figures'])[battle_idx]
+                    assert _can_counter_advance(battle_figure)
+                    if required_field:
+                        assert battle_figure['field'] == required_field
+
+    def test_validator_rejects_castle_only_peasant_war_template(self):
+        template = get_ai_defence_template_for_land(_land())
+        template['figures'] = [template['figures'][0]]
+        template['battle_figure_index'] = 0
+        template['prelude_spell_name'] = 'Peasant War'
+
+        assert not validate_ai_defence_template(template)
+
+    def test_validator_rejects_figure_that_cannot_counter_advance(self):
+        template = get_ai_defence_template_for_land(_land(tier=3))
+        fortress_idx = next(
+            (
+                index
+                for index, figure in enumerate(template['figures'])
+                if (FAMILY_SKILLS.get(figure['family_name']) or {}).get('cannot_attack')
+            ),
+            None,
+        )
+        if fortress_idx is None:
+            fortress = dict(template['figures'][template['battle_figure_index']])
+            fortress['cannot_attack'] = True
+            template['figures'].append(fortress)
+            fortress_idx = len(template['figures']) - 1
+        template['prelude_spell_name'] = None
+        template['battle_figure_index'] = fortress_idx
+
+        assert not validate_ai_defence_template(template)
 
     def test_generation_is_deterministic_for_same_land(self):
         land = _land(tier=4, suit='Spades', seed=98765, land_id=44, col=8, row=9)

@@ -2146,7 +2146,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
             self._draw_battle_figure_icon(
                 bf2_rect, bf2_id, mx_mouse, my_mouse,
                 x_attr='_battle_figure_x_rect_2',
-                empty_label='CW Fig',
+                empty_label='Optional',
             )
         elif not is_civil_war:
             self._battle_figure_x_rect_2 = None
@@ -2440,9 +2440,15 @@ class DefenceScreen(MenuScreenMixin, Screen):
                 timeout=15,
             )
             data = resp.json() if resp.headers.get('content-type', '').startswith('application/json') else {}
-            return bool(data.get('success'))
+            if data.get('success'):
+                return True
+            message = data.get('message') or data.get('error') or 'Could not clear defence'
+            logger.warning('Clear active defence failed: %s', message)
+            self.state.set_msg(message)
+            return False
         except Exception as e:
             logger.error('Clear active defence error: %s', e)
+            self.state.set_msg('Could not clear defence')
             return False
 
     def _get_config_fig(self, figure_id):
@@ -2505,18 +2511,6 @@ class DefenceScreen(MenuScreenMixin, Screen):
         fig = self._figure_object(figure_id)
         return getattr(fig, 'color', None)
 
-    def _civil_war_valid_second_ids(self, first_id):
-        first_color = self._battle_figure_color(first_id)
-        if not first_color:
-            return []
-        return [
-            f.get('id')
-            for f in self._config.get('figures', [])
-            if f.get('id') != first_id
-            and f.get('color') == first_color
-            and self._battle_figure_is_selectable(f.get('id'))
-        ]
-
     def _begin_battle_figure_selection(self):
         if self._config.get('counter_spell_name'):
             self._server_clear_counter_spell()
@@ -2527,7 +2521,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
             current_second = self._config.get('battle_figure_id_2')
             if current_first and not current_second and self._battle_figure_is_selectable(current_first):
                 self._pending_civil_war_battle_fig_1 = current_first
-                self.state.set_msg('Select a second same-color Civil War battle figure')
+                self.state.set_msg('Select an optional second same-color Civil War figure')
             else:
                 self.state.set_msg('Select the first Civil War battle figure')
 
@@ -2540,14 +2534,12 @@ class DefenceScreen(MenuScreenMixin, Screen):
 
         first_id = self._pending_civil_war_battle_fig_1
         if not first_id:
-            valid_seconds = self._civil_war_valid_second_ids(figure_id)
-            if not valid_seconds:
-                self.state.set_msg('Civil War needs two same-color village battle figures')
-                self._selecting_battle_fig = False
-                self._pending_civil_war_battle_fig_1 = None
-                return
-            self._pending_civil_war_battle_fig_1 = figure_id
-            self.state.set_msg('Select a second same-color Civil War battle figure')
+            # Commit the first figure immediately. The second Civil War slot
+            # is an optional enhancement and can be selected with a separate
+            # click, matching the runtime skip-second rule.
+            self._server_set_battle_figure(figure_id)
+            self._selecting_battle_fig = False
+            self._pending_civil_war_battle_fig_1 = None
             return
 
         if figure_id == first_id:
@@ -2842,13 +2834,13 @@ class DefenceScreen(MenuScreenMixin, Screen):
         if has_battle_fig and self._civil_war_battle_strategy():
             fig1_id = self._config.get('battle_figure_id')
             fig2_id = self._config.get('battle_figure_id_2')
-            battle_fig_valid = (
-                battle_fig_valid
-                and bool(fig2_id)
-                and fig2_id != fig1_id
-                and self._battle_figure_is_selectable(fig2_id)
-                and self._battle_figure_color(fig1_id) == self._battle_figure_color(fig2_id)
-            )
+            if fig2_id:
+                battle_fig_valid = (
+                    battle_fig_valid
+                    and fig2_id != fig1_id
+                    and self._battle_figure_is_selectable(fig2_id)
+                    and self._battle_figure_color(fig1_id) == self._battle_figure_color(fig2_id)
+                )
         elif self._config.get('battle_figure_id_2'):
             battle_fig_valid = False
         has_required_spell_targets = (
@@ -2906,11 +2898,9 @@ class DefenceScreen(MenuScreenMixin, Screen):
                 problems.append(reason)
             if self._civil_war_battle_strategy():
                 fig2_id = self._config.get('battle_figure_id_2')
-                if not fig2_id:
-                    problems.append('Civil War requires two battle figures.')
-                elif fig2_id == self._config.get('battle_figure_id'):
+                if fig2_id == self._config.get('battle_figure_id'):
                     problems.append('Civil War requires two different battle figures.')
-                else:
+                elif fig2_id:
                     reason = self._battle_figure_block_reason(fig2_id)
                     if reason:
                         problems.append(f'Second battle figure: {reason}')

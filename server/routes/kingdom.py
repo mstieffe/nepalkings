@@ -1112,7 +1112,7 @@ def _bulk_defence_incomplete_by_land(land_ids, user_id):
                 for mod in modifiers
                 if isinstance(mod, dict)
             )
-            if is_civil_war:
+            if is_civil_war and cfg.battle_figure_id_2:
                 battle_fig_2 = figures_by_id.get(cfg.battle_figure_id_2)
                 if not battle_fig_2 or battle_fig_2.id == battle_fig.id:
                     continue
@@ -2052,10 +2052,8 @@ def _get_defence_config_problems(cfg):
             for mod in strategy_modifiers if isinstance(mod, dict)
         )
     )
-    if has_battle_fig and is_civil_war:
-        if not cfg.battle_figure_id_2:
-            problems.append('Civil War requires two battle figures.')
-        elif cfg.battle_figure_id_2 not in figure_ids:
+    if has_battle_fig and is_civil_war and cfg.battle_figure_id_2:
+        if cfg.battle_figure_id_2 not in figure_ids:
             problems.append('Second battle figure is no longer in this configuration.')
         elif cfg.battle_figure_id_2 == cfg.battle_figure_id:
             problems.append('Civil War requires two different battle figures.')
@@ -3724,14 +3722,13 @@ def defence_set_modifier():
 
     # Auto-clear battle figure if incompatible with new modifier
     if modifier_type == 'Civil War':
-        # Civil War needs 2 same-color figures
-        if cfg.battle_figure_id and not cfg.battle_figure_id_2:
-            cfg.battle_figure_id = None
+        # The second same-color village figure is optional. Preserve a valid
+        # first pick when enabling Civil War and only clear an incompatible
+        # optional pair.
         if cfg.battle_figure_id and cfg.battle_figure_id_2:
             fig1 = db.session.get(LandConfigFigure, cfg.battle_figure_id)
             fig2 = db.session.get(LandConfigFigure, cfg.battle_figure_id_2)
             if fig1 and fig2 and fig1.color != fig2.color:
-                cfg.battle_figure_id = None
                 cfg.battle_figure_id_2 = None
     else:
         # Non-civil-war: clear second battle figure
@@ -3964,10 +3961,7 @@ def defence_set_battle_figure():
         if isinstance(mod, dict)
     )
 
-    if is_civil_war:
-        if not figure_id_2:
-            return jsonify({'success': False,
-                            'message': 'Civil War requires two battle figures'}), 400
+    if is_civil_war and figure_id_2:
         if figure_id_2 == figure_id:
             return jsonify({'success': False,
                             'message': 'Civil War requires two different battle figures'}), 400

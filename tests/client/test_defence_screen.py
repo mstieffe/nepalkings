@@ -497,6 +497,53 @@ class TestVictoryReviewSkip:
         assert state.screen == 'defence'
 
 
+class TestVictoryReviewClearAll:
+
+    def test_confirm_clear_wipes_defence_acks_victory_and_navigates(self):
+        from game.screens.defence_screen import DefenceScreen
+        state = _make_state()
+        screen = DefenceScreen(state)
+        state.action = {'task': None, 'content': None, 'status': 'clear all'}
+        screen._victory_review_mode = True
+        screen._victory_review_game_id = 42
+        screen._land_id = 7
+        screen._config = _make_config(figures=[{'id': 1}])
+        screen._pending_clear_all_confirm = True
+
+        with patch.object(screen, '_server_clear_active_defence',
+                          return_value=True) as mock_clear, \
+                patch.object(screen, '_server_acknowledge_victory_review',
+                             return_value=True) as mock_ack:
+            screen.handle_events([])
+
+        mock_clear.assert_called_once_with()
+        mock_ack.assert_called_once_with()
+        assert screen._pending_clear_all_confirm is False
+        assert screen._victory_review_mode is False
+        assert screen._victory_review_game_id is None
+        assert state.screen == 'kingdom'
+
+    def test_failed_clear_stays_on_screen_and_reports_error(self):
+        from game.screens.defence_screen import DefenceScreen
+        state = _make_state()
+        screen = DefenceScreen(state)
+        screen._land_id = 7
+
+        class _Resp:
+            headers = {'content-type': 'application/json'}
+
+            @staticmethod
+            def json():
+                return {'success': False, 'message': 'Clear rejected'}
+
+        with patch('game.screens.defence_screen.requests.post',
+                   return_value=_Resp()):
+            assert screen._server_clear_active_defence() is False
+
+        state.set_msg.assert_called_once_with('Clear rejected')
+        assert state.screen == 'defence'
+
+
 class TestDefenceLootRiskTutorial:
 
     def test_save_defence_shows_one_time_loot_tutorial_before_save(self):
@@ -1179,10 +1226,13 @@ class TestBattleFigureToggle:
         second = pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=(0, 0))
         with patch.object(screen, '_server_set_battle_figure') as mock_set:
             screen.handle_events([first])
-            assert screen._selecting_battle_fig is True
-            assert screen._pending_civil_war_battle_fig_1 == 10
-            mock_set.assert_not_called()
+            mock_set.assert_called_once_with(10)
+            assert screen._selecting_battle_fig is False
+            assert screen._pending_civil_war_battle_fig_1 is None
 
+            mock_set.reset_mock()
+            screen._config['battle_figure_id'] = 10
+            screen._begin_battle_figure_selection()
             screen._figure_icons[10].hovered = False
             screen._figure_icons[11].hovered = True
             screen.handle_events([second])
@@ -1269,7 +1319,7 @@ class TestBattleFigureToggle:
         state.set_msg.assert_called_with(
             'This figure cannot counter-advance because it cannot attack')
 
-    def test_civil_war_readiness_requires_second_same_color_battle_figure(self):
+    def test_civil_war_readiness_rejects_invalid_optional_second_figure(self):
         from game.screens.defence_screen import DefenceScreen
         state = _make_state()
         screen = DefenceScreen(state)
@@ -1296,6 +1346,31 @@ class TestBattleFigureToggle:
 
         assert screen._is_defence_ready() is False
         assert 'same color' in ' '.join(screen._get_defence_problems())
+
+    def test_civil_war_readiness_allows_one_battle_figure(self):
+        from game.screens.defence_screen import DefenceScreen
+        state = _make_state()
+        screen = DefenceScreen(state)
+        screen._config = _make_config(
+            prelude_spell_name='Civil War',
+            figures=[
+                {'id': 10, 'has_deficit': False, 'field': 'village',
+                 'color': 'offensive'},
+            ],
+            battle_moves=[
+                {'id': 1, 'round_index': 0},
+                {'id': 2, 'round_index': 1},
+                {'id': 3, 'round_index': 2},
+            ],
+            battle_figure_id=10,
+            battle_figure_id_2=None,
+        )
+        screen._figure_objects = [
+            _make_figure_object(10, field='village'),
+        ]
+
+        assert screen._is_defence_ready() is True
+        assert screen._get_defence_problems() == []
 
     def test_health_boost_target_selection_ignores_duel_only_checkmate(self):
         from game.screens.defence_screen import DefenceScreen
