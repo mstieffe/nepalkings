@@ -2,7 +2,9 @@
 # See LICENSE file in the project root for full license information.
 """Tests for authentication routes: register, login, token validation."""
 import pytest
+import sqlite3
 from datetime import datetime, timedelta
+from sqlalchemy.exc import OperationalError
 from werkzeug.security import generate_password_hash
 
 
@@ -109,6 +111,20 @@ class TestRegister:
         resp = client.post('/auth/register', data=_register_data('bad user!', 'pass1234'))
         assert resp.status_code == 400
 
+    def test_register_database_lock_returns_retryable_503(
+            self, client, db, monkeypatch):
+        def locked_commit():
+            raise OperationalError(
+                'COMMIT', {}, sqlite3.OperationalError('database is locked'))
+
+        monkeypatch.setattr(db.session, 'commit', locked_commit)
+        resp = client.post(
+            '/auth/register', data=_register_data('busyregister', 'pass1234'))
+
+        assert resp.status_code == 503
+        assert resp.get_json()['retryable'] is True
+        assert resp.headers['Retry-After'] == '2'
+
 
 class TestLogin:
     def test_login_success_returns_token(self, client):
@@ -148,6 +164,32 @@ class TestLogin:
         db.session.commit()
         resp = client.post('/auth/login', data={'username': 'ai_player', 'password': 'aipass'})
         assert resp.status_code == 403
+
+    def test_login_database_lock_returns_retryable_503(
+            self, client, db, monkeypatch):
+        from models import User
+
+        user = User(
+            username='busylogin',
+            password_hash=generate_password_hash('pass1234'),
+            gold=10,
+        )
+        db.session.add(user)
+        db.session.commit()
+
+        def locked_commit():
+            raise OperationalError(
+                'COMMIT', {}, sqlite3.OperationalError('database is locked'))
+
+        monkeypatch.setattr(db.session, 'commit', locked_commit)
+        resp = client.post('/auth/login', data={
+            'username': 'busylogin',
+            'password': 'pass1234',
+        })
+
+        assert resp.status_code == 503
+        assert resp.get_json()['retryable'] is True
+        assert resp.headers['Retry-After'] == '2'
 
 
 class TestTokenDecorator:

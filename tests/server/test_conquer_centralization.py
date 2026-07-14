@@ -554,6 +554,50 @@ class TestConquerReentrySafetyNet:
 
 
 class TestStuckConquerSweeper:
+    def test_process_leadership_lock_is_exclusive(self, app, tmp_path,
+                                                  monkeypatch):
+        import server_settings as settings
+        from sweepers import acquire_stuck_conquer_sweeper_leadership
+
+        lock_path = tmp_path / 'stuck-sweeper.lock'
+        monkeypatch.setattr(
+            settings, 'STUCK_CONQUER_SWEEPER_LOCK_PATH', str(lock_path))
+
+        first = acquire_stuck_conquer_sweeper_leadership(app)
+        assert first is not None
+        try:
+            assert acquire_stuck_conquer_sweeper_leadership(app) is None
+        finally:
+            first.release()
+
+        replacement = acquire_stuck_conquer_sweeper_leadership(app)
+        assert replacement is not None
+        replacement.release()
+
+    def test_daemon_iteration_releases_session_and_skips_region_reconcile(
+            self, app, db, monkeypatch):
+        import region_service
+        import sweepers
+
+        calls = []
+        original_remove = db.session.remove
+
+        monkeypatch.setattr(
+            sweepers, 'sweep_stuck_conquer_games', lambda: calls.append('sweep') or 0)
+        monkeypatch.setattr(
+            region_service, 'reconcile_region_champions',
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError('region reconciliation must not run in daemon')))
+
+        def tracked_remove():
+            calls.append('remove')
+            return original_remove()
+
+        monkeypatch.setattr(db.session, 'remove', tracked_remove)
+        assert sweepers.run_stuck_conquer_sweep_iteration(app) == 0
+        assert calls[0] == 'sweep'
+        assert 'remove' in calls
+
     def test_resolves_stale_conquer_game(self, app, db):
         from sweepers import sweep_stuck_conquer_games
         with app.app_context():

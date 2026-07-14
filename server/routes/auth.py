@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from flask import Blueprint, request, jsonify, g
 from itsdangerous import URLSafeTimedSerializer, SignatureExpired, BadSignature
 from sqlalchemy import case, func
+from sqlalchemy.exc import OperationalError
 from werkzeug.security import generate_password_hash, check_password_hash
 
 from models import db, User, Player, Game
@@ -55,6 +56,24 @@ def _is_valid_email(email):
     if ' ' in email:
         return False
     return True
+
+
+def _database_busy_response(error, action):
+    """Return a retryable response for transient SQLite writer contention."""
+    message = str(error or '').lower()
+    if not isinstance(error, OperationalError) or not any(
+            marker in message for marker in ('database is locked',
+                                              'database is busy')):
+        return None
+    logger.warning('Database busy during %s; asking client to retry', action)
+    response = jsonify({
+        'success': False,
+        'message': 'Server is briefly busy. Please try again in a moment.',
+        'retryable': True,
+    })
+    response.status_code = 503
+    response.headers['Retry-After'] = '2'
+    return response
 
 
 # ── Long-lived AI service token max age (1 year) ──
@@ -370,6 +389,9 @@ def register():
         return jsonify(response)
     except Exception as e:
         db.session.rollback()
+        busy_response = _database_busy_response(e, 'registration')
+        if busy_response is not None:
+            return busy_response
         logging.error(f"Registration failed: {e}")
         return jsonify({'success': False, 'message': 'Registration failed. Please try again later.'}), 500
 
@@ -414,6 +436,9 @@ def login():
         return jsonify(response)
     except Exception as e:
         db.session.rollback()
+        busy_response = _database_busy_response(e, 'login')
+        if busy_response is not None:
+            return busy_response
         logging.error(f"Login failed: {e}")
         return jsonify({'success': False, 'message': 'Login failed. Please try again later.'}), 500
 

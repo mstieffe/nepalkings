@@ -107,6 +107,25 @@ def test_inspector_shows_region_champion_and_personal_progress():
     assert lines['region_progress'] == 'Your progress: 5 lands · 4 more needed'
 
 
+def test_champion_inspector_shows_pending_tribute_rate_and_cap():
+    box = _anchored_box(region_info={
+        'key': 'karnali',
+        'name': 'Karnali',
+        'champion': {'user_id': 1, 'username': 'Malla'},
+        'champion_land_count': 12,
+        'my_land_count': 12,
+        'lands_to_champion': 0,
+        'is_champion': True,
+        'my_pending_tribute': 18.5,
+        'tribute_rate_per_hour': 3.4,
+        'tribute_cap': 81.6,
+    })
+
+    lines = dict(box._lines)
+    assert lines['region_tribute'] == (
+        'Tribute: 18.5g ready · +3.4g/h · 81.6g cap')
+
+
 # ── Map scan modes ──────────────────────────────────────────────────
 
 def _make_land(col, row, **o):

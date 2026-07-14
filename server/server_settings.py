@@ -35,6 +35,7 @@ from security_settings import (  # noqa: F401  (public re-export)
 from database_settings import (  # noqa: F401  (public re-export)
     DB_URL,
     DROP_TABLES_ON_STARTUP,
+    SQLITE_BUSY_TIMEOUT_SECONDS,
 )
 
 # Server URL is not security-critical; keep here for now.
@@ -390,6 +391,10 @@ STUCK_CONQUER_TIMEOUT_SECONDS = int(
 STUCK_CONQUER_SWEEP_INTERVAL_SECONDS = int(
     os.getenv('STUCK_CONQUER_SWEEP_INTERVAL_SECONDS', str(60))
 )
+# Non-blocking host-wide leadership lock. Empty means derive a sidecar path
+# from the SQLite database, keeping every WSGI worker on the same lock.
+STUCK_CONQUER_SWEEPER_LOCK_PATH = os.getenv(
+    'STUCK_CONQUER_SWEEPER_LOCK_PATH', '')
 POST_BATTLE_CHOICE_TIMEOUT_SECONDS = int(
     os.getenv('POST_BATTLE_CHOICE_TIMEOUT_SECONDS', str(5 * 60))
 )

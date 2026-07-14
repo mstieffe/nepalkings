@@ -5,6 +5,7 @@
 import pytest
 from datetime import datetime, timezone, timedelta
 from unittest.mock import patch
+from sqlalchemy import event
 from models import (db as _db, User, Land, Kingdom as KingdomModel,
                     KingdomSkillAllocation)
 import server_settings as config
@@ -283,6 +284,49 @@ class TestKingdomMap:
         rv = client.get('/kingdom/map', headers=auth_headers_user1)
 
         assert rv.status_code == 200
+
+    def test_map_read_emits_no_database_writes(self, client, db, two_users,
+                                               auth_headers_user1):
+        """Polling the map must never acquire SQLite's single writer lock."""
+        user, _other = two_users
+        kingdom = KingdomModel(
+            owner_user_id=user.id,
+            name='Read-only Realm',
+            badge_key='badge_plain',
+            border_key='border_simple_gold',
+            surface_key='surface_plain',
+        )
+        db.session.add(kingdom)
+        db.session.flush()
+        db.session.add(Land(
+            col=0,
+            row=0,
+            region='karnali',
+            tier=1,
+            gold_rate=5.0,
+            suit_bonus_suit='Spades',
+            suit_bonus_value=1,
+            owner_user_id=user.id,
+            kingdom_id=kingdom.id,
+        ))
+        db.session.commit()
+
+        writes = []
+
+        def record_write(_conn, _cursor, statement, _params, _context,
+                         _executemany):
+            verb = statement.lstrip().split(None, 1)[0].upper()
+            if verb in {'INSERT', 'UPDATE', 'DELETE', 'REPLACE'}:
+                writes.append(statement)
+
+        event.listen(db.engine, 'before_cursor_execute', record_write)
+        try:
+            rv = client.get('/kingdom/map', headers=auth_headers_user1)
+        finally:
+            event.remove(db.engine, 'before_cursor_execute', record_write)
+
+        assert rv.status_code == 200
+        assert writes == []
 
     def test_requires_auth(self, client):
         """Endpoint requires authentication."""

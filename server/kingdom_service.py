@@ -954,22 +954,25 @@ def _skill_keys():
     return tuple(d.key for d in (config.KINGDOM_SKILL_DEFINITIONS or ()))
 
 
-def kingdom_skill_allocations(kingdom_id):
+def kingdom_skill_allocations(kingdom_id, *, create_missing=True):
     """Return ``{skill_key: KingdomSkillAllocation}`` for ``kingdom_id``.
 
-    Missing rows are created at level 0 so callers can read levels uniformly.
-    Allocation rows for skill keys no longer in ``KINGDOM_SKILL_DEFINITIONS``
-    are returned as-is (read-only) but won't be created automatically.
+    Mutation paths create missing level-zero rows by default. Read-only
+    serialization passes ``create_missing=False`` so GET endpoints never turn
+    a harmless snapshot into an autoflushed SQLite write transaction.
+    Allocation rows for skill keys no longer in
+    ``KINGDOM_SKILL_DEFINITIONS`` are returned as-is.
     """
     rows = KingdomSkillAllocation.query.filter_by(kingdom_id=kingdom_id).all()
     by_key = {row.skill_key: row for row in rows}
-    for skill_key in _skill_keys():
-        if skill_key not in by_key:
-            row = KingdomSkillAllocation(
-                kingdom_id=kingdom_id, skill_key=skill_key, level=0)
-            db.session.add(row)
-            by_key[skill_key] = row
-    db.session.flush()
+    if create_missing:
+        for skill_key in _skill_keys():
+            if skill_key not in by_key:
+                row = KingdomSkillAllocation(
+                    kingdom_id=kingdom_id, skill_key=skill_key, level=0)
+                db.session.add(row)
+                by_key[skill_key] = row
+        db.session.flush()
     return by_key
 
 
@@ -2038,7 +2041,8 @@ def serialize_kingdom_config(kingdom):
     raw_gold_rate = round(sum(float(land.gold_rate or 0) for land in lands), 3)
     effective_gold_rate = effective_gold_rate_for_lands(lands) if lands else 0.0
     gold_bonus_rate = round(float(effective_gold_rate or 0) - raw_gold_rate, 3)
-    allocations = kingdom_skill_allocations(kingdom.id)
+    allocations = kingdom_skill_allocations(
+        kingdom.id, create_missing=False)
     skills = {}
     for sdef in (config.KINGDOM_SKILL_DEFINITIONS or ()):
         row = allocations.get(sdef.key)

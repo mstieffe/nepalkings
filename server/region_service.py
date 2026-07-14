@@ -407,8 +407,13 @@ def serialize_regions(user_id, lands=None, now=None):
     lands = list(lands) if lands is not None else Land.query.all()
     standings = region_standings(lands=lands)
     rows = {row.region: row for row in RegionChampion.query.all()}
+    # Names follow the live read-only standings rather than the persisted row.
+    # This keeps snapshots truthful if a prior mutation failed before its
+    # Champion reconciliation could commit; startup remains the repair path.
     champion_ids = {
-        user_id for row in rows.values() for user_id in _row_champion_ids(row)
+        leader_id
+        for data in standings.values()
+        for leader_id in _leaders_for_counts(data['counts_by_user'])[0]
     }
     usernames = {
         user.id: user.username for user in User.query.filter(
@@ -446,6 +451,7 @@ def serialize_regions(user_id, lands=None, now=None):
             'my_land_count': my_count,
             'lands_to_champion': lands_to_champion,
             'min_lands': 1,
+            'is_champion': user_id in leader_ids,
             'tribute_rate_per_hour': round(share_rate, 3),
             'my_pending_tribute': round(
                 pending.get(user_id, 0.0), 3),

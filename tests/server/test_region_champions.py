@@ -179,6 +179,8 @@ def test_map_region_snapshot_is_read_only(client, db, two_users,
         region for region in data['regions']
         if region['key'] == 'kathmandu')
     assert kathmandu['name'] == 'Kathmandu Valley'
+    assert kathmandu['is_champion'] is True
+    assert kathmandu['champion']['username'] == first.username
     assert kathmandu['my_land_count'] == 3
     assert kathmandu['min_lands'] == 1
     assert kathmandu['lands_to_champion'] == 0

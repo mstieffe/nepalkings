@@ -80,9 +80,14 @@ class TestConnectedKingdomRoutes:
 
     def test_map_exposes_component_data_and_no_legacy_bonuses(self, client, db, two_users,
                                                               auth_headers_user1):
+        from kingdom_service import reconcile_user_kingdoms
+
         u1, _ = two_users
         _add_land(db, 0, 0, owner_id=u1.id, gold_rate=50.0)
         _add_land(db, 1, 0, owner_id=u1.id, gold_rate=50.0)
+        # Ownership mutations, not the GET endpoint, persist the component's
+        # kingdom row before clients read the map.
+        reconcile_user_kingdoms(u1.id, commit=True)
 
         rv = client.get('/kingdom/map', headers=auth_headers_user1)
 

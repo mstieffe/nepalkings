@@ -416,14 +416,16 @@ class LeaderboardPanel:
             self.window.blit(champion_surf, (champion_x, champion_y))
 
             if is_champion:
-                progress = f'You: Champion · {my_count} lands'
+                progress = f'You: {my_count} lands'
             elif needed:
                 progress = f'You: {my_count} · {needed} to lead'
             else:
                 progress = f'You: {my_count}'
             tribute_rate = float(region.get('tribute_rate_per_hour') or 0.0)
-            meta = (f'+{tribute_rate:g}g/h'
-                    if is_champion and tribute_rate > 0 else '')
+            pending_tribute = float(region.get('my_pending_tribute') or 0.0)
+            meta = (
+                f'{pending_tribute:g}g ready · +{tribute_rate:g}/h'
+                if is_champion and tribute_rate > 0 else '')
             meta_surf = self._small_font.render(
                 meta, True, settings.KINGDOM_ACTIVITY_DIM_CLR)
             progress = self._fit_text(

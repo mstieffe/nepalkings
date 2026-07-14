@@ -6,6 +6,12 @@ import os
 # ── Database URL ──────────────────────────────────────────────────
 DB_URL = os.getenv('DB_URL', 'sqlite:///test.db')
 
+# Keep SQLite's busy wait shorter than the client's HTTP timeout. A persistent
+# writer should produce a retryable JSON response instead of looking like a
+# network outage after the client gives up at ten seconds.
+SQLITE_BUSY_TIMEOUT_SECONDS = max(
+    0.25, float(os.getenv('SQLITE_BUSY_TIMEOUT_SECONDS', '5.0')))
+
 # ── Schema reset on startup ───────────────────────────────────────
 # When True the server drops and recreates all tables on startup -- useful
 # for local schema iteration but DESTRUCTIVE in production. Default is

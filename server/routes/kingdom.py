@@ -1267,7 +1267,6 @@ def get_kingdom_map():
     from kingdom_service import (compute_owned_land_components,
                                  describe_kingdom_bonuses, effective_gold_rate_for_lands,
                                  kingdom_shield_block_reason, kingdom_skill_bonuses,
-                                 reconcile_user_kingdoms,
                                  serialize_kingdom_config,
                                  summarize_user_kingdom)
     from region_service import region_for, serialize_regions
@@ -1277,7 +1276,6 @@ def get_kingdom_map():
         return jsonify({'error': 'User not found'}), 404
 
     now = _utcnow()
-    reconcile_user_kingdoms(user.id, commit=False)
     lands = Land.query.order_by(Land.row, Land.col).all()
     kingdom_ids = {land.kingdom_id for land in lands if land.kingdom_id}
     kingdoms_by_id = {
@@ -1391,7 +1389,7 @@ def get_kingdom_map():
         components_by_user, lands, kingdoms_by_id, user.id)
     regions = serialize_regions(user.id, lands=lands, now=now)
 
-    return jsonify({
+    response = jsonify({
         'lands': lands_data,
         'my_total_gold_rate': round(my_total_gold_rate, 1),
         'my_effective_gold_rate': round(my_effective_gold_rate, 3),
@@ -1403,6 +1401,11 @@ def get_kingdom_map():
         'regions': regions,
         **leaderboards,
     })
+    # The 4,800-land snapshot is intentionally read-only. End its SQLite read
+    # transaction before returning so a slow client response cannot delay an
+    # unrelated writer waiting to commit.
+    db.session.rollback()
+    return response
 
 
 # ── Conquer Config Helpers ───────────────────────────────────────────────────

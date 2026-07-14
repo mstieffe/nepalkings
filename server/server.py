@@ -170,14 +170,15 @@ logging.getLogger('werkzeug').setLevel(logging.ERROR)
 # Configure the database URI and SQLite-specific settings
 app.config['SQLALCHEMY_DATABASE_URI'] = settings.DB_URL
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-if ':memory:' in settings.DB_URL:
+_is_sqlite = settings.DB_URL.startswith('sqlite:')
+if _is_sqlite and ':memory:' in settings.DB_URL:
     # In-memory SQLite uses StaticPool — pool_size/overflow/timeout are invalid
     app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
         'connect_args': {
             'check_same_thread': False
         }
     }
-else:
+elif _is_sqlite:
     app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
         'pool_pre_ping': True,
         'pool_recycle': 300,
@@ -185,9 +186,20 @@ else:
         'max_overflow': 2,        # Extra connections beyond pool_size
         'pool_timeout': 10,       # Seconds to wait for a connection before error
         'connect_args': {
-            'timeout': 30,
+            'timeout': float(settings.SQLITE_BUSY_TIMEOUT_SECONDS),
             'check_same_thread': False  # Important for SQLite with Flask
         }
+    }
+else:
+    # DBAPI-specific SQLite arguments such as ``check_same_thread`` make a
+    # PostgreSQL deployment fail during engine creation. Keep the shared pool
+    # tuning while allowing the target driver to use its native defaults.
+    app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+        'pool_pre_ping': True,
+        'pool_recycle': 300,
+        'pool_size': 5,
+        'max_overflow': 2,
+        'pool_timeout': 10,
     }
 db.init_app(app)
 
@@ -207,12 +219,14 @@ with app.app_context():
         if _applied:
             logger.info("Applied schema migrations: %s",
                         ', '.join(f'{v:04d}' for v in _applied))
-    except Exception as _migration_err:  # pragma: no cover — safety net
-        logger.exception("Schema migration failed: %s — the app will start "
-                         "anyway, but the database may be missing recent "
-                         "schema changes. Investigate before accepting "
-                         "traffic.", _migration_err)
+    except Exception as _migration_err:  # pragma: no cover — startup safety
+        logger.exception(
+            "Schema migration failed: %s — refusing to start with a partial "
+            "or incompatible schema.", _migration_err)
         db.session.rollback()
+        raise RuntimeError(
+            'Required database migration failed; application startup aborted'
+        ) from _migration_err
 
     logger.info("Database initialized")
 

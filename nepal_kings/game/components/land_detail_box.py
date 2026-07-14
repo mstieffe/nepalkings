@@ -240,7 +240,8 @@ class LandDetailBox:
         if kind == 'conquest_hint':
             return self._body_font.get_height() + 10
         if kind in ('since', 'kingdom_bonus', 'land_cd', 'shield',
-                    'region', 'region_champion', 'region_progress'):
+                    'region', 'region_champion', 'region_progress',
+                    'region_tribute'):
             return small_h + 2
         return body_h + 2
 
@@ -281,6 +282,16 @@ class LandDetailBox:
             else:
                 progress = f'Your progress: {mine} lands · Champion'
             self._lines.append(('region_progress', progress))
+            if self._region_info.get('is_champion'):
+                pending = float(
+                    self._region_info.get('my_pending_tribute') or 0.0)
+                rate = float(
+                    self._region_info.get('tribute_rate_per_hour') or 0.0)
+                cap = float(self._region_info.get('tribute_cap') or 0.0)
+                tribute = f'Tribute: {pending:g}g ready · +{rate:g}g/h'
+                if cap > 0:
+                    tribute += f' · {cap:g}g cap'
+                self._lines.append(('region_tribute', tribute))
         self._lines.append(('spacer', ''))
         self._lines.append(('gold', f'Gold production: {tile.gold_rate:.1f} / hour'))
         if tile.suit_bonus_suit == 'Neutral' or not tile.suit_bonus_value:
@@ -565,10 +576,13 @@ class LandDetailBox:
                 surf = self._small_font.render(text, True, settings.LAND_DETAIL_DIM_CLR)
                 self.window.blit(surf, (x, y))
                 y += surf.get_height() + 2
-            elif kind in ('region', 'region_champion', 'region_progress'):
+            elif kind in ('region', 'region_champion', 'region_progress',
+                           'region_tribute'):
                 clr = (settings.LAND_DETAIL_TITLE_CLR
                        if kind == 'region'
-                       else settings.LAND_DETAIL_DIM_CLR)
+                       else ((246, 211, 116)
+                             if kind == 'region_tribute'
+                             else settings.LAND_DETAIL_DIM_CLR))
                 surf = self._small_font.render(text, True, clr)
                 self.window.blit(surf, (x, y))
                 y += surf.get_height() + 2
