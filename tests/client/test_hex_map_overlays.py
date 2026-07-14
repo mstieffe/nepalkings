@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
 # See LICENSE file in the project root for full license information.
 """Tests for the redesigned per-tile overlays on the kingdom hex map."""
+import pygame
 import pytest
 
 
@@ -217,6 +218,30 @@ class TestKingdomBadge:
             hm = _new_map(lands, zoom=zoom)
             hm._draw_kingdom_badges(60)
             assert called['n'] >= 1, f'badge not drawn at zoom={zoom}'
+
+    def test_region_champion_medal_is_attached_to_players_kingdom_badge(
+            self, monkeypatch):
+        owner = {'user_id': 7, 'username': 'rex'}
+        hm = _new_map([
+            _make_land(col=0, row=0, land_id=1, owner=owner, kingdom_id=4,
+                       kingdom_name='Realm', kingdom_level=2),
+        ], zoom=1.0)
+        hm.set_regions([{
+            'key': 'kirat',
+            'champions': [{'user_id': 7, 'username': 'rex'}],
+        }])
+        rendered_sizes = []
+
+        def champion_icon(size):
+            rendered_sizes.append(size)
+            return pygame.Surface((size, size), pygame.SRCALPHA)
+
+        monkeypatch.setattr(hm, '_render_champion_icon', champion_icon)
+
+        hm._draw_kingdom_badges(60)
+
+        assert hm._region_champion_users == {7}
+        assert rendered_sizes
 
 
 # ─────────────────────────── owner chip ────────────────────────────

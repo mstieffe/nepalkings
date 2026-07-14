@@ -13,7 +13,8 @@ import server_settings as config
 from models import (db, User, Land, Kingdom, KingdomCosmeticUnlock,
                     KingdomSkillAllocation, KingdomNotification,
                     KingdomLootEvent, CollectionCard, LandConfigFigure,
-                    LandConfig, LandConfigBattleMove, ConquerTactic)
+                    LandConfig, LandConfigBattleMove, ConquerTactic,
+                    UserKingdomCosmeticEntitlement)
 
 
 def _utcnow():
@@ -83,16 +84,23 @@ def create_kingdom(owner_user_id, source_kingdom=None):
     db.session.add(kingdom)
     db.session.flush()
 
+    copied_unlocks = set()
     if source_kingdom:
-        copied_unlocks = {
+        copied_unlocks.update({
             key for (key,) in db.session.query(KingdomCosmeticUnlock.cosmetic_key)
             .filter_by(kingdom_id=source_kingdom.id)
             .all()
-        }
-        for key in copied_unlocks:
-            if key not in default_unlocked_cosmetic_keys():
-                db.session.add(KingdomCosmeticUnlock(
-                    kingdom_id=kingdom.id, cosmetic_key=key))
+        })
+    copied_unlocks.update({
+        key for (key,) in db.session.query(
+            UserKingdomCosmeticEntitlement.cosmetic_key)
+        .filter_by(user_id=owner_user_id)
+        .all()
+    })
+    for key in copied_unlocks:
+        if key not in default_unlocked_cosmetic_keys():
+            db.session.add(KingdomCosmeticUnlock(
+                kingdom_id=kingdom.id, cosmetic_key=key))
     return kingdom
 
 
@@ -215,14 +223,16 @@ def ensure_conquer_tactics_schema():
 # ── Map Seeding ──────────────────────────────────────────────────────────────
 
 
-def _pick_gold_rate(tier):
+def _pick_gold_rate(tier, rng=None):
+    rng = rng or random
     lo, hi = config.LAND_GOLD_RATE_RANGES[tier]
-    return round(random.uniform(lo, hi), 2)
+    return round(rng.uniform(lo, hi), 2)
 
 
-def _pick_suit_bonus_value(tier):
+def _pick_suit_bonus_value(tier, rng=None):
+    rng = rng or random
     lo, hi = config.LAND_SUIT_BONUS_RANGES[tier]
-    return random.randint(lo, hi)
+    return rng.randint(lo, hi)
 
 
 def kingdom_neighbor_coords(col, row):
@@ -263,24 +273,26 @@ def _odd_q_to_world(col, row):
     return q + (r / 2.0), (math.sqrt(3.0) / 2.0) * r
 
 
-def _pick_cluster_seeds(cols, rows, n_clusters):
+def _pick_cluster_seeds(cols, rows, n_clusters, coords=None, rng=None):
     """Pick ``n_clusters`` seed hexes using Mitchell's best-candidate sampler.
 
     Each new seed is the candidate (out of several random picks) that maximises
     the minimum distance to already-chosen seeds.  This produces well-spaced
     Voronoi seeds without manual quadrant placement.
     """
+    rng = rng or random
     seeds = []
-    all_coords = [(c, r) for r in range(rows) for c in range(cols)]
+    all_coords = list(coords) if coords is not None else [
+        (c, r) for r in range(rows) for c in range(cols)]
     if not all_coords:
         return seeds
     # First seed is fully random.
-    seeds.append(random.choice(all_coords))
+    seeds.append(rng.choice(all_coords))
     candidate_pool = max(8, 2 * n_clusters)
     while len(seeds) < n_clusters:
         best, best_dist = None, -1
         for _ in range(candidate_pool):
-            cand = random.choice(all_coords)
+            cand = rng.choice(all_coords)
             if cand in seeds:
                 continue
             d = min(_hex_distance(cand[0], cand[1], s[0], s[1]) for s in seeds)
@@ -292,13 +304,14 @@ def _pick_cluster_seeds(cols, rows, n_clusters):
     return seeds
 
 
-def _build_cluster_suits(clusters_per_suit):
+def _build_cluster_suits(clusters_per_suit, rng=None):
     """Return a shuffled suit list with equal cluster count per suit."""
+    rng = rng or random
     count = max(1, int(clusters_per_suit))
     cluster_suits = []
     for suit in ('Hearts', 'Diamonds', 'Clubs', 'Spades'):
         cluster_suits.extend([suit] * count)
-    random.shuffle(cluster_suits)
+    rng.shuffle(cluster_suits)
     return cluster_suits
 
 
@@ -318,8 +331,9 @@ def _cluster_radius_bounds(tier_count):
     return radius_min, radius_max
 
 
-def _build_cluster_profiles(seeds, tier_count):
+def _build_cluster_profiles(seeds, tier_count, rng=None):
     """Build per-cluster shape profile (radius, anisotropy, orientation)."""
+    rng = rng or random
     anis_range = getattr(config, 'KINGDOM_MAP_CLUSTER_ANISOTROPY_RANGE', (1.2, 2.1))
     anis_min = max(1.0, float(anis_range[0]))
     anis_max = max(anis_min, float(anis_range[1]))
@@ -328,9 +342,9 @@ def _build_cluster_profiles(seeds, tier_count):
     profiles = []
     for _ in seeds:
         profiles.append({
-            'radius': random.randint(radius_min, radius_max),
-            'anisotropy': random.uniform(anis_min, anis_max),
-            'angle': random.uniform(0.0, math.tau),
+            'radius': rng.randint(radius_min, radius_max),
+            'anisotropy': rng.uniform(anis_min, anis_max),
+            'angle': rng.uniform(0.0, math.tau),
         })
     return profiles
 
@@ -364,7 +378,8 @@ def _cluster_distance(col, row, seed, profile, cluster_idx, noise_strength):
     return max(0.0, base + (noise_strength * noise))
 
 
-def _assign_voronoi_regions(cols, rows, seeds, cluster_profiles):
+def _assign_voronoi_regions(cols, rows, seeds, cluster_profiles, coords=None,
+                            distance_scales=None):
     """Assign each hex to its nearest shaped cluster; ties/out-of-range are neutral.
 
     Returns ``{(col, row): seed_index_or_None}`` where ``None`` marks neutral
@@ -380,34 +395,43 @@ def _assign_voronoi_regions(cols, rows, seeds, cluster_profiles):
 
     assignment = {}
     tie_eps = 1e-9
-    for r in range(rows):
-        for c in range(cols):
-            best_idx, best_d, tied = -1, 10 ** 9, False
-            for idx, seed in enumerate(seeds):
-                d = _cluster_distance(
-                    c,
-                    r,
-                    seed,
-                    cluster_profiles[idx],
-                    idx,
-                    noise_strength,
-                )
-                if d + tie_eps < best_d:
-                    best_d, best_idx, tied = d, idx, False
-                elif abs(d - best_d) <= tie_eps:
-                    tied = True
+    target_coords = list(coords) if coords is not None else [
+        (c, r) for r in range(rows) for c in range(cols)]
+    for c, r in target_coords:
+        best_idx, best_d, tied = -1, 10 ** 9, False
+        for idx, seed in enumerate(seeds):
+            d = _cluster_distance(
+                c,
+                r,
+                seed,
+                cluster_profiles[idx],
+                idx,
+                noise_strength,
+            )
+            if distance_scales is not None and idx < len(distance_scales):
+                d *= max(0.1, float(distance_scales[idx]))
+            if d + tie_eps < best_d:
+                best_d, best_idx, tied = d, idx, False
+            elif abs(d - best_d) <= tie_eps:
+                tied = True
 
-            radius = cluster_profiles[best_idx]['radius'] if best_idx >= 0 else 0
-            if tied or best_idx < 0 or best_d > radius:
-                assignment[(c, r)] = None
-            else:
-                assignment[(c, r)] = best_idx
+        radius = cluster_profiles[best_idx]['radius'] if best_idx >= 0 else 0
+        if tied or best_idx < 0 or best_d > radius:
+            assignment[(c, r)] = None
+        else:
+            assignment[(c, r)] = best_idx
     return assignment
 
 
-def _mark_border_neutrals(assignment):
-    """Promote any hex that has a same-distance, different-cluster neighbour
-    to neutral, ensuring at least a 1-hex visible gap between clusters."""
+def _mark_border_neutrals(assignment, cluster_suits=None,
+                          region_by_coord=None):
+    """Create seams between different suits and between historic regions.
+
+    Adjacent clusters of the same suit deliberately join.  In the four outer
+    regions this lets the heavily weighted dominant suit read as a few broad
+    territories instead of many small islands; Kathmandu's denser, balanced
+    seed field remains visibly more fragmented.
+    """
     neutralised = set()
     for (c, r), idx in assignment.items():
         if idx is None:
@@ -415,6 +439,13 @@ def _mark_border_neutrals(assignment):
         for n in kingdom_neighbor_coords(c, r):
             n_idx = assignment.get(n)
             if n_idx is not None and n_idx != idx:
+                same_region = (not region_by_coord or
+                               region_by_coord.get((c, r)) ==
+                               region_by_coord.get(n))
+                same_suit = (cluster_suits is not None
+                             and cluster_suits[idx] == cluster_suits[n_idx])
+                if same_region and same_suit:
+                    continue
                 neutralised.add((c, r))
                 break
     for coord in neutralised:
@@ -422,7 +453,7 @@ def _mark_border_neutrals(assignment):
     return assignment
 
 
-def _pick_cluster_peaks(assignment, seeds):
+def _pick_cluster_peaks(assignment, seeds, rng=None):
     """Choose 1..N apex hexes per cluster to vary the peak shape.
 
     The seed itself is always a peak.  Additional peaks are picked from the
@@ -432,13 +463,14 @@ def _pick_cluster_peaks(assignment, seeds):
 
     Returns a list of frozensets, one per cluster.
     """
+    rng = rng or random
     plateau_range = getattr(
         config, 'KINGDOM_MAP_PEAK_PLATEAU_RANGE', (1, 1))
     plateau_min = max(1, int(plateau_range[0]))
     plateau_max = max(plateau_min, int(plateau_range[1]))
     peak_sets = []
     for idx, seed in enumerate(seeds):
-        target = random.randint(plateau_min, plateau_max)
+        target = rng.randint(plateau_min, plateau_max)
         peaks = {seed}
         frontier = [seed]
         while len(peaks) < target and frontier:
@@ -451,7 +483,7 @@ def _pick_cluster_peaks(assignment, seeds):
                         candidates.append(n)
             if not candidates:
                 break
-            random.shuffle(candidates)
+            rng.shuffle(candidates)
             for cand in candidates:
                 if len(peaks) >= target:
                     break
@@ -467,40 +499,76 @@ def _tier_for_cluster_hex(col, row, peaks, tier_count):
     return max(1, min(tier_count, tier_count - d))
 
 
-def _pick_neutral_tier(tier_count):
+def _pick_neutral_tier(tier_count, rng=None):
     """Pick a tier for a neutral land (never the apex tier)."""
+    rng = rng or random
     neutral_probs = getattr(config, 'LAND_NEUTRAL_TIER_PROBABILITIES', None)
     if neutral_probs:
         tiers = list(neutral_probs.keys())
         weights = [neutral_probs[t] for t in tiers]
-        return random.choices(tiers, weights=weights, k=1)[0]
+        return rng.choices(tiers, weights=weights, k=1)[0]
     # Fallback: drop the apex tier from cluster weights and renormalise.
     base = {t: w for t, w in config.LAND_TIER_PROBABILITIES.items()
             if t < tier_count}
     total = sum(base.values()) or 1.0
     tiers = list(base.keys())
     weights = [base[t] / total for t in tiers]
-    return random.choices(tiers, weights=weights, k=1)[0]
+    return rng.choices(tiers, weights=weights, k=1)[0]
 
 
-def seed_kingdom_map():
+def _enforce_kathmandu_neutral_share(assignment, seeds, profiles, coords):
+    """Expand existing gaps until Kathmandu reaches its configured quota."""
+    target = int(math.ceil(
+        len(coords) * max(0.0, min(1.0, config.KATHMANDU_NEUTRAL_SHARE))))
+    current = sum(1 for coord in coords if assignment.get(coord) is None)
+    needed = max(0, target - current)
+    if not needed:
+        return
+    seed_coords = set(seeds)
+    noise_strength = max(
+        0.0,
+        float(getattr(config, 'KINGDOM_MAP_BOUNDARY_NOISE_STRENGTH', 0.0)),
+    )
+    candidates = []
+    for col, row in coords:
+        idx = assignment.get((col, row))
+        if idx is None or (col, row) in seed_coords:
+            continue
+        distance = _cluster_distance(
+            col, row, seeds[idx], profiles[idx], idx, noise_strength)
+        radius = max(1.0, float(profiles[idx]['radius']))
+        # Prefer cluster-edge tiles.  The coordinate term gives stable tie
+        # breaking without sprinkling random holes through cluster cores.
+        score = distance / radius + ((col * 193 + row * 389) % 997) / 997000.0
+        candidates.append((score, col, row))
+    candidates.sort(reverse=True)
+    for _score, col, row in candidates[:needed]:
+        assignment[(col, row)] = None
+
+
+def _balanced_kathmandu_cluster_suits(assignment, cluster_count, rng):
+    """Assign realised clusters to suits while balancing their tile totals."""
+    suits = ['Hearts', 'Diamonds', 'Clubs', 'Spades']
+    rng.shuffle(suits)
+    sizes = {idx: 0 for idx in range(cluster_count)}
+    for idx in assignment.values():
+        if idx is not None:
+            sizes[idx] += 1
+    totals = {suit: 0 for suit in suits}
+    result = [None] * cluster_count
+    for idx in sorted(sizes, key=lambda item: (-sizes[item], item)):
+        suit = min(suits, key=lambda item: (totals[item], suits.index(item)))
+        result[idx] = suit
+        totals[suit] += sizes[idx]
+    return result
+
+
+def seed_kingdom_map(commit=True):
     """Generate the kingdom hex map if it doesn't exist yet.
 
-    The map is built as a landscape:
-            * Build an equal per-suit cluster list where each suit appears exactly
-                ``KINGDOM_MAP_CLUSTERS_PER_SUIT`` times, then shuffle it.
-            * Pick one well-spaced seed hex per cluster; each seed becomes the
-                centre of its preassigned suit cluster.
-            * Give each cluster its own anisotropy/orientation/radius profile and
-                assign hexes by shaped distance plus deterministic boundary noise.
-      * Assign every hex to its nearest seed (Voronoi).  Hexes equidistant to
-        two seeds, or whose nearest neighbour belongs to a different cluster,
-        become neutral — forming visible "rivers" between kingdoms.
-      * Tier acts as elevation: peak hex (the seed) is ``KINGDOM_TIER_COUNT``,
-        decreasing by one per hex of distance to the seed.
-      * Neutral hexes use ``LAND_NEUTRAL_TIER_PROBABILITIES`` (apex tier
-        excluded) and have no suit bonus (``suit_bonus_suit='Neutral'``,
-        ``suit_bonus_value=0``).
+    Each historic region receives its own shaped Voronoi seed pool.  Outer
+    regions favour one suit; Kathmandu balances all four suits and expands
+    organic gaps until Neutral land is the clear majority.
     """
     if Land.query.first() is not None:
         return  # already seeded
@@ -508,43 +576,90 @@ def seed_kingdom_map():
     cols = config.KINGDOM_MAP_COLS
     rows = config.KINGDOM_MAP_ROWS
     tier_count = getattr(config, 'KINGDOM_TIER_COUNT', 6)
-    clusters_per_suit = max(
-        1, int(getattr(config, 'KINGDOM_MAP_CLUSTERS_PER_SUIT', 1)))
-    cluster_suits = _build_cluster_suits(clusters_per_suit)
-    n_clusters = len(cluster_suits)
+    rng = random.Random(int(config.KINGDOM_MAP_GENERATION_SEED))
+    from region_service import region_coords, region_suit_list
+    coords_by_region = region_coords(cols, rows)
+    region_by_coord = {
+        coord: region_key
+        for region_key, coords in coords_by_region.items()
+        for coord in coords
+    }
     neutral_suit = getattr(config, 'LAND_NEUTRAL_SUIT', 'Neutral')
 
-    seeds = _pick_cluster_seeds(cols, rows, n_clusters)
-    cluster_profiles = _build_cluster_profiles(seeds, tier_count)
+    seeds = []
+    cluster_profiles = []
+    cluster_suits = []
+    assignment = {}
+    for region_key, coords in coords_by_region.items():
+        density = max(1, int(
+            config.KINGDOM_MAP_KATHMANDU_HEXES_PER_CLUSTER
+            if region_key == 'kathmandu'
+            else config.KINGDOM_MAP_OUTER_HEXES_PER_CLUSTER
+        ))
+        cluster_count = max(4, int(round(len(coords) / density)))
+        local_seeds = _pick_cluster_seeds(
+            cols, rows, cluster_count, coords=coords, rng=rng)
+        local_profiles = _build_cluster_profiles(
+            local_seeds, tier_count, rng=rng)
+        local_suits = None
+        distance_scales = None
+        if region_key != 'kathmandu':
+            local_suits = region_suit_list(
+                region_key, len(local_seeds), rng=rng)
+            dominant = config.MAP_REGIONS[region_key]['dominant_suit']
+            dominant_scale = max(0.1, min(1.0, float(
+                config.REGION_DOMINANT_CLUSTER_DISTANCE_SCALE)))
+            distance_scales = [
+                dominant_scale if suit == dominant else 1.0
+                for suit in local_suits
+            ]
+        local_assignment = _assign_voronoi_regions(
+            cols, rows, local_seeds, local_profiles, coords=coords,
+            distance_scales=distance_scales)
+        if region_key == 'kathmandu':
+            _enforce_kathmandu_neutral_share(
+                local_assignment, local_seeds, local_profiles, coords)
+        offset = len(seeds)
+        for coord, idx in local_assignment.items():
+            assignment[coord] = None if idx is None else idx + offset
+        seeds.extend(local_seeds)
+        cluster_profiles.extend(local_profiles)
+        if region_key == 'kathmandu':
+            local_suits = _balanced_kathmandu_cluster_suits(
+                local_assignment, len(local_seeds), rng)
+        cluster_suits.extend(local_suits)
 
-    assignment = _assign_voronoi_regions(cols, rows, seeds, cluster_profiles)
-    assignment = _mark_border_neutrals(assignment)
-    peak_sets = _pick_cluster_peaks(assignment, seeds)
+    assignment = _mark_border_neutrals(
+        assignment, cluster_suits=cluster_suits,
+        region_by_coord=region_by_coord)
+    peak_sets = _pick_cluster_peaks(assignment, seeds, rng=rng)
 
     for r in range(rows):
         for c in range(cols):
             cluster_idx = assignment.get((c, r))
             if cluster_idx is None:
-                tier = _pick_neutral_tier(tier_count)
+                tier = _pick_neutral_tier(tier_count, rng=rng)
                 suit = neutral_suit
                 bonus_val = 0
             else:
                 peaks = peak_sets[cluster_idx]
                 tier = _tier_for_cluster_hex(c, r, peaks, tier_count)
                 suit = cluster_suits[cluster_idx]
-                bonus_val = _pick_suit_bonus_value(tier)
+                bonus_val = _pick_suit_bonus_value(tier, rng=rng)
             land = Land(
                 col=c,
                 row=r,
+                region=region_by_coord[(c, r)],
                 tier=tier,
-                gold_rate=_pick_gold_rate(tier),
+                gold_rate=_pick_gold_rate(tier, rng=rng),
                 suit_bonus_suit=suit,
                 suit_bonus_value=bonus_val,
-                ai_template_index=pick_ai_defence_seed(random),
+                ai_template_index=pick_ai_defence_seed(rng),
             )
             db.session.add(land)
 
-    db.session.commit()
+    if commit:
+        db.session.commit()
 
 
 # ── Connected kingdoms / skills ─────────────────────────────────────────────

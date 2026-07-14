@@ -279,6 +279,7 @@ def collect_production_all_route():
     from kingdom_service import (collect_kingdom_production,
                                  reconcile_user_kingdoms,
                                  summarize_user_kingdom)
+    from region_service import collect_region_tributes
 
     reconcile_user_kingdoms(user.id, commit=False)
     db.session.flush()
@@ -311,6 +312,9 @@ def collect_production_all_route():
             'vault_cap': int(result.get('vault_cap') or 0),
             'production': result.get('production') or {},
         })
+    collected_tribute_total, region_breakdown = collect_region_tributes(
+        user, now=now)
+    total_gold += int(collected_tribute_total or 0)
     try:
         if total_gold or total_main or total_side or total_maps:
             from onboarding_service import increment_counter, mark_step, record_gold_earned
@@ -325,6 +329,7 @@ def collect_production_all_route():
         'success': True,
         'collected_total': total_gold,
         'collected_gold_total': total_gold,
+        'collected_tribute_total': int(collected_tribute_total or 0),
         'collected_main_boosters_total': total_main,
         'collected_side_boosters_total': total_side,
         'collected_maps_total': total_maps,
@@ -335,6 +340,7 @@ def collect_production_all_route():
         'booster_packs_side': int(user.booster_packs_side or 0),
         'maps': int(user.maps or 0),
         'kingdoms': breakdown,
+        'regions': region_breakdown,
         'kingdom': summarize_user_kingdom(user.id, None),
     })
 
@@ -1264,6 +1270,7 @@ def get_kingdom_map():
                                  reconcile_user_kingdoms,
                                  serialize_kingdom_config,
                                  summarize_user_kingdom)
+    from region_service import region_for, serialize_regions
 
     user = db.session.get(User, g.user_id)
     if not user:
@@ -1302,6 +1309,10 @@ def get_kingdom_map():
             my_lands_count += 1
 
         land_dict = land.serialize()
+        if not land_dict.get('region'):
+            land_dict['region'] = region_for(
+                land.col, land.row,
+                config.KINGDOM_MAP_COLS, config.KINGDOM_MAP_ROWS)
         land_dict.update(component_info_by_land.get(land.id, {
             'kingdom_component_id': None,
             'kingdom_component_size': 0,
@@ -1378,6 +1389,7 @@ def get_kingdom_map():
     # the on-map crowns + the leaderboard panel.
     leaderboards = _compute_top_kingdoms(
         components_by_user, lands, kingdoms_by_id, user.id)
+    regions = serialize_regions(user.id, lands=lands, now=now)
 
     return jsonify({
         'lands': lands_data,
@@ -1388,6 +1400,7 @@ def get_kingdom_map():
         'my_kingdoms': my_persistent_kingdoms,
         'recommended_tutorial_land_id': recommended_tutorial_land_id,
         'conquer_cooldown_remaining': cooldown_remaining,
+        'regions': regions,
         **leaderboards,
     })
 

@@ -63,6 +63,33 @@ if [ "$SKIP_BACKUP" = false ]; then
     if [ "$HTTP_CODE" = "200" ] && [ -s "$BACKUP_FILE" ]; then
         SIZE=$(du -h "$BACKUP_FILE" | cut -f1)
         echo "   ✅ Saved $BACKUP_FILE ($SIZE)"
+        if ! command -v sqlite3 >/dev/null 2>&1; then
+            echo "   ❌ sqlite3 is required to verify the production backup. Aborting."
+            exit 1
+        fi
+        INTEGRITY=$(sqlite3 "$BACKUP_FILE" "PRAGMA integrity_check;")
+        if [ "$INTEGRITY" != "ok" ]; then
+            echo "   ❌ Production backup failed SQLite integrity check. Aborting."
+            exit 1
+        fi
+        echo "   ✅ Backup integrity verified"
+
+        # Migration 14 is an intentional one-time regional map reset.  Before
+        # uploading code that can trigger it, run the real migration path on a
+        # disposable copy and refuse deployment while any Conquer battle is
+        # open.  Once production has version 14 this expensive dry-run is no
+        # longer needed on ordinary deploys.
+        SCHEMA_VERSION=$(sqlite3 "$BACKUP_FILE" \
+            "SELECT COALESCE(MAX(version), 0) FROM schema_version;" 2>/dev/null || echo "0")
+        if [ "${SCHEMA_VERSION:-0}" -lt 14 ]; then
+            echo "🧪 Dry-running Historic Regions migration on the backup..."
+            if [ ! -x ".venv/bin/python" ]; then
+                echo "   ❌ .venv/bin/python is required for the migration dry-run. Aborting."
+                exit 1
+            fi
+            .venv/bin/python scripts/verify_region_migration.py "$BACKUP_FILE"
+            echo "   ✅ Regional reset preflight passed"
+        fi
         # Keep only the 14 most recent backups
         ls -t backups/nepalkings-*.db 2>/dev/null | tail -n +15 | xargs rm -f 2>/dev/null || true
     elif [ "$HTTP_CODE" = "404" ]; then

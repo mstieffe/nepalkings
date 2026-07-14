@@ -50,6 +50,11 @@ class _DummyFloatingText:
 
 
 class TestKingdomLayout:
+    def test_activity_panel_defaults_to_collapsed(self):
+        from game.screens.kingdom_screen import KingdomScreen
+
+        assert KingdomScreen._activity_open is False
+
     def test_layout_regions_do_not_overlap(self):
         from game.screens.kingdom_screen import _compute_kingdom_layout
 
@@ -236,6 +241,9 @@ class TestKingdomActivityPanel:
 
         screen = KingdomScreen.__new__(KingdomScreen)
         screen._activity_rect = pygame.Rect(10, 10, 300, 400)
+        # These tests exercise the open panel's tabs and rows explicitly; the
+        # production screen now starts collapsed.
+        screen._activity_open = True
         screen._activity_tab = 'alerts'
         screen._messages = []
         screen._conversations = []
@@ -265,6 +273,17 @@ class TestKingdomActivityPanel:
 
         assert handled is True
         assert screen._activity_tab == 'history'
+
+    def test_toolbar_badge_counts_keep_notifications_and_messages_separate(self):
+        KingdomScreen, screen = self._screen()
+        screen._notifications = [
+            {'id': 1, 'seen': False},
+            {'id': 2, 'seen': True},
+            {'id': 3, 'seen': False},
+        ]
+        screen._message_unread_count = 4
+
+        assert KingdomScreen._activity_badge_counts(screen) == (2, 4)
 
     def test_desktop_panel_toggle_collapses_activity(self):
         KingdomScreen, screen = self._screen()
@@ -723,6 +742,24 @@ class TestKingdomDragRelease:
 
         KingdomScreen.handle_events(screen, [down])
 
+        assert screen._hex_map.events == []
+
+    def test_rankings_panel_clears_and_blocks_map_hover(self):
+        KingdomScreen, screen = self._screen()
+        screen._hex_map.hovered_tile = object()
+        panel_rect = pygame.Rect(120, 120, 180, 140)
+        screen._leaderboard_panel = SimpleNamespace(
+            contains_point=panel_rect.collidepoint)
+        motion = SimpleNamespace(
+            type=pygame.MOUSEMOTION,
+            pos=(160, 150),
+            rel=(0, 0),
+            buttons=(0, 0, 0),
+        )
+
+        KingdomScreen.handle_events(screen, [motion])
+
+        assert screen._hex_map.hovered_tile is None
         assert screen._hex_map.events == []
 
     def test_mobile_toolbar_toggle_press_still_toggles_layer_picker(self):

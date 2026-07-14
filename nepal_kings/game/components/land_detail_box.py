@@ -154,7 +154,7 @@ class LandDetailBox:
     def __init__(self, window, tile, cooldown=0, land_cooldown=0,
                  on_conquer=None, on_defence=None, on_close=None,
                  on_message=None, on_config=None, conquest_outcome=None,
-                 anchored=False, viewport_rect=None):
+                 anchored=False, viewport_rect=None, region_info=None):
         self.window = window
         self.tile = tile
         # Anchored mode docks a compact sheet to the bottom of the map
@@ -170,6 +170,7 @@ class LandDetailBox:
         self._on_close = on_close
         self._on_message = on_message
         self._conquest_outcome = conquest_outcome
+        self._region_info = region_info or {}
         self._created_at = pygame.time.get_ticks()
         self._last_render_cooldowns = None
 
@@ -238,7 +239,8 @@ class LandDetailBox:
             return max(self._icon_sz if self._broken_icon else 0, body_h) + 2
         if kind == 'conquest_hint':
             return self._body_font.get_height() + 10
-        if kind in ('since', 'kingdom_bonus', 'land_cd', 'shield'):
+        if kind in ('since', 'kingdom_bonus', 'land_cd', 'shield',
+                    'region', 'region_champion', 'region_progress'):
             return small_h + 2
         return body_h + 2
 
@@ -254,6 +256,31 @@ class LandDetailBox:
         self._lines = []
         self._lines.append(('title', f'Land ({tile.col}, {tile.row})'))
         self._lines.append(('tier', tile.tier))
+        if self._region_info:
+            name = self._region_info.get('name') or 'Historic region'
+            self._lines.append(('region', f'Region: {name}'))
+            champions = self._region_info.get('champions') or (
+                [self._region_info.get('champion')]
+                if self._region_info.get('champion') else [])
+            champion_name = (', '.join(
+                str(champion.get('username') or 'Unknown')
+                for champion in champions) if champions else 'Vacant')
+            champion_count = int(
+                self._region_info.get('champion_land_count') or 0)
+            champion_suffix = (f' ({champion_count} lands)'
+                               if champion_count else '')
+            self._lines.append((
+                'region_champion',
+                f'Champion{"s" if len(champions) > 1 else ""}: '
+                f'{champion_name}{champion_suffix}',
+            ))
+            mine = int(self._region_info.get('my_land_count') or 0)
+            needed = int(self._region_info.get('lands_to_champion') or 0)
+            if needed > 0:
+                progress = f'Your progress: {mine} lands · {needed} more needed'
+            else:
+                progress = f'Your progress: {mine} lands · Champion'
+            self._lines.append(('region_progress', progress))
         self._lines.append(('spacer', ''))
         self._lines.append(('gold', f'Gold production: {tile.gold_rate:.1f} / hour'))
         if tile.suit_bonus_suit == 'Neutral' or not tile.suit_bonus_value:
@@ -536,6 +563,13 @@ class LandDetailBox:
                 y += surf.get_height() + 2
             elif kind == 'since':
                 surf = self._small_font.render(text, True, settings.LAND_DETAIL_DIM_CLR)
+                self.window.blit(surf, (x, y))
+                y += surf.get_height() + 2
+            elif kind in ('region', 'region_champion', 'region_progress'):
+                clr = (settings.LAND_DETAIL_TITLE_CLR
+                       if kind == 'region'
+                       else settings.LAND_DETAIL_DIM_CLR)
+                surf = self._small_font.render(text, True, clr)
                 self.window.blit(surf, (x, y))
                 y += surf.get_height() + 2
             elif kind in ('kingdom', 'kingdom_bonus'):

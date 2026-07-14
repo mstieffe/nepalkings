@@ -69,6 +69,13 @@ def _scale_alpha(clr, factor):
     return (clr[0], clr[1], clr[2], a)
 
 
+def _blend_rgb(base, tint, weight):
+    """Blend two RGB colours without changing the caller's alpha model."""
+    weight = max(0.0, min(1.0, float(weight)))
+    return tuple(int(round(base[i] * (1.0 - weight) + tint[i] * weight))
+                 for i in range(3))
+
+
 def _suit_bonus_group(suit):
     """Return the semantic colour group for a suit bonus."""
     if suit in ('Spades', 'Clubs'):
@@ -408,7 +415,7 @@ class HexTile:
 
     __slots__ = (
         'land_id', 'col', 'row', 'tier', 'gold_rate',
-        'suit_bonus_suit', 'suit_bonus_value',
+        'suit_bonus_suit', 'suit_bonus_value', 'region',
         'owner', 'owner_style', 'is_mine', 'defence_incomplete',
         'kingdom_component_id', 'kingdom_component_size', 'kingdom_level',
         'kingdom_tier_name', 'kingdom_bonuses', 'kingdom_name',
@@ -426,6 +433,7 @@ class HexTile:
         self.gold_rate = land_dict['gold_rate']
         self.suit_bonus_suit = land_dict['suit_bonus_suit']
         self.suit_bonus_value = land_dict['suit_bonus_value']
+        self.region = land_dict.get('region')
         self.owner = land_dict.get('owner')
         self.owner_style = land_dict.get('owner_style') or {}
         self.is_mine = land_dict.get('is_mine', False)
@@ -511,6 +519,13 @@ class HexMap:
         self._minimap_static_cache_key = None
         self._minimap_static_cache = None
         self._minimap_data_version = 0
+        self._regions_data = []
+        self._regions_by_key = {}
+        self._region_champion_users = set()
+        self._region_geometry_cache = None
+        self._terrain_landmarks_cache = None
+        self._render_cache_key = None
+        self._render_cache = None
         # Crown leaderboards (set via set_leaderboards from KingdomScreen).
         # Crown leaderboards: group_key -> rank (1/2/3) for the largest
         # single connected kingdom; user_id -> rank for the greatest total
@@ -581,7 +596,10 @@ class HexMap:
         self._label_font = settings.get_font(settings.HEX_LABEL_FONT_SIZE)
         self._tier_font = settings.get_font(settings.HEX_LABEL_FONT_SIZE, bold=True)
 
-        # Centre camera on the grid
+        # A production-sized map opens as a true overview.  Tiny maps used by
+        # tutorials/tests retain the familiar 1:1 zoom.
+        if len(self.tiles) >= 1000:
+            self._fit_overview_zoom()
         self._centre_camera()
 
     def _get_scaled_icon(self, cache_key, raw_icon, icon_sz):
@@ -672,6 +690,10 @@ class HexMap:
         self._minimap_static_cache_key = None
         self._minimap_static_cache = None
         self._minimap_data_version = getattr(self, '_minimap_data_version', 0) + 1
+        self._region_geometry_cache = None
+        self._terrain_landmarks_cache = None
+        self._render_cache_key = None
+        self._render_cache = None
 
     def _precompute_conquest_outcomes(self):
         """Pre-compute whether each non-player tile would expand an existing kingdom
@@ -730,7 +752,9 @@ class HexMap:
             if outcome == 'new':
                 gap = max(4, int(inner_sz * 0.28))
                 lw  = max(1, int(inner_sz * 0.07))
-                clr = (120, 120, 120, 175)
+                # Keep the strategic hint legible at detail zoom without
+                # turning the whole mid-zoom map into a field of stripes.
+                clr = (120, 120, 120, 110)
                 # Lines y = x + c  (slope +1, \\ direction)
                 for c in range(-w, h + gap, gap):
                     seg = _clip_line_to_convex_polygon(
@@ -809,9 +833,44 @@ class HexMap:
         self.camera_y = grid_cy - vh / (2 * self.zoom)
         self._clamp_camera()
 
+    def _overview_fit_zoom(self, padding_px=None):
+        """Return the closest zoom that still contains the complete world."""
+        if not self.tiles:
+            return settings.HEX_MAP_ZOOM_MIN
+        padding = (padding_px if padding_px is not None else
+                   max(8, int(0.025 * min(
+                       self.viewport_rect.w, self.viewport_rect.h))))
+        world_w = max(1.0, self._world_max_x - self._world_min_x)
+        world_h = max(1.0, self._world_max_y - self._world_min_y)
+        usable_w = max(1.0, self.viewport_rect.w - padding * 2)
+        usable_h = max(1.0, self.viewport_rect.h - padding * 2)
+        return max(
+            settings.HEX_MAP_ZOOM_MIN,
+            min(settings.HEX_MAP_ZOOM_MAX,
+                min(usable_w / world_w, usable_h / world_h)),
+        )
+
+    def _minimum_zoom(self):
+        """Avoid postage-stamp zoom on production-sized kingdom maps."""
+        if len(self.tiles) >= 1000:
+            return self._overview_fit_zoom()
+        return settings.HEX_MAP_ZOOM_MIN
+
+    def _fit_overview_zoom(self, padding_px=None):
+        """Fit the complete world into the current viewport."""
+        self.zoom = self._overview_fit_zoom(padding_px)
+        return self.zoom
+
     def set_viewport(self, viewport_rect):
-        """Set the screen-space viewport used for render clipping and input gating."""
+        """Resize the viewport while preserving its world-space centre."""
+        old_center = (
+            self.camera_x + self.viewport_rect.w / (2 * self.zoom),
+            self.camera_y + self.viewport_rect.h / (2 * self.zoom),
+        )
         self.viewport_rect = pygame.Rect(viewport_rect)
+        self.zoom = max(self.zoom, self._minimum_zoom())
+        self.camera_x = old_center[0] - self.viewport_rect.w / (2 * self.zoom)
+        self.camera_y = old_center[1] - self.viewport_rect.h / (2 * self.zoom)
         self._clamp_camera()
 
     # ── Coordinate transforms ──────────────────────────────────────
@@ -840,13 +899,16 @@ class HexMap:
         ))
         return self.zoom >= min_zoom and sz >= 20
 
-    def _zoom_at_screen_pos(self, sx, sy, zoom_delta):
-        """Zoom around a screen-space point while keeping that world point anchored."""
+    def _zoom_at_screen_pos(self, sx, sy, zoom_steps):
+        """Zoom proportionally while keeping the cursor's world point anchored."""
         old_zoom = self.zoom
         wx, wy = self.screen_to_world(sx, sy)
+        factor = max(1.01, float(getattr(
+            settings, 'HEX_MAP_ZOOM_FACTOR', 1.35)))
+        target_zoom = old_zoom * (factor ** float(zoom_steps))
         self.zoom = max(
-            settings.HEX_MAP_ZOOM_MIN,
-            min(settings.HEX_MAP_ZOOM_MAX, self.zoom + zoom_delta),
+            self._minimum_zoom(),
+            min(settings.HEX_MAP_ZOOM_MAX, target_zoom),
         )
         if self.zoom == old_zoom:
             return
@@ -911,8 +973,8 @@ class HexMap:
                     0.5 if raw_y is None else raw_y)))
                 sx = self.viewport_rect.x + nx * self.viewport_rect.w
                 sy = self.viewport_rect.y + ny * self.viewport_rect.h
-                delta = max(-0.30, min(0.30, pinch * 12.0))
-                self._zoom_at_screen_pos(sx, sy, delta)
+                steps = max(-1.0, min(1.0, pinch * 12.0))
+                self._zoom_at_screen_pos(sx, sy, steps)
             return None
 
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
@@ -978,8 +1040,7 @@ class HexMap:
 
             wheel_y = max(-1.0, min(1.0, wheel_y))
             if wheel_y:
-                self._zoom_at_screen_pos(
-                    mx, my, wheel_y * settings.HEX_MAP_ZOOM_STEP)
+                self._zoom_at_screen_pos(mx, my, wheel_y)
             return None
 
         return None
@@ -988,11 +1049,11 @@ class HexMap:
 
     def zoom_in(self):
         cx, cy = self.viewport_rect.center
-        self._zoom_at_screen_pos(cx, cy, settings.HEX_MAP_ZOOM_STEP)
+        self._zoom_at_screen_pos(cx, cy, 1.0)
 
     def zoom_out(self):
         cx, cy = self.viewport_rect.center
-        self._zoom_at_screen_pos(cx, cy, -settings.HEX_MAP_ZOOM_STEP)
+        self._zoom_at_screen_pos(cx, cy, -1.0)
 
     def pan(self, dx_world, dy_world):
         self.camera_x += dx_world
@@ -1017,10 +1078,309 @@ class HexMap:
         wave = round(wave * (steps - 1)) / (steps - 1)
         return (1.0 - amp) + amp * wave
 
+    # ── Historic-region presentation ────────────────────────────
+
+    def set_regions(self, regions):
+        """Attach the five read-only region snapshots returned by the API."""
+        self._regions_data = [r for r in (regions or []) if isinstance(r, dict)]
+        self._regions_by_key = {
+            r.get('key'): r for r in self._regions_data if r.get('key')
+        }
+        self._region_champion_users = {
+            champion.get('user_id')
+            for region in self._regions_data
+            for champion in (region.get('champions') or
+                             ([region.get('champion')]
+                              if region.get('champion') else []))
+            if isinstance(champion, dict)
+            and champion.get('user_id') is not None
+        }
+        self._region_geometry_cache = None
+        self._terrain_landmarks_cache = None
+        self._minimap_static_cache_key = None
+        self._minimap_static_cache = None
+        self._render_cache_key = None
+        self._render_cache = None
+
+    def focus_region(self, region_key):
+        """Fit an entire historic region within the active viewport."""
+        ids = [t.land_id for t in self.tiles if t.region == region_key]
+        return self.focus_lands(ids, fit=True, max_zoom=1.15)
+
+    def _region_presentation_factor(self):
+        """Return overview presentation opacity for the current zoom."""
+        if getattr(self, 'map_mode', 'terrain') != 'terrain':
+            return 0.0
+        full = float(getattr(settings, 'REGION_PRESENTATION_FULL_ZOOM', 0.90))
+        end = float(getattr(settings, 'REGION_PRESENTATION_END_ZOOM', 1.35))
+        if self.zoom <= full:
+            return 1.0
+        if self.zoom >= end:
+            return 0.0
+        return 1.0 - (self.zoom - full) / max(0.01, end - full)
+
+    def _region_style(self, region_key):
+        return (getattr(settings, 'KINGDOM_REGIONS', {}) or {}).get(
+            region_key, {})
+
+    def _region_geometry(self):
+        """Cached centres/bounds used by labels and landmarks."""
+        cached = self._region_geometry_cache
+        if cached is not None:
+            return cached
+        grouped = {}
+        for tile in self.tiles:
+            if not tile.region:
+                continue
+            grouped.setdefault(tile.region, []).append(tile)
+        result = {}
+        for key, tiles in grouped.items():
+            min_x = min(t.cx for t in tiles) - self._size
+            max_x = max(t.cx for t in tiles) + self._size
+            half_h = self._size * math.sqrt(3) / 2
+            min_y = min(t.cy for t in tiles) - half_h
+            max_y = max(t.cy for t in tiles) + half_h
+            avg_x = sum(t.cx for t in tiles) / len(tiles)
+            avg_y = sum(t.cy for t in tiles) / len(tiles)
+            # Use an actual tile nearest the centroid so labels never land in
+            # another organically perturbed region.
+            anchor = min(
+                tiles,
+                key=lambda t: ((t.cx - avg_x) ** 2 + (t.cy - avg_y) ** 2,
+                               t.land_id),
+            )
+            result[key] = {
+                'tiles': tiles,
+                'bounds': (min_x, min_y, max_x, max_y),
+                'center': (anchor.cx, anchor.cy),
+            }
+        self._region_geometry_cache = result
+        return result
+
+    def _terrain_landmarks(self):
+        """Return 13 stable, low-density procedural landmark anchors."""
+        if self._terrain_landmarks_cache is not None:
+            return self._terrain_landmarks_cache
+        landmarks = []
+        geometry = self._region_geometry()
+        for key in ('karnali', 'kirat', 'lumbini', 'mithila'):
+            geo = geometry.get(key)
+            if not geo:
+                continue
+            tiles = geo['tiles']
+            min_x, min_y, max_x, max_y = geo['bounds']
+            for idx, fraction in enumerate((0.22, 0.50, 0.78)):
+                tx = min_x + (max_x - min_x) * fraction
+                # Northern forms hug the upper band; southern forms occupy
+                # the lower half, leaving labels and central play uncluttered.
+                ty_fraction = (0.27 + 0.05 * (idx % 2)
+                               if key in ('karnali', 'kirat')
+                               else 0.72 - 0.05 * (idx % 2))
+                ty = min_y + (max_y - min_y) * ty_fraction
+                anchor = min(
+                    tiles,
+                    key=lambda t: ((t.cx - tx) ** 2 + (t.cy - ty) ** 2,
+                                   t.land_id),
+                )
+                landmarks.append((key, anchor.cx, anchor.cy, idx))
+        kathmandu = geometry.get('kathmandu')
+        if kathmandu:
+            cx, cy = kathmandu['center']
+            landmarks.append(('kathmandu', cx, cy, 0))
+        cap = int(getattr(settings, 'REGION_SCENERY_GROUPS', 13))
+        self._terrain_landmarks_cache = landmarks[:cap]
+        return self._terrain_landmarks_cache
+
+    def _draw_terrain_landmarks(self):
+        factor = self._region_presentation_factor()
+        if factor <= 0.0:
+            return
+        vp = self.viewport_rect
+        layer = pygame.Surface(vp.size, pygame.SRCALPHA)
+        alpha = int(getattr(settings, 'REGION_SCENERY_ALPHA', 52) * factor)
+        if alpha <= 0:
+            return
+        unit = max(11, int(self._size * self.zoom * 3.7))
+
+        def local(wx, wy):
+            sx, sy = self.world_to_screen(wx, wy)
+            return int(sx - vp.x), int(sy - vp.y)
+
+        for key, wx, wy, variant in self._terrain_landmarks():
+            x, y = local(wx, wy)
+            if x < -unit * 3 or x > vp.w + unit * 3:
+                continue
+            if y < -unit * 2 or y > vp.h + unit * 2:
+                continue
+            style = self._region_style(key)
+            tint = style.get('label', (230, 220, 195))
+            line = (*tint, alpha)
+            soft = (*tint, max(8, alpha // 2))
+            terrain = style.get('terrain')
+            if terrain in ('mountain', 'foothill'):
+                peaks = []
+                for j, scale in enumerate((0.72, 1.0, 0.62)):
+                    px = x + int((j - 1) * unit * 0.82)
+                    base_y = y + int(unit * 0.40)
+                    peak_y = y - int(unit * scale)
+                    pts = [(px - unit, base_y), (px, peak_y),
+                           (px + unit, base_y)]
+                    pygame.draw.polygon(layer, soft, pts)
+                    pygame.draw.lines(layer, line, False, pts, max(1, unit // 12))
+                    peaks.append((px, peak_y))
+                if terrain == 'foothill':
+                    for j in range(4):
+                        tx = x + int((j - 1.5) * unit * 0.55)
+                        ty = y + int(unit * (0.25 + (j % 2) * 0.20))
+                        pygame.draw.polygon(
+                            layer, line,
+                            [(tx, ty - unit // 3),
+                             (tx - unit // 4, ty + unit // 4),
+                             (tx + unit // 4, ty + unit // 4)])
+            elif terrain in ('forest', 'fields'):
+                if terrain == 'forest':
+                    for j in range(5):
+                        cx = x + int((j - 2) * unit * 0.48)
+                        cy = y + int((j % 2) * unit * 0.24)
+                        pygame.draw.circle(layer, soft, (cx, cy),
+                                           max(3, int(unit * 0.42)))
+                        pygame.draw.circle(layer, line, (cx, cy),
+                                           max(3, int(unit * 0.42)),
+                                           max(1, unit // 14))
+                else:
+                    for j in range(-2, 3):
+                        yy = y + int(j * unit * 0.25)
+                        pygame.draw.arc(
+                            layer, line,
+                            pygame.Rect(x - unit * 2, yy - unit // 3,
+                                        unit * 4, unit),
+                            math.pi, math.pi * 2, max(1, unit // 14))
+            elif terrain == 'valley':
+                for j in range(3):
+                    rect = pygame.Rect(
+                        x - int(unit * (2.0 - j * 0.38)),
+                        y - int(unit * (0.80 - j * 0.13)),
+                        int(unit * (4.0 - j * 0.76)),
+                        int(unit * (1.60 - j * 0.26)),
+                    )
+                    pygame.draw.ellipse(layer, soft if j == 0 else line,
+                                        rect, max(1, unit // 16))
+        self.window.blit(layer, vp.topleft)
+
+    def _draw_region_boundaries(self, visible_hexes):
+        if not visible_hexes:
+            return
+        analytical = getattr(self, 'map_mode', 'terrain') != 'terrain'
+        clr = (getattr(settings, 'REGION_BOUNDARY_ANALYTIC_CLR',
+                       (232, 222, 205, 42)) if analytical else
+               getattr(settings, 'REGION_BOUNDARY_CLR',
+                       (244, 225, 184, 80)))
+        layer = pygame.Surface(self.viewport_rect.size, pygame.SRCALPHA)
+        # A broad dark under-stroke separates similarly coloured terrain;
+        # the warm inner stroke supplies the historic-region identity.  The
+        # later ownership layers still sit above both strokes.
+        width = max(2, min(6, int(self._size * self.zoom * 0.18)))
+        shadow = getattr(
+            settings, 'REGION_BOUNDARY_SHADOW_CLR', (42, 31, 20, 145))
+        if analytical and len(shadow) >= 4:
+            shadow = (*shadow[:3], max(30, int(shadow[3] * 0.48)))
+        ox, oy = self.viewport_rect.topleft
+        for tile, corners, _scx, _scy in visible_hexes:
+            if not tile.region:
+                continue
+            for i, coord in enumerate(_edge_neighbour_coords(tile.col, tile.row)):
+                neighbour = self._tile_by_coord.get(coord)
+                if neighbour is None or neighbour.region == tile.region:
+                    continue
+                # Draw each shared edge once.
+                if (tile.col, tile.row) > coord:
+                    continue
+                p0, p1 = corners[i], corners[(i + 1) % 6]
+                start = (int(p0[0] - ox), int(p0[1] - oy))
+                end = (int(p1[0] - ox), int(p1[1] - oy))
+                pygame.draw.line(layer, shadow, start, end, width + 3)
+                pygame.draw.line(layer, clr, start, end, width)
+        self.window.blit(layer, self.viewport_rect.topleft)
+
+    def _draw_region_labels(self):
+        analytical = getattr(self, 'map_mode', 'terrain') != 'terrain'
+        factor = 0.48 if analytical else self._region_presentation_factor()
+        if factor <= 0.0:
+            return
+        geometry = self._region_geometry()
+        order = list((getattr(settings, 'KINGDOM_REGIONS', {}) or {}).keys())
+        for key in order:
+            geo = geometry.get(key)
+            if not geo:
+                continue
+            sx, sy = self.world_to_screen(*geo['center'])
+            if not self.viewport_rect.inflate(160, 80).collidepoint(sx, sy):
+                continue
+            meta = self._regions_by_key.get(key, {})
+            style = self._region_style(key)
+            name = meta.get('name') or style.get('name') or key.title()
+            font_px = max(
+                16,
+                min(28, int(self.viewport_rect.w * 0.016)),
+                min(26, int(self._size * self.zoom * 0.92)),
+            )
+            color = style.get('label', (242, 228, 198))
+            label = self._cached_text(name.upper(), font_px, color, bold=True).copy()
+            label.set_alpha(max(45, int(235 * factor)))
+            shadow = self._cached_text(
+                name.upper(), font_px,
+                getattr(settings, 'REGION_LABEL_SHADOW_CLR', (10, 8, 6, 185))[:3],
+                bold=True).copy()
+            shadow.set_alpha(max(35, int(185 * factor)))
+            rect = label.get_rect(center=(int(sx), int(sy)))
+            self.window.blit(shadow, rect.move(1, 2))
+            self.window.blit(label, rect)
+            if meta.get('champions') or meta.get('champion'):
+                crown_w = max(8, int(font_px * 0.72))
+                cx, cy = rect.centerx, rect.top - max(5, crown_w // 2)
+                crown = [
+                    (cx - crown_w, cy - crown_w // 3),
+                    (cx - crown_w // 2, cy),
+                    (cx, cy - crown_w // 2),
+                    (cx + crown_w // 2, cy),
+                    (cx + crown_w, cy - crown_w // 3),
+                    (cx + int(crown_w * 0.72), cy + crown_w // 2),
+                    (cx - int(crown_w * 0.72), cy + crown_w // 2),
+                ]
+                pygame.draw.polygon(self.window, (242, 205, 92), crown)
+
     def render(self):
         """Draw all visible hexes, labels, and minimap."""
         sz = self._size * self.zoom
         vp = self.viewport_rect
+
+        has_mine = any(tile.is_mine for tile in self.tiles)
+        # At full-map scale the glow is sub-pixel; keeping it static avoids
+        # rebuilding the entire 4,800-tile overview for an invisible pulse.
+        pulse_step = (round(self._owner_glow_pulse(), 3)
+                      if has_mine and self.zoom >= 0.22 else None)
+        warning_step = (
+            pygame.time.get_ticks() // 250
+            if (self.zoom >= settings.HEX_MAP_LAND_INFO_MIN_ZOOM
+                and any(tile.defence_incomplete for tile in self.tiles))
+            else None
+        )
+        cache_key = (
+            vp.x, vp.y, vp.w, vp.h,
+            round(self.camera_x, 3), round(self.camera_y, 3),
+            round(self.zoom, 5), self.map_mode,
+            getattr(self, '_minimap_data_version', 0),
+            getattr(self.selected_tile, 'land_id', None),
+            getattr(self.hovered_tile, 'land_id', None),
+            tuple(getattr(self, 'minimap_origin', ()) or ()),
+            pulse_step, warning_step,
+        )
+        cached_frame = getattr(self, '_render_cache', None)
+        if (cached_frame is not None
+                and cache_key == getattr(self, '_render_cache_key', None)
+                and cached_frame.get_size() == vp.size):
+            self.window.blit(cached_frame, vp.topleft)
+            return
 
         old_clip = self.window.get_clip()
         self.window.set_clip(vp)
@@ -1042,20 +1402,44 @@ class HexMap:
         # hex fills (most visible on lower/right edges with thick skins).
         for tile, corners, scx, scy in visible_hexes:
             self._draw_hex_base(tile, corners, scx, scy, sz)
-        for tile, corners, scx, scy in visible_hexes:
-            self._draw_hex_border(tile, corners)
+        self._draw_terrain_landmarks()
+        self._draw_region_boundaries(visible_hexes)
+        # At overview zoom ordinary per-land borders and details are hidden.
+        # Avoid thousands of no-op Python calls on the enlarged 4,800-land
+        # map while preserving selection/tutorial/hover affordances.
+        if self.zoom >= 0.22:
+            for tile, corners, scx, scy in visible_hexes:
+                self._draw_hex_border(tile, corners)
+        else:
+            for tile, corners, _scx, _scy in visible_hexes:
+                if (tile is self.selected_tile or
+                        getattr(tile, 'is_recommended_tutorial_land', False)):
+                    self._draw_hex_border(tile, corners)
         self._draw_cluster_outlines(visible_hexes, sz)
-        for tile, corners, scx, scy in visible_hexes:
-            self._draw_hex_details(tile, scx, scy, sz)
+        if self.zoom >= settings.HEX_MAP_LAND_INFO_MIN_ZOOM:
+            for tile, _corners, scx, scy in visible_hexes:
+                self._draw_hex_details(tile, scx, scy, sz)
+        elif self.hovered_tile is not None:
+            for tile, _corners, scx, scy in visible_hexes:
+                if tile is self.hovered_tile:
+                    self._draw_hex_details(tile, scx, scy, sz)
+                    break
 
         # Suit cluster icons (drawn before kingdom badges so the kingdom
         # name pill always sits on top of the suit icon).
         self._draw_suit_cluster_icons(sz)
+        self._draw_region_labels()
         self._draw_kingdom_badges(sz)
 
         self.window.set_clip(old_clip)
 
         self._draw_minimap()
+        try:
+            self._render_cache = self.window.subsurface(vp).copy()
+            self._render_cache_key = cache_key
+        except (ValueError, pygame.error):
+            self._render_cache = None
+            self._render_cache_key = None
 
     def _draw_hex(self, tile, corners, scx, scy, sz):
         """Draw a single hex with fill, border, and labels."""
@@ -1132,6 +1516,13 @@ class HexMap:
         """Draw glow, fill, and owned-land surface cosmetics."""
         # Fill colour follows suit-bonus colour; tier controls intensity.
         fill = list(_tile_fill_color(tile))
+        region_factor = self._region_presentation_factor()
+        region_style = self._region_style(getattr(tile, 'region', None))
+        region_tint = region_style.get('tint')
+        if region_tint and region_factor > 0:
+            alpha = float(getattr(settings, 'REGION_TINT_ALPHA_MAX', 48)) / 255.0
+            fill = list(_blend_rgb(fill, region_tint,
+                                   alpha * region_factor))
 
         # Hover brighten — tiered: the hovered tile gets the full boost,
         # every other tile in the same connected kingdom-component gets a
@@ -1202,7 +1593,12 @@ class HexMap:
         # border edges visually unaffected.
         if not tile.is_mine:
             outcome = getattr(self, '_conquest_outcomes', {}).get(tile.land_id)
-            if outcome == 'new' and tile is not self.hovered_tile:
+            # Region presentation and cluster icons own the mid-zoom band.
+            # Reveal the all-map conquest hatch only once the player is close
+            # enough to inspect individual lands; hover feedback remains
+            # available at every zoom.
+            if (self.zoom >= 1.30 and outcome == 'new'
+                    and tile is not self.hovered_tile):
                 # Reducing circumradius by `inset` shrinks the perpendicular
                 # distance to each flat edge by inset * sqrt(3)/2, so to clear
                 # a border of `border_px` screen pixels the correct inset is
@@ -1252,6 +1648,13 @@ class HexMap:
 
     def _draw_hex_border(self, tile, corners):
         """Draw selection and border cosmetics after all hex fills."""
+        # At full-map scale a one-pixel line is proportionally wider than the
+        # tile itself and turns the terrain into visual static.  Region seams,
+        # ownership cluster outlines, and selections remain on their later
+        # layers; ordinary per-land borders arrive as the player zooms in.
+        if (self.zoom < 0.22 and tile is not self.selected_tile
+                and not getattr(tile, 'is_recommended_tutorial_land', False)):
+            return
         if tile.owner:
             self._draw_owner_border(tile, corners)
             if tile is self.selected_tile:
@@ -1729,8 +2132,16 @@ class HexMap:
         icons are hidden); suppressed at high zoom."""
         if sz <= 8:
             return
+        start_zoom = float(getattr(
+            settings, 'REGION_CLUSTER_ICON_START_ZOOM', 0.82))
+        full_zoom = float(getattr(
+            settings, 'REGION_CLUSTER_ICON_FULL_ZOOM', 1.00))
+        if self.zoom < start_zoom:
+            return
         if self.zoom >= settings.HEX_MAP_LAND_NUMBERS_MIN_ZOOM:
             return
+        fade = min(1.0, max(0.0, (self.zoom - start_zoom) /
+                            max(0.01, full_zoom - start_zoom)))
         vp = self.viewport_rect
         icon_sz = max(20, int(sz * 1.05))
         for cluster in self._suit_clusters():
@@ -1755,7 +2166,7 @@ class HexMap:
                 continue
             try:
                 ghost = icon.copy()
-                ghost.set_alpha(190)
+                ghost.set_alpha(max(1, int(190 * fade)))
                 icon = ghost
             except Exception:
                 pass
@@ -1962,6 +2373,15 @@ class HexMap:
                     and (self.zoom >= 2.0 or not crown_icons)):
                 ico = self._render_crown_icon(
                     'lands', lands_rank,
+                    max(12, int(badge_surf.get_height() * 0.58)))
+                if ico is not None:
+                    crown_icons.append(ico)
+            # Region titles follow the player, like Greatest Realm medals:
+            # every kingdom badge owned by a current Champion receives the
+            # shared Champion medal in the same dedicated ranking row.
+            if badge_data.get('owner_user_id') in getattr(
+                    self, '_region_champion_users', set()):
+                ico = self._render_champion_icon(
                     max(12, int(badge_surf.get_height() * 0.58)))
                 if ico is not None:
                     crown_icons.append(ico)
@@ -2291,6 +2711,9 @@ class HexMap:
                     border = settings.HEX_MINE_BORDER if tile.is_mine else (40, 40, 40)
                 else:
                     clr = _tile_fill_color(tile)
+                    region_tint = self._region_style(tile.region).get('tint')
+                    if region_tint:
+                        clr = _blend_rgb(clr, region_tint, 0.48)
                     border = _tile_border_color(tile)
                 if tile.is_mine:
                     pygame.draw.circle(mm_surf, settings.HEX_MINE_BORDER,
@@ -2299,6 +2722,56 @@ class HexMap:
                     mine_centers.append((tx, ty))
                 pygame.draw.circle(mm_surf, clr, (int(tx), int(ty)), dot_r)
                 pygame.draw.circle(mm_surf, border, (int(tx), int(ty)), dot_r, 1)
+
+            # Simplified historic-region seams.  These stay one pixel wide so
+            # player ownership dots remain the strongest minimap signal.
+            seam_clr = (234, 216, 178, 105)
+            for tile in self.tiles:
+                if not tile.region:
+                    continue
+                corners = _hex_corners(tile.cx, tile.cy, self._size)
+                for i, coord in enumerate(_edge_neighbour_coords(
+                        tile.col, tile.row)):
+                    neighbour = self._tile_by_coord.get(coord)
+                    if (neighbour is None or neighbour.region == tile.region
+                            or (tile.col, tile.row) > coord):
+                        continue
+                    p0, p1 = corners[i], corners[(i + 1) % 6]
+                    pygame.draw.line(
+                        mm_surf, seam_clr,
+                        (int(off_x + (p0[0] - min_wx) * scale),
+                         int(off_y + (p0[1] - min_wy) * scale)),
+                        (int(off_x + (p1[0] - min_wx) * scale),
+                         int(off_y + (p1[1] - min_wy) * scale)), 1)
+
+            # Explicit dominant-suit marks make the regional reading survive
+            # at minimap scale.  They sit below the player's own sigil and use
+            # restrained opacity so ownership remains the primary signal.
+            mark_sz = max(9, min(20, int(min(mm_w, mm_h) * 0.16)))
+            for region_key, geo in self._region_geometry().items():
+                style = self._region_style(region_key)
+                suit = style.get('dominant_suit')
+                wx, wy = geo['center']
+                mx = int(off_x + (wx - min_wx) * scale)
+                my = int(off_y + (wy - min_wy) * scale)
+                raw = self._suit_icon_raw.get(suit) if suit else None
+                if raw is not None:
+                    pygame.draw.circle(mm_surf, (28, 21, 14, 188),
+                                       (mx, my), max(5, int(mark_sz * 0.58)))
+                    pygame.draw.circle(mm_surf, (231, 210, 163, 150),
+                                       (mx, my), max(5, int(mark_sz * 0.58)), 1)
+                    icon = self._get_scaled_icon(
+                        ('minimap-region', suit), raw, mark_sz)
+                    if icon is not None:
+                        icon = icon.copy()
+                        icon.set_alpha(205)
+                        mm_surf.blit(icon, icon.get_rect(center=(mx, my)))
+                elif region_key == 'kathmandu':
+                    neutral_clr = (*style.get('label', (235, 218, 184)), 185)
+                    pygame.draw.circle(mm_surf, (35, 27, 18, 180),
+                                       (mx, my), max(4, mark_sz // 3 + 2))
+                    pygame.draw.circle(mm_surf, neutral_clr, (mx, my),
+                                       max(3, mark_sz // 3), 2)
 
             if mine_centers:
                 cx = sum(p[0] for p in mine_centers) / len(mine_centers)
@@ -2511,6 +2984,8 @@ class HexMap:
         self._silver_wreath_users = lands_ranks
         # Invalidate the badge cache so crown decoration appears next frame.
         self._kingdom_badges_cache = None
+        self._render_cache_key = None
+        self._render_cache = None
 
     _CROWN_TIER_BY_RANK = {1: 'gold', 2: 'silver', 3: 'bronce'}
 
@@ -2558,6 +3033,36 @@ class HexMap:
         if raw is None and raw_key not in raw_cache:
             path = os.path.join('img', 'kingdom', 'ranking',
                                 f'{category}_{tier}.png')
+            try:
+                raw = pygame.image.load(path).convert_alpha()
+            except Exception:
+                raw = None
+                logger.warning(f'Could not load ranking icon: {path}')
+            raw_cache[raw_key] = raw
+        if raw is None:
+            return None
+
+        scaled = pygame.transform.smoothscale(raw, (s, s))
+        if len(self._crown_icon_cache) > 32:
+            self._crown_icon_cache.pop(next(iter(self._crown_icon_cache)))
+        self._crown_icon_cache[key] = scaled
+        return scaled
+
+    def _render_champion_icon(self, size):
+        """Load/cache the shared Region Champion medal for kingdom badges."""
+        s = max(8, int(size))
+        key = ('champion', 'fixed', s)
+        cached = self._crown_icon_cache.get(key)
+        if cached is not None:
+            return cached
+
+        raw_cache = getattr(self, '_crown_icon_raw_cache', None)
+        if raw_cache is None:
+            raw_cache = self._crown_icon_raw_cache = {}
+        raw_key = ('champion', 'fixed')
+        raw = raw_cache.get(raw_key)
+        if raw is None and raw_key not in raw_cache:
+            path = os.path.join('img', 'kingdom', 'ranking', 'champion.png')
             try:
                 raw = pygame.image.load(path).convert_alpha()
             except Exception:

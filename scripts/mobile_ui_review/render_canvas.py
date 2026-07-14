@@ -10,6 +10,7 @@ package installer.
 from __future__ import annotations
 
 import argparse
+import math
 import os
 from pathlib import Path
 import sys
@@ -53,6 +54,9 @@ KINGDOM_SCREEN_ALIASES = {
     "kingdom_alerts": "alerts",
     "kingdom_history": "history",
     "kingdom_messages": "messages",
+    "kingdom_mid": "mid",
+    "kingdom_detail": "detail",
+    "kingdom_regions": "regions",
 }
 
 KINGDOM_CONFIG_ALIASES = {
@@ -168,8 +172,66 @@ def fixture_map_land(col: int, row: int, land_id: int, *, owned: bool,
         "kingdom_level": 7 if owned else 3,
         "kingdom_tier_name": "Mountain Realm" if owned else "Border Duchy",
         "kingdom_bonuses": {"gold_production": 0.10} if owned else {},
-        "kingdom_name": kingdom_name or ("Pocket Himalaya" if owned else "Rival Ridge"),
+        "kingdom_name": kingdom_name or (
+            "Pocket Himalaya" if owned else "Rival Ridge"),
         "kingdom_id": kingdom_id,
+        "kingdom_shield_remaining": 0,
+        "kingdom_shield_reason": None,
+        "kingdom_is_shielded": False,
+        "conquer_cooldown_remaining": 0,
+    }
+
+
+def fixture_regional_map_land(col: int, row: int, land_id: int,
+                              *, owner_kind: str | None = None) -> dict:
+    """Dense 96x50 visual-review land with stable regional geography."""
+    wx = col * 1.5
+    wy = row * math.sqrt(3.0) + (col & 1) * math.sqrt(3.0) / 2.0
+    dx = (wx - (95 * 1.5) / 2.0) / ((95 * 1.5) / 2.0)
+    max_y = 49 * math.sqrt(3.0) + math.sqrt(3.0) / 2.0
+    dy = (wy - max_y / 2.0) / (max_y / 2.0)
+    if math.hypot(dx, dy) <= 0.52:
+        region = "kathmandu"
+    elif dy < 0:
+        region = "karnali" if dx < 0 else "kirat"
+    else:
+        region = "lumbini" if dx < 0 else "mithila"
+
+    dominant = {
+        "karnali": "Spades", "kirat": "Clubs",
+        "lumbini": "Hearts", "mithila": "Diamonds",
+    }
+    terrain_hash = ((col * 73856093) ^ (row * 19349663)
+                    ^ (col * row * 83492791)) & 0x7fffffff
+    roll = (terrain_hash >> 8) % 100
+    if region == "kathmandu":
+        suit = ("Neutral" if roll < 60 else
+                ("Hearts", "Diamonds", "Clubs", "Spades")[roll % 4])
+    else:
+        suit = "Neutral" if roll < 24 else dominant[region]
+    tier = 1 + (terrain_hash % (5 if suit == "Neutral" else 6))
+    owner = None
+    is_mine = owner_kind == "mine"
+    if is_mine:
+        owner = {"id": 1, "user_id": 1, "username": "MobileUser"}
+    elif owner_kind == "rival":
+        owner = {"id": 2, "user_id": 2, "username": "RivalKing"}
+    return {
+        "id": land_id, "col": col, "row": row, "region": region,
+        "tier": tier, "gold_rate": float(2 + tier * 3),
+        "suit_bonus_suit": suit,
+        "suit_bonus_value": 0 if suit == "Neutral" else tier,
+        "owner": owner,
+        "owner_style": fixture_kingdom_style() if is_mine else {},
+        "is_mine": is_mine, "defence_incomplete": False,
+        "kingdom_component_id": (401 if is_mine else 902 if owner else None),
+        "kingdom_component_size": (9 if is_mine else 8 if owner else 0),
+        "kingdom_level": 7 if is_mine else 3 if owner else 0,
+        "kingdom_tier_name": "Mountain Realm" if owner else None,
+        "kingdom_bonuses": {"gold_production": 0.10} if is_mine else {},
+        "kingdom_name": ("Pocket Himalaya" if is_mine
+                          else "Rival Ridge" if owner else None),
+        "kingdom_id": 4 if is_mine else 9 if owner else None,
         "kingdom_shield_remaining": 0,
         "kingdom_shield_reason": None,
         "kingdom_is_shielded": False,
@@ -867,24 +929,22 @@ def populate_conquer_game(client, subscreen: str):
 
 
 def fixture_kingdom_map_data() -> dict:
-    lands = [
-        fixture_map_land(4, 4, 7, owned=True, kingdom_id=4,
-                         kingdom_name="Pocket Himalaya"),
-        fixture_map_land(5, 4, 8, owned=True, kingdom_id=4,
-                         kingdom_name="Pocket Himalaya"),
-        fixture_map_land(4, 5, 9, owned=True, kingdom_id=4,
-                         kingdom_name="Pocket Himalaya"),
-        fixture_map_land(5, 5, 10, owned=True, kingdom_id=4,
-                         kingdom_name="Pocket Himalaya"),
-        fixture_map_land(6, 4, 21, owned=False, kingdom_id=9,
-                         kingdom_name="Rival Ridge"),
-        fixture_map_land(6, 5, 22, owned=False, kingdom_id=9,
-                         kingdom_name="Rival Ridge"),
-        fixture_map_land(3, 4, 23, owned=False, kingdom_id=12,
-                         kingdom_name="Border Duchy"),
-        fixture_map_land(3, 5, 24, owned=False, kingdom_id=12,
-                         kingdom_name="Border Duchy"),
-    ]
+    mine_coords = {(col, row) for col in range(45, 48) for row in range(23, 26)}
+    rival_coords = {(col, row) for col in range(74, 78) for row in range(11, 13)}
+    lands = []
+    my_ids = []
+    rival_ids = []
+    for row in range(50):
+        for col in range(96):
+            land_id = row * 96 + col + 1
+            owner_kind = ("mine" if (col, row) in mine_coords else
+                          "rival" if (col, row) in rival_coords else None)
+            lands.append(fixture_regional_map_land(
+                col, row, land_id, owner_kind=owner_kind))
+            if owner_kind == "mine":
+                my_ids.append(land_id)
+            elif owner_kind == "rival":
+                rival_ids.append(land_id)
     largest = [
         {
             "rank": 1,
@@ -893,8 +953,8 @@ def fixture_kingdom_map_data() -> dict:
             "user_id": 1,
             "kingdom_id": 4,
             "kingdom_component_id": 401,
-            "size": 4,
-            "land_ids": [7, 8, 9, 10],
+            "size": len(my_ids),
+            "land_ids": my_ids,
         },
         {
             "rank": 2,
@@ -903,8 +963,8 @@ def fixture_kingdom_map_data() -> dict:
             "user_id": 2,
             "kingdom_id": 9,
             "kingdom_component_id": 902,
-            "size": 2,
-            "land_ids": [21, 22],
+            "size": len(rival_ids),
+            "land_ids": rival_ids,
         },
     ]
     realms = [
@@ -912,32 +972,62 @@ def fixture_kingdom_map_data() -> dict:
             "rank": 1,
             "username": "MobileUser",
             "user_id": 1,
-            "total_lands": 4,
+            "total_lands": len(my_ids),
             "largest_kingdom_id": 4,
             "largest_component_id": 401,
-            "largest_land_ids": [7, 8, 9, 10],
+            "largest_land_ids": my_ids,
         },
         {
             "rank": 2,
             "username": "RivalKing",
             "user_id": 2,
-            "total_lands": 2,
+            "total_lands": len(rival_ids),
             "largest_kingdom_id": 9,
             "largest_component_id": 902,
-            "largest_land_ids": [21, 22],
+            "largest_land_ids": rival_ids,
         },
     ]
     return {
         "lands": lands,
+        "regions": [
+            {"key": "karnali", "name": "Karnali", "dominant_suit": "Spades",
+             "champion": None,
+             "champions": [],
+             "champion_land_count": 0, "my_land_count": 0,
+             "lands_to_champion": 1, "min_lands": 1},
+            {"key": "kirat", "name": "Kirat", "dominant_suit": "Clubs",
+             "champion": {"user_id": 2, "username": "RivalKing"},
+             "champions": [{"user_id": 2, "username": "RivalKing"}],
+             "champion_land_count": len(rival_ids), "my_land_count": 0,
+             "lands_to_champion": len(rival_ids), "min_lands": 1},
+            {"key": "kathmandu", "name": "Kathmandu Valley",
+             "dominant_suit": None,
+             "champion": {"user_id": 1, "username": "MobileUser"},
+             "champions": [{"user_id": 1, "username": "MobileUser"}],
+             "champion_land_count": len(my_ids), "my_land_count": len(my_ids),
+             "lands_to_champion": 0, "min_lands": 1,
+             "tribute_rate_per_hour": 4.2, "my_pending_tribute": 32.4,
+             "tribute_cap": 100.8},
+            {"key": "lumbini", "name": "Lumbini", "dominant_suit": "Hearts",
+             "champion": None,
+             "champions": [],
+             "champion_land_count": 0, "my_land_count": 0,
+             "lands_to_champion": 1, "min_lands": 1},
+            {"key": "mithila", "name": "Mithila", "dominant_suit": "Diamonds",
+             "champion": None,
+             "champions": [],
+             "champion_land_count": 0, "my_land_count": 0,
+             "lands_to_champion": 1, "min_lands": 1},
+        ],
         "conquer_cooldown_remaining": 0,
         "my_kingdom": {
-            "components": [{"land_ids": [7, 8, 9, 10], "size": 4}],
+            "components": [{"land_ids": my_ids, "size": len(my_ids)}],
         },
         "my_kingdoms": [{
             "id": 4,
             "name": "Pocket Himalaya",
-            "land_ids": [7, 8, 9, 10],
-            "lands_count": 4,
+            "land_ids": my_ids,
+            "lands_count": len(my_ids),
             "pending_gold": 37.0,
             "vault_cap": 80,
             "production": {
@@ -945,15 +1035,15 @@ def fixture_kingdom_map_data() -> dict:
                 "side_booster": {"pending": 0},
             },
         }],
-        "my_lands_count": 4,
+        "my_lands_count": len(my_ids),
         "my_total_gold_rate": 18.0,
         "my_effective_gold_rate": 21.0,
         "top_largest_kingdoms": largest,
         "top_greatest_realms": realms,
         "my_largest_rank": 1,
-        "my_largest_size": 4,
+        "my_largest_size": len(my_ids),
         "my_realm_rank": 1,
-        "my_realm_size": 4,
+        "my_realm_size": len(my_ids),
     }
 
 
@@ -972,7 +1062,8 @@ def populate_kingdom_screen(screen, tab: str) -> None:
     screen._activity_poller = None
     screen._loading = False
     screen._error = None
-    screen._activity_tab = tab
+    screen._activity_tab = (
+        tab if tab in {"alerts", "history", "messages"} else "alerts")
     screen._activity_scroll_offsets = {"alerts": 0, "history": 0, "messages": 0}
     screen._notifications = [
         {
@@ -1061,6 +1152,17 @@ def populate_kingdom_screen(screen, tab: str) -> None:
     ]
     screen._messages = list(screen._conversations)
     screen._message_unread_count = 2
+    if tab == "regions":
+        screen._leaderboard_panel.collapsed = False
+        screen._leaderboard_panel._view = "regions"
+    elif tab in {"mid", "detail"} and screen._hex_map is not None:
+        screen._hex_map.zoom = 1.05 if tab == "mid" else 1.60
+        target = next(
+            (tile for tile in screen._hex_map.tiles if tile.is_mine), None)
+        if target is not None:
+            screen._hex_map.focus_land(target.land_id)
+            if tab == "detail":
+                screen._open_detail(target)
 
 
 def populate_kingdom_config(screen, section: str) -> None:
@@ -1310,6 +1412,10 @@ def render_screens(width: int, height: int, ui_scale: str, screens: list[str]) -
                 print(f"skip {screen_name}: screen not loaded")
                 failures += 1
                 continue
+            # Render one settling frame before capture. Pygame's scaled/double-
+            # buffered display can otherwise preserve rectangular fragments of
+            # the prior screen in the first screenshot frame.
+            screen.render()
             screen.render()
             pygame.display.flip()
             out = OUT_DIR / f"{screen_name}-{width}x{height}.png"

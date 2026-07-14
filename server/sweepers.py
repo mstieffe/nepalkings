@@ -114,6 +114,8 @@ def start_stuck_conquer_sweeper(app, interval_seconds=None):
             try:
                 with app.app_context():
                     sweep_stuck_conquer_games()
+                    from region_service import reconcile_region_champions
+                    reconcile_region_champions(commit=True)
             except Exception:
                 logger.exception("[STUCK_SWEEP] iteration failed")
             time.sleep(interval_seconds)

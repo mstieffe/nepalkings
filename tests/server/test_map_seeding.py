@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
 # See LICENSE file in the project root for full license information.
 """Tests for kingdom map seeding and gold production."""
+from collections import Counter, defaultdict
 import pytest
 from unittest.mock import patch
 from datetime import datetime, timezone, timedelta
@@ -53,6 +54,91 @@ class TestMapSeeding:
             import server_settings as config
             expected = config.KINGDOM_MAP_COLS * config.KINGDOM_MAP_ROWS
             assert count == expected
+            assert count == 4_800
+
+    def test_seed_is_deterministic_and_regionally_balanced(self, app, db):
+        import server_settings as config
+
+        def snapshot():
+            return [
+                (land.col, land.row, land.region, land.tier, land.gold_rate,
+                 land.suit_bonus_suit, land.suit_bonus_value,
+                 land.ai_template_index)
+                for land in Land.query.order_by(Land.row, Land.col).all()
+            ]
+
+        with app.app_context():
+            seed_kingdom_map()
+            first = snapshot()
+            Land.query.delete()
+            db.session.commit()
+            seed_kingdom_map()
+            second = snapshot()
+            assert first == second
+
+            by_region = defaultdict(list)
+            for land in Land.query.all():
+                by_region[land.region].append(land)
+            assert set(by_region) == set(config.MAP_REGIONS)
+            for key, lands in by_region.items():
+                share = len(lands) / 4_800
+                assert 0.15 <= share <= 0.25, (key, share)
+
+            for key, spec in config.MAP_REGIONS.items():
+                lands = by_region[key]
+                non_neutral = [
+                    land for land in lands
+                    if land.suit_bonus_suit != 'Neutral'
+                ]
+                if key == 'kathmandu':
+                    neutral_share = 1 - len(non_neutral) / len(lands)
+                    assert 0.60 <= neutral_share <= 0.68
+                    counts = Counter(
+                        land.suit_bonus_suit for land in non_neutral)
+                    mean = sum(counts.values()) / 4
+                    assert set(counts) == {
+                        'Hearts', 'Diamonds', 'Clubs', 'Spades'}
+                    assert max(counts.values()) - min(counts.values()) <= mean * 0.30
+                else:
+                    dominant = spec['dominant_suit']
+                    dominant_count = sum(
+                        land.suit_bonus_suit == dominant
+                        for land in non_neutral)
+                    assert dominant_count / len(non_neutral) >= 0.80
+
+            # Outer dominant-suit territories join into broad shapes, while
+            # Kathmandu's denser balanced seed field stays more fragmented.
+            from kingdom_service import kingdom_neighbor_coords
+
+            def component_sizes(region_key, suit):
+                coords = {
+                    (land.col, land.row) for land in by_region[region_key]
+                    if land.suit_bonus_suit == suit
+                }
+                sizes = []
+                while coords:
+                    stack = [coords.pop()]
+                    size = 0
+                    while stack:
+                        coord = stack.pop()
+                        size += 1
+                        for neighbour in kingdom_neighbor_coords(*coord):
+                            if neighbour in coords:
+                                coords.remove(neighbour)
+                                stack.append(neighbour)
+                    sizes.append(size)
+                return sizes
+
+            for key, spec in config.MAP_REGIONS.items():
+                if key == 'kathmandu':
+                    largest = max(
+                        max(component_sizes(key, suit), default=0)
+                        for suit in ('Hearts', 'Diamonds', 'Clubs', 'Spades'))
+                    assert largest <= 65
+                else:
+                    dominant_sizes = component_sizes(
+                        key, spec['dominant_suit'])
+                    assert max(dominant_sizes) >= 90
 
     def test_seed_idempotent(self, app, db):
         """Calling seed twice should not duplicate lands."""

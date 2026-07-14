@@ -232,8 +232,67 @@ KEY_CARD_RANKS = ['J', 'Q', 'K', 'A']
 CARD_SELL_KEY_MULTIPLIER = 10               # J→10, Q→20, K→40, A→30
 
 # ── v2.0: Kingdom ──
-KINGDOM_MAP_COLS = 75
-KINGDOM_MAP_ROWS = 50                        # = 3750 hexes
+KINGDOM_MAP_COLS = 96
+KINGDOM_MAP_ROWS = 50                        # = 4800 hexes
+KINGDOM_MAP_GENERATION_SEED = int(
+    os.getenv('KINGDOM_MAP_GENERATION_SEED', '20260714')
+)
+KINGDOM_MAP_HEXES_PER_CLUSTER = int(
+    os.getenv('KINGDOM_MAP_HEXES_PER_CLUSTER', '94')
+)
+KINGDOM_MAP_OUTER_HEXES_PER_CLUSTER = int(
+    os.getenv('KINGDOM_MAP_OUTER_HEXES_PER_CLUSTER', '120')
+)
+KINGDOM_MAP_KATHMANDU_HEXES_PER_CLUSTER = int(
+    os.getenv('KINGDOM_MAP_KATHMANDU_HEXES_PER_CLUSTER', '55')
+)
+
+# Historic-region geography.  Dict order is the presentation order used by
+# the API and client Regions panel.
+MAP_REGIONS = {
+    'karnali': {
+        'name': 'Karnali',
+        'dominant_suit': 'Spades',
+        'quadrant': 'northwest',
+    },
+    'kirat': {
+        'name': 'Kirat',
+        'dominant_suit': 'Clubs',
+        'quadrant': 'northeast',
+    },
+    'kathmandu': {
+        'name': 'Kathmandu Valley',
+        'dominant_suit': None,
+        'quadrant': 'center',
+    },
+    'lumbini': {
+        'name': 'Lumbini',
+        'dominant_suit': 'Hearts',
+        'quadrant': 'southwest',
+    },
+    'mithila': {
+        'name': 'Mithila',
+        'dominant_suit': 'Diamonds',
+        'quadrant': 'southeast',
+    },
+}
+REGION_CENTER_RADIUS = float(os.getenv('REGION_CENTER_RADIUS', '0.52'))
+REGION_BORDER_NOISE = float(os.getenv('REGION_BORDER_NOISE', '0.08'))
+REGION_DOMINANT_SUIT_WEIGHT = float(
+    os.getenv('REGION_DOMINANT_SUIT_WEIGHT', '0.80')
+)
+# Dominant seeds claim a slightly wider Voronoi catchment, so their connected
+# territories are not merely more numerous but visibly broader as well.
+REGION_DOMINANT_CLUSTER_DISTANCE_SCALE = float(
+    os.getenv('REGION_DOMINANT_CLUSTER_DISTANCE_SCALE', '0.80')
+)
+KATHMANDU_NEUTRAL_SHARE = float(
+    os.getenv('KATHMANDU_NEUTRAL_SHARE', '0.60')
+)
+REGION_TRIBUTE_RATE = float(os.getenv('REGION_TRIBUTE_RATE', '0.05'))
+REGION_TRIBUTE_CAP_HOURS = int(
+    os.getenv('REGION_TRIBUTE_CAP_HOURS', '24')
+)
 
 # Land tiers 1..KINGDOM_TIER_COUNT.  Higher = rarer / more valuable.  The map
 # is generated as a "landscape" with one elevation peak per suit cluster, so

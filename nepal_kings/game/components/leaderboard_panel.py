@@ -11,6 +11,10 @@ import pygame
 from config import settings
 
 
+_CHAMPION_ICON_PATH = 'img/kingdom/ranking/champion.png'
+_REGION_SUITS = ('Spades', 'Clubs', 'Hearts', 'Diamonds')
+
+
 class LeaderboardPanel:
     """Compact two-section leaderboard rendered inside the map viewport."""
 
@@ -33,11 +37,53 @@ class LeaderboardPanel:
         self._my_realm_rank = None
         self._my_realm_size = 0
         self._my_user_id = None
+        self._regions = []
+        self._view = 'rankings'
+        self._tab_rects = {}
         self._title_font = settings.get_font(settings.FS_SMALL, bold=True)
         self._row_font = settings.get_font(settings.FS_TINY)
         self._row_font_bold = settings.get_font(settings.FS_TINY, bold=True)
         self._small_font = settings.get_font(
             max(8, int(settings.FS_TINY * 0.86)))
+        self._champion_icon = self._load_region_icon(_CHAMPION_ICON_PATH)
+        self._suit_icons = {
+            suit: self._load_region_icon(
+                f'{settings.SUIT_ICON_IMG_PATH}{suit.lower()}.png')
+            for suit in _REGION_SUITS
+        }
+        self._region_icon_cache = {}
+
+    @staticmethod
+    def _load_region_icon(path):
+        try:
+            return pygame.image.load(path).convert_alpha()
+        except Exception:
+            return None
+
+    def _region_icon(self, kind, size):
+        """Return one cached Champion/suit icon at the requested row size."""
+        size = max(8, int(size))
+        cache_key = (kind, size)
+        cached = self._region_icon_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        if kind == 'champion':
+            raw = self._champion_icon
+        else:
+            raw = self._suit_icons.get(kind)
+        if raw is not None:
+            icon = pygame.transform.smoothscale(raw, (size, size))
+        elif kind == 'neutral':
+            icon = pygame.Surface((size, size), pygame.SRCALPHA)
+            center = (size // 2, size // 2)
+            pygame.draw.circle(icon, (230, 216, 176, 220), center,
+                               max(2, size // 3), max(1, size // 6))
+            pygame.draw.circle(icon, (80, 72, 54, 190), center,
+                               max(1, size // 9))
+        else:
+            return None
+        self._region_icon_cache[cache_key] = icon
+        return icon
 
     def set_rect(self, rect):
         self.rect = pygame.Rect(rect)
@@ -47,13 +93,15 @@ class LeaderboardPanel:
 
     def set_data(self, *, top_largest=None, top_realms=None,
                  my_largest_rank=None, my_largest_size=0,
-                 my_realm_rank=None, my_realm_size=0):
+                 my_realm_rank=None, my_realm_size=0, regions=None):
         self._top_largest = list(top_largest or [])
         self._top_realms = list(top_realms or [])
         self._my_largest_rank = my_largest_rank
         self._my_largest_size = int(my_largest_size or 0)
         self._my_realm_rank = my_realm_rank
         self._my_realm_size = int(my_realm_size or 0)
+        if regions is not None:
+            self._regions = list(regions or [])
 
     def _header_h(self):
         return self._title_font.get_height() + 8
@@ -101,6 +149,7 @@ class LeaderboardPanel:
         r = self.rect
         vr = self._visible_rect()
         self._row_rects = []
+        self._tab_rects = {}
 
         # Background panel + border (header-height only when collapsed).
         surf = pygame.Surface((vr.w, vr.h), pygame.SRCALPHA)
@@ -113,7 +162,8 @@ class LeaderboardPanel:
         self._draw_toggle(vr)
 
         if self.collapsed:
-            label = self._title_font.render('Rankings', True,
+            label_text = 'Regions' if self._view == 'regions' else 'Rankings'
+            label = self._title_font.render(label_text, True,
                                             settings.KINGDOM_INFO_CLR)
             self.window.blit(label, label.get_rect(
                 midleft=(vr.x + 8, vr.centery)))
@@ -128,6 +178,40 @@ class LeaderboardPanel:
             row_h = max(self._row_font.get_height() + 4,
                         int(r.h * 0.085),
                         settings.TOUCH_COMPACT_MIN)
+
+            # Segmented view switch.  Keeping the five regions in the same
+            # collapsible surface avoids adding another permanent map widget.
+            tab_h = max(self._title_font.get_height() + 7,
+                        settings.TOUCH_COMPACT_MIN)
+            tab_right = r.right - pad - max(16, self._header_h() - 2)
+            tab_gap = max(2, int(r.w * 0.012))
+            tab_w = max(
+                42, (tab_right - (r.x + pad) - tab_gap) // 2)
+            for idx, (key, text) in enumerate((
+                    ('rankings', 'Rankings'), ('regions', 'Regions'))):
+                tab = pygame.Rect(r.x + pad + idx * (tab_w + tab_gap), y,
+                                  tab_w, tab_h)
+                self._tab_rects[key] = tab
+                active = self._view == key
+                bg = ((78, 69, 94, 225) if active
+                      else (37, 34, 46, 175))
+                pygame.draw.rect(self.window, bg, tab,
+                                 border_radius=4)
+                pygame.draw.rect(
+                    self.window,
+                    settings.KINGDOM_INFO_CLR if active
+                    else settings.MINIMAP_BORDER_CLR,
+                    tab, 1, border_radius=4)
+                surf = self._row_font_bold.render(
+                    text, True,
+                    (250, 232, 174) if active
+                    else settings.KINGDOM_ACTIVITY_DIM_CLR)
+                self.window.blit(surf, surf.get_rect(center=tab.center))
+            y += tab_h + section_gap
+
+            if self._view == 'regions':
+                self._draw_regions(r, y, row_h)
+                return
 
             # Section A: Largest Kingdom → kingdom_{gold,silver,bronce}.
             self._draw_section_title('Largest Kingdom', r, y)
@@ -238,6 +322,132 @@ class LeaderboardPanel:
         self.window.blit(surf, (panel_rect.x + 8, y))
         return y + surf.get_height() + 2
 
+    def _draw_regions(self, panel_rect, y, row_h):
+        """Draw five structured Region/Champion/progress cards."""
+        if not self._regions:
+            empty = self._small_font.render(
+                '— no region data —', True,
+                settings.KINGDOM_ACTIVITY_DIM_CLR)
+            self.window.blit(empty, (panel_rect.x + 10, y + 2))
+            return
+
+        visible_regions = self._regions[:5]
+        available_h = max(1, panel_rect.bottom - y - 4)
+        per_row_limit = max(1, available_h // len(visible_regions))
+        three_line_min = (self._row_font_bold.get_height()
+                          + self._small_font.get_height() * 2 + 12)
+        fitted_h = max(1, min(
+            max(row_h, three_line_min), per_row_limit))
+
+        for region in visible_regions:
+            rect = pygame.Rect(panel_rect.x + 4, y,
+                               panel_rect.w - 8, max(1, fitted_h - 2))
+            hovered = rect.collidepoint(pygame.mouse.get_pos())
+            bg = (62, 56, 80, 205) if hovered else (32, 30, 40, 145)
+            surface = pygame.Surface(rect.size, pygame.SRCALPHA)
+            pygame.draw.rect(surface, bg, surface.get_rect(), border_radius=4)
+            self.window.blit(surface, rect.topleft)
+
+            name = str(region.get('name') or region.get('key') or 'Region')
+            champions = region.get('champions') or (
+                [region.get('champion')] if region.get('champion') else [])
+            champion_name = ', '.join(
+                str(champion.get('username') or 'Unknown')
+                for champion in champions)
+            champ_count = int(region.get('champion_land_count') or 0)
+            my_count = int(region.get('my_land_count') or 0)
+            needed = int(region.get('lands_to_champion') or 0)
+            is_champion = (
+                self._my_user_id is not None
+                and any(champion.get('user_id') == self._my_user_id
+                        for champion in champions)
+            )
+
+            pad_x = 7
+            line_gap = 2
+            dominant = region.get('dominant_suit')
+            suit_icon = self._region_icon(
+                dominant if dominant else 'neutral',
+                min(18, max(10, self._row_font_bold.get_height())))
+            suit_w = suit_icon.get_width() if suit_icon else 0
+
+            # Region identity owns its own line, with a reserved suit slot.
+            # It can therefore never collide with the Champion identity.
+            title_max = max(12, rect.w - pad_x * 2 - suit_w
+                            - (4 if suit_icon else 0))
+            title = self._fit_text(name, self._row_font_bold, title_max)
+            title_surf = self._row_font_bold.render(
+                title, True, settings.KINGDOM_INFO_CLR)
+            title_y = rect.y + max(3, (rect.h - three_line_min) // 2 + 3)
+            self.window.blit(title_surf, (rect.x + pad_x, title_y))
+            if suit_icon is not None:
+                self.window.blit(suit_icon, suit_icon.get_rect(
+                    midright=(rect.right - pad_x,
+                              title_y + title_surf.get_height() // 2)))
+
+            if not champions:
+                champion_summary = 'No Champion'
+            elif len(champions) == 1:
+                champion_summary = f'{champion_name} · {champ_count}'
+            else:
+                champion_summary = (
+                    f'{len(champions)} co-Champions · {champ_count}')
+            champion_icon = None
+            if champions:
+                champion_icon = self._region_icon(
+                    'champion', min(
+                        18, max(10, self._small_font.get_height() + 1)))
+            champion_reserved = (
+                champion_icon.get_width() + 4 if champion_icon else 0)
+            champion_summary = self._fit_text(
+                champion_summary, self._small_font,
+                max(12, rect.w - pad_x * 2 - champion_reserved))
+            champion_surf = self._small_font.render(
+                champion_summary, True,
+                (settings.KINGDOM_ACTIVITY_TEXT_CLR if champions
+                 else settings.KINGDOM_ACTIVITY_DIM_CLR))
+            champion_y = title_y + title_surf.get_height() + line_gap
+            champion_x = rect.x + pad_x
+            if champion_icon is not None:
+                self.window.blit(champion_icon, champion_icon.get_rect(
+                    midleft=(champion_x,
+                             champion_y + champion_surf.get_height() // 2)))
+                champion_x += champion_icon.get_width() + 4
+            self.window.blit(champion_surf, (champion_x, champion_y))
+
+            if is_champion:
+                progress = f'You: Champion · {my_count} lands'
+            elif needed:
+                progress = f'You: {my_count} · {needed} to lead'
+            else:
+                progress = f'You: {my_count}'
+            tribute_rate = float(region.get('tribute_rate_per_hour') or 0.0)
+            meta = (f'+{tribute_rate:g}g/h'
+                    if is_champion and tribute_rate > 0 else '')
+            meta_surf = self._small_font.render(
+                meta, True, settings.KINGDOM_ACTIVITY_DIM_CLR)
+            progress = self._fit_text(
+                progress, self._small_font,
+                max(12, rect.w - pad_x * 2 - meta_surf.get_width()
+                    - (6 if meta else 0)))
+            progress_surf = self._small_font.render(
+                progress, True,
+                ((255, 239, 184) if is_champion
+                 else settings.KINGDOM_ACTIVITY_DIM_CLR))
+            progress_y = champion_y + champion_surf.get_height() + line_gap
+            # Short panels preserve the two identity lines; full personal
+            # progress remains available in the click-open inspector.
+            if progress_y + progress_surf.get_height() <= rect.bottom - 2:
+                self.window.blit(progress_surf, (rect.x + pad_x, progress_y))
+                if meta:
+                    self.window.blit(meta_surf, meta_surf.get_rect(
+                        topright=(rect.right - pad_x, progress_y)))
+
+            target = dict(region)
+            target['region_key'] = region.get('key')
+            self._row_rects.append((rect, target))
+            y += fitted_h
+
     def _fit_text(self, text, font, max_width):
         if font.size(text)[0] <= max_width:
             return text
@@ -261,6 +471,10 @@ class LeaderboardPanel:
         if self.collapsed:
             self.collapsed = False
             return {}
+        for key, rect in self._tab_rects.items():
+            if rect.collidepoint(event.pos):
+                self._view = key
+                return {'view': key}
         for rect, entry in self._row_rects:
             if rect.collidepoint(event.pos):
                 if callable(self.on_focus):

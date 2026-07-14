@@ -277,6 +277,16 @@ with app.app_context():
     except Exception as _kingdom_reconcile_err:  # pragma: no cover — safety net
         logger.exception("Persistent kingdom reconciliation failed: %s", _kingdom_reconcile_err)
         db.session.rollback()
+    try:
+        from region_service import reconcile_region_champions
+        reconcile_region_champions(commit=True)
+        logger.info("Historic region Champion reconciliation checked")
+    except Exception as _region_reconcile_err:  # pragma: no cover — safety net
+        logger.exception(
+            "Historic region Champion reconciliation failed: %s",
+            _region_reconcile_err,
+        )
+        db.session.rollback()
 
     # Create AI users if enabled
     if settings.AI_ENABLED:

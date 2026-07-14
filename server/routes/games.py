@@ -7793,6 +7793,21 @@ def _resolve_conquer_battle(game, winner, requesting_player):
                 new_owner_id=attacker_user.id,
                 commit=False,
             )
+            affected_regions = {land.region} if land and land.region else set()
+            for transferred_id in (
+                    (split_transfer_summary or {}).get('transferred_land_ids') or []):
+                transferred_land = db.session.get(Land, transferred_id)
+                if transferred_land and transferred_land.region:
+                    affected_regions.add(transferred_land.region)
+            if affected_regions:
+                from region_service import reconcile_region_champion
+                champion_now = _utcnow()
+                for affected_region in sorted(affected_regions):
+                    reconcile_region_champion(
+                        affected_region,
+                        now=champion_now,
+                        commit=False,
+                    )
             # Award XP for every conquered land based on its tier, including
             # founding lands that create brand-new kingdoms.  Collateral lands
             # from splits also award tier-based XP.

@@ -19,6 +19,7 @@ from game.components.loading_indicator import draw_loading_indicator
 from game.components import sigil_cosmetics
 from config import settings
 from utils import http_compat as requests
+from utils import sound
 from utils.background_poller import BackgroundPoller
 import logging
 
@@ -38,13 +39,12 @@ _BOX_W      = menu_chrome_safe_width(_BOX_X, int(0.87 * _SW))
 _BOX_BOTTOM = int(0.92 * _SH)
 _BOX_H      = _BOX_BOTTOM - _BOX_Y
 
-# Map scan modes: (key, short toolbar label).  'terrain' is the default rich
-# suit/tier view; the others wash the map by one dimension.
+# Player-facing map layers.  Ownership and vulnerability remain part of the
+# renderer for compatibility/testing, but the kingdom screen deliberately
+# exposes only the two useful everyday views.
 _MAP_MODES = (
     ('terrain',    'Terrain'),
-    ('ownership',  'Owner'),
     ('gold',       'Gold'),
-    ('vulnerable', 'Targets'),
 )
 
 
@@ -62,17 +62,21 @@ def _compute_kingdom_layout(activity_open=True):
     box = pygame.Rect(_BOX_X, _BOX_Y, _BOX_W, _BOX_H)
     pad = _BOX_PAD
     gap = settings.KINGDOM_PANEL_GAP
+    mobile_ui = settings.TOUCH_TARGET_MIN > 0
+    portrait_ui = mobile_ui and _SH > _SW
+    header_h = settings.KINGDOM_HEADER_H
+    if portrait_ui:
+        header_h = max(header_h, int(0.16 * _SH))
     header = pygame.Rect(
         box.x + pad,
         box.y + pad,
         box.w - 2 * pad,
-        settings.KINGDOM_HEADER_H,
+        header_h,
     )
 
     content_top = header.bottom + int(0.008 * _SH)
     content_bottom = box.bottom - pad
     content_h = max(1, content_bottom - content_top)
-    mobile_ui = settings.TOUCH_TARGET_MIN > 0
     activity_w = settings.KINGDOM_ACTIVITY_W
     if mobile_ui:
         # On phones the map owns the content area.  Activity becomes a
@@ -133,7 +137,7 @@ class KingdomScreen(MenuScreenMixin, Screen):
     # Defaults keep lightweight ``__new__`` test doubles and older saved
     # screen objects compatible with the responsive fields introduced here.
     _mobile_ui = settings.TOUCH_TARGET_MIN > 0
-    _activity_open = True
+    _activity_open = False
     _layers_open = False
     _activity_panel_toggle_rect = None
     _activity_tab_hit_rects = {}
@@ -170,7 +174,9 @@ class KingdomScreen(MenuScreenMixin, Screen):
         self._message_unread_count = 0
         self._activity_tab = 'alerts'
         self._mobile_ui = settings.TOUCH_TARGET_MIN > 0
-        self._activity_open = not self._mobile_ui
+        # The map is the primary kingdom-screen task on every form factor.
+        # Activity stays one click away and advertises unread work via badges.
+        self._activity_open = False
         self._layers_open = False
         self._activity_toggle_rect = None
         self._activity_panel_toggle_rect = None
@@ -284,6 +290,7 @@ class KingdomScreen(MenuScreenMixin, Screen):
         # Set of my land ids from the last map load; diffed to detect new
         # conquests (a land that became mine) so we can celebrate it.
         self._prev_my_land_ids = None
+        self._prev_champion_region_keys = None
 
         # ── Track last load time ────────────────────────────────────
         self._last_load_tick = 0
@@ -450,6 +457,9 @@ class KingdomScreen(MenuScreenMixin, Screen):
         # Re-apply the chosen scan mode (survives cold rebuilds + refreshes).
         if hasattr(self._hex_map, 'set_map_mode'):
             self._hex_map.set_map_mode(self._map_mode)
+        regions = data.get('regions') or []
+        if hasattr(self._hex_map, 'set_regions'):
+            self._hex_map.set_regions(regions)
 
         # Keep the minimap and leaderboard pinned to the resized map corners.
         self._position_map_overlays()
@@ -463,6 +473,7 @@ class KingdomScreen(MenuScreenMixin, Screen):
             my_largest_size=data.get('my_largest_size') or 0,
             my_realm_rank=data.get('my_realm_rank'),
             my_realm_size=data.get('my_realm_size') or 0,
+            regions=regions,
         )
 
         # Wire the same leaderboard into the hex map so the on-map kingdom
@@ -486,20 +497,16 @@ class KingdomScreen(MenuScreenMixin, Screen):
         focused = bool(new_conquered
                        and self._hex_map.focus_lands(
                            new_conquered, fit=True, max_zoom=1.5))
-        if cold_load and not focused:
-            focused = bool(
-                self._recommended_tutorial_land_id
-                and self._hex_map.focus_lands(
-                    [self._recommended_tutorial_land_id],
-                    fit=True,
-                    max_zoom=1.5,
-                )
-            )
-            if not focused:
-                self._focus_largest_kingdom_component()
+        # Cold loads intentionally retain HexMap's full-world camera fit so
+        # both ends of the wider map and all five region labels are visible.
+        # Explicit navigation (kingdom chip, region row, recenter) still
+        # provides a close fitted view.
 
         if new_conquered:
             self._celebrate_conquests(new_conquered)
+        gained_regions = self._diff_champion_regions(regions)
+        if gained_regions:
+            self._celebrate_region_championships(gained_regions)
 
         self._loading = False
         self._last_map_updated_at_ms = pygame.time.get_ticks()
@@ -565,6 +572,10 @@ class KingdomScreen(MenuScreenMixin, Screen):
     def _on_leaderboard_focus(self, entry):
         """Pan the hex map to the kingdom referenced by a clicked panel row."""
         if not self._hex_map or not isinstance(entry, dict):
+            return
+        region_key = entry.get('region_key')
+        if region_key and hasattr(self._hex_map, 'focus_region'):
+            self._hex_map.focus_region(region_key)
             return
         # Largest-kingdom rows carry the matching component's land_ids;
         # greatest-realm rows carry the user's largest component land_ids.
@@ -1084,9 +1095,13 @@ class KingdomScreen(MenuScreenMixin, Screen):
         vp = self._map_viewport_rect
         hm = getattr(self, '_hex_map', None)
         if hm is not None:
+            minimap_y = (
+                vp.bottom - settings.MINIMAP_H - settings.MINIMAP_MARGIN)
+            if self._mobile_ui and _SH > _SW:
+                minimap_y -= settings.TOUCH_TARGET_MIN + settings.MINIMAP_MARGIN
             hm.minimap_origin = (
                 vp.right - settings.MINIMAP_W - settings.MINIMAP_MARGIN,
-                vp.bottom - settings.MINIMAP_H - settings.MINIMAP_MARGIN,
+                minimap_y,
             )
 
         leaderboard = getattr(self, '_leaderboard_panel', None)
@@ -1628,6 +1643,27 @@ class KingdomScreen(MenuScreenMixin, Screen):
     def _format_kingdom_event_item(self, item):
         kind = item.get('kind') or ''
         payload = item.get('payload') or {}
+        if kind == 'map_regenerated':
+            return (
+                'The realm has been redrawn',
+                'Territory and kingdom progress reset; account value was preserved.',
+                True,
+            )
+        if kind == 'region_champion_gained':
+            name = payload.get('region_name') or 'a historic region'
+            count = int(payload.get('land_count') or 0)
+            return (f'Champion of {name}',
+                    f'You took the lead with {count} lands.', True)
+        if kind == 'region_champion_lost':
+            name = payload.get('region_name') or 'a historic region'
+            payout = int(payload.get('tribute_paid') or 0)
+            detail = ('Your accrued tribute was paid automatically.' if not payout
+                      else f'{payout} tribute paid automatically.')
+            return (f'Champion title lost: {name}', detail, False)
+        if kind == 'region_tribute_collected':
+            amount = int(payload.get('amount') or 0)
+            return ('Regional tribute collected',
+                    f'{amount} gold included in Collect All.', True)
         if kind == 'xp_gained':
             amount = int(payload.get('amount') or 0)
             reason = payload.get('reason') or 'conquer'
@@ -1794,12 +1830,14 @@ class KingdomScreen(MenuScreenMixin, Screen):
         chip_h = max(int(0.056 * _SH),
                      font.get_height() + small_font.get_height() + 12)
         sigil_sz = max(18, int(chip_h * 0.62))
-        chevron_w = max(14, int(chip_h * 0.42))
+        portrait_ui = self._mobile_ui and _SH > _SW
+        chevron_w = (max(14, int(chip_h * 0.42))
+                     if len(kingdoms) > 1 else 0)
         gear_sz = max(16, int(chip_h * 0.52))
         pad_x = max(6, int(0.006 * _SW))
 
         # Truncate name to fit a reasonable budget.
-        max_name_w = int(0.13 * _SW)
+        max_name_w = int((0.25 if portrait_ui else 0.13) * _SW)
         truncated = name
         if font.size(truncated)[0] > max_name_w:
             while truncated and font.size(truncated + '…')[0] > max_name_w:
@@ -1821,8 +1859,9 @@ class KingdomScreen(MenuScreenMixin, Screen):
         # Anchor the chip just to the right of the box's left pad, vertically
         # centred in the header.
         chip_x = self._header_rect.x + 6
-        chip_y = self._header_rect.y + max(
-            0, (self._header_rect.h - chip_h) // 2)
+        chip_y = (self._header_rect.y + 2 if portrait_ui else
+                  self._header_rect.y + max(
+                      0, (self._header_rect.h - chip_h) // 2))
         chip_rect = pygame.Rect(chip_x, chip_y, chip_w, chip_h)
         self._kingdom_chip_rect = chip_rect
 
@@ -2035,9 +2074,23 @@ class KingdomScreen(MenuScreenMixin, Screen):
         bh = text_h + py * 2
 
         mobile_ui = settings.TOUCH_TARGET_MIN > 0
+        portrait_ui = mobile_ui and _SH > _SW
         info_left_bound = self._header_rect.x
         info_right_bound = self._header_rect.right
-        if mobile_ui:
+        if portrait_ui:
+            compact_font = settings.get_font(
+                max(8, int(settings.FS_TINY * 0.78)), bold=True)
+            max_bw = max(80, int(self._header_rect.w * 0.52))
+            short_base = f'{land_count} {land_word} · {base_rate:.0f}g/h'
+            segments = [
+                compact_font.render(short_base, True, info_clr),
+                compact_font.render(f'+{bonus_rate:.0f}', True, bonus_clr),
+            ]
+            text_w = sum(s.get_width() for s in segments)
+            text_h = max((s.get_height() for s in segments), default=0)
+            bw = min(text_w + px * 2, max_bw)
+            bh = text_h + py * 2
+        elif mobile_ui:
             # The mobile header also contains the kingdom chip on the left
             # and the Collect button on the right. Keep the info pill in the
             # middle lane so those controls never paint on top of each other.
@@ -2058,12 +2111,17 @@ class KingdomScreen(MenuScreenMixin, Screen):
 
         box = pygame.Surface((bw, bh), pygame.SRCALPHA)
         box.fill(settings.KINGDOM_INFO_BG_CLR)
-        if mobile_ui:
+        if portrait_ui:
+            bar_x = self._header_rect.x
+        elif mobile_ui:
             lane_w = max(1, info_right_bound - info_left_bound)
             bar_x = info_left_bound + max(0, (lane_w - bw) // 2)
         else:
             bar_x = self._header_rect.x + (self._header_rect.w - bw) // 2
-        bar_y = self._header_rect.y + self._title_surf.get_height() + int(0.006 * _SH)
+        bar_y = (self._header_rect.y + int(0.085 * _SH)
+                 if portrait_ui else
+                 self._header_rect.y + self._title_surf.get_height()
+                 + int(0.006 * _SH))
         self.window.blit(box, (bar_x, bar_y))
         tx = bar_x + px
         ty = bar_y + py
@@ -2093,20 +2151,27 @@ class KingdomScreen(MenuScreenMixin, Screen):
                 label = 'Collect' if not parts else 'Collect ' + ' + '.join(parts)
             if any_full:
                 label += '  (FULL!)'
-            btn_font = self._nav_font
-            max_btn_text_w = int(0.22 * _SW) if mobile_ui else None
+            btn_font = (settings.get_font(
+                max(8, int(settings.FS_TINY * 0.78)), bold=True)
+                if portrait_ui else self._nav_font)
+            max_btn_text_w = (int(0.32 * _SW) if portrait_ui else
+                              int(0.22 * _SW) if mobile_ui else None)
             if max_btn_text_w:
                 label = self._fit_text(label, btn_font, max_btn_text_w)
             btn_surf = btn_font.render(label, True, (240, 230, 180))
             bpx = int(0.012 * _SW)
             bpy = int(0.006 * _SH)
             btn_w = btn_surf.get_width() + bpx * 2
-            if mobile_ui:
+            if portrait_ui:
+                btn_w = min(btn_w, int(0.36 * _SW))
+            elif mobile_ui:
                 btn_w = min(btn_w, int(0.24 * _SW))
             btn_h = max(bh, btn_surf.get_height() + bpy * 2)
             btn_x = bar_x + bw + int(0.010 * _SW)
             # Keep button inside header area; if overflow, place to right of title within header
-            max_right = self._header_rect.right - self._btn_close_rect.w - int(0.012 * _SW)
+            max_right = (self._header_rect.right if portrait_ui else
+                         self._header_rect.right - self._btn_close_rect.w
+                         - int(0.012 * _SW))
             if btn_x + btn_w > max_right:
                 btn_x = max(self._header_rect.x, max_right - btn_w)
             btn_y = bar_y + (bh - btn_h) // 2
@@ -2520,6 +2585,11 @@ class KingdomScreen(MenuScreenMixin, Screen):
             # panel were already consumed above, and clicking another hex here
             # re-targets the inspector.
             if self._hex_map:
+                if event.type == MOUSEMOTION:
+                    lb = getattr(self, '_leaderboard_panel', None)
+                    if lb is not None and lb.contains_point(event.pos):
+                        self._hex_map.hovered_tile = None
+                        continue
                 if event.type == MOUSEBUTTONDOWN and event.button == 1:
                     lb = getattr(self, '_leaderboard_panel', None)
                     chip_rect = getattr(self, '_kingdom_chip_rect', None)
@@ -2560,6 +2630,46 @@ class KingdomScreen(MenuScreenMixin, Screen):
         new = [lid for lid in my_ids if lid not in prev] if prev is not None else []
         self._prev_my_land_ids = my_ids
         return new
+
+    def _diff_champion_regions(self, regions):
+        """Return newly gained Champion snapshots, never on first load."""
+        user_id = self._current_user_id()
+        current = {
+            region.get('key'): region
+            for region in (regions or [])
+            if isinstance(region, dict)
+            and any(
+                champion.get('user_id') == user_id
+                for champion in (region.get('champions') or
+                                  ([region.get('champion')]
+                                   if region.get('champion') else []))
+            )
+        }
+        previous = getattr(self, '_prev_champion_region_keys', None)
+        gained = ([current[key] for key in current if key not in previous]
+                  if previous is not None else [])
+        self._prev_champion_region_keys = set(current)
+        return gained
+
+    def _celebrate_region_championships(self, regions):
+        """Celebrate each newly gained title once, without persistent chrome."""
+        fx = getattr(self, '_fx', None)
+        if not fx:
+            return
+        for idx, region in enumerate(list(regions)[:2]):
+            name = region.get('name') or 'the region'
+            fx.spawn_banner(
+                f'Champion of {name}!', (248, 214, 104),
+                duration_ms=1500 + idx * 180,
+                anchor_rect=self._map_viewport_rect,
+            )
+            fx.spawn_confetti(
+                self._map_viewport_rect,
+                [(248, 214, 104), (236, 230, 194), (130, 190, 145)],
+                count=24, fall_speed=(72.0, 132.0),
+                gravity=105.0, life_ms=(650, 1050), delay_ms=idx * 180,
+            )
+        sound.play('conquer_win', volume=0.75)
 
     def _celebrate_conquests(self, land_ids):
         """Burst + border-merge pulse on lands that just became mine."""
@@ -3344,6 +3454,10 @@ class KingdomScreen(MenuScreenMixin, Screen):
             self._hex_map.conquest_outcome_for(tile)
             if self._hex_map else None
         )
+        region_info = next((
+            region for region in ((self._map_data or {}).get('regions') or [])
+            if region.get('key') == getattr(tile, 'region', None)
+        ), None)
         self._detail_box = LandDetailBox(
             self.window, tile,
             cooldown=self._cooldown,
@@ -3356,6 +3470,7 @@ class KingdomScreen(MenuScreenMixin, Screen):
             conquest_outcome=conquest_outcome,
             anchored=True,
             viewport_rect=self._map_viewport_rect,
+            region_info=region_info,
         )
         self._keep_selected_hex_visible(tile)
         if self._kingdom_coach_ready() and self._detail_conquer_button_rect():
@@ -3388,7 +3503,12 @@ class KingdomScreen(MenuScreenMixin, Screen):
     @staticmethod
     def _hover_preview_lines(tile):
         """Return the deliberately small set of facts shown before a click."""
-        title = f'Land ({tile.col}, {tile.row})  \u00b7  Tier {int(tile.tier)}'
+        region = (getattr(settings, 'KINGDOM_REGIONS', {}).get(
+            getattr(tile, 'region', None), {}) or {}).get('name')
+        if region:
+            title = f'{region} \u00b7 ({tile.col}, {tile.row}) \u00b7 Tier {int(tile.tier)}'
+        else:
+            title = f'Land ({tile.col}, {tile.row})  \u00b7  Tier {int(tile.tier)}'
         if (tile.suit_bonus_suit and tile.suit_bonus_suit != 'Neutral'
                 and tile.suit_bonus_value):
             suit = f'{tile.suit_bonus_suit} +{tile.suit_bonus_value}'
@@ -3414,6 +3534,10 @@ class KingdomScreen(MenuScreenMixin, Screen):
             return
         tile = getattr(hm, 'hovered_tile', None)
         if tile is None:
+            return
+        leaderboard = getattr(self, '_leaderboard_panel', None)
+        if (leaderboard is not None
+                and leaderboard.contains_point(pygame.mouse.get_pos())):
             return
         # Suppress under blocking modals/overlays and for the land already
         # open in the inspector (avoids duplicating its info).
@@ -3524,10 +3648,7 @@ class KingdomScreen(MenuScreenMixin, Screen):
 
         activity_button = None
         if not self._activity_open:
-            count = self._mobile_activity_count()
             activity_label = '\u2039 Activity'
-            if count:
-                activity_label += f' {count}'
             tw, th = font.size(activity_label)
             activity_w = tw + pad_x * 2
             activity_button = (activity_label, activity_w)
@@ -3536,6 +3657,14 @@ class KingdomScreen(MenuScreenMixin, Screen):
 
         x = vp.right - margin - total_w
         y = vp.y + margin
+        if _SH > _SW:
+            # The collapsed Regions/Rankings header owns the first map row;
+            # move layer/activity controls beneath it instead of overlapping.
+            leaderboard = getattr(self, '_leaderboard_panel', None)
+            header_h = (leaderboard._header_h()
+                        if leaderboard is not None
+                        and hasattr(leaderboard, '_header_h') else 0)
+            y += header_h + gap
         mx, my = pygame.mouse.get_pos()
         for key, label, bw in btns:
             rect = pygame.Rect(x, y, bw, h)
@@ -3571,12 +3700,45 @@ class KingdomScreen(MenuScreenMixin, Screen):
             tsurf = font.render(label, True, settings.KINGDOM_ACTIVITY_TEXT_CLR)
             self.window.blit(tsurf, tsurf.get_rect(center=rect.center))
             self._activity_toggle_rect = rect
+            self._draw_activity_badges(rect)
 
         self._draw_map_mode_legend(vp, y + h + max(3, pad_y), margin)
 
     def _mobile_activity_count(self):
         return len(self._visible_notifications()) + int(
             self._message_unread_count or 0)
+
+    def _activity_badge_counts(self):
+        """Return unread notification/message counts for the toolbar badges."""
+        return (len(self._visible_notifications()),
+                max(0, int(self._message_unread_count or 0)))
+
+    def _draw_activity_badges(self, rect):
+        """Draw compact N/M unread pills without lengthening Activity text."""
+        alerts, messages = self._activity_badge_counts()
+        badges = []
+        if alerts:
+            badges.append((f'N{min(alerts, 99)}' if alerts < 100 else 'N99+',
+                           (188, 66, 56), (255, 238, 222)))
+        if messages:
+            badges.append((f'M{min(messages, 99)}' if messages < 100 else 'M99+',
+                           (74, 108, 178), (238, 244, 255)))
+        if not badges:
+            return
+        font = self._activity_small_font
+        gap = 3
+        right = rect.right - 2
+        y = rect.y - max(3, font.get_height() // 3)
+        for label, bg, text_clr in reversed(badges):
+            text = font.render(label, True, text_clr)
+            width = text.get_width() + 8
+            height = max(14, text.get_height() + 2)
+            pill = pygame.Rect(right - width, y, width, height)
+            pygame.draw.rect(self.window, bg, pill, border_radius=height // 2)
+            pygame.draw.rect(self.window, (247, 223, 177), pill, 1,
+                             border_radius=height // 2)
+            self.window.blit(text, text.get_rect(center=pill.center))
+            right = pill.left - gap
 
     def _draw_mobile_toolbar_button(self, rect, label, *, active=False):
         hovered = rect.collidepoint(pygame.mouse.get_pos())
@@ -3598,7 +3760,7 @@ class KingdomScreen(MenuScreenMixin, Screen):
         self.window.blit(surf, surf.get_rect(center=visual.center))
 
     def _draw_mobile_map_toolbar(self):
-        """Draw two large map controls and an optional 2x2 layer picker."""
+        """Draw two large map controls and an optional layer picker."""
         vp = self._map_viewport_rect
         margin = max(6, int(0.008 * _SH))
         h = settings.TOUCH_TARGET_MIN
@@ -3609,8 +3771,7 @@ class KingdomScreen(MenuScreenMixin, Screen):
         activity_x = vp.right - margin - activity_w
         layers_x = activity_x - gap - layers_w
 
-        count = self._mobile_activity_count()
-        activity_label = 'Activity' if not count else f'Activity  {count}'
+        activity_label = 'Activity'
         self._activity_toggle_rect = pygame.Rect(
             activity_x, y, activity_w, h)
         self._layers_toggle_rect = pygame.Rect(layers_x, y, layers_w, h)
@@ -3621,6 +3782,7 @@ class KingdomScreen(MenuScreenMixin, Screen):
         self._draw_mobile_toolbar_button(
             self._activity_toggle_rect, activity_label,
             active=self._activity_open)
+        self._draw_activity_badges(self._activity_toggle_rect)
 
         if not self._layers_open:
             return

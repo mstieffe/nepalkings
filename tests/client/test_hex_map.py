@@ -290,7 +290,9 @@ class TestCameraTransforms:
         ))
 
         after = hm.screen_to_world(*cursor)
-        assert hm.zoom == pytest.approx(1.125)
+        from config import settings
+        assert hm.zoom == pytest.approx(
+            settings.HEX_MAP_ZOOM_FACTOR ** 0.25)
         assert abs(before[0] - after[0]) < 0.01
         assert abs(before[1] - after[1]) < 0.01
 
@@ -315,7 +317,8 @@ class TestCameraTransforms:
         ))
 
         after = hm.screen_to_world(*cursor)
-        assert hm.zoom == pytest.approx(1.5)
+        from config import settings
+        assert hm.zoom == pytest.approx(settings.HEX_MAP_ZOOM_FACTOR)
         assert abs(before[0] - after[0]) < 0.01
         assert abs(before[1] - after[1]) < 0.01
 
@@ -339,7 +342,9 @@ class TestCameraTransforms:
         ))
 
         after = hm.screen_to_world(*cursor)
-        assert hm.zoom == pytest.approx(1.5)
+        from config import settings
+        assert hm.zoom == pytest.approx(
+            2.0 / settings.HEX_MAP_ZOOM_FACTOR)
         assert abs(before[0] - after[0]) < 0.01
         assert abs(before[1] - after[1]) < 0.01
 
@@ -383,6 +388,20 @@ class TestCameraTransforms:
         after = hm.screen_to_world(*viewport.center)
         assert abs(before[0] - after[0]) < 0.01
         assert abs(before[1] - after[1]) < 0.01
+
+    def test_production_map_cannot_zoom_below_full_overview(self):
+        from game.components.hex_map import HexMap
+        import pygame
+        window = pygame.display.get_surface()
+        viewport = pygame.Rect(100, 50, 500, 300)
+        lands = [_make_land(c, r) for r in range(50) for c in range(96)]
+        hm = HexMap(lands, window, viewport_rect=viewport)
+        overview_zoom = hm.zoom
+
+        for _ in range(12):
+            hm.zoom_out()
+
+        assert hm.zoom == pytest.approx(overview_zoom)
 
     def test_pan_is_clamped_to_world_bounds(self):
         from game.components.hex_map import HexMap
@@ -886,6 +905,7 @@ class TestHexMapVisualSemantics:
         monkeypatch.setattr(HexMap, '_draw_kingdom_badges', lambda self, _sz: None)
         monkeypatch.setattr(HexMap, '_draw_minimap', lambda self: None)
 
+        hm.zoom = settings.HEX_MAP_LAND_INFO_MIN_ZOOM
         hm.render()
 
         assert [phase for phase, _land_id in calls] == [

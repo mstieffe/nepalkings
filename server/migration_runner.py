@@ -31,7 +31,7 @@ NEVER "migrate" production by resetting the database.
 import logging
 from datetime import datetime, timezone
 
-from sqlalchemy import text
+from sqlalchemy import func, text
 
 from models import db
 
@@ -119,6 +119,204 @@ def _m_figure_is_clone_column():
                            'BOOLEAN NOT NULL DEFAULT 0')
 
 
+def _m_regenerate_kingdom_map_into_regions():
+    """One-time, value-preserving reset into the 96x50 regional map."""
+    _add_column_if_missing('land', 'region', 'VARCHAR(20)')
+    _add_column_if_missing('region_champion', 'champion_user_ids', 'JSON')
+    _add_column_if_missing('region_champion', 'pending_gold_by_user', 'JSON')
+    _add_column_if_missing('region_champion', 'since_by_user', 'JSON')
+    db.session.execute(text(
+        'CREATE INDEX IF NOT EXISTS ix_land_region ON land (region)'))
+    db.session.flush()
+
+    from models import (
+        CollectionCard, Game, Kingdom, KingdomCosmeticUnlock,
+        KingdomLootEvent, KingdomMessage, KingdomNotification,
+        KingdomSkillAllocation, Land, LandAttackLog, LandConfig,
+        LandConfigBattleMove, LandConfigFigure, RegionChampion, User,
+        UserKingdomCosmeticEntitlement,
+    )
+
+    # Fresh databases are seeded by server.py immediately after migrations.
+    if Land.query.first() is None:
+        return
+
+    active_games = Game.query.filter(
+        Game.mode == 'conquer',
+        Game.state.in_(('open', 'active')),
+    ).count()
+    if active_games:
+        raise RuntimeError(
+            'Historic-region map reset requires zero open/active Conquer games; '
+            f'found {active_games}')
+
+    from kingdom_service import collect_kingdom_production, seed_kingdom_map
+    import server_settings as config
+
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    former_owner_ids = {
+        user_id for (user_id,) in db.session.query(Land.owner_user_id)
+        .filter(Land.owner_user_id.isnot(None)).distinct().all()
+    }
+    preservation = {
+        user_id: {
+            'gold': 0,
+            'main_boosters': 0,
+            'side_boosters': 0,
+            'maps': 0,
+            'shield_refund': 0,
+            'cosmetics': set(),
+        }
+        for user_id in former_owner_ids
+    }
+
+    kingdoms = Kingdom.query.order_by(Kingdom.id).all()
+    land_counts = dict(db.session.query(
+        Land.kingdom_id, func.count(Land.id)
+    ).filter(Land.kingdom_id.isnot(None)).group_by(Land.kingdom_id).all())
+
+    # Preserve every paid/earned cosmetic as an account entitlement.
+    existing_entitlements = {
+        (row.user_id, row.cosmetic_key)
+        for row in UserKingdomCosmeticEntitlement.query.all()
+    }
+    for kingdom in kingdoms:
+        user = db.session.get(User, kingdom.owner_user_id)
+        if not user:
+            continue
+        info = preservation.setdefault(user.id, {
+            'gold': 0, 'main_boosters': 0, 'side_boosters': 0, 'maps': 0,
+            'shield_refund': 0, 'cosmetics': set(),
+        })
+        unlocks = KingdomCosmeticUnlock.query.filter_by(
+            kingdom_id=kingdom.id).all()
+        for unlock in unlocks:
+            info['cosmetics'].add(unlock.cosmetic_key)
+            key = (user.id, unlock.cosmetic_key)
+            if key not in existing_entitlements:
+                db.session.add(UserKingdomCosmeticEntitlement(
+                    user_id=user.id, cosmetic_key=unlock.cosmetic_key,
+                    granted_at=now))
+                existing_entitlements.add(key)
+
+        collected = collect_kingdom_production(kingdom, user, now=now)
+        info['gold'] += int(collected.get('collected_gold') or 0)
+        info['main_boosters'] += int(
+            collected.get('collected_main_boosters') or 0)
+        info['side_boosters'] += int(
+            collected.get('collected_side_boosters') or 0)
+        info['maps'] += int(collected.get('collected_maps') or 0)
+
+        if kingdom.shield_until and kingdom.shield_until > now:
+            remaining_hours = max(
+                0.0, (kingdom.shield_until - now).total_seconds() / 3600.0)
+            refund = int(
+                remaining_hours
+                * int(config.KINGDOM_SHIELD_PRICE_PER_HOUR_PER_LAND)
+                * int(land_counts.get(kingdom.id, 0) or 0)
+            )
+            if refund:
+                user.gold = int(user.gold or 0) + refund
+                info['shield_refund'] += refund
+
+    db.session.flush()
+
+    defence_ids = [config_id for (config_id,) in db.session.query(
+        LandConfig.id).filter(LandConfig.config_type == 'defence').all()]
+    if defence_ids:
+        # Release every defence-held collection card, including legacy rows
+        # whose child JSON no longer contains the lock reference.
+        CollectionCard.query.filter(
+            CollectionCard.lock_type.like('defence%')
+        ).update({
+            CollectionCard.locked: False,
+            CollectionCard.lock_type: None,
+            CollectionCard.lock_ref_id: None,
+        }, synchronize_session=False)
+
+        Land.query.filter(Land.defence_config_id.in_(defence_ids)).update(
+            {Land.defence_config_id: None}, synchronize_session=False)
+        Game.query.filter(Game.defence_config_id.in_(defence_ids)).update(
+            {Game.defence_config_id: None}, synchronize_session=False)
+        Game.query.filter(Game.conquer_config_id.in_(defence_ids)).update(
+            {Game.conquer_config_id: None}, synchronize_session=False)
+        LandConfig.query.filter(
+            LandConfig.base_config_id.in_(defence_ids)).update(
+                {LandConfig.base_config_id: None}, synchronize_session=False)
+        LandConfig.query.filter(LandConfig.id.in_(defence_ids)).update({
+            LandConfig.battle_figure_id: None,
+            LandConfig.battle_figure_id_2: None,
+            LandConfig.base_config_id: None,
+        }, synchronize_session=False)
+        LandConfigBattleMove.query.filter(
+            LandConfigBattleMove.config_id.in_(defence_ids)).delete(
+                synchronize_session=False)
+        LandConfigFigure.query.filter(
+            LandConfigFigure.config_id.in_(defence_ids)).delete(
+                synchronize_session=False)
+        LandConfig.query.filter(LandConfig.id.in_(defence_ids)).delete(
+            synchronize_session=False)
+
+    old_kingdom_ids = [kingdom.id for kingdom in kingdoms]
+    KingdomLootEvent.query.update({
+        KingdomLootEvent.land_id: None,
+        KingdomLootEvent.attack_log_id: None,
+        KingdomLootEvent.kingdom_id: None,
+    }, synchronize_session=False)
+    KingdomMessage.query.update(
+        {KingdomMessage.land_id: None}, synchronize_session=False)
+    Game.query.update({
+        Game.land_id: None,
+        Game.defence_config_id: None,
+    }, synchronize_session=False)
+    KingdomNotification.query.filter(
+        KingdomNotification.kingdom_id.in_(old_kingdom_ids)
+    ).update({KingdomNotification.kingdom_id: None}, synchronize_session=False)
+
+    LandAttackLog.query.delete(synchronize_session=False)
+    Land.query.delete(synchronize_session=False)
+    KingdomCosmeticUnlock.query.delete(synchronize_session=False)
+    KingdomSkillAllocation.query.delete(synchronize_session=False)
+    Kingdom.query.delete(synchronize_session=False)
+    RegionChampion.query.delete(synchronize_session=False)
+    # The production-like database may already contain stale optional links
+    # from old finished games/spells.  Nulling them here makes the required
+    # post-reset foreign-key integrity check meaningful and restorable.
+    db.session.execute(text(
+        'UPDATE game SET conquer_config_id = NULL '
+        'WHERE conquer_config_id IS NOT NULL AND conquer_config_id NOT IN '
+        '(SELECT id FROM land_config)'))
+    db.session.execute(text(
+        'UPDATE active_spell SET target_figure_id = NULL '
+        'WHERE target_figure_id IS NOT NULL AND target_figure_id NOT IN '
+        '(SELECT id FROM figure)'))
+    db.session.flush()
+
+    seed_kingdom_map(commit=False)
+    from region_service import reconcile_region_champions
+    reconcile_region_champions(now=now, commit=False)
+
+    for user_id in sorted(former_owner_ids):
+        info = preservation.get(user_id) or {}
+        db.session.add(KingdomNotification(
+            user_id=user_id,
+            kingdom_id=None,
+            kind='map_regenerated',
+            payload={
+                'map_cols': int(config.KINGDOM_MAP_COLS),
+                'map_rows': int(config.KINGDOM_MAP_ROWS),
+                'preserved_gold': int(info.get('gold') or 0),
+                'preserved_main_boosters': int(
+                    info.get('main_boosters') or 0),
+                'preserved_side_boosters': int(
+                    info.get('side_boosters') or 0),
+                'preserved_maps': int(info.get('maps') or 0),
+                'shield_refund': int(info.get('shield_refund') or 0),
+                'preserved_cosmetics': sorted(info.get('cosmetics') or []),
+            },
+        ))
+
+
 def _m_clear_fill_up_to_10_preludes():
     """'Fill up to 10' left the conquer/defence prelude pool — clear saved
     configs that still reference it and unlock their locked 10-cards."""
@@ -159,6 +357,8 @@ MIGRATIONS = [
     (11, 'clear Fill up to 10 prelude configs', _m_clear_fill_up_to_10_preludes),
     (12, 'duel turn_time_limit columns', _m_duel_turn_time_limit_columns),
     (13, 'figure.is_clone column', _m_figure_is_clone_column),
+    (14, 'regenerate kingdom map into historic regions',
+     _m_regenerate_kingdom_map_into_regions),
 ]
 
 

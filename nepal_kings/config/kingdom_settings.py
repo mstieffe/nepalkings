@@ -528,18 +528,71 @@ HEX_SURFACE_SKINS = {
 HEX_OWNER_ALPHA     = 110                  # overlay alpha for owner tint
 
 # ── Camera / viewport ──────────────────────────────────────────────
-HEX_MAP_ZOOM_MIN    = 0.25
+HEX_MAP_ZOOM_MIN    = 0.04   # permits a complete 96x50 fit in portrait
 HEX_MAP_ZOOM_MAX    = 4.0
-HEX_MAP_ZOOM_STEP   = 0.50
+HEX_MAP_ZOOM_FACTOR = 1.35  # proportional per wheel/button notch
 HEX_MAP_DRAG_THRESHOLD = 5                 # px before drag starts
 # Progressive disclosure thresholds for per-tile overlays.
 HEX_MAP_LAND_INFO_MIN_ZOOM       = 1.5    # icons (stat strip, tier ribbon)
 HEX_MAP_LAND_NUMBERS_MIN_ZOOM    = 2.0    # numeric labels appear here and above
 HEX_MAP_OWNER_NAME_MIN_ZOOM      = 2.0    # below this owner chip is dot only
 
+# ── Historic regions / progressive map presentation ────────────────
+# Geography is intentionally quieter than ownership.  Tints and procedural
+# landmarks are overview aids; they fade before per-land information appears.
+KINGDOM_REGIONS = {
+    'karnali': {
+        'name': 'Karnali',
+        'dominant_suit': 'Spades',
+        'tint': (112, 133, 154),
+        'label': (224, 234, 240),
+        'terrain': 'mountain',
+    },
+    'kirat': {
+        'name': 'Kirat',
+        'dominant_suit': 'Clubs',
+        'tint': (93, 130, 103),
+        'label': (220, 236, 218),
+        'terrain': 'foothill',
+    },
+    'kathmandu': {
+        'name': 'Kathmandu Valley',
+        'dominant_suit': None,
+        'tint': (180, 151, 104),
+        'label': (248, 226, 184),
+        'terrain': 'valley',
+    },
+    'lumbini': {
+        'name': 'Lumbini',
+        'dominant_suit': 'Hearts',
+        'tint': (157, 109, 118),
+        'label': (244, 218, 222),
+        'terrain': 'forest',
+    },
+    'mithila': {
+        'name': 'Mithila',
+        'dominant_suit': 'Diamonds',
+        'tint': (173, 132, 82),
+        'label': (248, 224, 183),
+        'terrain': 'fields',
+    },
+}
+REGION_TINT_ALPHA_MAX = 118
+REGION_PRESENTATION_FULL_ZOOM = 0.90
+REGION_PRESENTATION_END_ZOOM = 1.35
+REGION_BOUNDARY_CLR = (255, 231, 174, 215)
+REGION_BOUNDARY_SHADOW_CLR = (42, 31, 20, 145)
+REGION_BOUNDARY_ANALYTIC_CLR = (232, 222, 205, 105)
+REGION_LABEL_SHADOW_CLR = (10, 8, 6, 185)
+REGION_SCENERY_ALPHA = 92
+REGION_SCENERY_GROUPS = 13
+REGION_CLUSTER_ICON_START_ZOOM = 0.82
+REGION_CLUSTER_ICON_FULL_ZOOM = 1.00
+
 # ── Minimap ─────────────────────────────────────────────────────────
-MINIMAP_W           = int(0.12 * SCREEN_WIDTH)
-MINIMAP_H           = int(0.11 * SCREEN_HEIGHT)
+_KINGDOM_PORTRAIT_UI = _IS_MOBILE and SCREEN_HEIGHT > SCREEN_WIDTH
+MINIMAP_W           = int((0.23 if _KINGDOM_PORTRAIT_UI else 0.12) * SCREEN_WIDTH)
+MINIMAP_H           = int((0.07 if _KINGDOM_PORTRAIT_UI else 0.11) * SCREEN_HEIGHT)
 MINIMAP_MARGIN      = int(0.015 * SCREEN_HEIGHT)
 MINIMAP_BG_CLR      = (20, 20, 20, 180)
 MINIMAP_BORDER_CLR  = (180, 160, 130)
@@ -550,7 +603,7 @@ MINIMAP_VIEWPORT_CLR = (255, 255, 255, 120)
 # Width matches the minimap so the two anchored corners read as siblings;
 # height fits two 3-row sections plus optional "You: #N" lines.
 LEADERBOARD_PANEL_W = int(0.155 * SCREEN_WIDTH)
-LEADERBOARD_PANEL_H = int(0.22 * SCREEN_HEIGHT)
+LEADERBOARD_PANEL_H = int((0.46 if _IS_MOBILE else 0.24) * SCREEN_HEIGHT)
 
 # ── Info panel (top of screen) ──────────────────────────────────────
 KINGDOM_INFO_FONT_SIZE  = FS_BODY
@@ -564,7 +617,7 @@ KINGDOM_PANEL_GAP       = int(0.014 * SCREEN_WIDTH)
 KINGDOM_HEADER_H        = int(0.105 * SCREEN_HEIGHT)
 KINGDOM_ACTIVITY_W      = int(0.215 * SCREEN_WIDTH)
 KINGDOM_MAP_FRAME_PAD   = int(0.010 * SCREEN_HEIGHT)
-KINGDOM_MAP_FRAME_BG    = (18, 16, 13, 135)
+KINGDOM_MAP_FRAME_BG    = (42, 31, 22, 150)
 KINGDOM_MAP_FRAME_BORDER = (166, 142, 96)
 KINGDOM_MAP_FRAME_BORDER_W = 2
 KINGDOM_ACTIVITY_BG     = (22, 20, 28, 205)

@@ -807,6 +807,9 @@ class Land(db.Model):
     id               = db.Column(db.Integer, primary_key=True)
     col              = db.Column(db.Integer, nullable=False)
     row              = db.Column(db.Integer, nullable=False)
+    # Nullable for legacy/test rows; the regional seeder and migration always
+    # populate it for the shared production map.
+    region           = db.Column(db.String(20), nullable=True, index=True)
     tier             = db.Column(db.Integer, nullable=False)   # 1..KINGDOM_TIER_COUNT
     gold_rate        = db.Column(db.Float,   nullable=False)   # gold per hour
     suit_bonus_suit  = db.Column(db.String(10), nullable=False)
@@ -846,6 +849,7 @@ class Land(db.Model):
             'id': self.id,
             'col': self.col,
             'row': self.row,
+            'region': self.region,
             'tier': self.tier,
             'gold_rate': self.gold_rate,
             'suit_bonus_suit': self.suit_bonus_suit,
@@ -957,6 +961,29 @@ class Kingdom(db.Model):
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
         }
+
+
+class RegionChampion(db.Model):
+    """Co-Champions and lazily accrued tribute for one historic region."""
+    __tablename__ = 'region_champion'
+
+    region = db.Column(db.String(20), primary_key=True)
+    champion_user_id = db.Column(
+        db.Integer, db.ForeignKey('user.id'), nullable=True, index=True)
+    # The singular FK remains as a backward-compatible representative.  These
+    # JSON fields are authoritative and let tied leaders share the title while
+    # keeping reconciliation locked to one row per region.
+    champion_user_ids = db.Column(db.JSON, nullable=True, default=list)
+    pending_gold_by_user = db.Column(db.JSON, nullable=True, default=dict)
+    since_by_user = db.Column(db.JSON, nullable=True, default=dict)
+    since = db.Column(db.DateTime, nullable=True)
+    pending_gold = db.Column(
+        db.Float, nullable=False, default=0.0, server_default='0')
+    last_accrued_at = db.Column(db.DateTime, nullable=True)
+    rate_per_hour = db.Column(
+        db.Float, nullable=False, default=0.0, server_default='0')
+
+    champion = db.relationship('User', foreign_keys=[champion_user_id])
 
 
 class LandConfig(db.Model):
@@ -1260,6 +1287,25 @@ class KingdomCosmeticUnlock(db.Model):
             'cosmetic_key': self.cosmetic_key,
             'unlocked_at': self.unlocked_at.isoformat() if self.unlocked_at else None,
         }
+
+
+class UserKingdomCosmeticEntitlement(db.Model):
+    """Account-scoped cosmetic retained through the regional map reset."""
+    __tablename__ = 'user_kingdom_cosmetic_entitlement'
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(
+        db.Integer, db.ForeignKey('user.id'), nullable=False, index=True)
+    cosmetic_key = db.Column(db.String(80), nullable=False)
+    granted_at = db.Column(db.DateTime, default=_utcnow, nullable=False)
+
+    user = db.relationship('User', foreign_keys=[user_id])
+
+    __table_args__ = (
+        db.UniqueConstraint(
+            'user_id', 'cosmetic_key',
+            name='uq_user_kingdom_cosmetic_entitlement'),
+    )
 
 
 class KingdomSkillAllocation(db.Model):

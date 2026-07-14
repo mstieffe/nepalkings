@@ -92,6 +92,21 @@ def test_modal_inspector_still_centres_on_screen():
     assert abs(box.box_rect.centery - settings.SCREEN_HEIGHT // 2) <= 2
 
 
+def test_inspector_shows_region_champion_and_personal_progress():
+    box = _anchored_box(region_info={
+        'key': 'kathmandu',
+        'name': 'Kathmandu Valley',
+        'champion': {'user_id': 9, 'username': 'Malla'},
+        'champion_land_count': 12,
+        'my_land_count': 5,
+        'lands_to_champion': 4,
+    })
+    lines = dict(box._lines)
+    assert lines['region'] == 'Region: Kathmandu Valley'
+    assert lines['region_champion'] == 'Champion: Malla (12 lands)'
+    assert lines['region_progress'] == 'Your progress: 5 lands · 4 more needed'
+
+
 # ── Map scan modes ──────────────────────────────────────────────────
 
 def _make_land(col, row, **o):
@@ -99,7 +114,7 @@ def _make_land(col, row, **o):
              suit_bonus_suit='Hearts', suit_bonus_value=2, owner=None,
              is_mine=False, kingdom_component_id=None, kingdom_component_size=0,
              kingdom_level=0, kingdom_tier_name=None, kingdom_bonuses={},
-             kingdom_id=None, kingdom_name=None)
+             kingdom_id=None, kingdom_name=None, region=None)
     d.update(o)
     return d
 
@@ -180,6 +195,39 @@ def test_focus_lands_can_zoom_to_fit_for_explicit_navigation():
         assert hm.viewport_rect.colliderect(rect)
 
 
+def test_full_96_by_50_map_opens_with_both_ends_visible():
+    from config import settings
+    from game.components.hex_map import HexMap
+
+    win = pygame.Surface((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+    lands = [
+        _make_land(col, row, region=(
+            'karnali' if col < 24 else
+            'lumbini' if col < 48 else
+            'kathmandu' if col < 64 else
+            'kirat' if col < 80 else 'mithila'))
+        for row in range(50) for col in range(96)
+    ]
+    hm = HexMap(lands, win, viewport_rect=_viewport())
+    west = hm.land_screen_rect(lands[0]['id'])
+    east = hm.land_screen_rect(lands[-1]['id'])
+    assert west is not None
+    assert east is not None
+    assert hm.viewport_rect.colliderect(west)
+    assert hm.viewport_rect.colliderect(east)
+    assert settings.HEX_MAP_ZOOM_MIN <= hm.zoom < 0.90
+
+
+def test_region_focus_fits_only_the_requested_region():
+    hm = _hexmap()
+    for index, tile in enumerate(hm.tiles):
+        tile.region = 'kathmandu' if index < 2 else 'kirat'
+    selected = hm.focus_region('kathmandu')
+    assert selected is not None
+    assert selected.region == 'kathmandu'
+    assert hm.zoom <= 1.15
+
+
 def test_two_finger_gesture_zooms_when_runtime_exposes_it():
     gesture_type = getattr(pygame, 'MULTIGESTURE', None)
     if gesture_type is None:
@@ -210,6 +258,8 @@ def _mode_screen():
     s._map_viewport_rect = _viewport()
     s._nav_font = settings.get_font(settings.KINGDOM_INFO_FONT_SIZE, bold=True)
     s._activity_small_font = settings.get_font(int(settings.FS_TINY * 0.86))
+    s._notifications = []
+    s._message_unread_count = 0
     return KingdomScreen, s
 
 
@@ -217,6 +267,7 @@ def test_toolbar_draws_all_modes_and_click_switches():
     from game.screens.kingdom_screen import _MAP_MODES
     KingdomScreen, s = _mode_screen()
     s._draw_map_modes_toolbar()
+    assert tuple(key for key, _label in _MAP_MODES) == ('terrain', 'gold')
     assert set(s._map_mode_rects) == {k for k, _ in _MAP_MODES}
     gold_rect = s._map_mode_rects['gold']
     assert KingdomScreen._handle_map_mode_click(s, gold_rect.center) is True
@@ -272,6 +323,16 @@ def test_hover_preview_keeps_only_land_stats_and_owner_summary():
         'Owner: rival',
     )
     assert not any('Conquer' in line or 'shield' in line for line in lines)
+
+
+def test_hover_preview_folds_region_into_first_of_three_lines():
+    from game.screens.kingdom_screen import KingdomScreen
+
+    lines = KingdomScreen._hover_preview_lines(
+        _tile(region='kathmandu'))
+
+    assert lines[0] == 'Kathmandu Valley · (2, 3) · Tier 2'
+    assert len(lines) == 3
 
 
 def test_hover_preview_suppressed_without_hover():
@@ -387,6 +448,64 @@ def test_collapsed_leaderboard_row_clicks_do_not_focus():
     body = pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=(60, 250))
     assert panel.handle_event(body) is None
     assert focused == []
+
+
+def test_leaderboard_regions_view_focuses_clicked_region():
+    panel = _leaderboard()
+    panel.set_data(regions=[{
+        'key': 'kathmandu', 'name': 'Kathmandu Valley',
+        'champion': {'user_id': 4, 'username': 'Malla'},
+        'champions': [{'user_id': 4, 'username': 'Malla'}],
+        'champion_land_count': 12, 'my_land_count': 5, 'min_lands': 1,
+        'lands_to_champion': 7,
+    }])
+    focused = []
+    panel.on_focus = focused.append
+    panel.render()
+    switch = pygame.event.Event(
+        pygame.MOUSEBUTTONUP, button=1,
+        pos=panel._tab_rects['regions'].center)
+    assert panel.handle_event(switch) == {'view': 'regions'}
+    panel.render()
+    assert len(panel._row_rects) == 1
+    click = pygame.event.Event(
+        pygame.MOUSEBUTTONUP, button=1,
+        pos=panel._row_rects[0][0].center)
+    panel.handle_event(click)
+    assert focused[0]['region_key'] == 'kathmandu'
+
+
+def test_leaderboard_view_tabs_have_visual_spacing():
+    panel = _leaderboard()
+    panel.render()
+    rankings = panel._tab_rects['rankings']
+    regions = panel._tab_rects['regions']
+    assert regions.left - rankings.right >= 2
+
+
+def test_all_region_rows_fit_and_use_champion_and_suit_icons():
+    panel = _leaderboard()
+    suits = ('Spades', 'Clubs', None, 'Hearts', 'Diamonds')
+    panel.set_data(regions=[{
+        'key': f'region-{index}',
+        'name': ('Kathmandu Valley' if suit is None else suit),
+        'dominant_suit': suit,
+        'champion': {'user_id': index + 1, 'username': f'Player{index}'},
+        'champions': [{'user_id': index + 1,
+                       'username': f'Player{index}'}],
+        'champion_land_count': 9 - index,
+        'my_land_count': index,
+        'lands_to_champion': max(0, 8 - index),
+    } for index, suit in enumerate(suits)])
+    panel._view = 'regions'
+
+    panel.render()
+
+    assert len(panel._row_rects) == 5
+    assert panel._row_rects[-1][0].bottom <= panel.rect.bottom
+    assert panel._champion_icon is not None
+    assert all(panel._suit_icons[suit] is not None
+               for suit in ('Spades', 'Clubs', 'Hearts', 'Diamonds'))
 
 
 # ── Reward / conquest particle effects ──────────────────────────────
