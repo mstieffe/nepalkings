@@ -209,6 +209,8 @@ def test_web_uses_native_audio_manager_and_publishes_direct_assets():
     assert "new AudioContextClass();" in index_html
     assert "'audio/' + encodeURIComponent(candidate)" in index_html
     assert "preferredExtension = supportsOgg ? '.ogg' : '.mp3'" in index_html
+    assert "navigator.audioSession.type = 'playback';" in index_html
+    assert 'audioSessionType: audioSessionType' in index_html
     assert 'return loadCandidate(ctx, filenames, index + 1);' in index_html
     assert 'window.nk_audio_status' in index_html
     assert 'window.nk_audio_play_sfx' in index_html

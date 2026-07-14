@@ -24,7 +24,9 @@ container. The generated files are
 The web build publishes both compressed formats beside `index.html` and plays
 them with the browser-native Web Audio API. It prefers OGG where supported and
 retries MP3 if fetch or decoding fails. This avoids distortion from SDL's
-realtime audio callback while retaining older iPhone support.
+realtime audio callback while retaining older iPhone support. On iOS, the page
+selects the `playback` audio session so the game uses the media route rather
+than WebKit's silent-switch-sensitive ambient route.
 
 The original 48 kHz WAV exports are retained locally as `Menu Suno Master.wav`,
 `Kingdom Suno Master.wav`, and `Battle Suno Master.wav`. They are Git-ignored

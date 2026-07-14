@@ -379,6 +379,7 @@ function show_infobox() {
         var requests = Object.create(null);
         var currentMusic = null;
         var musicGeneration = 0;
+        var audioSessionType = 'unavailable';
         var formatProbe = document.createElement('audio');
         var supportsOgg = false;
 
@@ -387,6 +388,20 @@ function show_infobox() {
                 'audio/ogg; codecs="vorbis"').replace(/^no$/, '');
         } catch (error) {}
         var preferredExtension = supportsOgg ? '.ogg' : '.mp3';
+
+        function configureAudioSession(){
+            try {
+                if (navigator.audioSession) {
+                    navigator.audioSession.type = 'playback';
+                    audioSessionType = navigator.audioSession.type || 'playback';
+                    return true;
+                }
+            } catch (error) {
+                audioSessionType = 'error';
+            }
+            return false;
+        }
+        configureAudioSession();
 
         function clampVolume(value){
             value = Number(value);
@@ -521,6 +536,7 @@ function show_infobox() {
         }
 
         window.nk_audio_unlock = function(){
+            configureAudioSession();
             var ctx = audioContext();
             if (!ctx) return Promise.resolve(false);
             // Starting a source and resuming synchronously within the tap
@@ -617,6 +633,7 @@ function show_infobox() {
         window.nk_audio_status = function(){
             return {
                 contextState: context ? context.state : 'uninitialized',
+                audioSessionType: audioSessionType,
                 preferredExtension: preferredExtension,
                 loaded: Object.keys(buffers),
                 pending: Object.keys(requests)
@@ -624,6 +641,7 @@ function show_infobox() {
         };
 
         function resumeAfterInteraction(){
+            configureAudioSession();
             if (!context || context.state === 'running'
                     || context.state === 'closed') return;
             primeContext(context);
