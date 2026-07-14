@@ -16,14 +16,15 @@ creator on 2026-07-13.
 | Battle | `Battle Theme Source.flac` | 0-51s | `db9a709b-4806-4f4f-a04c-adb5340fd7ae` | 45s |
 
 Each runtime edit uses a 6-second tail-to-head crossfade, -8 dB gain, and
-44.1 kHz stereo output. Web OGG companions use Vorbis quality 7; this keeps
-the generated files compact without discarding the upper half of the audible
-band. The generated files are
-`nepal_kings/sound/music_<use>.wav` and `.ogg`.
+44.1 kHz stereo output. Web OGG companions use Vorbis quality 7; MP3 fallbacks
+use 256 kbps for compatibility with iOS versions that cannot decode an OGG
+container. The generated files are
+`nepal_kings/sound/music_<use>.wav`, `.ogg`, and `.mp3`.
 
-The web build publishes the OGG files beside `index.html` and plays them with
-the browser-native Web Audio API. This avoids distortion from SDL's realtime
-audio callback when a WebAssembly frame is late.
+The web build publishes both compressed formats beside `index.html` and plays
+them with the browser-native Web Audio API. It prefers OGG where supported and
+retries MP3 if fetch or decoding fails. This avoids distortion from SDL's
+realtime audio callback while retaining older iPhone support.
 
 The original 48 kHz WAV exports are retained locally as `Menu Suno Master.wav`,
 `Kingdom Suno Master.wav`, and `Battle Suno Master.wav`. They are Git-ignored

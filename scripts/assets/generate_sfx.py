@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
 # See LICENSE file in the project root for full license information.
 #!/usr/bin/env python3
-"""Generate the game's runtime audio set plus web OGG companions.
+"""Generate the game's runtime audio set plus web audio companions.
 
 Every runtime sound in nepal_kings/sound/ is built by this script. Most are
 synthesized from project-owned recipes; approved source masters are converted
@@ -11,11 +11,10 @@ from scripts/assets/audio_sources/. Re-run after changing a recipe or source:
 
 Design notes: 44.1 kHz avoids audible browser resampling and preserves the
 detail in approved source recordings. Most short effects stay mono, while
-music and spatial spell cues stay stereo. The OGG companions use a higher
-quality setting than the original web pass and are used by the pygbag build
-because browsers are more reliable with OGG than SDL WAV decoding. The
-palette aims for soft felt, wood, bell metal, frame drum, and airy tones —
-minimal and tactile rather than arcade-like.
+music and spatial spell cues stay stereo. Modern browsers use high-quality
+OGG companions; MP3 companions cover iOS versions without OGG-container
+support. The palette aims for soft felt, wood, bell metal, frame drum, and
+airy tones — minimal and tactile rather than arcade-like.
 """
 
 import array
@@ -401,32 +400,40 @@ def write_wav(name, sound, channels=1):
     print(f'  {name:<22} {len(sound) / SAMPLE_RATE * 1000:5.0f} ms  {kb:5.1f} KB')
 
 
-def write_ogg_companions():
+def write_web_companions():
     ffmpeg = shutil.which('ffmpeg')
     if not ffmpeg:
-        print('Skipping web OGG companions: ffmpeg not found.')
+        print('Skipping web audio companions: ffmpeg not found.')
         return
 
-    print('Writing web OGG companions...')
+    print('Writing web OGG and MP3 companions...')
     for wav_path in WAV_OUTPUTS:
-        ogg_path = os.path.splitext(wav_path)[0] + '.ogg'
+        stem = os.path.splitext(wav_path)[0]
+        ogg_path = stem + '.ogg'
+        mp3_path = stem + '.mp3'
+        is_music = os.path.basename(wav_path).startswith('music_')
         quality = '7' if os.path.basename(wav_path).startswith('music_') else '6'
+        mp3_bitrate = '256k' if is_music else '192k'
         with wave.open(wav_path, 'rb') as wf:
             channels = wf.getnchannels()
-        subprocess.run([
-            ffmpeg,
-            '-y',
-            '-loglevel', 'error',
-            '-i', wav_path,
-            '-ar', str(SAMPLE_RATE),
-            '-ac', str(channels),
-            '-c:a', 'libvorbis',
-            '-q:a', quality,
-            ogg_path,
-        ], check=True)
-        name = os.path.basename(ogg_path)
-        kb = os.path.getsize(ogg_path) / 1024
-        print(f'  {name:<22} web        {kb:5.1f} KB')
+        outputs = (
+            (ogg_path, ('-c:a', 'libvorbis', '-q:a', quality)),
+            (mp3_path, ('-c:a', 'libmp3lame', '-b:a', mp3_bitrate)),
+        )
+        for output_path, codec_args in outputs:
+            subprocess.run([
+                ffmpeg,
+                '-y',
+                '-loglevel', 'error',
+                '-i', wav_path,
+                '-ar', str(SAMPLE_RATE),
+                '-ac', str(channels),
+                *codec_args,
+                output_path,
+            ], check=True)
+            name = os.path.basename(output_path)
+            kb = os.path.getsize(output_path) / 1024
+            print(f'  {name:<22} web        {kb:5.1f} KB')
 
 
 def write_external_music_loop(track_name):
@@ -868,7 +875,7 @@ def build_all():
         )
         write_wav('music_battle.wav', finalize_loop(battle_music, peak=0.30))
 
-    write_ogg_companions()
+    write_web_companions()
 
 
 if __name__ == '__main__':

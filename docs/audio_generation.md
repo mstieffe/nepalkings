@@ -13,10 +13,11 @@ Run from the repository root:
 .venv/bin/python scripts/assets/generate_sfx.py
 ```
 
-The script writes 22.05 kHz WAV runtime masters to `nepal_kings/sound/` and
-uses FFmpeg to create matching OGG files for the browser client. Effects are
-mono; approved music may remain stereo. Every filename in `utils/sound.py` and
-`utils/music.py` must have both formats before release.
+The script writes 44.1 kHz WAV runtime masters to `nepal_kings/sound/` and uses
+FFmpeg to create matching OGG and MP3 files for the browser client. Effects
+are usually mono; approved music and spatial spell cues remain stereo. Every
+filename in `utils/sound.py` and `utils/music.py` must have all three formats
+before release. Modern browsers prefer OGG; MP3 covers older iOS releases.
 
 The active menu, kingdom, and battle themes are lossless excerpts from approved
 Suno Pro masters. The script builds 60-second menu and kingdom loops plus a
@@ -30,9 +31,9 @@ an approved source or FFmpeg is unavailable.
 Selected spell, card, booster, construction, reward, progression, and battle
 cues are derived from locally retained Mixkit WAV masters under
 `scripts/assets/audio_sources/mixkit/`. The masters are Git-ignored; compact
-mono runtime edits and their OGG companions are generated alongside the rest
-of the sound set. If those masters are unavailable, the generator preserves
-the procedural baseline and creates every required variant from its declared
+runtime edits and their web companions are generated alongside the rest of
+the sound set. If those masters are unavailable, the generator preserves the
+procedural baseline and creates every required variant from its declared
 fallback, so a clean checkout still produces a complete runtime sound set.
 
 ## Music generator prompts
@@ -69,8 +70,9 @@ Keep the existing filename and loudness role. Convert an approved source with
 FFmpeg, then compare it against neighboring events in-game:
 
 ```bash
-ffmpeg -i approved_source.wav -ar 22050 -ac 1 -c:a pcm_s16le nepal_kings/sound/event.wav
-ffmpeg -i nepal_kings/sound/event.wav -ar 22050 -ac 1 -c:a libvorbis -q:a 4 nepal_kings/sound/event.ogg
+ffmpeg -i approved_source.wav -ar 44100 -ac 1 -c:a pcm_s16le nepal_kings/sound/event.wav
+ffmpeg -i nepal_kings/sound/event.wav -ar 44100 -ac 1 -c:a libvorbis -q:a 6 nepal_kings/sound/event.ogg
+ffmpeg -i nepal_kings/sound/event.wav -ar 44100 -ac 1 -c:a libmp3lame -b:a 192k nepal_kings/sound/event.mp3
 ```
 
 Do not rerun the procedural generator after a manual replacement unless its

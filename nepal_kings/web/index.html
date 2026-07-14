@@ -379,17 +379,61 @@ function show_infobox() {
         var requests = Object.create(null);
         var currentMusic = null;
         var musicGeneration = 0;
+        var formatProbe = document.createElement('audio');
+        var supportsOgg = false;
+
+        try {
+            supportsOgg = !!formatProbe.canPlayType(
+                'audio/ogg; codecs="vorbis"').replace(/^no$/, '');
+        } catch (error) {}
+        var preferredExtension = supportsOgg ? '.ogg' : '.mp3';
 
         function clampVolume(value){
             value = Number(value);
             return isFinite(value) ? Math.max(0, Math.min(1, value)) : 0;
         }
 
-        function audioContext(){
+        function createAudioContext(){
             if (!AudioContextClass) return null;
-            if (!context) context = new AudioContextClass({latencyHint: 'playback'});
-            if (context.state === 'suspended') {
-                context.resume().catch(function(){});
+            try {
+                return new AudioContextClass({latencyHint: 'playback'});
+            } catch (error) {
+                // Older WebKit accepts the constructor but not its options.
+                try {
+                    return new AudioContextClass();
+                } catch (fallbackError) {
+                    return null;
+                }
+            }
+        }
+
+        function resumeContext(ctx){
+            if (!ctx || ctx.state === 'closed') return Promise.resolve(false);
+            if (ctx.state === 'running') return Promise.resolve(true);
+            try {
+                return Promise.resolve(ctx.resume()).then(function(){
+                    return ctx.state === 'running';
+                }, function(){ return false; });
+            } catch (error) {
+                return Promise.resolve(false);
+            }
+        }
+
+        function primeContext(ctx){
+            try {
+                var buffer = ctx.createBuffer(1, 1, ctx.sampleRate || 44100);
+                var source = ctx.createBufferSource();
+                source.buffer = buffer;
+                source.connect(ctx.destination);
+                source.start(0);
+            } catch (error) {}
+        }
+
+        function audioContext(){
+            if (!context) context = createAudioContext();
+            if (context && context.state !== 'running'
+                    && context.state !== 'closed') {
+                resumeContext(context);
             }
             return context;
         }
@@ -397,6 +441,57 @@ function show_infobox() {
         function validFilename(filename){
             return typeof filename === 'string'
                 && /^[A-Za-z0-9_.-]+$/.test(filename);
+        }
+
+        function candidateFilenames(filename){
+            var stem = filename.replace(/\.(?:ogg|mp3)$/i, '');
+            var fallbackExtension = preferredExtension === '.ogg'
+                ? '.mp3' : '.ogg';
+            return [stem + preferredExtension, stem + fallbackExtension];
+        }
+
+        function decodeBuffer(ctx, data){
+            // Callback arguments retain compatibility with older WebKit;
+            // current browsers return a Promise from the same invocation.
+            return new Promise(function(resolve, reject){
+                var settled = false;
+                function succeed(buffer){
+                    if (settled) return;
+                    settled = true;
+                    resolve(buffer);
+                }
+                function fail(error){
+                    if (settled) return;
+                    settled = true;
+                    reject(error || new Error('Audio decode failed'));
+                }
+                try {
+                    var result = ctx.decodeAudioData(data, succeed, fail);
+                    if (result && typeof result.then === 'function') {
+                        result.then(succeed, fail);
+                    }
+                } catch (error) {
+                    fail(error);
+                }
+            });
+        }
+
+        function loadCandidate(ctx, filenames, index){
+            var candidate = filenames[index];
+            var url = new URL(
+                'audio/' + encodeURIComponent(candidate), document.baseURI);
+            return fetch(url.toString(), {cache: 'force-cache'})
+                .then(function(response){
+                    if (!response.ok) throw new Error('Audio HTTP ' + response.status);
+                    return response.arrayBuffer();
+                })
+                .then(function(data){ return decodeBuffer(ctx, data); })
+                .catch(function(error){
+                    if (index + 1 < filenames.length) {
+                        return loadCandidate(ctx, filenames, index + 1);
+                    }
+                    throw error;
+                });
         }
 
         function loadBuffer(filename){
@@ -407,13 +502,8 @@ function show_infobox() {
             if (buffers[filename]) return Promise.resolve(buffers[filename]);
             if (requests[filename]) return requests[filename];
 
-            var url = new URL('audio/' + encodeURIComponent(filename), document.baseURI);
-            requests[filename] = fetch(url.toString(), {cache: 'force-cache'})
-                .then(function(response){
-                    if (!response.ok) throw new Error('Audio HTTP ' + response.status);
-                    return response.arrayBuffer();
-                })
-                .then(function(data){ return ctx.decodeAudioData(data); })
+            requests[filename] = loadCandidate(
+                ctx, candidateFilenames(filename), 0)
                 .then(function(buffer){
                     buffers[filename] = buffer;
                     delete requests[filename];
@@ -432,12 +522,18 @@ function show_infobox() {
 
         window.nk_audio_unlock = function(){
             var ctx = audioContext();
-            if (!ctx) return false;
-            // Warm the first screen's theme while Python finishes booting.
-            loadBuffer('music_menu.ogg').catch(function(error){
-                reportError('music_menu.ogg', error);
+            if (!ctx) return Promise.resolve(false);
+            // Starting a source and resuming synchronously within the tap
+            // covers both WebKit and Chromium's mobile autoplay policies.
+            primeContext(ctx);
+            return resumeContext(ctx).then(function(running){
+                if (!running) return false;
+                // Warm the first screen's theme while Python finishes booting.
+                loadBuffer('music_menu.ogg').catch(function(error){
+                    reportError('music_menu.ogg', error);
+                });
+                return true;
             });
-            return true;
         };
 
         window.nk_audio_play_sfx = function(filename, volume){
@@ -517,6 +613,28 @@ function show_infobox() {
             previous.source.stop(ctx.currentTime + fadeSeconds + 0.05);
             return true;
         };
+
+        window.nk_audio_status = function(){
+            return {
+                contextState: context ? context.state : 'uninitialized',
+                preferredExtension: preferredExtension,
+                loaded: Object.keys(buffers),
+                pending: Object.keys(requests)
+            };
+        };
+
+        function resumeAfterInteraction(){
+            if (!context || context.state === 'running'
+                    || context.state === 'closed') return;
+            primeContext(context);
+            resumeContext(context);
+        }
+        ['click', 'pointerup', 'touchend', 'keydown'].forEach(function(name){
+            document.addEventListener(name, resumeAfterInteraction, true);
+        });
+        document.addEventListener('visibilitychange', function(){
+            if (!document.hidden) resumeAfterInteraction();
+        });
     })();
 
     window.nk_prepare_audio_gate = function(){
@@ -547,31 +665,51 @@ function show_infobox() {
             loader.dataset.audioGate = 'starting';
             if (status) status.textContent = 'Starting game...';
 
+            var nativeAttempt;
             try {
                 var canvas = document.getElementById('canvas');
                 if (canvas && canvas.focus) canvas.focus();
-                if (window.nk_audio_unlock) window.nk_audio_unlock();
                 if (window.MM && window.MM.focus_handler && ev && ev.type === 'click') {
                     window.MM.focus_handler(ev);
                 }
-            } catch(e) {}
-
-            try {
-                var cdn = (window.config && window.config.cdn)
-                    || 'https://pygame-web.github.io/cdn/0.9.3/';
-                var audio = new Audio(cdn + 'empty.ogg');
-                audio.setAttribute('playsinline', '');
-                var attempt = audio.play();
-                if (attempt && attempt.then) {
-                    attempt.then(function(){
-                        if (window.MM) window.MM.UME = true;
-                    }).catch(markWaiting);
-                } else if (window.MM) {
-                    window.MM.UME = true;
-                }
+                nativeAttempt = window.nk_audio_unlock
+                    ? Promise.resolve(window.nk_audio_unlock())
+                    : Promise.resolve(false);
             } catch(e) {
-                markWaiting();
+                nativeAttempt = Promise.resolve(false);
             }
+
+            function legacyMediaUnlock(){
+                try {
+                    var url = new URL('audio/ui_click.mp3', document.baseURI);
+                    var audio = new Audio(url.toString());
+                    audio.preload = 'auto';
+                    audio.volume = 0.001;
+                    audio.setAttribute('playsinline', '');
+                    var attempt = audio.play();
+                    if (attempt && attempt.then) {
+                        return attempt.then(function(){
+                            audio.pause();
+                            return true;
+                        }, function(){ return false; });
+                    }
+                    return Promise.resolve(true);
+                } catch(e) {
+                    return Promise.resolve(false);
+                }
+            }
+
+            // Invoke both mechanisms before leaving the gesture callback.
+            // Mobile autoplay permission does not survive a Promise turn.
+            var mediaAttempt = legacyMediaUnlock();
+            Promise.all([nativeAttempt, mediaAttempt]).then(function(results){
+                var unlocked = results[0] || results[1];
+                if (!unlocked) {
+                    markWaiting();
+                    return;
+                }
+                if (window.MM) window.MM.UME = true;
+            }).catch(markWaiting);
         }
 
         loader.addEventListener('click', tryUnlock);

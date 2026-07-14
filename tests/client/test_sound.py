@@ -37,15 +37,17 @@ def test_every_event_has_a_generated_asset():
     assert missing == [], f'missing SFX assets (run scripts/assets/generate_sfx.py): {missing}'
 
 
-def test_every_event_has_a_web_ogg_companion():
-    """pygbag/browser audio should use OGG companions, not WAV-only assets."""
+def test_every_event_has_web_audio_companions():
+    """Web Audio needs modern OGG plus an MP3 fallback for older iOS."""
     missing = []
     for name in sound.EVENTS:
         for filename in sound.event_filenames(name):
             stem, _ext = os.path.splitext(filename)
-            if not os.path.exists(os.path.join(sound._sound_dir(), stem + '.ogg')):
-                missing.append(f'{name}:{filename}')
-    assert missing == [], f'missing web OGG SFX assets: {missing}'
+            for extension in ('.ogg', '.mp3'):
+                if not os.path.exists(os.path.join(
+                        sound._sound_dir(), stem + extension)):
+                    missing.append(f'{name}:{stem}{extension}')
+    assert missing == [], f'missing web SFX assets: {missing}'
 
 
 def test_web_play_prefers_ogg_companion(tmp_path, monkeypatch):

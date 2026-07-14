@@ -181,8 +181,10 @@ def test_web_audio_gate_requires_real_user_gesture():
 
     assert 'ume_block : 1' in index_html
     assert 'window.nk_prepare_audio_gate' in index_html
-    assert "new Audio(cdn + 'empty.ogg')" in index_html
-    assert 'window.nk_audio_unlock()' in index_html
+    assert "new URL('audio/ui_click.mp3', document.baseURI)" in index_html
+    assert 'Promise.resolve(window.nk_audio_unlock())' in index_html
+    assert 'Promise.all([nativeAttempt, mediaAttempt])' in index_html
+    assert "ctx.state === 'running'" in index_html
     assert 'while not platform.window.MM.UME:' in index_html
     assert "document.getElementById('canvas').click()" not in index_html
 
@@ -204,9 +206,16 @@ def test_web_uses_native_audio_manager_and_publishes_direct_assets():
     build_script = (repo_root / 'scripts/build_web.sh').read_text()
 
     assert "new AudioContextClass({latencyHint: 'playback'})" in index_html
-    assert "new URL('audio/' + encodeURIComponent(filename)" in index_html
+    assert "new AudioContextClass();" in index_html
+    assert "'audio/' + encodeURIComponent(candidate)" in index_html
+    assert "preferredExtension = supportsOgg ? '.ogg' : '.mp3'" in index_html
+    assert 'return loadCandidate(ctx, filenames, index + 1);' in index_html
+    assert 'window.nk_audio_status' in index_html
     assert 'window.nk_audio_play_sfx' in index_html
     assert 'window.nk_audio_play_music' in index_html
     assert 'source.loop = true;' in index_html
     assert 'WEB_AUDIO_STAGE=' in build_script
+    assert "'*.mp3'" in build_script
+    assert 'WEB_OGG_COUNT' in build_script
+    assert 'WEB_MP3_COUNT' in build_script
     assert '"$WEB_OUT/audio"' in build_script

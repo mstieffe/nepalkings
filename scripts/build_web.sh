@@ -52,14 +52,26 @@ RAW_IMG_MB=$(du -sm "$APP/img" | cut -f1)
 echo "   Staged image tree: ${RAW_IMG_MB} MB (before web optimization)"
 
 # Native Web Audio needs URL-addressable files outside pygbag's mounted
-# archive. Keep a staging copy that will be published beside index.html.
+# archive. OGG is preferred; MP3 covers iOS versions without OGG containers.
 mkdir -p "$WEB_AUDIO_STAGE"
-cp "$APP"/sound/*.ogg "$WEB_AUDIO_STAGE/"
-WEB_AUDIO_COUNT=$(find "$WEB_AUDIO_STAGE" -type f -name '*.ogg' | wc -l | tr -d ' ')
-if [ "$WEB_AUDIO_COUNT" -eq 0 ]; then
-    echo "No browser audio assets found in $APP/sound" >&2
+WEB_OGG_COUNT=$(find "$APP/sound" -type f -name '*.ogg' | wc -l | tr -d ' ')
+WEB_MP3_COUNT=$(find "$APP/sound" -type f -name '*.mp3' | wc -l | tr -d ' ')
+if [ "$WEB_OGG_COUNT" -eq 0 ] || [ "$WEB_OGG_COUNT" -ne "$WEB_MP3_COUNT" ]; then
+    echo "Browser audio needs matching OGG and MP3 assets" >&2
     exit 1
 fi
+for ogg in "$APP"/sound/*.ogg; do
+    [ -f "${ogg%.ogg}.mp3" ] || {
+        echo "Missing MP3 companion for $ogg" >&2
+        exit 1
+    }
+done
+cp "$APP"/sound/*.ogg "$APP"/sound/*.mp3 "$WEB_AUDIO_STAGE/"
+WEB_AUDIO_COUNT=$((WEB_OGG_COUNT + WEB_MP3_COUNT))
+
+# MP3 files are consumed directly by Web Audio and need not also be mounted
+# inside pygbag's archive. Keep OGG there for its SDL fallback path.
+find "$APP/sound" -type f -name '*.mp3' -delete
 
 # The browser always prefers OGG and every shipped WAV has a verified OGG
 # companion. Keep lossless WAV masters in the desktop/source tree without
@@ -72,7 +84,7 @@ while IFS= read -r -d '' wav; do
         PRUNED_WAVS=$((PRUNED_WAVS + 1))
     fi
 done < <(find "$APP/sound" -type f -name '*.wav' -print0)
-echo "   Web audio: OGG only (${PRUNED_WAVS} WAV masters omitted)"
+echo "   Archive audio: OGG only (${PRUNED_WAVS} WAV masters omitted)"
 
 # ── 2. Optimize the staged images for the web ────────────────────────
 echo "🖼️  Optimizing images ${QUANTIZE_FLAG:+(quantize on)}..."
@@ -92,8 +104,9 @@ if [ -f nepal_kings/web/index.html ]; then
 fi
 
 mkdir -p "$WEB_OUT/audio"
-cp "$WEB_AUDIO_STAGE"/*.ogg "$WEB_OUT/audio/"
-echo "   Published ${WEB_AUDIO_COUNT} native Web Audio assets"
+cp "$WEB_AUDIO_STAGE"/*.ogg "$WEB_AUDIO_STAGE"/*.mp3 "$WEB_OUT/audio/"
+echo "   Published ${WEB_AUDIO_COUNT} native Web Audio assets "\
+     "(${WEB_OGG_COUNT} OGG + ${WEB_MP3_COUNT} MP3)"
 
 # ── 5. Report final bundle size ──────────────────────────────────────
 echo ""

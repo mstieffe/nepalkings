@@ -31,7 +31,7 @@ def test_every_track_has_desktop_and_web_assets():
     missing = []
     for name, (filename, _gain) in music.TRACKS.items():
         stem, _ext = os.path.splitext(filename)
-        for candidate in (filename, stem + '.ogg'):
+        for candidate in (filename, stem + '.ogg', stem + '.mp3'):
             if not os.path.exists(os.path.join(sound._sound_dir(), candidate)):
                 missing.append(f'{name}:{candidate}')
     assert missing == []
