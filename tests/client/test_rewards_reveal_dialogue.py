@@ -53,3 +53,50 @@ def test_tutorial_kicker_adds_two_level_header_and_body_clearance(monkeypatch):
     )
     assert tutorial_body_top > regular_body_top
     tutorial.draw()  # The opt-in header remains renderable as a full dialogue.
+
+
+def test_revealed_reward_captions_wrap_inside_their_slots(monkeypatch):
+    from config import settings
+    from game.components import rewards_reveal_dialogue as reward_dialogue
+
+    _display()
+    icon = pygame.Surface((64, 64), pygame.SRCALPHA)
+    monkeypatch.setattr(reward_dialogue, '_load_chest_image', lambda: icon)
+    monkeypatch.setattr(reward_dialogue, '_load_reward_icon', lambda kind: icon)
+    surface = pygame.Surface((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+    dialogue = reward_dialogue.RewardsRevealDialogueBox(
+        surface,
+        title='Your Welcome Gift',
+        icon=None,
+        summary_lines=['Every kingdom is built on cards.'],
+        items=[
+            {'kind': 'gold', 'label': '2000 gold', 'description': 'Gold.'},
+            {'kind': 'main_booster', 'label': '2 main boosters',
+             'description': 'Main cards.'},
+            {'kind': 'side_booster', 'label': '1 side booster',
+             'description': 'Side cards.'},
+        ],
+        kicker='Welcome to Nepal Kings',
+    )
+
+    for item in dialogue.items:
+        item.revealed = True
+        assert 1 <= len(item.caption_lines) <= 2
+        assert all(
+            dialogue.caption_font.size(line)[0] <= dialogue._caption_max_w
+            for line in item.caption_lines
+        )
+
+    # Neighbouring captions retain a real gutter instead of touching.
+    first_row = dialogue._chest_rows[0]
+    for left, right in zip(first_row, first_row[1:]):
+        left_w = max(dialogue.caption_font.size(line)[0]
+                     for line in left.caption_lines)
+        right_w = max(dialogue.caption_font.size(line)[0]
+                      for line in right.caption_lines)
+        clear_space = (
+            right.rect.centerx - left.rect.centerx - (left_w + right_w) / 2)
+        assert clear_space >= 2
+
+    dialogue._last_revealed_item = dialogue.items[-1]
+    dialogue.draw()

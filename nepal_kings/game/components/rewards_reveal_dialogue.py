@@ -74,7 +74,7 @@ class _ChestItem:
 
     __slots__ = (
         'kind', 'label', 'description', 'item_icon', 'frame_size',
-        'rect', 'revealed', 'reveal_started_at',
+        'rect', 'revealed', 'reveal_started_at', 'caption_lines',
     )
 
     def __init__(self, kind, label, description, item_icon, frame_size):
@@ -86,6 +86,7 @@ class _ChestItem:
         self.rect = pygame.Rect(0, 0, frame_size, frame_size)
         self.revealed = False
         self.reveal_started_at = None
+        self.caption_lines = []
 
     # ── state helpers ───────────────────────────────────────────────
     def reveal_progress(self, now_ms):
@@ -230,18 +231,37 @@ class RewardsRevealDialogueBox:
         # Chest-row layout: greedy fit, wrap to multiple rows if needed.
         gap_x = int(0.012 * _SW)
         gap_y = int(0.014 * _SH)
+        # Captions belong to an individual reward slot. Keep every rendered
+        # line narrower than the distance between adjacent slot centres so
+        # labels such as "2 main boosters" and "1 side booster" cannot merge.
+        caption_gutter = max(4, int(0.006 * _SW))
+        caption_max_w = max(24, frame_size + gap_x - caption_gutter)
+        for item in self.items:
+            item.caption_lines = self._caption_lines(
+                item.label, self.caption_font, caption_max_w, max_lines=2)
+        max_caption_lines = max(
+            (len(item.caption_lines) for item in self.items), default=0)
+        caption_top_gap = int(0.004 * _SH)
+        caption_line_h = (
+            self.caption_font.get_height() + max(1, int(0.002 * _SH)))
+        caption_block_h = 0
+        if max_caption_lines:
+            caption_block_h = (
+                caption_top_gap
+                + self.caption_font.get_height()
+                + (max_caption_lines - 1) * caption_line_h
+            )
         max_row_w = box_w - int(0.08 * _SW)
         per_row = max(1, min(len(self.items) or 1,
                              (max_row_w + gap_x) // (frame_size + gap_x)))
         self._chest_rows = []
         for i in range(0, len(self.items), per_row):
             self._chest_rows.append(self.items[i:i + per_row])
-        chest_block_h = (len(self._chest_rows) * frame_size +
-                         max(0, len(self._chest_rows) - 1) * gap_y) \
+        chest_block_h = (
+            len(self._chest_rows) * (frame_size + caption_block_h)
+            + max(0, len(self._chest_rows) - 1) * gap_y) \
             if self._chest_rows else 0
-        # Reserve a strip below each chest row for the item label caption.
         if self._chest_rows:
-            chest_block_h += self.caption_font.get_height() + int(0.004 * _SH)
             chest_block_h += int(0.006 * _SH)  # hint text gap above chests
             chest_block_h += self._hint_h
         description_h = 0
@@ -249,12 +269,17 @@ class RewardsRevealDialogueBox:
             desc_max_w = box_w - int(0.10 * _SW)
             max_desc_lines = 1
             for item in self.items:
-                lines = self._wrap_text(item.description, self.description_font, desc_max_w)
+                lines = self._wrap_text(
+                    item.description, self.description_font, desc_max_w)
                 max_desc_lines = max(max_desc_lines, len(lines))
             desc_line_h = self.description_font.get_height() + int(0.004 * _SH)
             description_h = int(0.018 * _SH) + max_desc_lines * desc_line_h
         self._chest_gap_x = gap_x
         self._chest_gap_y = gap_y
+        self._caption_max_w = caption_max_w
+        self._caption_top_gap = caption_top_gap
+        self._caption_line_h = caption_line_h
+        self._caption_block_h = caption_block_h
         self._chest_block_h = chest_block_h
         self._description_h = description_h
         self._desc_max_w = box_w - int(0.10 * _SW)
@@ -381,6 +406,34 @@ class RewardsRevealDialogueBox:
                 out.append(line)
         return out
 
+    @staticmethod
+    def _fit_text(text, font, max_w):
+        """Ellipsize one caption line so it never escapes its reward slot."""
+        text = str(text or '')
+        if font.size(text)[0] <= max_w:
+            return text
+        ellipsis = '...'
+        room = max(0, max_w - font.size(ellipsis)[0])
+        fitted = ''
+        for char in text:
+            if font.size(fitted + char)[0] > room:
+                break
+            fitted += char
+        return fitted.rstrip() + ellipsis
+
+    @classmethod
+    def _caption_lines(cls, label, font, max_w, max_lines=2):
+        """Return compact, bounded lines for the title below a reward icon."""
+        if not label:
+            return []
+        lines = cls._wrap_text(label, font, max_w)
+        if len(lines) > max_lines:
+            lines = (
+                lines[:max_lines - 1]
+                + [' '.join(lines[max_lines - 1:])]
+            )
+        return [cls._fit_text(line, font, max_w) for line in lines]
+
     def _build_glow(self, frame_size):
         """Soft warm radial glow used behind hovered chests."""
         size = int(frame_size * 1.5)
@@ -424,10 +477,9 @@ class RewardsRevealDialogueBox:
             for item in row:
                 item.rect = pygame.Rect(ix, current_y, frame, frame)
                 ix += frame + gap_x
-            current_y += frame + gap_y
+            current_y += frame + self._caption_block_h + gap_y
         if self._description_h:
-            caption_h = self.caption_font.get_height() + int(0.004 * _SH)
-            self._description_top = current_y - gap_y + caption_h + int(0.018 * _SH)
+            self._description_top = current_y - gap_y + int(0.018 * _SH)
 
     # ── draw ────────────────────────────────────────────────────────
     def draw(self):
@@ -592,13 +644,14 @@ class RewardsRevealDialogueBox:
         self.window.blit(scaled, rect.topleft)
 
     def _draw_item_caption(self, item):
-        if not item.label:
+        if not item.caption_lines:
             return
-        cap = self.caption_font.render(
-            item.label, True, settings.DIALOGUE_BOX_MSG_TEXT_CLR)
-        cy = item.rect.bottom + int(0.004 * settings.SCREEN_HEIGHT) \
-            + cap.get_height() // 2
-        self.window.blit(cap, cap.get_rect(center=(item.rect.centerx, cy)))
+        y = item.rect.bottom + self._caption_top_gap
+        for line in item.caption_lines:
+            cap = self.caption_font.render(
+                line, True, settings.DIALOGUE_BOX_MSG_TEXT_CLR)
+            self.window.blit(cap, cap.get_rect(midtop=(item.rect.centerx, y)))
+            y += self._caption_line_h
 
     def _description_item(self, now_ms):
         if (self._last_revealed_item is not None

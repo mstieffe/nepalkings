@@ -330,6 +330,7 @@ def test_conquer_battle_coach_starts_with_tactics_pointer():
     step = ConquerGameScreen._current_conquer_battle_coach_step(screen)
 
     assert step['id'] == 'conquer_battle_tactics'
+    assert step['button_label'] == 'Start Battle!'
 
 
 def _ensure_display_for_window():
@@ -3410,6 +3411,18 @@ class TestConquerGameShell:
 
 
 class TestConquerSubscreenLayout:
+    def test_field_titles_shorten_to_fit_narrow_conquer_columns(self):
+        from config import settings
+        from game.screens.field_screen import FieldScreen
+
+        font = settings.get_font(settings.FIELD_TITLE_FONT_SIZE)
+        for field, expected in (
+                ('castle', 'CSTL'), ('village', 'VILL'), ('military', 'MIL')):
+            width = font.size(expected)[0]
+            label = FieldScreen._responsive_field_title(field, font, width)
+            assert label == expected
+            assert font.size(label)[0] <= width
+
     def test_field_compartments_translate_with_conquer_subscreen_origin(self):
         from config import settings
         from game.screens.field_screen import FieldScreen
@@ -4031,6 +4044,71 @@ game.battle_gamble_counts = {
 assert rail._gamble_status_for_strip(game)[0] == 'Gamble used'
 pygame.quit()
 ''')
+
+    def test_mobile_timeline_toggle_uses_full_touch_target(self):
+        _run_mobile_geometry_check(r'''
+import pygame
+pygame.mouse.set_cursor = lambda *args, **kwargs: None
+from nepal_kings import Client
+from config import settings
+
+client = Client()
+client._init_perf_conquer_fixture(lambda *_args, **_kwargs: None)
+screen = client.screens['conquer_game']
+game = screen.state.game
+game.battle_turn_player_id = game.player_id
+game.battle_round = 1
+screen.render()
+
+toggle = screen._conquer_timeline_toggle_rect
+assert toggle is not None
+hit = screen._conquer_touch_hit_rect(toggle)
+assert hit.contains(toggle)
+assert hit.width >= settings.TOUCH_TARGET_MIN
+assert hit.height >= settings.TOUCH_TARGET_MIN
+
+# A tap inside the enlarged target but outside the tiny painted chevron works.
+point = (hit.left, hit.centery)
+assert not toggle.collidepoint(point)
+event = pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=point)
+assert screen._handle_collapsed_header_events([event]) is True
+assert screen._is_conquer_timeline_overlay_open() is True
+pygame.quit()
+''')
+
+    def test_mobile_round_ledger_tap_pins_and_unpins_recap(self, monkeypatch):
+        from game.components import conquer_round_ledger as module
+        from game.components.conquer_round_ledger import ConquerRoundLedger
+        from game.components.conquer_layout import compute_conquer_layout
+        from config import settings
+
+        monkeypatch.setattr(module.settings, 'TOUCH_TARGET_MIN', 58)
+        parent = SimpleNamespace(
+            window=pygame.Surface((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT)),
+            state=SimpleNamespace(game=SimpleNamespace(
+                battle_round=1,
+                battle_turn_player_id=1,
+                last_battle_result=None,
+            )),
+        )
+        ledger = ConquerRoundLedger(parent)
+        layout = compute_conquer_layout(
+            settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT, mode='battle')
+        ledger._layout = layout
+        ledger._cached_screen_size = (settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT)
+        ledger._cached_mode = 'battle'
+        played = {'id': 1, 'family_name': 'Dagger', 'value': 5}
+        ledger._played_per_round_pair = lambda: (
+            [played, None, None], [played, None, None])
+
+        first_card = pygame.Rect(*layout.round_ledger.round_card_rects[0])
+        tap = pygame.event.Event(
+            pygame.MOUSEBUTTONDOWN, button=1, pos=first_card.center)
+
+        assert ledger.handle_event(tap) == 'inspect_round'
+        assert ledger._touch_round_idx == 0
+        assert ledger.handle_event(tap) == 'inspect_round'
+        assert ledger._touch_round_idx is None
 
     def test_mobile_battle_shop_ready_banner_clears_ready_button(self):
         _run_mobile_geometry_check(r'''

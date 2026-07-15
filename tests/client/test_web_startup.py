@@ -204,6 +204,8 @@ def test_web_uses_native_audio_manager_and_publishes_direct_assets():
     repo_root = Path(__file__).resolve().parents[2]
     index_html = (repo_root / 'nepal_kings/web/index.html').read_text()
     build_script = (repo_root / 'scripts/build_web.sh').read_text()
+    login_screen = (
+        repo_root / 'nepal_kings/game/screens/login_screen.py').read_text()
 
     assert "new AudioContextClass({latencyHint: 'playback'})" in index_html
     assert "new AudioContextClass();" in index_html
@@ -213,9 +215,18 @@ def test_web_uses_native_audio_manager_and_publishes_direct_assets():
     assert 'audioSessionType: audioSessionType' in index_html
     assert 'return loadCandidate(ctx, filenames, index + 1);' in index_html
     assert 'window.nk_audio_status' in index_html
+    assert 'musicFilename: currentMusic ? currentMusic.filename : null' in index_html
     assert 'window.nk_audio_play_sfx' in index_html
     assert 'window.nk_audio_play_music' in index_html
+    assert 'window.nk_audio_resume' in index_html
     assert 'source.loop = true;' in index_html
+    assert 'window.nk_keyboard_open' in index_html
+    assert 'window.nk_keyboard_poll' in index_html
+    assert 'id="nk-keyboard-input"' in index_html
+    assert "['click', 'pointerup', 'touchend', 'keydown', 'focusin']" in index_html
+    assert login_screen.count('web_overlay=True') == 2
+    assert 'field_username.sync_web_input()' in login_screen
+    assert 'field_pwd.sync_web_input()' in login_screen
     assert 'WEB_AUDIO_STAGE=' in build_script
     assert "'*.mp3'" in build_script
     assert 'WEB_OGG_COUNT' in build_script

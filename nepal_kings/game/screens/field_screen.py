@@ -3475,6 +3475,20 @@ class FieldScreen(SubScreen):
         bounds.bottom = min(settings.SCREEN_HEIGHT, bounds.bottom)
         return bounds
 
+    @staticmethod
+    def _responsive_field_title(field, font, max_width):
+        """Return the clearest compartment label that fits its column."""
+        labels = {
+            'castle': ('CASTLE', 'CSTL', 'C'),
+            'village': ('VILLAGE', 'VILL', 'V'),
+            'military': ('MILITARY', 'MIL', 'M'),
+        }.get(str(field).lower(), (str(field).upper(),))
+        max_width = max(1, int(max_width))
+        for label in labels:
+            if font.size(label)[0] <= max_width:
+                return label
+        return labels[-1]
+
     def _draw_field_static_layer(self):
         self._refresh_all_seeing_eye_status()
         cache_key = self._field_static_layer_key()
@@ -3560,8 +3574,13 @@ class FieldScreen(SubScreen):
             for player in ('self', 'opponent'):
                 for field in ('castle', 'village', 'military'):
                     compartment = self.compartments[player][field]
+                    title_label = self._responsive_field_title(
+                        field,
+                        self.field_title_font,
+                        compartment.width - 2 * settings.FIELD_TITLE_PADDING,
+                    )
                     title_text = self.field_title_font.render(
-                        field.upper(), True, settings.FIELD_TITLE_COLOR)
+                        title_label, True, settings.FIELD_TITLE_COLOR)
                     title_rect = title_text.get_rect()
                     if player == 'self':
                         title_rect.left = compartment.left + settings.FIELD_TITLE_PADDING

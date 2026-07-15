@@ -196,7 +196,8 @@ class LoginScreen(Screen):
         self.field_username = InputField(self.window, field_x, y,
                                          "username", "", False, True,
                                          max_length=MAX_USERNAME_LENGTH,
-                                         width=_field_w, height=_field_h)
+                                         width=_field_w, height=_field_h,
+                                         web_overlay=True)
         y += _field_h + _field_gap
 
         # Password
@@ -205,7 +206,8 @@ class LoginScreen(Screen):
         self.field_pwd = InputField(self.window, field_x, y,
                                      "password", "", True, False,
                                      max_length=MAX_PASSWORD_LENGTH,
-                                     width=_field_w, height=_field_h)
+                                     width=_field_w, height=_field_h,
+                                     web_overlay=True)
         y += _field_h + _legal_gap
 
         # Legal acceptance for registration only.
@@ -939,6 +941,10 @@ class LoginScreen(Screen):
 
     def update(self, events):
         super().update()
+        # A native HTML input owns mobile typing so the browser keyboard does
+        # not block the page (and therefore does not stop background music).
+        self.field_username.sync_web_input()
+        self.field_pwd.sync_web_input()
         self.button_register.disabled = not self._legal_confirmed
         self.button_login.update()
         self.button_register.update()

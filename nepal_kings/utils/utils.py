@@ -606,7 +606,10 @@ class ControlButton(Button):
 
 
 class InputField:
-    def __init__(self, window, x: int = 0, y: int = 0, name: str = "", content: str = "", pwd: bool = False, active: bool = False, max_length: int = 15, width: int = None, height: int = None):
+    def __init__(self, window, x: int = 0, y: int = 0, name: str = "",
+                 content: str = "", pwd: bool = False, active: bool = False,
+                 max_length: int = 15, width: int = None, height: int = None,
+                 web_overlay: bool = False):
         self.window = window
         self.x = x
         self.y = y
@@ -615,6 +618,9 @@ class InputField:
         self.pwd = pwd
         self.active = active  # Track if the field is currently active
         self.max_length = max_length
+        self.web_overlay = bool(web_overlay)
+        self._web_input_pending = False
+        self._web_input_original = content
 
         self.color_rect = settings.INPUTFIELD_COLOR_PASSIVE
         self.color_text = settings.TEXT_COLOR_PASSIVE
@@ -676,14 +682,44 @@ class InputField:
     def activate(self):
         """Activate the input field, setting it as the active field."""
         self.active = True
-        # On mobile web, open a browser prompt for text entry
+        # Mobile login fields use a native, non-blocking HTML input so opening
+        # the virtual keyboard does not suspend Web Audio. Other fields retain
+        # the browser prompt as a compatibility fallback.
         if sys.platform == 'emscripten':
-            from utils.web_keyboard import is_mobile, prompt
+            from utils.web_keyboard import is_mobile, open_input, prompt
             if is_mobile():
+                if self.web_overlay and open_input(
+                        self.name, self.content, self.pwd, self.max_length):
+                    self._web_input_original = self.content
+                    self._web_input_pending = True
+                    return
                 result = prompt(self.name, self.content, self.pwd)
                 self.content = result[:self.max_length]
                 self.cursor_pos = len(self.content)
                 self.active = False
+
+    def sync_web_input(self):
+        """Mirror the active non-blocking browser input into this field."""
+        if not self._web_input_pending:
+            return False
+        from utils.web_keyboard import poll_input
+        state = poll_input(self.name)
+        if state is None:
+            return False
+
+        done = bool(state.get('done'))
+        cancelled = bool(state.get('cancelled'))
+        if cancelled:
+            value = self._web_input_original
+        else:
+            value = str(state.get('value', self.content))
+        self.content = value[:self.max_length]
+        self.cursor_pos = len(self.content)
+
+        if done:
+            self._web_input_pending = False
+            self.active = False
+        return True
 
     def deactivate(self):
         """Deactivate the input field, removing it from the active state."""
@@ -763,5 +799,4 @@ def brighten(img, brightness_factor):
 
     # Return the modified image
     return image_copy
-
 

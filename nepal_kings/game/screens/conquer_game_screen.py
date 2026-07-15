@@ -1549,6 +1549,23 @@ class ConquerGameScreen(GameScreen):
             points = [(cx - s, cy - s // 2), (cx, cy + s // 2), (cx + s, cy - s // 2)]
         pygame.draw.lines(self.window, color, False, points, 2)
 
+    @staticmethod
+    def _conquer_touch_hit_rect(rect, min_size=None):
+        """Return a screen-clipped touch target around a compact control."""
+        hit = pygame.Rect(rect)
+        target = int(min_size if min_size is not None
+                     else settings.TOUCH_TARGET_MIN)
+        if target > 0:
+            hit = hit.inflate(
+                max(0, target - hit.width),
+                max(0, target - hit.height),
+            )
+        screen_rect = pygame.Rect(
+            0, 0, settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT)
+        # ``clip`` would shave pixels from controls near a screen edge. Clamp
+        # instead so the target shifts inward and retains its ergonomic size.
+        return hit.clamp(screen_rect)
+
     def _handle_collapsed_header_events(self, events):
         if not self._should_use_collapsed_conquer_header():
             return False
@@ -1558,7 +1575,7 @@ class ConquerGameScreen(GameScreen):
         for event in events:
             if event.type != pygame.MOUSEBUTTONDOWN or event.button != 1:
                 continue
-            if toggle.collidepoint(event.pos):
+            if self._conquer_touch_hit_rect(toggle).collidepoint(event.pos):
                 self._toggle_conquer_timeline_overlay()
                 return True
         return False
@@ -2783,7 +2800,7 @@ class ConquerGameScreen(GameScreen):
                     'title': 'Choose A Tactic',
                     'body': 'Pick one prepared tactic each round. Play it, or Gamble it for two replacements.',
                     'action': 'next',
-                    'button_label': 'Got it',
+                    'button_label': 'Start Battle!',
                     'max_lines': 4,
                 }
         return None
@@ -9163,8 +9180,11 @@ class ConquerGameScreen(GameScreen):
                 if (event.type == MOUSEBUTTONDOWN and event.button == 1
                         and self._handle_conquer_lane_figure_click(event.pos)):
                     return
-                if self._round_ledger.handle_event(event) == 'open_result':
+                ledger_action = self._round_ledger.handle_event(event)
+                if ledger_action == 'open_result':
                     self._open_tactics_hand_result_dialogue()
+                    return
+                if ledger_action:
                     return
                 if self._tactics_rail.handle_event(event):
                     pending = self._tactics_rail.consume_pending_action()

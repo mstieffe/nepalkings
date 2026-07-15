@@ -88,6 +88,10 @@ def render(width: int, height: int, ui_scale: str, mobile: bool) -> None:
         hint_text='Open each chest to reveal your gift.',
         kicker='Welcome to Nepal Kings')
     shot('welcome-gift', gift)
+    for item in gift.items:
+        item.revealed = True
+    gift._last_revealed_item = gift.items[-1] if gift.items else None
+    shot('welcome-gift-revealed', gift)
 
     reveal = StarterSuitRevealDialogue(surf, 'Hearts')
     reveal._phase = 'done'

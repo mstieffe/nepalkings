@@ -230,6 +230,69 @@ function show_infobox() {
             font-weight: 600;
         }
 
+        /* ── Non-blocking mobile text input ──────────────── */
+        #nk-keyboard-overlay[hidden] { display: none !important; }
+        #nk-keyboard-overlay {
+            position: fixed;
+            inset: 0;
+            z-index: 300000;
+            display: flex;
+            align-items: flex-start;
+            justify-content: center;
+            padding: max(12px, env(safe-area-inset-top, 0px)) 16px 16px;
+            background: rgba(18, 16, 13, .42);
+        }
+        #nk-keyboard-panel {
+            display: grid;
+            grid-template-columns: minmax(150px, 1fr) auto auto;
+            gap: 10px;
+            align-items: end;
+            width: min(92vw, 640px);
+            padding: 12px;
+            border: 1px solid #78694e;
+            border-radius: 10px;
+            background: rgba(35, 31, 26, .98);
+            box-shadow: 0 8px 28px rgba(0, 0, 0, .45);
+        }
+        #nk-keyboard-field-wrap {
+            display: flex;
+            min-width: 0;
+            flex-direction: column;
+            gap: 5px;
+        }
+        #nk-keyboard-label {
+            color: #dcc88c;
+            font-size: 13px;
+            font-weight: 600;
+            letter-spacing: .04em;
+            text-transform: capitalize;
+        }
+        #nk-keyboard-input {
+            min-width: 0;
+            height: 44px;
+            padding: 8px 10px;
+            border: 1px solid #c5ad71;
+            border-radius: 7px;
+            outline: none;
+            background: #32303d;
+            color: #f0eadc;
+            font: 16px/1.2 'Segoe UI', Arial, sans-serif;
+        }
+        #nk-keyboard-panel button {
+            height: 44px;
+            min-width: 74px;
+            padding: 0 14px;
+            border: 1px solid #8f7b53;
+            border-radius: 7px;
+            background: #443b2d;
+            color: #ebe1d0;
+            font: 600 15px/1 'Segoe UI', Arial, sans-serif;
+        }
+        #nk-keyboard-done {
+            border-color: #d0b75e !important;
+            background: #695824 !important;
+        }
+
         /* ── Landscape prompt (portrait overlay) ──────────── */
         #nk-rotate {
             display: none;
@@ -328,6 +391,19 @@ function show_infobox() {
         <div class="icon">📱</div>
         <div class="msg">Please rotate your device</div>
         <div class="hint">Nepal Kings is best played in landscape mode</div>
+    </div>
+
+    <!-- A regular HTML input keeps Web Audio alive while the mobile keyboard
+         is open. window.prompt() is modal and interrupts iOS playback. -->
+    <div id="nk-keyboard-overlay" hidden>
+        <form id="nk-keyboard-panel" autocomplete="on">
+            <div id="nk-keyboard-field-wrap">
+                <label id="nk-keyboard-label" for="nk-keyboard-input">Text</label>
+                <input id="nk-keyboard-input" type="text" maxlength="64">
+            </div>
+            <button id="nk-keyboard-cancel" type="button">Cancel</button>
+            <button id="nk-keyboard-done" type="submit">Done</button>
+        </form>
     </div>
 
     <!-- pygbag required elements (hidden) -->
@@ -630,10 +706,19 @@ function show_infobox() {
             return true;
         };
 
+        window.nk_audio_resume = function(){
+            configureAudioSession();
+            var ctx = audioContext();
+            if (!ctx) return Promise.resolve(false);
+            primeContext(ctx);
+            return resumeContext(ctx);
+        };
+
         window.nk_audio_status = function(){
             return {
                 contextState: context ? context.state : 'uninitialized',
                 audioSessionType: audioSessionType,
+                musicFilename: currentMusic ? currentMusic.filename : null,
                 preferredExtension: preferredExtension,
                 loaded: Object.keys(buffers),
                 pending: Object.keys(requests)
@@ -641,17 +726,122 @@ function show_infobox() {
         };
 
         function resumeAfterInteraction(){
-            configureAudioSession();
-            if (!context || context.state === 'running'
-                    || context.state === 'closed') return;
-            primeContext(context);
-            resumeContext(context);
+            window.nk_audio_resume();
         }
-        ['click', 'pointerup', 'touchend', 'keydown'].forEach(function(name){
+        ['click', 'pointerup', 'touchend', 'keydown', 'focusin'].forEach(function(name){
             document.addEventListener(name, resumeAfterInteraction, true);
         });
         document.addEventListener('visibilitychange', function(){
             if (!document.hidden) resumeAfterInteraction();
+        });
+    })();
+
+    // Native mobile text-entry bridge. Unlike window.prompt(), this does not
+    // block the page or interrupt the looping Web Audio graph.
+    (function(){
+        var overlay = document.getElementById('nk-keyboard-overlay');
+        var form = document.getElementById('nk-keyboard-panel');
+        var labelNode = document.getElementById('nk-keyboard-label');
+        var input = document.getElementById('nk-keyboard-input');
+        var cancel = document.getElementById('nk-keyboard-cancel');
+        var done = document.getElementById('nk-keyboard-done');
+        var state = null;
+        var closing = false;
+
+        function resumeAudio(){
+            if (window.nk_audio_resume) window.nk_audio_resume();
+        }
+
+        function focusCanvas(){
+            var canvas = document.getElementById('canvas');
+            if (!canvas || !canvas.focus) return;
+            try { canvas.focus({preventScroll: true}); }
+            catch (error) { canvas.focus(); }
+        }
+
+        function finish(cancelled){
+            if (!state || state.done) return;
+            state.value = cancelled ? state.original : input.value;
+            state.cancelled = !!cancelled;
+            state.done = true;
+            closing = true;
+            overlay.hidden = true;
+            input.blur();
+            closing = false;
+            focusCanvas();
+            resumeAudio();
+        }
+
+        window.nk_keyboard_open = function(label, current, isPassword, maxLength){
+            if (!overlay || !form || !input) return false;
+            label = String(label || 'text');
+            current = String(current || '');
+            state = {
+                label: label,
+                original: current,
+                value: current,
+                done: false,
+                cancelled: false
+            };
+            labelNode.textContent = label;
+            input.type = isPassword ? 'password' : 'text';
+            input.autocomplete = isPassword ? 'current-password' : 'username';
+            input.autocapitalize = 'none';
+            input.spellcheck = false;
+            input.maxLength = Math.max(1, Number(maxLength) || 64);
+            input.value = current;
+            overlay.hidden = false;
+            resumeAudio();
+            try { input.focus({preventScroll: true}); }
+            catch (error) { input.focus(); }
+            try { input.setSelectionRange(input.value.length, input.value.length); }
+            catch (error) {}
+            return true;
+        };
+
+        window.nk_keyboard_poll = function(label){
+            if (!state || state.label !== String(label)) return null;
+            if (!state.done) state.value = input.value;
+            var snapshot = {
+                value: state.value,
+                done: state.done,
+                cancelled: state.cancelled
+            };
+            if (state.done) state = null;
+            return snapshot;
+        };
+
+        input.addEventListener('input', function(){
+            if (state && !state.done) state.value = input.value;
+            resumeAudio();
+        });
+        input.addEventListener('keydown', function(event){
+            if (event.key !== 'Enter') return;
+            event.preventDefault();
+            finish(false);
+        });
+        input.addEventListener('blur', function(){
+            if (closing) return;
+            setTimeout(function(){
+                if (state && !state.done && document.activeElement !== input) {
+                    finish(false);
+                }
+            }, 0);
+        });
+        form.addEventListener('submit', function(event){
+            event.preventDefault();
+            finish(false);
+        });
+        cancel.addEventListener('pointerdown', function(event){
+            event.preventDefault();
+            finish(true);
+        });
+        done.addEventListener('pointerdown', function(event){
+            event.preventDefault();
+            finish(false);
+        });
+        overlay.addEventListener('pointerdown', function(event){
+            if (event.target === overlay) finish(true);
         });
     })();
 

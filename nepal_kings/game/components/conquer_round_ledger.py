@@ -17,7 +17,8 @@ Each round card is laid out as ``[you chip | diff pill | opp chip]``.
 The total card sits at the right and shows a circle whose colour
 indicates the cumulative result. When the battle has resolved, the
 circle morphs into a win/lose chip and is clickable: ``handle_event``
-returns ``'open_result'`` if the user clicks it.
+returns ``'open_result'`` if the user clicks it.  On touch devices,
+resolved round cards can also be tapped to pin their recap popover.
 """
 from __future__ import annotations
 
@@ -99,6 +100,7 @@ class ConquerRoundLedger:
         self._total_circle_rect: Optional[pygame.Rect] = None
         self._hover_round_idx: Optional[int] = None
         self._hover_popover_rect: Optional[pygame.Rect] = None
+        self._touch_round_idx: Optional[int] = None
         self._revealed_round_keys: Dict[int, Tuple[Any, Any]] = {}
         self._round_reveal_animations: Dict[int, Dict[str, int]] = {}
         # Last count-up value shown by the revealing diff pill; drives the
@@ -528,23 +530,49 @@ class ConquerRoundLedger:
 
     # ------------------------------------------------------------------ events
     def handle_event(self, event) -> Optional[str]:
-        """Return ``'open_result'`` when the user clicks the resolved circle."""
+        """Handle total-result clicks and touch-friendly round inspection."""
         if event.type != pygame.MOUSEBUTTONDOWN or event.button != 1:
             return None
-        if self._total_circle_rect is None:
+        if self._total_circle_rect is not None:
+            hit_rect = self._total_circle_rect
+            if settings.TOUCH_TARGET_MIN > 0:
+                hit_rect = hit_rect.inflate(
+                    max(0, settings.TOUCH_TARGET_MIN - hit_rect.width),
+                    max(0, settings.TOUCH_TARGET_MIN - hit_rect.height),
+                )
+            if hit_rect.collidepoint(event.pos):
+                game = self._game()
+                if game and getattr(game, 'last_battle_result', None):
+                    self._touch_round_idx = None
+                    return 'open_result'
+
+        if settings.TOUCH_TARGET_MIN <= 0:
             return None
-        hit_rect = self._total_circle_rect
-        if settings.TOUCH_TARGET_MIN > 0:
-            hit_rect = hit_rect.inflate(
-                max(0, settings.TOUCH_TARGET_MIN - hit_rect.width),
-                max(0, settings.TOUCH_TARGET_MIN - hit_rect.height),
+
+        # A pinned recap is intentionally tap-driven: phones have no stable
+        # hover state. Tapping the same card (or its popover) closes it.
+        if (self._touch_round_idx is not None
+                and self._hover_popover_rect is not None
+                and self._hover_popover_rect.collidepoint(event.pos)):
+            self._touch_round_idx = None
+            return 'inspect_round'
+
+        layout = self._ensure_layout().round_ledger
+        you_per, opp_per = self._played_per_round_pair()
+        for idx, rect_tuple in enumerate(layout.round_card_rects):
+            resolved = (
+                idx < len(you_per) and idx < len(opp_per)
+                and you_per[idx] is not None and opp_per[idx] is not None
             )
-        if not hit_rect.collidepoint(event.pos):
-            return None
-        game = self._game()
-        if not game or not getattr(game, 'last_battle_result', None):
-            return None
-        return 'open_result'
+            if resolved and pygame.Rect(*rect_tuple).collidepoint(event.pos):
+                self._touch_round_idx = (
+                    None if self._touch_round_idx == idx else idx)
+                return 'inspect_round'
+
+        # Let the underlying control receive an unrelated tap, but dismiss a
+        # pinned recap so it never becomes stale screen chrome.
+        self._touch_round_idx = None
+        return None
 
     # ------------------------------------------------------------------ draw
     def draw(self):
@@ -595,7 +623,8 @@ class ConquerRoundLedger:
         pygame.draw.rect(self.window, border, rect, 2, border_radius=6)
 
         title_font = settings.get_font(max(10, int(settings.FS_TINY * 0.95)), bold=True)
-        ts = title_font.render(f'Round {idx + 1}', True, _TEXT_SECONDARY)
+        title_label = self._fit_text(f'Round {idx + 1}', title_font, rect.width - 12)
+        ts = title_font.render(title_label, True, _TEXT_SECONDARY)
         self.window.blit(ts, (rect.left + 6, rect.top + 4))
 
         # Three columns: you-chip | diff | opp-chip
@@ -903,7 +932,11 @@ class ConquerRoundLedger:
         self.window.blit(bg, rect.topleft)
         pygame.draw.rect(self.window, (210, 168, 72), rect, 2, border_radius=6)
         title_font = settings.get_font(max(11, int(settings.FS_TINY * 1.05)), bold=True)
-        ts = title_font.render('BATTLE TOTAL', True, (238, 206, 130))
+        title_label = 'BATTLE TOTAL'
+        if title_font.size(title_label)[0] > rect.width - 8:
+            title_label = 'TOTAL'
+        title_label = self._fit_text(title_label, title_font, rect.width - 8)
+        ts = title_font.render(title_label, True, (238, 206, 130))
         self.window.blit(ts, ts.get_rect(midtop=(rect.centerx, rect.top + 3)))
 
         total_diff = self._ghost_total_diff(you_per, opp_per, ghost_preview)
@@ -969,7 +1002,11 @@ class ConquerRoundLedger:
         # Hover hint
         if last_result:
             hint = settings.get_font(max(9, int(settings.FS_TINY * 0.85)))
-            hs = hint.render('click for details', True, _TEXT_MUTED)
+            hint_label = ('tap for details'
+                          if settings.TOUCH_TARGET_MIN > 0
+                          else 'click for details')
+            hint_label = self._fit_text(hint_label, hint, rect.width - 6)
+            hs = hint.render(hint_label, True, _TEXT_MUTED)
             self.window.blit(hs, (rect.centerx - hs.get_width() // 2,
                                   rect.bottom - hs.get_height() - 3))
         # Cache for click handling
@@ -979,6 +1016,10 @@ class ConquerRoundLedger:
     def _draw_round_hover_popover(self, ledger, you_per, opp_per, mouse_pos=None):
         mouse_pos = mouse_pos if mouse_pos is not None else pygame.mouse.get_pos()
         idx = self._round_card_hover_index(mouse_pos, ledger, you_per, opp_per)
+        if idx is None and settings.TOUCH_TARGET_MIN > 0:
+            touch_idx = getattr(self, '_touch_round_idx', None)
+            if touch_idx in (0, 1, 2):
+                idx = touch_idx
         self._hover_round_idx = idx
         self._hover_popover_rect = None
         if idx is None:

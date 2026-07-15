@@ -27,6 +27,14 @@ _STANDARD_SIZES = [
     (1600, 900),
     (1366, 768),
 ]
+_RESPONSIVE_SIZES = [
+    (320, 568),    # compact portrait phone
+    (390, 844),    # modern portrait phone
+    (568, 320),    # compact landscape phone
+    (640, 360),    # small split-screen / landscape window
+    (1024, 768),   # 4:3 tablet
+    (2560, 1080),  # ultrawide desktop
+]
 _MODES = ('pre_battle', 'battle', 'result')
 
 
@@ -45,6 +53,30 @@ def test_layout_validates_for_standard_sizes(size, mode):
     assert isinstance(layout, ConquerLayout)
     assert layout.mode == mode
     assert layout.screen_size == size
+
+
+@pytest.mark.parametrize('size', _RESPONSIVE_SIZES)
+@pytest.mark.parametrize('mode', _MODES)
+def test_layout_validates_across_phone_tablet_and_ultrawide_sizes(size, mode):
+    layout = compute_conquer_layout(size[0], size[1], mode=mode)
+    assert layout.screen_size == size
+    assert layout.tactics_rail.rect[2] > 0
+    assert layout.battlefield.rect[2] > 0
+
+
+@pytest.mark.parametrize('size', [(320, 568), (390, 844), (768, 1024)])
+@pytest.mark.parametrize('mode', _MODES)
+def test_narrow_layout_keeps_one_complete_tactic_row(size, mode):
+    layout = compute_conquer_layout(size[0], size[1], mode=mode)
+    assert layout.narrow is True
+    assert layout.tactics_rail.hand_list_rect[3] >= layout.tactics_rail.cell_height
+
+
+@pytest.mark.parametrize('size', [(568, 320), (640, 360)])
+def test_compact_landscape_rail_has_a_readable_width_floor(size):
+    layout = compute_conquer_layout(size[0], size[1], mode='battle')
+    assert layout.narrow is False
+    assert layout.tactics_rail.rect[2] >= min(112, int(size[0] * 0.23))
 
 
 @pytest.mark.parametrize('size', _STANDARD_SIZES)

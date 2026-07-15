@@ -60,8 +60,12 @@ _LEDGER_H_PCT = 0.190 if _IS_MOBILE else 0.1685  # ledger band height (pre+battl
 _RAIL_X_PCT = 0.018
 _RAIL_W_PCT = 0.160 if _IS_MOBILE else 0.135
 _RAIL_TO_FIELD_GAP_W_PCT = 0.0125
-_FIELD_X_PCT = _RAIL_X_PCT + _RAIL_W_PCT + _RAIL_TO_FIELD_GAP_W_PCT
-_FIELD_W_PCT = 1.0 - _FIELD_X_PCT - _MARGIN_X_PCT
+# Percentage-only sizing makes the command rail unusably thin on compact
+# landscape canvases (small split-screen windows, foldables, older phones).
+# Keep a modest pixel floor while still capping the rail so the battlefield
+# remains the primary surface.  The normal percentage wins on larger screens.
+_RAIL_MIN_USABLE_W_PX = 128 if _IS_MOBILE else 112
+_RAIL_MAX_W_PCT = 0.23
 
 # Battlefield inner padding
 _FIELD_INNER_PAD_X_PCT = 0.00833
@@ -397,6 +401,22 @@ def _compute_tactics_rail(W: int, H: int,
     )
 
 
+def _minimum_tactics_rail_height(W: int, H: int) -> int:
+    """Height needed for rail chrome plus one complete tactic row.
+
+    The narrow layout used to divide the content band exactly in half.  On
+    portrait screens that often left the hand viewport shorter than one cell,
+    so the only visible tactic was clipped.  Keep this calculation beside the
+    rail solver so both use the same dimensional constants.
+    """
+    pad_y = int(round(_RAIL_INNER_PAD_Y_PCT * H))
+    top_h = int(round(_RAIL_TOP_STRIP_H_PCT * H))
+    detail_h = int(round(_RAIL_DETAIL_H_PCT * H))
+    action_h = int(round(_RAIL_ACTION_TRAY_H_PCT * H))
+    cell_h = int(round(_RAIL_CELL_H_PCT * H))
+    return max(1, 2 * pad_y + top_h + detail_h + action_h + cell_h)
+
+
 def _compute_round_ledger(W: int, H: int,
                           x_px: int, y_px: int,
                           w_px: int, h_px: int) -> RoundLedgerLayout:
@@ -473,26 +493,39 @@ def _compute_conquer_layout_uncached(screen_w: int, screen_h: int,
     ledger_w = W - 2 * margin_x
 
     if not is_narrow:
-        rail_x = int(round(_RAIL_X_PCT * W))
-        rail_w = int(round(_RAIL_W_PCT * W))
-        field_x = int(round(_FIELD_X_PCT * W))
-        field_w = int(round(_FIELD_W_PCT * W))
-        # Snap rail_x_end + gap to field_x to avoid 1px overlaps from rounding.
+        rail_x = margin_x
+        rail_w = max(
+            int(round(_RAIL_W_PCT * W)),
+            min(_RAIL_MIN_USABLE_W_PX, int(round(_RAIL_MAX_W_PCT * W))),
+        )
+        rail_w = min(rail_w, int(round(_RAIL_MAX_W_PCT * W)))
         gap = int(round(_RAIL_TO_FIELD_GAP_W_PCT * W))
-        if rail_x + rail_w + gap > field_x:
-            rail_w = max(0, field_x - rail_x - gap)
+        field_x = rail_x + rail_w + gap
+        field_w = max(1, W - margin_x - field_x)
         rail = _compute_tactics_rail(W, H, rail_x, content_y, rail_w, content_h)
         battlefield = _compute_battlefield(W, H, field_x, content_y, field_w, content_h)
     else:
-        # Narrow / stacked: tactics rail above battlefield (full width, half each).
+        # Narrow / stacked: battlefield above tactics rail.  Allocate enough
+        # height for the rail's chrome and one complete tactic row instead of
+        # blindly splitting 50/50.  A battlefield floor prevents exceptionally
+        # short portrait windows from giving all remaining room to controls.
         full_x = margin_x
         full_w = W - 2 * margin_x
-        half_h = max(0, content_h // 2 - int(round(0.01 * H)))
-        # Plan stack order: timeline → battlefield → tactics → ledger
+        stack_gap = max(2, int(round(0.01 * H)))
+        available_h = max(2, content_h - stack_gap)
+        rail_min_h = _minimum_tactics_rail_height(W, H)
+        battlefield_min_h = max(
+            int(round(0.20 * H)),
+            int(round(available_h * 0.36)),
+        )
+        rail_h = max(available_h - available_h // 2, rail_min_h)
+        rail_h = min(rail_h, max(1, available_h - battlefield_min_h))
+        battlefield_h = max(1, available_h - rail_h)
+        # Stack order: timeline → battlefield → tactics → ledger.
         battlefield = _compute_battlefield(
-            W, H, full_x, content_y, full_w, half_h)
-        rail_y = content_y + half_h + int(round(0.01 * H))
-        rail_h = max(0, content_y + content_h - rail_y)
+            W, H, full_x, content_y, full_w, battlefield_h)
+        rail_y = content_y + battlefield_h + stack_gap
+        rail_h = max(1, content_y + content_h - rail_y)
         rail = _compute_tactics_rail(W, H, full_x, rail_y, full_w, rail_h)
 
     ledger = _compute_round_ledger(W, H, ledger_x, ledger_y, ledger_w, ledger_h)
