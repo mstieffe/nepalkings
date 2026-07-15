@@ -352,6 +352,11 @@ class KingdomScreen(MenuScreenMixin, Screen):
         self._floating_text_last_tick = pygame.time.get_ticks()
         if getattr(self, '_fx', None):
             self._fx.clear()
+        # Until the first conquest is complete, returning to Kingdom should
+        # bring the marked target back instead of preserving an accidental pan
+        # that left a phone user hunting across the full 96x50 map.
+        if self._hex_map and self._recommended_tutorial_land_pending():
+            self._focus_recommended_tutorial_land()
         self._load_map()
 
     # ── Data loading ────────────────────────────────────────────────
@@ -497,10 +502,13 @@ class KingdomScreen(MenuScreenMixin, Screen):
         focused = bool(new_conquered
                        and self._hex_map.focus_lands(
                            new_conquered, fit=True, max_zoom=1.5))
-        # Cold loads intentionally retain HexMap's full-world camera fit so
-        # both ends of the wider map and all five region labels are visible.
-        # Explicit navigation (kingdom chip, region row, recenter) still
-        # provides a close fitted view.
+        # Cold loads normally retain HexMap's full-world camera fit.  The one
+        # exception is a returning tutorial player who has already read the
+        # overview: their next task is a single marked hex, so show it at a
+        # useful phone scale instead of leaving it a few pixels wide.
+        if (cold_load and self._recommended_tutorial_land_pending()
+                and 'kingdom_overview_window' in self._menu_coach_seen()):
+            focused = bool(self._focus_recommended_tutorial_land()) or focused
 
         if new_conquered:
             self._celebrate_conquests(new_conquered)
@@ -931,18 +939,82 @@ class KingdomScreen(MenuScreenMixin, Screen):
             self.window,
             kingdom_overview_pages(),
             title='Your Kingdom',
+            presentation=('map_sidecar' if self._mobile_ui else 'modal'),
         )
 
     def _handle_kingdom_overview_events(self, events):
-        if not getattr(self, '_kingdom_overview_dialogue', None):
+        dialogue = getattr(self, '_kingdom_overview_dialogue', None)
+        if not dialogue:
             return False
         from pygame import QUIT
         if any(getattr(e, 'type', None) == QUIT for e in events):
             return False
-        if self._kingdom_overview_dialogue.update(events) == 'done':
+
+        dialogue_events = []
+        map_events = []
+        for event in events:
+            event_type = getattr(event, 'type', None)
+            dialogue_dragging = (
+                getattr(dialogue, '_dragging', False)
+                or getattr(dialogue, '_scrollbar_dragging', False)
+            )
+            map_dragging = (
+                getattr(getattr(self, '_hex_map', None), '_dragging', False)
+                or getattr(self, '_map_control_press', None) is not None
+            )
+            if (not dialogue_dragging and map_dragging
+                    and event_type in (pygame.MOUSEMOTION,
+                                       pygame.MOUSEBUTTONUP)):
+                map_events.append(event)
+                continue
+            if dialogue.captures_event(event):
+                dialogue_events.append(event)
+            else:
+                map_events.append(event)
+
+        if dialogue.update(dialogue_events) == 'done':
             self._kingdom_overview_dialogue = None
             self._mark_menu_coach_seen('kingdom_overview_window')
+            self._focus_recommended_tutorial_land()
+            return True
+        self._handle_map_navigation_behind_tutorial(map_events)
         return True
+
+    def _handle_map_navigation_behind_tutorial(self, events):
+        """Keep map exploration live in the area exposed by the sidecar.
+
+        This deliberately ignores returned land clicks: the overview teaches
+        the map without opening another panel above it.  Drag, pinch/wheel zoom
+        and the dedicated zoom/recenter buttons still work normally.
+        """
+        hex_map = getattr(self, '_hex_map', None)
+        if not hex_map:
+            return
+        multi_gesture = getattr(pygame, 'MULTIGESTURE', None)
+        map_event_types = {
+            pygame.MOUSEBUTTONDOWN,
+            pygame.MOUSEBUTTONUP,
+            pygame.MOUSEMOTION,
+            pygame.MOUSEWHEEL,
+        }
+        if multi_gesture is not None:
+            map_event_types.add(multi_gesture)
+        for event in events:
+            event_type = getattr(event, 'type', None)
+            if event_type not in map_event_types:
+                continue
+            if (event_type == pygame.MOUSEBUTTONDOWN
+                    and getattr(event, 'button', 0) == 1
+                    and self._begin_map_control_press(event.pos)):
+                continue
+            if (event_type == pygame.MOUSEMOTION
+                    and self._drag_map_control_press(event.pos)):
+                continue
+            if (event_type == pygame.MOUSEBUTTONUP
+                    and getattr(event, 'button', 0) == 1
+                    and self._finish_map_control_press(event.pos)):
+                continue
+            hex_map.handle_event(event)
 
     def _kingdom_coach_ready(self):
         # The first-open overview window teaches concepts before coach pointers.
@@ -967,6 +1039,60 @@ class KingdomScreen(MenuScreenMixin, Screen):
         """
         facts = (self._onboarding() or {}).get('facts') or {}
         return int(facts.get('conquer_battles') or 0) >= 1
+
+    def _recommended_tutorial_land_pending(self):
+        """Whether the marked first-conquest target should still be guided."""
+        land_id = getattr(self, '_recommended_tutorial_land_id', None)
+        onboarding = self._onboarding() or {}
+        return bool(
+            self._mobile_ui
+            and land_id is not None
+            and not onboarding.get('onboarding_skipped')
+            and 'finish_first_conquer_battle'
+            not in self._onboarding_completed_steps()
+        )
+
+    def _focus_recommended_tutorial_land(self):
+        """Centre the marked land at a tap-friendly zoom without opening it."""
+        if not self._recommended_tutorial_land_pending() or not self._hex_map:
+            return None
+        land_id = self._recommended_tutorial_land_id
+        focus_many = getattr(self._hex_map, 'focus_lands', None)
+        if callable(focus_many):
+            tile = focus_many([land_id], fit=True, max_zoom=1.5)
+        else:
+            focus_one = getattr(self._hex_map, 'focus_land', None)
+            tile = focus_one(land_id) if callable(focus_one) else None
+        if tile is not None and hasattr(self._hex_map, 'selected_tile'):
+            # The coach asks the player to tap; centring must not make the land
+            # look as though it has already been selected.
+            self._hex_map.selected_tile = None
+        return tile
+
+    def _recommended_tutorial_touch_tile(self, pos, coach_step):
+        """Return the marked tile for a forgiving mobile tap around its hex."""
+        if (not self._mobile_ui or not coach_step
+                or coach_step.get('id') not in (
+                    'kingdom_pick_land', 'kingdom_conquer_retry')):
+            return None
+        rect = self._recommended_land_anchor_rect()
+        if rect is None:
+            return None
+        target = max(
+            settings.TOUCH_TARGET_MIN,
+            getattr(settings, 'TOUCH_ICON_MIN', 0) or 0,
+        )
+        hit = rect.inflate(max(0, target - rect.w),
+                           max(0, target - rect.h))
+        hit.clamp_ip(self._map_viewport_rect)
+        if not hit.collidepoint(pos):
+            return None
+        land_id = self._recommended_tutorial_land_id
+        return next(
+            (tile for tile in getattr(self._hex_map, 'tiles', [])
+             if getattr(tile, 'land_id', None) == land_id),
+            None,
+        )
 
     def _recommended_land_anchor_rect(self):
         """Screen rect of the recommended tutorial land, or None.
@@ -1025,6 +1151,10 @@ class KingdomScreen(MenuScreenMixin, Screen):
                 'action': 'click',
                 'mark_on_click': False,
                 'max_lines': 4,
+                'coach_placement': (
+                    'inside_top' if self._mobile_ui and not has_recommended
+                    else None
+                ),
             }
         # Lost the first conquest (no land won yet): re-guide the no-penalty
         # retry. No cards were lost and the recommended land + starter attack are
@@ -1041,6 +1171,10 @@ class KingdomScreen(MenuScreenMixin, Screen):
                 'action': 'click',
                 'mark_on_click': False,
                 'max_lines': 4,
+                'coach_placement': (
+                    'inside_top' if self._mobile_ui and land_rect is None
+                    else None
+                ),
             }
         if not first_conquer_complete:
             return None
@@ -1052,6 +1186,8 @@ class KingdomScreen(MenuScreenMixin, Screen):
                 'title': 'Your First Land!',
                 'body': 'Congratulations! Your first land joins your kingdom and starts producing gold for you.',
                 'action': 'coach',
+                'interactive_rects': [self._map_viewport_rect],
+                'coach_placement': 'inside_top' if self._mobile_ui else None,
                 'finish_tutorial_button': True,
                 'max_lines': 5,
             }
@@ -2283,6 +2419,8 @@ class KingdomScreen(MenuScreenMixin, Screen):
             self._hex_map.zoom_out()
             return True
         if key == 'recenter':
+            if self._recommended_tutorial_land_pending():
+                return self._focus_recommended_tutorial_land() is not None
             kingdom = self._current_chip_kingdom()
             if kingdom:
                 self._focus_kingdom_on_map(kingdom)
@@ -2601,7 +2739,15 @@ class KingdomScreen(MenuScreenMixin, Screen):
                     )
                     if blocked:
                         continue
+                tutorial_tile = None
+                if (event.type == MOUSEBUTTONUP and event.button == 1
+                        and not self._hex_map.is_drag_release(event)):
+                    tutorial_tile = self._recommended_tutorial_touch_tile(
+                        event.pos, coach_step)
                 clicked_tile = self._hex_map.handle_event(event)
+                if tutorial_tile is not None:
+                    self._hex_map.selected_tile = tutorial_tile
+                    clicked_tile = tutorial_tile
                 if clicked_tile:
                     self._open_detail(clicked_tile)
 

@@ -938,6 +938,10 @@ def _recommended_tutorial_land_id(user, lands, now=None):
     now = now or _utcnow()
     attack_suit = _user_offensive_suit(user)
     attacker_beats = _SUIT_ADVANTAGE.get(attack_suit)
+    cols = [int(land.col) for land in lands if land.col is not None]
+    rows = [int(land.row) for land in lands if land.row is not None]
+    center_col = (min(cols) + max(cols)) / 2 if cols else 0.0
+    center_row = (min(rows) + max(rows)) / 2 if rows else 0.0
     candidates = []
     for land in lands:
         if land.owner_user_id is not None:
@@ -949,8 +953,16 @@ def _recommended_tutorial_land_id(user, lands, now=None):
         # First-conquest battles use the scripted-safe defender regardless of
         # the land's normal AI template, so keep map loading cheap here.
         suit_score = 0 if land.suit_bonus_suit == attacker_beats else 1
+        # Prefer a target near the middle of the world. Edge/corner lands are
+        # pinned against the viewport by camera clamping and can end up under
+        # map chrome, which makes the very first tap unnecessarily difficult
+        # on a phone. Account for the flat-top hex grid's unequal axes.
+        dx = (float(land.col) - center_col) * 1.5
+        dy = (float(land.row) - center_row) * math.sqrt(3)
+        center_score = dx * dx + dy * dy
         candidates.append((
             suit_score,
+            center_score,
             -float(land.gold_rate or 0),
             int(land.id or 0),
         ))

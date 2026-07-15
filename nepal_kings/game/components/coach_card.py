@@ -14,6 +14,8 @@ import math
 
 import pygame
 
+from config import settings
+
 # The target rect is inflated by this much so the highlight/hole sits clear of
 # the control's edges. Must match across the spotlight hole and the border.
 _INFLATE = 14
@@ -110,7 +112,7 @@ def _fit_text(font, text, max_width):
 def draw_coach_panel(window, target_rects, *, title, body, title_font,
                      body_font, ticks, width_ratio=0.36, min_width=320,
                      max_width=420, min_height=152, max_lines=5,
-                     has_button_row=True):
+                     has_button_row=True, placement=None):
     """Draw shared coach chrome and return ``(card_rect, button_height)``.
 
     Screens retain their own progression and event routing while this helper
@@ -131,18 +133,29 @@ def draw_coach_panel(window, target_rects, *, title, body, title_font,
     body_lines = _wrap_lines(body_font, body, card_w - 28, max_lines)
     title_h = title_font.get_height()
     body_line_h = body_font.get_height() + 3
-    button_h = max(30, body_font.get_height() + 10)
+    button_h = max(
+        30,
+        body_font.get_height() + 10,
+        getattr(settings, 'TOUCH_TARGET_MIN', 0) or 0,
+    )
     button_space = button_h + 16 if has_button_row else 8
     card_h = max(
         min_height,
         22 + title_h + 10 + len(body_lines) * body_line_h + button_space,
     )
     gap = 14
-    if target.right + gap + card_w < screen_w:
+    if placement == 'inside_top':
+        card_x = max(8, min(target.centerx - card_w // 2,
+                            screen_w - card_w - 8))
+        card_y = max(8, min(target.top + gap, screen_h - card_h - 8))
+    elif target.right + gap + card_w < screen_w:
         card_x = target.right + gap
+        card_y = max(8, min(target.centery - card_h // 2,
+                            screen_h - card_h - 8))
     else:
         card_x = max(8, target.left - gap - card_w)
-    card_y = max(8, min(target.centery - card_h // 2, screen_h - card_h - 8))
+        card_y = max(8, min(target.centery - card_h // 2,
+                            screen_h - card_h - 8))
     card = pygame.Rect(card_x, card_y, card_w, card_h)
     surf = pygame.Surface((card.w, card.h), pygame.SRCALPHA)
     pygame.draw.rect(surf, (24, 20, 16, 235), surf.get_rect(), border_radius=8)

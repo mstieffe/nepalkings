@@ -1841,6 +1841,7 @@ class MenuScreenMixin:
 
     def _draw_menu_coach(self, step):
         self._menu_coach_buttons = []
+        self._menu_coach_card_rect = None
         self._menu_coach_step = step
         if not step:
             return
@@ -1866,9 +1867,11 @@ class MenuScreenMixin:
             min_height=152,
             max_lines=step.get('max_lines', 5),
             has_button_row=draws_next or draws_finish or draws_skip,
+            placement=step.get('coach_placement'),
         )
         if card is None:
             return
+        self._menu_coach_card_rect = card.copy()
 
         if draws_next:
             label = step.get('button_label') or 'Next'
@@ -1907,6 +1910,20 @@ class MenuScreenMixin:
             event_types.add(text_input)
         return event_types
 
+    def _menu_coach_interactive_rects(self, step):
+        """Areas that stay interactive while a coach card is visible.
+
+        Click-action lessons already pass their target through.  A coach-only
+        card can opt a larger background area in as well, which the Kingdom
+        screen uses to keep map exploration live behind its final card.
+        """
+        explicit = step.get('interactive_rects') if step else None
+        if explicit:
+            return [pygame.Rect(rect) for rect in explicit]
+        if step and step.get('action', 'next') == 'click':
+            return self._menu_coach_passthrough_rects(step)
+        return []
+
     def _handle_menu_coach_events(self, events, step=_MENU_COACH_STEP_UNSET):
         if step is _MENU_COACH_STEP_UNSET:
             step = getattr(self, '_menu_coach_step', None)
@@ -1915,6 +1932,7 @@ class MenuScreenMixin:
         action = step.get('action', 'next')
         block_types = self._menu_coach_blocking_event_types()
         passthrough_rects = self._menu_coach_passthrough_rects(step)
+        interactive_rects = self._menu_coach_interactive_rects(step)
         for event in events:
             if event.type == pygame.QUIT:
                 continue
@@ -1927,6 +1945,13 @@ class MenuScreenMixin:
                     if rect.collidepoint(pos):
                         self._menu_coach_pressed_button_action = button_action
                         return True
+                card_rect = getattr(self, '_menu_coach_card_rect', None)
+                if card_rect and card_rect.collidepoint(pos):
+                    return True
+                if (action != 'click'
+                        and any(rect.collidepoint(pos)
+                                for rect in interactive_rects)):
+                    return False
                 if action != 'click':
                     return True
                 if any(rect.collidepoint(pos) for rect in passthrough_rects):
@@ -1963,12 +1988,27 @@ class MenuScreenMixin:
                         if getattr(self.state, 'set_msg', None):
                             self.state.set_msg('Lesson skipped. Other guidance stays active.')
                     return True
+                card_rect = getattr(self, '_menu_coach_card_rect', None)
+                if card_rect and card_rect.collidepoint(pos):
+                    return True
+                if (action != 'click'
+                        and any(rect.collidepoint(pos)
+                                for rect in interactive_rects)):
+                    return False
                 if action == 'click':
                     if any(rect.collidepoint(pos) for rect in passthrough_rects):
                         if step.get('mark_on_click', True):
                             self._mark_menu_coach_seen(step.get('id'))
                         return False
                     return True
+                return True
+            if event.type == pygame.MOUSEWHEEL:
+                pos = getattr(event, 'pos', None) or pygame.mouse.get_pos()
+                card_rect = getattr(self, '_menu_coach_card_rect', None)
+                if card_rect and card_rect.collidepoint(pos):
+                    return True
+                if any(rect.collidepoint(pos) for rect in interactive_rects):
+                    return False
                 return True
             return True
         return False

@@ -1380,6 +1380,7 @@ class HexMap:
                 and cache_key == getattr(self, '_render_cache_key', None)
                 and cached_frame.get_size() == vp.size):
             self.window.blit(cached_frame, vp.topleft)
+            self._draw_recommended_tutorial_marker()
             return
 
         old_clip = self.window.get_clip()
@@ -1440,6 +1441,47 @@ class HexMap:
         except (ValueError, pygame.error):
             self._render_cache = None
             self._render_cache_key = None
+        self._draw_recommended_tutorial_marker()
+
+    def _draw_recommended_tutorial_marker(self):
+        """Draw a high-contrast tap halo over the marked onboarding land.
+
+        The production map can fit thousands of lands on screen, making the
+        underlying hex only a few pixels wide.  This overlay stays at least as
+        large as a mobile touch target and is drawn after the cached map frame
+        so its gentle pulse remains animated without rebuilding every tile.
+        """
+        tile = next(
+            (item for item in self.tiles
+             if getattr(item, 'is_recommended_tutorial_land', False)),
+            None,
+        )
+        if tile is None:
+            return
+        cx, cy = self.world_to_screen(tile.cx, tile.cy)
+        if not self.viewport_rect.collidepoint(cx, cy):
+            return
+        sz = self._size * self.zoom
+        touch_radius = (getattr(settings, 'TOUCH_TARGET_MIN', 0) or 0) / 2
+        pulse = (pygame.time.get_ticks() % 900) / 900.0
+        breathe = 0.5 + 0.5 * math.sin(pulse * math.tau)
+        radius = int(max(sz * 1.22, touch_radius, 12) + breathe * 4)
+        pad = 5
+        diameter = (radius + pad) * 2
+        halo = pygame.Surface((diameter, diameter), pygame.SRCALPHA)
+        center = (diameter // 2, diameter // 2)
+        pygame.draw.circle(halo, (255, 215, 52, 34), center, radius)
+        pygame.draw.circle(halo, (255, 232, 104, 225), center, radius,
+                           max(2, int(0.006 * settings.SCREEN_HEIGHT)))
+        pygame.draw.circle(halo, (255, 247, 190, 150), center,
+                           max(3, radius - 5), 1)
+        old_clip = self.window.get_clip()
+        self.window.set_clip(self.viewport_rect)
+        self.window.blit(
+            halo,
+            (int(cx) - center[0], int(cy) - center[1]),
+        )
+        self.window.set_clip(old_clip)
 
     def _draw_hex(self, tile, corners, scx, scy, sz):
         """Draw a single hex with fill, border, and labels."""

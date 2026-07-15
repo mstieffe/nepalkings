@@ -221,6 +221,37 @@ def test_kingdom_map_marks_recommended_first_conquest_land(client, app, db, monk
     assert marked[0].get('owner') is None
 
 
+def test_tutorial_land_recommendation_prefers_central_phone_safe_target(monkeypatch):
+    import importlib
+    from types import SimpleNamespace
+
+    kingdom_routes = importlib.import_module('routes.kingdom')
+    monkeypatch.setattr(
+        kingdom_routes, '_first_conquer_complete_for_user', lambda user: False)
+    monkeypatch.setattr(
+        kingdom_routes, '_user_offensive_suit', lambda user: 'Hearts')
+
+    def land(land_id, col, row, gold):
+        return SimpleNamespace(
+            id=land_id,
+            col=col,
+            row=row,
+            owner_user_id=None,
+            tier=1,
+            conquer_cooldown_until=None,
+            suit_bonus_suit='Clubs',
+            gold_rate=gold,
+        )
+
+    lands = [
+        land(1, 0, 0, 99),
+        land(2, 95, 49, 99),
+        land(3, 48, 25, 1),
+    ]
+    assert kingdom_routes._recommended_tutorial_land_id(
+        SimpleNamespace(), lands) == 3
+
+
 def test_first_tier1_ai_conquest_uses_safe_defence_template(client, app, db):
     _register(client, 'preasm_safe_ai')
     from models import User

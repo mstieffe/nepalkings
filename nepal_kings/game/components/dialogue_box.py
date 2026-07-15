@@ -7,6 +7,38 @@ from game.core.input_state import get_pressed as _get_pressed
 from utils import haptics
 
 
+def _responsive_dialogue_button_metrics():
+    """Return visible button metrics that remain finger-sized on mobile.
+
+    Dialogue buttons pre-date the mobile canvas and are intentionally compact
+    on desktop.  Merely inflating their hit rect leaves a tiny-looking control
+    on phones, so teaching/reward dialogues use these larger visual metrics as
+    well.  Portrait uses the compact touch minimum to avoid an oversized
+    10.5%-of-height button on tall screens.
+    """
+    width = settings.DIALOGUE_BOX_BTN_W
+    height = settings.DIALOGUE_BOX_BTN_H
+    margin = settings.DIALOGUE_BOX_BTN_MARGIN_BOTTOM
+    touch_target = getattr(settings, 'TOUCH_TARGET_MIN', 0) or 0
+    if touch_target <= 0:
+        return width, height, margin
+
+    landscape = settings.SCREEN_WIDTH >= settings.SCREEN_HEIGHT
+    min_height = (
+        touch_target if landscape
+        else (getattr(settings, 'TOUCH_COMPACT_MIN', 0) or touch_target)
+    )
+    height = max(height, min_height)
+    width_ratio = 0.18 if landscape else 0.30
+    width = max(
+        width,
+        int(width_ratio * settings.SCREEN_WIDTH),
+        int(2.25 * height),
+    )
+    margin = max(margin, int(0.018 * settings.SCREEN_HEIGHT))
+    return width, height, margin
+
+
 # ── Themed button for the dialogue box ─────────────────────────────
 
 class _DlgButton:

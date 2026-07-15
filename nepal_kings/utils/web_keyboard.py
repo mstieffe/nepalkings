@@ -22,10 +22,12 @@ def init():
     try:
         import embed as _embed
         _is_mobile = bool(_embed.js(
-            "(/iPhone|iPod|Android|webOS|BlackBerry|IEMobile|Opera Mini/i"
+            "(/iPhone|iPad|iPod|Android|webOS|BlackBerry|IEMobile|Opera Mini/i"
             ".test(navigator.userAgent)"
             " || (navigator.maxTouchPoints > 0"
-            " && Math.min(window.innerWidth, window.innerHeight) < 768))"
+            " && (navigator.platform === 'MacIntel'"
+            " || (window.matchMedia"
+            " && window.matchMedia('(pointer: coarse)').matches))))"
         ))
     except Exception:
         _is_mobile = False

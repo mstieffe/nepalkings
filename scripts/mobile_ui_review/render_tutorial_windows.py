@@ -116,7 +116,8 @@ def render(width: int, height: int, ui_scale: str, mobile: bool) -> None:
     kingdom = TutorialWindowDialogue(
         surf,
         kingdom_overview_pages(),
-        title='Your Kingdom')
+        title='Your Kingdom',
+        presentation='map_sidecar' if mobile else 'modal')
     shot('kingdom-1', kingdom, page=0)
 
     loot = TutorialWindowDialogue(

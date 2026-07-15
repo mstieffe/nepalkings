@@ -57,6 +57,9 @@ KINGDOM_SCREEN_ALIASES = {
     "kingdom_mid": "mid",
     "kingdom_detail": "detail",
     "kingdom_regions": "regions",
+    "kingdom_tutorial": "tutorial",
+    "kingdom_coach_pick_land": "coach_pick_land",
+    "kingdom_coach_finish": "coach_finish",
 }
 
 KINGDOM_CONFIG_ALIASES = {
@@ -1048,6 +1051,8 @@ def fixture_kingdom_map_data() -> dict:
 
 
 def populate_kingdom_screen(screen, tab: str) -> None:
+    screen._kingdom_overview_dialogue = None
+    screen.__dict__.pop("_current_kingdom_coach_step", None)
     old_load_activity = getattr(screen, "_load_activity", None)
     screen._load_activity = lambda: None
     try:
@@ -1163,6 +1168,61 @@ def populate_kingdom_screen(screen, tab: str) -> None:
             screen._hex_map.focus_land(target.land_id)
             if tab == "detail":
                 screen._open_detail(target)
+    elif tab == "tutorial":
+        from game.components.tutorial_window import TutorialWindowDialogue
+        from game.tutorial_content import kingdom_overview_pages
+        screen._kingdom_overview_dialogue = TutorialWindowDialogue(
+            screen.window,
+            kingdom_overview_pages(),
+            title="Your Kingdom",
+            presentation="map_sidecar",
+        )
+    elif tab == "coach_pick_land":
+        unowned = [tile for tile in screen._hex_map.tiles if not tile.owner]
+        target = min(
+            unowned,
+            key=lambda tile: ((tile.col - 47.5) ** 2
+                              + (tile.row - 24.5) ** 2),
+            default=None,
+        )
+        if target is not None:
+            target.is_recommended_tutorial_land = True
+            screen._recommended_tutorial_land_id = target.land_id
+            screen._hex_map.focus_lands(
+                [target.land_id], fit=True, max_zoom=1.5)
+            screen._hex_map.selected_tile = None
+            target_rect = screen._hex_map.land_screen_rect(target.land_id)
+            step = {
+                "id": "kingdom_pick_land",
+                "rect": target_rect,
+                "click_through_rects": [screen._map_viewport_rect],
+                "title": "Pick The Marked Land",
+                "body": (
+                    "Tap the gold-marked land. It's a perfect first target "
+                    "for your starter attack."
+                ),
+                "action": "click",
+                "mark_on_click": False,
+                "max_lines": 4,
+            }
+            screen._current_kingdom_coach_step = lambda: step
+    elif tab == "coach_finish":
+        viewport = screen._map_viewport_rect
+        step = {
+            "id": "kingdom_after_conquer_map",
+            "rect": viewport,
+            "interactive_rects": [viewport],
+            "title": "Your First Land!",
+            "body": (
+                "Congratulations! Your first land joins your kingdom and "
+                "starts producing gold for you."
+            ),
+            "action": "coach",
+            "coach_placement": "inside_top",
+            "finish_tutorial_button": True,
+            "max_lines": 5,
+        }
+        screen._current_kingdom_coach_step = lambda: step
 
 
 def populate_kingdom_config(screen, section: str) -> None:

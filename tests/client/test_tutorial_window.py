@@ -53,6 +53,74 @@ def test_window_last_page_next_returns_done():
     assert win.update([_click(win._btn_next.rect)]) == 'done'
 
 
+def test_mobile_tutorial_uses_roomy_panel_and_visible_touch_buttons(monkeypatch):
+    from config import settings
+    from game.components.tutorial_window import TutorialWindowDialogue
+
+    _display()
+    monkeypatch.setattr(settings, 'SCREEN_WIDTH', 854)
+    monkeypatch.setattr(settings, 'SCREEN_HEIGHT', 480)
+    monkeypatch.setattr(settings, 'TOUCH_TARGET_MIN', 58)
+    monkeypatch.setattr(settings, 'TOUCH_COMPACT_MIN', 34)
+    win = TutorialWindowDialogue(
+        pygame.Surface((854, 480)),
+        [{'title': 'One', 'lines': ['A useful mobile lesson.']}],
+        title='Tutorial',
+    )
+
+    assert win.rect.w >= int(0.92 * 854)
+    assert win.rect.h >= int(0.85 * 480)
+    assert win._btn_next.rect.h >= settings.TOUCH_TARGET_MIN
+    assert win._btn_next.rect.centerx == win.rect.centerx
+    assert win.rect.contains(win._btn_next.rect)
+
+
+def test_mobile_map_sidecar_leaves_map_exposed_and_routes_pointer_by_panel(monkeypatch):
+    from config import settings
+    from game.components.tutorial_window import TutorialWindowDialogue
+
+    _display()
+    monkeypatch.setattr(settings, 'SCREEN_WIDTH', 854)
+    monkeypatch.setattr(settings, 'SCREEN_HEIGHT', 480)
+    monkeypatch.setattr(settings, 'TOUCH_TARGET_MIN', 58)
+    monkeypatch.setattr(settings, 'TOUCH_COMPACT_MIN', 34)
+    win = TutorialWindowDialogue(
+        pygame.Surface((854, 480)),
+        [{'title': 'Map', 'lines': ['Drag the exposed map while reading.']}],
+        title='Your Kingdom',
+        presentation='map_sidecar',
+    )
+
+    assert win.background_interactive is True
+    assert win._overlay is None
+    assert win.rect.left > int(0.45 * settings.SCREEN_WIDTH)
+    assert win.rect.right < settings.SCREEN_WIDTH
+    outside = pygame.event.Event(
+        pygame.MOUSEBUTTONDOWN, button=1, pos=(win.rect.left - 40, win.rect.centery))
+    inside = pygame.event.Event(
+        pygame.MOUSEBUTTONDOWN, button=1, pos=win.rect.center)
+    assert win.captures_event(outside) is False
+    assert win.captures_event(inside) is True
+
+
+def test_tutorial_navigation_honours_expanded_touch_hit_rect(monkeypatch):
+    from config import settings
+    from game.components.tutorial_window import TutorialWindowDialogue
+
+    _display()
+    monkeypatch.setattr(settings, 'TOUCH_TARGET_MIN', 0)
+    win = TutorialWindowDialogue(
+        None, [{'title': 'Only', 'lines': ['x']}], title='Tutorial')
+    win._created_at = pygame.time.get_ticks() - 1000
+    monkeypatch.setattr(settings, 'TOUCH_TARGET_MIN', win._btn_next.rect.h + 20)
+    monkeypatch.setattr(settings, 'TOUCH_COMPACT_MIN', win._btn_next.rect.w)
+    pos = (win._btn_next.rect.centerx, win._btn_next.rect.top - 5)
+    assert not win._btn_next.rect.collidepoint(pos)
+    assert win._btn_next.hit_rect().collidepoint(pos)
+    event = pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=pos)
+    assert win.update([event]) == 'done'
+
+
 def test_window_back_disabled_on_first_page():
     win = _window([{'lines': ['x']}, {'lines': ['y']}])
     win.update([])  # refresh button disabled state

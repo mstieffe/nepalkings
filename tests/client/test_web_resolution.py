@@ -34,3 +34,15 @@ def test_larger_mobile_viewport_can_use_middle_canvas_tier():
 
 def test_desktop_web_keeps_full_hd_when_it_fits():
     assert _select_web_resolution(1920, 1080, mobile=False)[:3] == (1920, 1080, None)
+
+
+def test_web_mobile_detection_includes_ipads_and_coarse_touch_devices():
+    repo_root = Path(__file__).resolve().parents[2]
+    launcher = (repo_root / 'nepal_kings/main.py').read_text()
+    keyboard = (repo_root / 'nepal_kings/utils/web_keyboard.py').read_text()
+
+    for source in (launcher, keyboard):
+        assert 'iPhone|iPad|iPod|Android' in source
+        assert "navigator.platform === 'MacIntel'" in source or (
+            "navigator.platform==='MacIntel'" in source)
+        assert "matchMedia('(pointer: coarse)')" in source

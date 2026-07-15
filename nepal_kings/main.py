@@ -451,10 +451,12 @@ if __name__ == '__main__':
                 return {w: vv? vv.width : window.innerWidth,
                         h: vv? vv.height: window.innerHeight,
                         dpr: window.devicePixelRatio||1,
-                        mobile: /iPhone|iPod|Android|webOS|BlackBerry|IEMobile|Opera Mini/i
+                        mobile: /iPhone|iPad|iPod|Android|webOS|BlackBerry|IEMobile|Opera Mini/i
                                 .test(navigator.userAgent)
                                 || (navigator.maxTouchPoints>0
-                                    && Math.min(window.innerWidth,window.innerHeight)<500)
+                                    && (navigator.platform==='MacIntel'
+                                        || (window.matchMedia
+                                            && window.matchMedia('(pointer: coarse)').matches)))
                        }
             })()""")
             _vw, _vh = int(_vp['w']), int(_vp['h'])

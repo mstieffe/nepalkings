@@ -19,21 +19,60 @@ overlay and button conventions.
 import pygame
 
 from config import settings
-from game.components.dialogue_box import _DlgButton
+from game.components.dialogue_box import (
+    _DlgButton,
+    _responsive_dialogue_button_metrics,
+)
 
 
-def _tutorial_rect(height_ratio):
-    """Dialogue geometry tuned for teaching windows, especially phone portrait."""
+def _tutorial_rect(height_ratio, presentation='modal'):
+    """Responsive teaching geometry.
+
+    ``map_sidecar`` leaves a useful part of the background map exposed: a
+    right-hand teaching rail in landscape and a bottom sheet in portrait.
+    Other tutorials remain centered and use nearly all of a phone canvas.
+    """
     _SW = settings.SCREEN_WIDTH
     _SH = settings.SCREEN_HEIGHT
-    small = _SW < 700 or getattr(settings, 'TOUCH_TARGET_MIN', 0) > 0
-    if small:
+    mobile = getattr(settings, 'TOUCH_TARGET_MIN', 0) > 0
+    small = _SW < 700 or mobile
+
+    if presentation == 'map_sidecar' and mobile:
+        if _SW >= _SH:
+            margin_x = max(10, int(0.018 * _SW))
+            margin_y = max(8, int(0.03 * _SH))
+            box_w = min(_SW - margin_x * 2, max(340, int(0.43 * _SW)))
+            box_h = min(_SH - margin_y * 2, int(0.94 * _SH))
+            return pygame.Rect(
+                _SW - margin_x - box_w,
+                (_SH - box_h) // 2,
+                box_w,
+                box_h,
+            )
+        margin_x = max(10, int(0.04 * _SW))
+        margin_y = max(10, int(0.025 * _SH))
+        box_w = _SW - margin_x * 2
+        box_h = min(int(0.48 * _SH), _SH - margin_y * 2)
+        return pygame.Rect(
+            margin_x,
+            _SH - margin_y - box_h,
+            box_w,
+            box_h,
+        )
+
+    if mobile:
+        margin_x = max(12, int((0.03 if _SW >= _SH else 0.05) * _SW))
+        width_ratio = 0.94 if _SW >= _SH else 0.90
+        box_w = min(int(width_ratio * _SW), _SW - margin_x * 2)
+    elif small:
         margin_x = max(12, int(0.05 * _SW))
         box_w = min(int(0.86 * _SW), _SW - margin_x * 2)
     else:
         box_w = settings.DIALOGUE_BOX_WIDTH
     box_h = int(height_ratio * _SH)
-    if small:
+    if mobile:
+        box_h = min(int(0.88 * _SH), max(box_h, int(0.86 * _SH)))
+    elif small:
         box_h = min(int(0.82 * _SH), max(box_h, int(0.72 * _SH)))
     x = (_SW - box_w) // 2
     y = max(int(0.02 * _SH), (_SH - box_h) // 2)
@@ -78,7 +117,8 @@ def _draw_vscrollbar(window, panel_rect, top, avail_h, content_h, scroll,
     pygame.draw.rect(bar, (*accent, 200), (0, thumb_y, w, thumb_h), border_radius=w // 2)
     window.blit(bar, (x, top))
     if obj is not None:
-        hit_pad = w  # widen the grab target for easier (and touch) dragging
+        touch_w = getattr(settings, 'TOUCH_COMPACT_MIN', 0) or 0
+        hit_pad = max(w, (touch_w - w + 1) // 2)
         obj._scroll_track_rect = pygame.Rect(
             x - hit_pad, top, w + 2 * hit_pad, avail_h)
         obj._scroll_track_top = top
@@ -153,9 +193,11 @@ def _apply_wheel_drag_scroll(events, content_rect, obj):
 
 
 class TutorialWindowDialogue:
-    def __init__(self, window, pages, *, title=None):
+    def __init__(self, window, pages, *, title=None, presentation='modal'):
         self.window = window
         self.title = title or ''
+        self.presentation = presentation
+        self.background_interactive = presentation == 'map_sidecar'
         self.pages = [p for p in (pages or []) if p]
         self.page_index = 0
         self._created_at = pygame.time.get_ticks()
@@ -173,7 +215,7 @@ class TutorialWindowDialogue:
         # Warm accent for headlines/captions; falls back to the title colour.
         self._accent = getattr(settings, 'TITLE_TEXT_COLOR', (240, 210, 140))
 
-        self.rect = _tutorial_rect(0.66)
+        self.rect = _tutorial_rect(0.66, presentation)
         self.x, self.y = self.rect.topleft
         box_w, box_h = self.rect.size
 
@@ -184,18 +226,24 @@ class TutorialWindowDialogue:
         pygame.draw.rect(self._panel, settings.DIALOGUE_BOX_BORDER_CLR,
                          self._panel.get_rect(),
                          settings.DIALOGUE_BOX_BORDER_WIDTH, border_radius=_corner_r)
-        self._overlay = pygame.Surface((_SW, _SH), pygame.SRCALPHA)
-        self._overlay.fill(settings.DIALOGUE_BOX_OVERLAY_CLR)
+        self._overlay = None
+        if not self.background_interactive:
+            self._overlay = pygame.Surface((_SW, _SH), pygame.SRCALPHA)
+            self._overlay.fill(settings.DIALOGUE_BOX_OVERLAY_CLR)
 
-        btn_w = settings.DIALOGUE_BOX_BTN_W
-        btn_h = settings.DIALOGUE_BOX_BTN_H
-        margin = settings.DIALOGUE_BOX_BTN_MARGIN_BOTTOM
+        btn_w, btn_h, margin = _responsive_dialogue_button_metrics()
+        side_margin = max(10, int(0.02 * _SW))
+        # Narrow sidecars must always keep both controls inside the panel.
+        btn_w = min(btn_w, max(1, (self.rect.w - side_margin * 3) // 2))
         btn_y = self.rect.bottom - btn_h - margin
         self._btn_back = _DlgButton(
-            window, self.rect.x + int(0.04 * _SW), btn_y, 'Back',
+            window, self.rect.x + side_margin, btn_y, 'Back',
             width=btn_w, height=btn_h)
+        next_x = self.rect.right - side_margin - btn_w
+        if len(self.pages) <= 1:
+            next_x = self.rect.centerx - btn_w // 2
         self._btn_next = _DlgButton(
-            window, self.rect.right - int(0.04 * _SW) - btn_w, btn_y, 'Next',
+            window, next_x, btn_y, 'Next',
             width=btn_w, height=btn_h)
         self._btn_y = btn_y
         self._btn_w = btn_w
@@ -230,6 +278,40 @@ class TutorialWindowDialogue:
     def _is_last(self):
         return self.page_index >= len(self.pages) - 1
 
+    def captures_event(self, event):
+        """Whether an event belongs to this window instead of its background.
+
+        Normal teaching windows are modal.  A map sidecar only owns pointer
+        gestures that start over its panel, leaving the exposed map usable.
+        An active content/scrollbar drag remains captured through release even
+        if the pointer strays outside the panel.
+        """
+        if not self.background_interactive:
+            return True
+        event_type = getattr(event, 'type', None)
+        pointer_types = {
+            pygame.MOUSEBUTTONDOWN,
+            pygame.MOUSEBUTTONUP,
+            pygame.MOUSEMOTION,
+            pygame.MOUSEWHEEL,
+        }
+        multi_gesture = getattr(pygame, 'MULTIGESTURE', None)
+        if multi_gesture is not None:
+            pointer_types.add(multi_gesture)
+        if event_type not in pointer_types:
+            return True
+        if (getattr(self, '_dragging', False)
+                or getattr(self, '_scrollbar_dragging', False)):
+            return True
+        if event_type == multi_gesture:
+            x = int(float(getattr(event, 'x', 0.5) or 0.5)
+                    * settings.SCREEN_WIDTH)
+            y = int(float(getattr(event, 'y', 0.5) or 0.5)
+                    * settings.SCREEN_HEIGHT)
+            return self.rect.collidepoint((x, y))
+        pos = getattr(event, 'pos', None) or pygame.mouse.get_pos()
+        return self.rect.collidepoint(pos)
+
     # ── update / draw ────────────────────────────────────────────────
     def _goto_page(self, idx):
         self.page_index = max(0, min(len(self.pages) - 1, idx))
@@ -253,10 +335,10 @@ class TutorialWindowDialogue:
                 if self._drag_moved:
                     self._drag_moved = False
                     continue
-                if not self._btn_back.disabled and self._btn_back.rect.collidepoint(pos):
+                if not self._btn_back.disabled and self._btn_back.collide(pos):
                     self._goto_page(self.page_index - 1)
                     return None
-                if self._btn_next.rect.collidepoint(pos):
+                if self._btn_next.collide(pos):
                     if self._is_last:
                         return 'done'
                     self._goto_page(self.page_index + 1)
@@ -278,14 +360,16 @@ class TutorialWindowDialogue:
             # border, so they skip the window's frame and get a larger box. They
             # are scaled in a single pass straight from the source — up to fill
             # the box, or down if oversized — for a bigger, crisper result.
-            max_w = self.rect.w - int(0.06 * _SW)
+            mobile = getattr(settings, 'TOUCH_TARGET_MIN', 0) > 0
+            max_w = self.rect.w - int((0.04 if mobile else 0.06) * _SW)
             max_h = int((0.34 if hero else 0.26) * _SH)
             ratio = min(max_w / img.get_width(), max_h / img.get_height())
             return pygame.transform.smoothscale(
                 img, (max(1, int(img.get_width() * ratio)),
                       max(1, int(img.get_height() * ratio))))
 
-        max_w = self.rect.w - int(0.14 * _SW)
+        mobile = getattr(settings, 'TOUCH_TARGET_MIN', 0) > 0
+        max_w = self.rect.w - int((0.06 if mobile else 0.14) * _SW)
         max_h = int((0.30 if hero else 0.22) * _SH)
         if img.get_width() > max_w or img.get_height() > max_h:
             ratio = min(max_w / img.get_width(), max_h / img.get_height())
@@ -416,7 +500,8 @@ class TutorialWindowDialogue:
     def draw(self):
         _SW = settings.SCREEN_WIDTH
         _SH = settings.SCREEN_HEIGHT
-        self.window.blit(self._overlay, (0, 0))
+        if self._overlay is not None:
+            self.window.blit(self._overlay, (0, 0))
         self.window.blit(self._panel, self.rect.topleft)
 
         # ── Header: small kicker + accent rule ──
@@ -558,9 +643,8 @@ class StarterSuitRevealDialogue:
         self._overlay = pygame.Surface((_SW, _SH), pygame.SRCALPHA)
         self._overlay.fill(settings.DIALOGUE_BOX_OVERLAY_CLR)
 
-        btn_w = settings.DIALOGUE_BOX_BTN_W
-        btn_h = settings.DIALOGUE_BOX_BTN_H
-        margin = settings.DIALOGUE_BOX_BTN_MARGIN_BOTTOM
+        btn_w, btn_h, margin = _responsive_dialogue_button_metrics()
+        btn_w = min(btn_w, max(1, self.rect.w - int(0.08 * _SW)))
         self._btn = _DlgButton(
             window, self.rect.centerx - btn_w // 2,
             self.rect.bottom - btn_h - margin, 'Reveal',
@@ -615,7 +699,7 @@ class StarterSuitRevealDialogue:
         for event in events:
             if event.type == pygame.MOUSEBUTTONUP and getattr(event, 'button', 0) == 1:
                 pos = getattr(event, 'pos', pygame.mouse.get_pos())
-                if self._btn.disabled or not self._btn.rect.collidepoint(pos):
+                if self._btn.disabled or not self._btn.collide(pos):
                     continue
                 if self._phase == 'done':
                     return 'done'

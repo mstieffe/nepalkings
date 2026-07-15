@@ -922,6 +922,7 @@ def test_kingdom_coach_finishes_on_first_land_card():
     assert step['id'] == 'kingdom_after_conquer_map'
     assert step['action'] == 'coach'
     assert step['rect'] == screen._map_viewport_rect
+    assert step['interactive_rects'] == [screen._map_viewport_rect]
     assert step['finish_tutorial_button'] is True
 
 
@@ -1179,6 +1180,43 @@ def test_menu_coach_click_step_allows_only_target_click():
     assert marked == ['start_first_duel']
 
 
+def test_coach_only_card_can_leave_kingdom_map_interactive(monkeypatch):
+    import pygame
+
+    screen, _ = _screen_with_gold(100)
+    viewport = pygame.Rect(100, 80, 500, 300)
+    step = {
+        'id': 'kingdom_after_conquer_map',
+        'rect': viewport,
+        'interactive_rects': [viewport],
+        'title': 'Your First Land',
+        'body': 'Explore the map.',
+        'action': 'coach',
+    }
+    screen._menu_coach_buttons = []
+
+    down = pygame.event.Event(
+        pygame.MOUSEBUTTONDOWN, button=1, pos=viewport.center)
+    up = pygame.event.Event(
+        pygame.MOUSEBUTTONUP, button=1, pos=viewport.center)
+    outside = pygame.event.Event(
+        pygame.MOUSEBUTTONDOWN, button=1, pos=(20, 20))
+    assert screen._handle_menu_coach_events([down], step) is False
+    assert screen._handle_menu_coach_events([up], step) is False
+    assert screen._handle_menu_coach_events([outside], step) is True
+
+    # The coach chrome itself still consumes taps; only exposed map does not.
+    screen._menu_coach_card_rect = pygame.Rect(200, 150, 180, 120)
+    card_down = pygame.event.Event(
+        pygame.MOUSEBUTTONDOWN, button=1, pos=(250, 180))
+    assert screen._handle_menu_coach_events([card_down], step) is True
+    screen._menu_coach_card_rect = None
+
+    monkeypatch.setattr(pygame.mouse, 'get_pos', lambda: viewport.center)
+    wheel = pygame.event.Event(pygame.MOUSEWHEEL, x=0, y=1)
+    assert screen._handle_menu_coach_events([wheel], step) is False
+
+
 def test_defence_coach_walks_setup_steps_after_tutorial():
     """Defence is dropped from the first session, so its coaching only appears
     on-demand once the conquer tutorial is finished: build → battle plan →
@@ -1336,6 +1374,120 @@ def test_kingdom_overview_window_shows_once_on_first_open():
     assert screen._kingdom_overview_dialogue is not None
     # The kingdom coach is suppressed while the window is up.
     assert screen._kingdom_coach_ready() is False
+
+
+def test_mobile_kingdom_overview_uses_interactive_map_sidecar():
+    screen = _kingdom_overview_screen(seen=[])
+    screen._mobile_ui = True
+    screen._maybe_show_kingdom_overview()
+
+    assert screen._kingdom_overview_dialogue.presentation == 'map_sidecar'
+    assert screen._kingdom_overview_dialogue.background_interactive is True
+    assert screen._kingdom_overview_dialogue._overlay is None
+
+
+def test_kingdom_overview_routes_exposed_pointer_events_to_map():
+    import pygame
+    from game.screens.kingdom_screen import KingdomScreen
+
+    screen = object.__new__(KingdomScreen)
+    dialogue_received = []
+    map_received = []
+    screen._kingdom_overview_dialogue = SimpleNamespace(
+        captures_event=lambda event: event.pos[0] >= 400,
+        update=lambda events: dialogue_received.extend(events),
+    )
+    screen._hex_map = SimpleNamespace(
+        _dragging=False,
+        handle_event=lambda event: map_received.append(event))
+    screen._begin_map_control_press = lambda pos: False
+    screen._drag_map_control_press = lambda pos: False
+    screen._finish_map_control_press = lambda pos: False
+
+    map_down = pygame.event.Event(
+        pygame.MOUSEBUTTONDOWN, button=1, pos=(120, 200))
+    panel_down = pygame.event.Event(
+        pygame.MOUSEBUTTONDOWN, button=1, pos=(600, 200))
+    assert screen._handle_kingdom_overview_events(
+        [map_down, panel_down]) is True
+    assert dialogue_received == [panel_down]
+    assert map_received == [map_down]
+
+    # A map drag that crosses beneath the sidecar must still receive motion and
+    # release so it cannot get stuck in a dragging state.
+    screen._hex_map._dragging = True
+    crossing_motion = pygame.event.Event(
+        pygame.MOUSEMOTION, pos=(600, 220), rel=(300, 20), buttons=(1, 0, 0))
+    screen._handle_kingdom_overview_events([crossing_motion])
+    assert map_received[-1] == crossing_motion
+
+
+def test_finishing_kingdom_overview_focuses_marked_land():
+    from game.screens.kingdom_screen import KingdomScreen
+
+    screen = object.__new__(KingdomScreen)
+    marked = []
+    focused = []
+    screen._kingdom_overview_dialogue = SimpleNamespace(
+        captures_event=lambda event: True,
+        update=lambda events: 'done',
+    )
+    screen._mark_menu_coach_seen = marked.append
+    screen._focus_recommended_tutorial_land = lambda: focused.append(True)
+
+    assert screen._handle_kingdom_overview_events([]) is True
+    assert screen._kingdom_overview_dialogue is None
+    assert marked == ['kingdom_overview_window']
+    assert focused == [True]
+
+
+def test_mobile_marked_land_focus_uses_phone_friendly_zoom_and_clears_selection():
+    from game.screens.kingdom_screen import KingdomScreen
+
+    screen = object.__new__(KingdomScreen)
+    tile = SimpleNamespace(land_id=42)
+    calls = []
+    screen._mobile_ui = True
+    screen._recommended_tutorial_land_id = 42
+    screen.state = SimpleNamespace(user_dict={'onboarding': {
+        'completed_steps': [],
+        'onboarding_skipped': False,
+    }})
+    screen._hex_map = SimpleNamespace(
+        selected_tile=tile,
+        focus_lands=lambda ids, **kwargs: (
+            calls.append((ids, kwargs)) or tile),
+    )
+
+    assert screen._focus_recommended_tutorial_land() is tile
+    assert calls == [([42], {'fit': True, 'max_zoom': 1.5})]
+    assert screen._hex_map.selected_tile is None
+
+
+def test_mobile_marked_land_accepts_tap_around_tiny_rendered_hex(monkeypatch):
+    import pygame
+    from config import settings
+    from game.screens.kingdom_screen import KingdomScreen
+
+    screen = object.__new__(KingdomScreen)
+    tile = SimpleNamespace(land_id=42)
+    tiny_hex = pygame.Rect(100, 100, 8, 8)
+    screen._mobile_ui = True
+    monkeypatch.setattr(settings, 'TOUCH_TARGET_MIN', 58)
+    monkeypatch.setattr(settings, 'TOUCH_ICON_MIN', 32)
+    screen._recommended_tutorial_land_id = 42
+    screen._map_viewport_rect = pygame.Rect(20, 20, 500, 300)
+    screen._hex_map = SimpleNamespace(
+        tiles=[tile],
+        land_screen_rect=lambda land_id: tiny_hex,
+    )
+    step = {'id': 'kingdom_pick_land'}
+    near = (tiny_hex.centerx + settings.TOUCH_TARGET_MIN // 2 - 2,
+            tiny_hex.centery)
+
+    assert not tiny_hex.collidepoint(near)
+    assert screen._recommended_tutorial_touch_tile(near, step) is tile
+    assert screen._recommended_tutorial_touch_tile((200, 200), step) is None
 
 
 def test_kingdom_overview_window_suppressed_after_seen():

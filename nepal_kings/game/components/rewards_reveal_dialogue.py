@@ -12,7 +12,10 @@ import math
 import pygame
 import textwrap
 
-from game.components.dialogue_box import _DlgButton
+from game.components.dialogue_box import (
+    _DlgButton,
+    _responsive_dialogue_button_metrics,
+)
 from game.core.input_state import get_pressed as _get_pressed
 
 
@@ -54,6 +57,16 @@ _REVEAL_DURATION_MS  = 350   # total time for one chest's reveal anim
 _HOVER_SCALE         = 1.08  # idle chest scale on hover
 _BOUNCE_PEAK         = 1.22  # peak scale mid-reveal
 _CHEST_FRAME_HEIGHT_FACTOR = 0.115  # of SCREEN_HEIGHT, approximate frame size
+
+
+def _touch_hit_rect(rect):
+    """Finger-sized hit target around a reward chest without changing art."""
+    target = getattr(settings, 'TOUCH_TARGET_MIN', 0) or 0
+    if target <= 0:
+        return rect
+    hit = rect.inflate(max(0, target - rect.w), max(0, target - rect.h))
+    hit.clamp_ip(pygame.Rect(0, 0, settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+    return hit
 
 
 class _ChestItem:
@@ -124,8 +137,13 @@ class RewardsRevealDialogueBox:
 
         _SW = settings.SCREEN_WIDTH
         _SH = settings.SCREEN_HEIGHT
-        small = _SW < 700 or getattr(settings, 'TOUCH_TARGET_MIN', 0) > 0
-        if small:
+        mobile = getattr(settings, 'TOUCH_TARGET_MIN', 0) > 0
+        small = _SW < 700 or mobile
+        if mobile:
+            margin_x = max(12, int((0.03 if _SW >= _SH else 0.05) * _SW))
+            width_ratio = 0.94 if _SW >= _SH else 0.90
+            box_w = min(int(width_ratio * _SW), _SW - margin_x * 2)
+        elif small:
             margin_x = max(12, int(0.05 * _SW))
             box_w = min(int(0.86 * _SW), _SW - margin_x * 2)
         else:
@@ -178,10 +196,15 @@ class RewardsRevealDialogueBox:
             [self.footer_when_done] if self.footer_when_done else [],
             _max_text_w,
         )
+        default_hint = 'Tap each chest to reveal your loot' if mobile \
+            else 'Click each chest to reveal your loot'
+        resolved_hint = hint_text or default_hint
+        if mobile and resolved_hint.startswith('Click '):
+            resolved_hint = 'Tap ' + resolved_hint[6:]
         self.hint_surfaces = [
             self.caption_font.render(line, True, settings.DIALOGUE_BOX_MSG_TEXT_CLR)
             for line in self._wrap_text(
-                hint_text or "Click each chest to reveal your loot",
+                resolved_hint,
                 self.caption_font,
                 _max_text_w,
             )
@@ -235,7 +258,10 @@ class RewardsRevealDialogueBox:
         summary_img_h = (self.summary_image.get_height() + int(0.008 * _SH)) \
             if self.summary_image else 0
         footer_h = len(self.footer_surfaces) * _line_h
-        btn_h = settings.DIALOGUE_BOX_BTN_H + _pad_bottom
+        _btn_w, _btn_visual_h, _btn_margin = _responsive_dialogue_button_metrics()
+        btn_h = _btn_visual_h + _btn_margin
+        self._btn_visual_h = _btn_visual_h
+        self._btn_margin = _btn_margin
 
         block_gap = int(0.020 * _SH)
         self._block_gap = block_gap
@@ -276,11 +302,11 @@ class RewardsRevealDialogueBox:
         self._glow_surf = self._build_glow(frame_size)
 
         # Place the OK button (single action). Disabled until all revealed.
-        _btn_w = settings.DIALOGUE_BOX_BTN_W
+        _btn_w = min(_btn_w, max(1, self.rect.w - int(0.08 * _SW)))
         first_x = self.rect.centerx - _btn_w // 2
         btn_y = self.rect.bottom - btn_h + int(0.004 * _SH)
         self._ok_button = _DlgButton(window, first_x, btn_y, 'ok',
-                                     width=_btn_w, height=settings.DIALOGUE_BOX_BTN_H)
+                                     width=_btn_w, height=_btn_visual_h)
 
         # Position chest rects (recomputed once now; centres on x).
         self._description_top = None
@@ -453,8 +479,8 @@ class RewardsRevealDialogueBox:
         # Footer message — only once all revealed
         if self.footer_surfaces and self._all_revealed(now):
             fy = (self.rect.bottom -
-                  settings.DIALOGUE_BOX_BTN_H -
-                  settings.DIALOGUE_BOX_BTN_MARGIN_BOTTOM -
+                  self._btn_visual_h -
+                  self._btn_margin -
                   int(0.018 * _SH) -
                   len(self.footer_surfaces) * self._line_h)
             for i, surf in enumerate(self.footer_surfaces):
@@ -572,13 +598,14 @@ class RewardsRevealDialogueBox:
         for event in events:
             if event.type == pygame.MOUSEBUTTONUP and getattr(event, 'button', 0) == 1:
                 # OK button (only if not disabled)
-                if not self._ok_button.disabled and self._ok_button.collide():
+                if (not self._ok_button.disabled
+                        and self._ok_button.collide(event.pos)):
                     return 'ok'
                 # Chest clicks
                 for item in self.items:
                     if item.revealed or item.reveal_started_at is not None:
                         continue
-                    if item.rect.collidepoint(event.pos):
+                    if _touch_hit_rect(item.rect).collidepoint(event.pos):
                         item.reveal_started_at = now
                         self._last_revealed_item = item
                         from utils import sound
