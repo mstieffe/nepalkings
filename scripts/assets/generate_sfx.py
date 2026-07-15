@@ -184,8 +184,9 @@ MIXKIT_EFFECTS = {
         'sources': ('mixkit-game-loot-win-2013.wav',),
         'filter': (
             '[0:a]atrim=start=0.10:end=1.03,asetpts=PTS-STARTPTS,'
-            'afade=t=out:st=0.78:d=0.15,volume=2dB,'
-            'alimiter=limit=0.7:attack=3:release=30,'
+            'afade=t=in:st=0:d=0.03,lowpass=f=5600:p=2,'
+            'volume=2dB,alimiter=limit=0.7:attack=5:release=40,'
+            'afade=t=out:st=0.78:d=0.15,'
             'pan=mono|c0=0.5*c0+0.5*c1,aresample=44100[out]'),
     },
     'quest_claim': {

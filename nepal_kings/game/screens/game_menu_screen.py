@@ -616,7 +616,8 @@ class GameMenuScreen(MenuScreenMixin, Screen):
                 welcome_gift_lines(),
                 items,
                 footer_when_done='Added to your collection!',
-                hint_text='Click each box to reveal your gift.',
+                hint_text='Open each chest to reveal your gift.',
+                kicker='Welcome to Nepal Kings',
             )
         return None
 

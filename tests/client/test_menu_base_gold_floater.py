@@ -1589,3 +1589,28 @@ def test_welcome_intro_uses_supplied_conquer_image_without_extra_frame():
     assert image is td.conquer_start_image()
     assert image is td.conquer_start_image(int(0.26 * settings.SCREEN_HEIGHT))
     assert image.get_width() > 1 and image.get_height() > 1
+
+
+def test_welcome_gift_uses_tutorial_header_hierarchy():
+    import pygame
+
+    _ensure_pygame_display()
+    from config import settings
+    from game.screens.game_menu_screen import GameMenuScreen
+
+    screen = object.__new__(GameMenuScreen)
+    screen.window = pygame.Surface(
+        (settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+    screen.state = SimpleNamespace(user_dict={'onboarding': {
+        'starter_present': {'starter_defaults': {
+            'gold': 2000,
+            'booster_packs': 2,
+            'booster_packs_side': 1,
+        }},
+    }})
+
+    dialogue = screen._build_welcome_stage(1, 'Maya')
+
+    assert dialogue.title == 'Your Welcome Gift'
+    assert dialogue.kicker == 'Welcome to Nepal Kings'
+    assert dialogue._header_h > dialogue.title_font.get_height()

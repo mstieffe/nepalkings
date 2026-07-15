@@ -2,6 +2,7 @@
 # See LICENSE file in the project root for full license information.
 """Tests for the SFX engine (utils/sound.py)."""
 
+import array
 import json
 import os
 import sys
@@ -219,6 +220,22 @@ def test_mixkit_effects_are_high_quality_runtime_edits():
             ) else 1
             assert wf.getnchannels() == expected_channels, filename
             assert duration <= max_duration + 0.01, filename
+
+
+def test_reward_reveal_is_soft_enough_for_repeated_chest_opening():
+    filename, gain = sound.EVENTS['reward_reveal']
+    assert filename == 'reward_reveal.wav'
+    assert gain == pytest.approx(0.8)
+
+    path = os.path.join(sound._sound_dir(), filename)
+    with wave.open(path, 'rb') as wf:
+        samples = array.array('h', wf.readframes(wf.getnframes()))
+    if sys.byteorder != 'little':
+        samples.byteswap()
+
+    # Leave meaningful transient headroom; the previous cue peaked close to
+    # full scale and sounded sharp when several reward boxes were opened.
+    assert max(abs(sample) for sample in samples) <= int(32767 * 0.65)
 
 
 def test_downloaded_card_and_build_cues_are_authored_variants():

@@ -115,7 +115,8 @@ class RewardsRevealDialogueBox:
     def __init__(self, window, title, icon, summary_lines, items,
                  footer_when_done="All loot collected!",
                  summary_image=None,
-                 hint_text=None):
+                 hint_text=None,
+                 kicker=None):
         """
         :param summary_lines: list[str] — always-visible text shown above the
             chest row (e.g. "Stake winnings: +90 gold" or "Stake lost: -45 gold").
@@ -128,9 +129,13 @@ class RewardsRevealDialogueBox:
         :param summary_image: optional pygame.Surface — a single icon
             (typically the gold/gold_lost image) shown centered between the
             title and the summary_lines.
+        :param kicker: optional small uppercase label above the title. This is
+            used by onboarding rewards to match the two-level header hierarchy
+            of the other tutorial windows.
         """
         self.window = window
         self.title = title or ""
+        self.kicker = kicker or ""
         self.summary_lines = list(summary_lines or [])
         self.footer_when_done = footer_when_done
         self._created_at = pygame.time.get_ticks()
@@ -152,6 +157,8 @@ class RewardsRevealDialogueBox:
         self.font = settings.get_font(settings.FONT_SIZE_DIALOGUE_BOX)
         self.title_font = settings.get_font(
             settings.FONT_SIZE_TITLE_DIALOGUE_BOX, bold=True)
+        self.kicker_font = settings.get_font(
+            getattr(settings, 'FS_SMALL', settings.FONT_SIZE_DIALOGUE_BOX))
         self.caption_font = settings.get_font(settings.FS_TINY)
         self.description_font = settings.get_font(settings.FS_SMALL)
 
@@ -252,8 +259,25 @@ class RewardsRevealDialogueBox:
         self._description_h = description_h
         self._desc_max_w = box_w - int(0.10 * _SW)
 
-        title_h = (self.title_font.get_height() + int(0.016 * _SH)) if self.title else 0
-        sep_extra = int(0.018 * _SH) if self.title else 0
+        if self.title and self.kicker:
+            # Same visual rhythm as TutorialWindowDialogue: small contextual
+            # label, short rule, then the larger page headline.
+            header_h = (
+                self.kicker_font.get_height()
+                + int(0.010 * _SH)
+                + int(0.018 * _SH)
+                + self.title_font.get_height()
+                + int(0.024 * _SH)
+            )
+        elif self.title:
+            header_h = (
+                self.title_font.get_height()
+                + int(0.016 * _SH)
+                + int(0.018 * _SH)
+            )
+        else:
+            header_h = 0
+        self._header_h = header_h
         summary_h = len(self.summary_surfaces) * _line_h
         summary_img_h = (self.summary_image.get_height() + int(0.008 * _SH)) \
             if self.summary_image else 0
@@ -267,7 +291,7 @@ class RewardsRevealDialogueBox:
         self._block_gap = block_gap
         self._summary_img_h = summary_img_h
         self.box_height = (
-            _pad_top + title_h + sep_extra +
+            _pad_top + header_h +
             summary_img_h +
             summary_h + (block_gap if (summary_h or summary_img_h) else 0) +
             chest_block_h + description_h + (block_gap if footer_h else 0) +
@@ -384,11 +408,9 @@ class RewardsRevealDialogueBox:
 
         # Compute starting y once the rest of the layout is known.
         _pad_top = settings.DIALOGUE_BOX_TEXT_MARGIN_Y
-        title_h = (self.title_font.get_height() + int(0.016 * _SH)) if self.title else 0
-        sep_extra = int(0.018 * _SH) if self.title else 0
         summary_h = len(self.summary_surfaces) * self._line_h
 
-        current_y = (self.rect.y + _pad_top + title_h + sep_extra +
+        current_y = (self.rect.y + _pad_top + self._header_h +
                      self._summary_img_h +
                      summary_h +
                      (self._block_gap if (summary_h or self._summary_img_h) else 0))
@@ -418,8 +440,29 @@ class RewardsRevealDialogueBox:
 
         current_y = self.rect.y + settings.DIALOGUE_BOX_TEXT_MARGIN_Y
 
-        # Title + icons + separator
+        # Title + icons + separator. Tutorial rewards can opt into the same
+        # kicker / headline hierarchy as the paginated teaching windows.
         if self.title:
+            if self.kicker:
+                kicker_surface = self.kicker_font.render(
+                    self.kicker.upper(), True, settings.TITLE_TEXT_COLOR)
+                self.window.blit(
+                    kicker_surface,
+                    kicker_surface.get_rect(
+                        center=(self.rect.centerx,
+                                current_y + kicker_surface.get_height() // 2)),
+                )
+                current_y += kicker_surface.get_height() + int(0.010 * _SH)
+                rule_w = int(self.rect.w * 0.18)
+                pygame.draw.line(
+                    self.window,
+                    settings.DIALOGUE_BOX_SEP_CLR,
+                    (self.rect.centerx - rule_w // 2, current_y),
+                    (self.rect.centerx + rule_w // 2, current_y),
+                    2,
+                )
+                current_y += int(0.018 * _SH)
+
             title_surface = self.title_font.render(
                 self.title, True, settings.TITLE_TEXT_COLOR)
             title_rect = title_surface.get_rect(
@@ -434,12 +477,15 @@ class RewardsRevealDialogueBox:
                     self.window.blit(self.icon,
                                      (title_rect.right + icon_gap, icon_y))
             self.window.blit(title_surface, title_rect)
-            current_y += title_surface.get_height() + int(0.016 * _SH)
-            sep_x1 = self.rect.x + int(0.04 * _SW)
-            sep_x2 = self.rect.right - int(0.04 * _SW)
-            pygame.draw.line(self.window, settings.DIALOGUE_BOX_SEP_CLR,
-                             (sep_x1, current_y), (sep_x2, current_y), 1)
-            current_y += int(0.018 * _SH)
+            if self.kicker:
+                current_y += title_surface.get_height() + int(0.024 * _SH)
+            else:
+                current_y += title_surface.get_height() + int(0.016 * _SH)
+                sep_x1 = self.rect.x + int(0.04 * _SW)
+                sep_x2 = self.rect.right - int(0.04 * _SW)
+                pygame.draw.line(self.window, settings.DIALOGUE_BOX_SEP_CLR,
+                                 (sep_x1, current_y), (sep_x2, current_y), 1)
+                current_y += int(0.018 * _SH)
 
         # Summary image (e.g. gold pile centered above the text)
         if self.summary_image is not None:
@@ -451,7 +497,11 @@ class RewardsRevealDialogueBox:
         # Summary lines (always visible — stake winnings/losses)
         for i, surf in enumerate(self.summary_surfaces):
             ly = current_y + i * self._line_h
-            self.window.blit(surf, surf.get_rect(center=(self.rect.centerx, ly)))
+            self.window.blit(
+                surf,
+                surf.get_rect(
+                    center=(self.rect.centerx, ly + surf.get_height() // 2)),
+            )
         if self.summary_surfaces:
             current_y += len(self.summary_surfaces) * self._line_h + self._block_gap
         elif self.summary_image is not None:

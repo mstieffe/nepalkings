@@ -85,7 +85,8 @@ def render(width: int, height: int, ui_scale: str, mobile: bool) -> None:
             'booster_packs_side': 1, 'maps': 0,
         }),
         footer_when_done='Added to your collection!',
-        hint_text='Click each box to reveal your gift.')
+        hint_text='Open each chest to reveal your gift.',
+        kicker='Welcome to Nepal Kings')
     shot('welcome-gift', gift)
 
     reveal = StarterSuitRevealDialogue(surf, 'Hearts')

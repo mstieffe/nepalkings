@@ -53,7 +53,9 @@ EVENTS = {
     'booster_open':   (('booster_open.wav', 'booster_open_2.wav'), 1.0),
     'booster_reveal': ('booster_reveal.wav', 0.9),
     'rare_card_reveal': ('rare_card_reveal.wav', 0.9),
-    'reward_reveal':  ('reward_reveal.wav', 0.9),
+    # Reward chests are often opened several times in quick succession, so
+    # keep this gentler than one-off celebration cues.
+    'reward_reveal':  ('reward_reveal.wav', 0.8),
     'quest_claim':    ('quest_claim.wav', 0.9),
     'craft_success':  ('craft_success.wav', 1.0),
     'figure_place':   (('figure_place.wav', 'figure_place_2.wav'), 1.0),
