@@ -700,6 +700,18 @@ function show_infobox() {
             if (window.nk_audio_resume) window.nk_audio_resume();
         }
 
+        // SDL installs document-level keyboard handlers which call
+        // preventDefault().  That is correct while the canvas owns the
+        // keyboard, but it prevents Safari from applying virtual-keyboard
+        // characters to a focused HTML input.  Keep those events inside the
+        // native field; stopping propagation does not cancel text insertion.
+        function keepKeyboardEventLocal(event){
+            event.stopPropagation();
+            if (event.stopImmediatePropagation) {
+                event.stopImmediatePropagation();
+            }
+        }
+
         function focusCanvas(){
             var canvas = document.getElementById('canvas');
             if (!canvas || !canvas.focus) return;
@@ -779,11 +791,16 @@ function show_infobox() {
                 record.dirty = true;
                 resumeAudio();
             });
+            ['keypress', 'keyup'].forEach(function(eventName){
+                input.addEventListener(eventName, keepKeyboardEventLocal);
+            });
             input.addEventListener('keydown', function(event){
-                if (event.key !== 'Enter') return;
-                event.preventDefault();
-                input.blur();
-                focusCanvas();
+                keepKeyboardEventLocal(event);
+                if (event.key === 'Enter') {
+                    event.preventDefault();
+                    input.blur();
+                    focusCanvas();
+                }
             });
             layoutField(record);
             return true;

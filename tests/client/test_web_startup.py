@@ -227,6 +227,11 @@ def test_web_uses_native_audio_manager_and_publishes_direct_assets():
     assert 'id="nk-keyboard-layer"' in index_html
     assert 'id="nk-keyboard-overlay"' not in index_html
     assert 'id="nk-keyboard-done"' not in index_html
+    assert 'function keepKeyboardEventLocal(event)' in index_html
+    assert 'event.stopPropagation();' in index_html
+    assert 'event.stopImmediatePropagation();' in index_html
+    assert "['keypress', 'keyup'].forEach" in index_html
+    assert "input.addEventListener('keydown'" in index_html
     assert "['click', 'pointerup', 'touchend', 'keydown', 'focusin']" in index_html
     assert login_screen.count('web_overlay=True') == 2
     assert '_register_mobile_web_inputs()' in login_screen
