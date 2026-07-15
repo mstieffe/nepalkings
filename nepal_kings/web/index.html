@@ -230,67 +230,30 @@ function show_infobox() {
             font-weight: 600;
         }
 
-        /* ── Non-blocking mobile text input ──────────────── */
-        #nk-keyboard-overlay[hidden] { display: none !important; }
-        #nk-keyboard-overlay {
+        /* Native inputs sit invisibly over the matching canvas fields. A real
+           input receives the tap directly, which reliably opens iOS keyboards
+           without adding a second dialogue on top of the login form. */
+        #nk-keyboard-layer {
             position: fixed;
             inset: 0;
-            z-index: 300000;
-            display: flex;
-            align-items: flex-start;
-            justify-content: center;
-            padding: max(12px, env(safe-area-inset-top, 0px)) 16px 16px;
-            background: rgba(18, 16, 13, .42);
+            z-index: 20;
+            pointer-events: none;
         }
-        #nk-keyboard-panel {
-            display: grid;
-            grid-template-columns: minmax(150px, 1fr) auto auto;
-            gap: 10px;
-            align-items: end;
-            width: min(92vw, 640px);
-            padding: 12px;
-            border: 1px solid #78694e;
-            border-radius: 10px;
-            background: rgba(35, 31, 26, .98);
-            box-shadow: 0 8px 28px rgba(0, 0, 0, .45);
-        }
-        #nk-keyboard-field-wrap {
-            display: flex;
-            min-width: 0;
-            flex-direction: column;
-            gap: 5px;
-        }
-        #nk-keyboard-label {
-            color: #dcc88c;
-            font-size: 13px;
-            font-weight: 600;
-            letter-spacing: .04em;
-            text-transform: capitalize;
-        }
-        #nk-keyboard-input {
-            min-width: 0;
-            height: 44px;
-            padding: 8px 10px;
-            border: 1px solid #c5ad71;
-            border-radius: 7px;
+        .nk-canvas-input {
+            position: fixed;
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            border: 0;
             outline: none;
-            background: #32303d;
-            color: #f0eadc;
-            font: 16px/1.2 'Segoe UI', Arial, sans-serif;
-        }
-        #nk-keyboard-panel button {
-            height: 44px;
-            min-width: 74px;
-            padding: 0 14px;
-            border: 1px solid #8f7b53;
-            border-radius: 7px;
-            background: #443b2d;
-            color: #ebe1d0;
-            font: 600 15px/1 'Segoe UI', Arial, sans-serif;
-        }
-        #nk-keyboard-done {
-            border-color: #d0b75e !important;
-            background: #695824 !important;
+            appearance: none;
+            background: transparent;
+            color: transparent;
+            caret-color: transparent;
+            font-size: 16px;
+            opacity: .01;
+            pointer-events: auto;
+            touch-action: manipulation;
         }
 
         /* ── Landscape prompt (portrait overlay) ──────────── */
@@ -393,18 +356,8 @@ function show_infobox() {
         <div class="hint">Nepal Kings is best played in landscape mode</div>
     </div>
 
-    <!-- A regular HTML input keeps Web Audio alive while the mobile keyboard
-         is open. window.prompt() is modal and interrupts iOS playback. -->
-    <div id="nk-keyboard-overlay" hidden>
-        <form id="nk-keyboard-panel" autocomplete="on">
-            <div id="nk-keyboard-field-wrap">
-                <label id="nk-keyboard-label" for="nk-keyboard-input">Text</label>
-                <input id="nk-keyboard-input" type="text" maxlength="64">
-            </div>
-            <button id="nk-keyboard-cancel" type="button">Cancel</button>
-            <button id="nk-keyboard-done" type="submit">Done</button>
-        </form>
-    </div>
+    <!-- Direct touch targets for canvas text fields are created here. -->
+    <div id="nk-keyboard-layer"></div>
 
     <!-- pygbag required elements (hidden) -->
     <div id="transfer" hidden>
@@ -736,17 +689,12 @@ function show_infobox() {
         });
     })();
 
-    // Native mobile text-entry bridge. Unlike window.prompt(), this does not
-    // block the page or interrupt the looping Web Audio graph.
+    // Canvas-aligned native text fields receive mobile taps directly. This is
+    // what lets iOS open its keyboard without a modal or a second visible UI.
     (function(){
-        var overlay = document.getElementById('nk-keyboard-overlay');
-        var form = document.getElementById('nk-keyboard-panel');
-        var labelNode = document.getElementById('nk-keyboard-label');
-        var input = document.getElementById('nk-keyboard-input');
-        var cancel = document.getElementById('nk-keyboard-cancel');
-        var done = document.getElementById('nk-keyboard-done');
-        var state = null;
-        var closing = false;
+        var layer = document.getElementById('nk-keyboard-layer');
+        var fields = Object.create(null);
+        var enabled = true;
 
         function resumeAudio(){
             if (window.nk_audio_resume) window.nk_audio_resume();
@@ -759,90 +707,140 @@ function show_infobox() {
             catch (error) { canvas.focus(); }
         }
 
-        function finish(cancelled){
-            if (!state || state.done) return;
-            state.value = cancelled ? state.original : input.value;
-            state.cancelled = !!cancelled;
-            state.done = true;
-            closing = true;
-            overlay.hidden = true;
-            input.blur();
-            closing = false;
-            focusCanvas();
-            resumeAudio();
-        }
-
-        window.nk_keyboard_open = function(label, current, isPassword, maxLength){
-            if (!overlay || !form || !input) return false;
-            label = String(label || 'text');
-            current = String(current || '');
-            state = {
-                label: label,
-                original: current,
-                value: current,
-                done: false,
-                cancelled: false
-            };
-            labelNode.textContent = label;
+        function configureInput(record, current, isPassword, maxLength){
+            var input = record.input;
             input.type = isPassword ? 'password' : 'text';
             input.autocomplete = isPassword ? 'current-password' : 'username';
+            input.inputMode = 'text';
             input.autocapitalize = 'none';
             input.spellcheck = false;
             input.maxLength = Math.max(1, Number(maxLength) || 64);
-            input.value = current;
-            overlay.hidden = false;
+            input.value = String(current || '');
+        }
+
+        function layoutField(record){
+            var canvas = document.getElementById('canvas');
+            if (!canvas || canvas.width <= 1 || canvas.height <= 1) return;
+            var bounds = canvas.getBoundingClientRect();
+            var scaleX = bounds.width / canvas.width;
+            var scaleY = bounds.height / canvas.height;
+            record.input.style.left = (bounds.left + record.x * scaleX) + 'px';
+            record.input.style.top = (bounds.top + record.y * scaleY) + 'px';
+            record.input.style.width = Math.max(1, record.w * scaleX) + 'px';
+            record.input.style.height = Math.max(1, record.h * scaleY) + 'px';
+            record.input.style.display = enabled ? 'block' : 'none';
+        }
+
+        function layoutAll(){
+            Object.keys(fields).forEach(function(label){
+                layoutField(fields[label]);
+            });
+        }
+
+        window.nk_keyboard_register = function(
+                label, current, isPassword, maxLength, x, y, width, height){
+            if (!layer) return false;
+            label = String(label || 'text');
+            if (fields[label]) fields[label].input.remove();
+
+            var input = document.createElement('input');
+            input.className = 'nk-canvas-input';
+            input.id = 'nk-canvas-input-' + label.replace(/[^A-Za-z0-9_-]/g, '-');
+            input.setAttribute('aria-label', label);
+            var record = {
+                label: label,
+                input: input,
+                x: Number(x) || 0,
+                y: Number(y) || 0,
+                w: Number(width) || 1,
+                h: Number(height) || 1,
+                active: false,
+                done: false,
+                dirty: false
+            };
+            configureInput(record, current, isPassword, maxLength);
+            fields[label] = record;
+            layer.appendChild(input);
+
+            input.addEventListener('pointerdown', resumeAudio);
+            input.addEventListener('focus', function(){
+                record.active = true;
+                record.done = false;
+                record.dirty = true;
+                resumeAudio();
+            });
+            input.addEventListener('input', function(){
+                record.dirty = true;
+                resumeAudio();
+            });
+            input.addEventListener('blur', function(){
+                record.active = false;
+                record.done = true;
+                record.dirty = true;
+                resumeAudio();
+            });
+            input.addEventListener('keydown', function(event){
+                if (event.key !== 'Enter') return;
+                event.preventDefault();
+                input.blur();
+                focusCanvas();
+            });
+            layoutField(record);
+            return true;
+        };
+
+        window.nk_keyboard_focus = function(label, current, isPassword, maxLength){
+            var record = fields[String(label)];
+            if (!record || !enabled) return false;
+            configureInput(record, current, isPassword, maxLength);
             resumeAudio();
-            try { input.focus({preventScroll: true}); }
-            catch (error) { input.focus(); }
-            try { input.setSelectionRange(input.value.length, input.value.length); }
-            catch (error) {}
+            try { record.input.focus({preventScroll: true}); }
+            catch (error) { record.input.focus(); }
+            try {
+                var end = record.input.value.length;
+                record.input.setSelectionRange(end, end);
+            } catch (error) {}
             return true;
         };
 
         window.nk_keyboard_poll = function(label){
-            if (!state || state.label !== String(label)) return null;
-            if (!state.done) state.value = input.value;
+            var record = fields[String(label)];
+            if (!record || (!record.dirty && !record.active)) return null;
             var snapshot = {
-                value: state.value,
-                done: state.done,
-                cancelled: state.cancelled
+                value: record.input.value,
+                active: record.active,
+                done: record.done
             };
-            if (state.done) state = null;
+            record.dirty = false;
+            record.done = false;
             return snapshot;
         };
 
-        input.addEventListener('input', function(){
-            if (state && !state.done) state.value = input.value;
-            resumeAudio();
-        });
-        input.addEventListener('keydown', function(event){
-            if (event.key !== 'Enter') return;
-            event.preventDefault();
-            finish(false);
-        });
-        input.addEventListener('blur', function(){
-            if (closing) return;
-            setTimeout(function(){
-                if (state && !state.done && document.activeElement !== input) {
-                    finish(false);
-                }
-            }, 0);
-        });
-        form.addEventListener('submit', function(event){
-            event.preventDefault();
-            finish(false);
-        });
-        cancel.addEventListener('pointerdown', function(event){
-            event.preventDefault();
-            finish(true);
-        });
-        done.addEventListener('pointerdown', function(event){
-            event.preventDefault();
-            finish(false);
-        });
-        overlay.addEventListener('pointerdown', function(event){
-            if (event.target === overlay) finish(true);
-        });
+        window.nk_keyboard_set_enabled = function(value){
+            enabled = !!value;
+            Object.keys(fields).forEach(function(label){
+                var input = fields[label].input;
+                input.disabled = !enabled;
+                if (!enabled && document.activeElement === input) input.blur();
+            });
+            layoutAll();
+            return true;
+        };
+
+        window.nk_keyboard_clear = function(){
+            Object.keys(fields).forEach(function(label){
+                fields[label].input.remove();
+            });
+            fields = Object.create(null);
+            return true;
+        };
+
+        window.addEventListener('resize', layoutAll);
+        window.addEventListener('orientationchange', layoutAll);
+        if (window.visualViewport) {
+            window.visualViewport.addEventListener('resize', layoutAll);
+            window.visualViewport.addEventListener('scroll', layoutAll);
+        }
     })();
 
     window.nk_prepare_audio_gate = function(){

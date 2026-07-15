@@ -40,29 +40,51 @@ def is_mobile():
     return _is_mobile
 
 
-def open_input(label='', current='', is_password=False, max_length=64):
-    """Open the page's non-blocking native input overlay.
-
-    Returns ``False`` when the current web shell does not publish the bridge,
-    allowing callers to fall back to ``prompt()``.
-    """
+def _js_call(function_name, *values):
+    """Call one page-level keyboard bridge function."""
     if not _is_web:
         return False
     try:
         import embed as _embed
-        args = ','.join(json.dumps(value, separators=(',', ':')) for value in (
-            str(label), str(current), bool(is_password), int(max_length)))
+        args = ','.join(
+            json.dumps(value, separators=(',', ':')) for value in values)
         return bool(_embed.js(
-            f"window.nk_keyboard_open&&window.nk_keyboard_open({args})"))
+            f"window.{function_name}&&window.{function_name}({args})"))
     except Exception:
         return False
+
+
+def register_input(label, current, is_password, max_length, rect):
+    """Place an invisible native input directly over a canvas field."""
+    return _js_call(
+        'nk_keyboard_register',
+        str(label), str(current), bool(is_password), int(max_length),
+        int(rect.x), int(rect.y), int(rect.w), int(rect.h),
+    )
+
+
+def set_inputs_enabled(value):
+    """Show or hide registered canvas-aligned input targets."""
+    return _js_call('nk_keyboard_set_enabled', bool(value))
+
+
+def clear_inputs():
+    """Remove all registered input targets from the page."""
+    return _js_call('nk_keyboard_clear')
+
+
+def open_input(label='', current='', is_password=False, max_length=64):
+    """Focus a registered canvas-aligned native input."""
+    return _js_call(
+        'nk_keyboard_focus',
+        str(label), str(current), bool(is_password), int(max_length),
+    )
 
 
 def poll_input(label=''):
     """Return the latest overlay state for *label*, or ``None``.
 
-    The returned mapping contains ``value``, ``done``, and ``cancelled``.
-    Completed state is consumed by the page bridge after this poll.
+    The returned mapping contains ``value``, ``active``, and ``done``.
     """
     if not _is_web:
         return None

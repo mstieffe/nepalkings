@@ -220,11 +220,16 @@ def test_web_uses_native_audio_manager_and_publishes_direct_assets():
     assert 'window.nk_audio_play_music' in index_html
     assert 'window.nk_audio_resume' in index_html
     assert 'source.loop = true;' in index_html
-    assert 'window.nk_keyboard_open' in index_html
+    assert 'window.nk_keyboard_register' in index_html
+    assert 'window.nk_keyboard_focus' in index_html
     assert 'window.nk_keyboard_poll' in index_html
-    assert 'id="nk-keyboard-input"' in index_html
+    assert 'window.nk_keyboard_set_enabled' in index_html
+    assert 'id="nk-keyboard-layer"' in index_html
+    assert 'id="nk-keyboard-overlay"' not in index_html
+    assert 'id="nk-keyboard-done"' not in index_html
     assert "['click', 'pointerup', 'touchend', 'keydown', 'focusin']" in index_html
     assert login_screen.count('web_overlay=True') == 2
+    assert '_register_mobile_web_inputs()' in login_screen
     assert 'field_username.sync_web_input()' in login_screen
     assert 'field_pwd.sync_web_input()' in login_screen
     assert 'WEB_AUDIO_STAGE=' in build_script

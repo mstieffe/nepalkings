@@ -208,6 +208,8 @@ class LoginScreen(Screen):
                                      max_length=MAX_PASSWORD_LENGTH,
                                      width=_field_w, height=_field_h,
                                      web_overlay=True)
+        self._web_inputs_enabled = None
+        self._register_mobile_web_inputs()
         y += _field_h + _legal_gap
 
         # Legal acceptance for registration only.
@@ -863,6 +865,7 @@ class LoginScreen(Screen):
     def _apply_login_response(self, response_data):
         self.state.set_msg(response_data.get('message', ''))
         if response_data.get('success'):
+            self._clear_mobile_web_inputs()
             # Store auth token for all subsequent requests
             token = response_data.get('token')
             if token:
@@ -885,6 +888,7 @@ class LoginScreen(Screen):
     def _apply_register_response(self, response_data):
         self.state.set_msg(response_data.get('message', ''))
         if response_data.get('success'):
+            self._clear_mobile_web_inputs()
             # Store auth token for all subsequent requests
             token = response_data.get('token')
             if token:
@@ -903,6 +907,38 @@ class LoginScreen(Screen):
         # rejected value (e.g. pick another username), not start over.
 
     # ── Events ──────────────────────────────────────────────────────
+
+    def _register_mobile_web_inputs(self):
+        """Align native mobile inputs with the two visible canvas fields."""
+        if not (_IS_WEB and self._mobile_ui):
+            return
+        from utils.web_keyboard import clear_inputs, register_input
+        clear_inputs()
+        for field in (self.field_username, self.field_pwd):
+            register_input(
+                field.name,
+                field.content,
+                field.pwd,
+                field.max_length,
+                field.rect,
+            )
+
+    def _set_mobile_web_inputs_enabled(self, value):
+        if not (_IS_WEB and self._mobile_ui):
+            return
+        value = bool(value)
+        if self._web_inputs_enabled == value:
+            return
+        from utils.web_keyboard import set_inputs_enabled
+        set_inputs_enabled(value)
+        self._web_inputs_enabled = value
+
+    def _clear_mobile_web_inputs(self):
+        if not (_IS_WEB and self._mobile_ui):
+            return
+        from utils.web_keyboard import clear_inputs
+        clear_inputs()
+        self._web_inputs_enabled = None
 
     def handle_events(self, events):
         super().handle_events(events)
@@ -941,8 +977,10 @@ class LoginScreen(Screen):
 
     def update(self, events):
         super().update()
-        # A native HTML input owns mobile typing so the browser keyboard does
-        # not block the page (and therefore does not stop background music).
+        # Native HTML inputs sit directly over the visible canvas fields. They
+        # open the keyboard from the tap itself while the game and music run.
+        self._set_mobile_web_inputs_enabled(
+            self._legal_doc is None and not self.loading)
         self.field_username.sync_web_input()
         self.field_pwd.sync_web_input()
         self.button_register.disabled = not self._legal_confirmed

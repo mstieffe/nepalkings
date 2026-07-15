@@ -620,7 +620,6 @@ class InputField:
         self.max_length = max_length
         self.web_overlay = bool(web_overlay)
         self._web_input_pending = False
-        self._web_input_original = content
 
         self.color_rect = settings.INPUTFIELD_COLOR_PASSIVE
         self.color_text = settings.TEXT_COLOR_PASSIVE
@@ -688,10 +687,10 @@ class InputField:
         if sys.platform == 'emscripten':
             from utils.web_keyboard import is_mobile, open_input, prompt
             if is_mobile():
-                if self.web_overlay and open_input(
-                        self.name, self.content, self.pwd, self.max_length):
-                    self._web_input_original = self.content
-                    self._web_input_pending = True
+                if self.web_overlay:
+                    if open_input(
+                            self.name, self.content, self.pwd, self.max_length):
+                        self._web_input_pending = True
                     return
                 result = prompt(self.name, self.content, self.pwd)
                 self.content = result[:self.max_length]
@@ -699,8 +698,8 @@ class InputField:
                 self.active = False
 
     def sync_web_input(self):
-        """Mirror the active non-blocking browser input into this field."""
-        if not self._web_input_pending:
+        """Mirror a canvas-aligned browser input into this field."""
+        if not self.web_overlay and not self._web_input_pending:
             return False
         from utils.web_keyboard import poll_input
         state = poll_input(self.name)
@@ -708,17 +707,16 @@ class InputField:
             return False
 
         done = bool(state.get('done'))
-        cancelled = bool(state.get('cancelled'))
-        if cancelled:
-            value = self._web_input_original
-        else:
-            value = str(state.get('value', self.content))
+        value = str(state.get('value', self.content))
         self.content = value[:self.max_length]
         self.cursor_pos = len(self.content)
 
         if done:
             self._web_input_pending = False
             self.active = False
+        else:
+            self._web_input_pending = bool(state.get('active'))
+            self.active = self._web_input_pending
         return True
 
     def deactivate(self):
@@ -799,4 +797,3 @@ def brighten(img, brightness_factor):
 
     # Return the modified image
     return image_copy
-
