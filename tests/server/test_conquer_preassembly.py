@@ -19,8 +19,8 @@ def _register(client, username='preasm'):
         'privacy_accepted': 'true',
     })
     assert resp.status_code == 200
-    # The starter set is granted on the first booster open (before the player
-    # ever reaches a conquer config). Simulate that here so the pre-assembler
+    # The starter set is granted when the Collection roulette settles, before
+    # the player reaches a conquer config. Simulate that here so the pre-assembler
     # has the curated starter cards to work with.
     from models import User
     from onboarding_service import grant_starter_set

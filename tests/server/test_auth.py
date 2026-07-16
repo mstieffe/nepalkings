@@ -31,7 +31,7 @@ class TestRegister:
 
     def test_starter_set_is_deferred_then_grants_buildable_deck(self, client):
         """The starter set is NOT granted at signup. It is granted (random
-        offensive suit + curated set) on the first booster open / on skip, and
+        offensive suit + curated set) when the Collection roulette settles, and
         is enough to build the first conquer attack independent of booster luck."""
         import server_settings as settings
         from ai.figure_recipes import find_buildable_figures
@@ -46,7 +46,7 @@ class TestRegister:
         assert CollectionCard.query.filter_by(user_id=user.id).count() == 0
         assert not (user.onboarding_state or {}).get('starter_set_granted')
 
-        # Granting (as on the first booster open) assigns the suit + set.
+        # The roulette-completion grant assigns the suit + set.
         offensive = grant_starter_set(user, commit=True)
         assert offensive in settings.OFFENSIVE_SUITS
         assert get_starter_suits(user)['offensive'] == offensive

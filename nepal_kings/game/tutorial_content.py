@@ -21,14 +21,8 @@ def welcome_pages(username, *, screen_height=None):
             'You want to become the greatest king of Nepal?',
             'Turn cards into figures, spells, and tactics, then conquer land after land until the crown is yours.',
         ],
+        'button_label': 'Start Tutorial',
     }]
-
-
-def welcome_gift_lines():
-    return [
-        'Every kingdom is built on cards.',
-        'Here is a welcome gift to start yours:',
-    ]
 
 
 def reward_reveal_items(reward):
@@ -66,27 +60,16 @@ def reward_reveal_items(reward):
 
 
 def collection_basics_pages():
-    return [
-        {
-            'title': 'Key and number cards',
-            'layout': 'text_image_text',
-            'lines': [
-                'Key cards carry jewels; number cards carry numbers.',
-                'The outline shows rarity: grey is Common, orange is Uncommon, and gold is Rare.',
-            ],
-            'image': lambda: td.card_rarity_code_diagram(),
-        },
-        {
-            'title': 'Cards become actions',
-            'layout': 'text_image_text',
-            'lines': [
-                'Every figure, spell, and tactic is built from cards: some from a single card, some from a recipe.',
-                "Don't worry about memorizing recipes: the game always shows you what you can build.",
-            ],
-            'image': lambda: td.card_recipe_examples(),
-            'image_caption': 'Some examples.',
-        },
-    ]
+    return [{
+        'title': 'Cards become actions',
+        'layout': 'text_image_text',
+        'lines': [
+            'Every figure, spell, and tactic is built from a regular deck of cards: some from a single card, some from a recipe.',
+            "Don't worry about memorizing recipes: the game always shows you what you can build.",
+        ],
+        'image': lambda: td.card_recipe_examples(),
+        'image_caption': 'Some examples.',
+    }]
 
 
 def starter_present_pages():
@@ -98,9 +81,10 @@ def starter_present_pages():
         'image': lambda: td.suit_roulette_diagram(),
         'image_caption': 'One of the four suits, drawn at random.',
         'lines': [
-            'One more gift: a full starter set of cards, all in one suit.',
-            'Spin to reveal which suit is yours.',
+            'You will receive a starter set of cards, all in one suit.',
+            'Spin the roulette to reveal which suit is yours.',
         ],
+        'button_label': 'Spin Roulette',
     }]
 
 
@@ -131,29 +115,17 @@ def duel_intro_pages():
 
 
 def conquer_battle_intro_pages():
-    return [
-        {
-            'title': 'Your prepared attack',
-            'layout': 'image_top',
-            'image': lambda: td.battle_flow_diagram(),
-            'lines': [
-                '1. Health Boost fires first and strengthens your opening figure.',
-                '2. Your figures set the base score: they matter most.',
-                '3. Three tactic rounds swing the final result.',
-                'Win the total, and the land is yours.',
-            ],
-        },
-        {
-            'title': 'Your three tactics',
-            'layout': 'image_top',
-            'image': lambda: td.starter_tactics_diagram(),
-            'lines': [
-                'Call King and Call Villager bring a matching figure into the clash. Block stops an opposing Call.',
-                'Pick one prepared tactic each round. You can also Gamble a tactic for two replacements.',
-                'Try them out. This first battle is risk-free.',
-            ],
-        },
-    ]
+    return [{
+        'title': 'Your prepared attack',
+        'layout': 'image_top',
+        'image': lambda: td.battle_flow_diagram(),
+        'lines': [
+            '1. Both players fire their prelude spells.',
+            '2. Battle figures are selected and set the starting score.',
+            '3. Three tactic moves are played to turn the tide.',
+            'Win the total, and the land is yours. This first battle is risk-free.',
+        ],
+    }]
 
 
 def kingdom_overview_pages():

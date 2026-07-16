@@ -177,7 +177,11 @@ def _battle_coach_screen(*, move_model='tactics_hand', menu_seen=None,
                 'onboarding_skipped': bool(skipped),
             },
         },
-        game=SimpleNamespace(mode='conquer', conquer_move_model=move_model),
+        game=SimpleNamespace(
+            mode='conquer', conquer_move_model=move_model,
+            battle_round=1, battle_turn_player_id=1,
+            last_battle_result=None,
+        ),
     )
     screen.subscreens = {
         'field': SimpleNamespace(dialogue_box=None),
@@ -201,6 +205,12 @@ def _battle_coach_screen(*, move_model='tactics_hand', menu_seen=None,
     )
     screen._conquer_finish_available = lambda: False
     screen._is_tactics_hand_game = lambda: move_model == 'tactics_hand'
+    screen._is_battle_phase_active = lambda: True
+    screen._conquer_clash_diff_hidden = lambda: False
+    screen._conquer_lane_figure_rects = [
+        {'rect': pygame.Rect(320, 170, 60, 80)},
+        {'rect': pygame.Rect(480, 170, 60, 80)},
+    ]
     screen.active_conquer_timeline_step = lambda: SimpleNamespace(kind='overview')
     return ConquerGameScreen, screen
 
@@ -330,7 +340,7 @@ def test_conquer_battle_coach_starts_with_tactics_pointer():
     step = ConquerGameScreen._current_conquer_battle_coach_step(screen)
 
     assert step['id'] == 'conquer_battle_tactics'
-    assert step['button_label'] == 'Start Battle!'
+    assert step['button_label'] == 'Choose a tactic'
 
 
 def _ensure_display_for_window():
@@ -351,11 +361,12 @@ def test_battle_intro_window_shows_once_then_suppressed():
     ConquerGameScreen._maybe_show_battle_intro_window(screen)
     assert screen._battle_intro_dialogue is not None
     pages = screen._battle_intro_dialogue.pages
-    assert [page['title'] for page in pages] == [
-        'Your prepared attack', 'Your three tactics']
-    assert any('Health Boost' in line for line in pages[0]['lines'])
-    assert any('Gamble' in line for line in pages[1]['lines'])
-    assert all('Combine' not in line for line in pages[1]['lines'])
+    assert [page['title'] for page in pages] == ['Your prepared attack']
+    assert any('prelude spells' in line for line in pages[0]['lines'])
+    assert any('starting score' in line for line in pages[0]['lines'])
+    assert any('Three tactic moves' in line for line in pages[0]['lines'])
+    assert any('risk-free' in line for line in pages[0]['lines'])
+    assert all('Gamble' not in line for line in pages[0]['lines'])
     # While the window is up, the anchored coach is suppressed and the intro
     # is considered paused.
     assert ConquerGameScreen._conquer_battle_coach_allowed(screen) is False
@@ -377,6 +388,22 @@ def test_battle_intro_window_suppressed_when_skipped_or_done():
         screen.state.game.battle_round = 1
         ConquerGameScreen._maybe_show_battle_intro_window(screen)
         assert screen._battle_intro_dialogue is None
+
+
+def test_battle_intro_completion_starts_prebattle_sequence_immediately():
+    ConquerGameScreen, screen = _battle_coach_screen()
+    screen._battle_intro_dialogue = SimpleNamespace(
+        update=lambda events: 'done')
+    marked = []
+    advanced = []
+    screen._mark_conquer_battle_coach_seen = marked.append
+    screen._advance_active_timeline_step = lambda: advanced.append(True)
+
+    handled = ConquerGameScreen._handle_battle_intro_window_events(screen, [])
+
+    assert handled is True
+    assert marked == ['battle_intro_window']
+    assert advanced == [True]
 
 
 def test_on_enter_primes_conquer_game_start_summary_immediately():
@@ -448,6 +475,20 @@ def test_conquer_battle_coach_shows_tactics_after_timeline():
     assert step['action'] == 'next'
     # Rect set unions the tactic action buttons with the rail target.
     assert len(step['rects']) >= 1
+
+
+def test_conquer_tactics_coach_waits_for_figures_and_clash_diff_reveal():
+    ConquerGameScreen, screen = _battle_coach_screen()
+    screen._conquer_lane_figure_rects = []
+    assert ConquerGameScreen._current_conquer_battle_coach_step(screen) is None
+
+    screen._conquer_lane_figure_rects = [object(), object()]
+    screen._conquer_clash_diff_hidden = lambda: True
+    assert ConquerGameScreen._current_conquer_battle_coach_step(screen) is None
+
+    screen._conquer_clash_diff_hidden = lambda: False
+    step = ConquerGameScreen._current_conquer_battle_coach_step(screen)
+    assert step['id'] == 'conquer_battle_tactics'
 
 
 def test_conquer_battle_coach_next_marks_seen_without_advancing_timeline():
@@ -556,6 +597,29 @@ def test_conquer_result_breakdown_line_flips_for_defender():
     assert 'Total -8' in line
 
 
+def test_conquer_result_breakdown_line_uses_advancing_side_after_invader_swap():
+    ConquerGameScreen = _conquer_screen_class()
+    screen = ConquerGameScreen.__new__(ConquerGameScreen)
+    screen.state = SimpleNamespace(game=SimpleNamespace(player_id=321))
+
+    # Production-shaped Invader Swap result: the original conquer attacker
+    # (321) defended, while player 322 was the advancing battle side.  The
+    # canonical negative diffs therefore mean +21 for the local player.
+    line = ConquerGameScreen._conquer_result_breakdown_line(
+        screen,
+        {
+            'fig_diff': -9,
+            'round_diff': -12,
+            'battle_score_player_id': 322,
+        },
+        True,
+    )
+
+    assert 'Figures +9' in line
+    assert 'Tactics +12' in line
+    assert 'Total +21' in line
+
+
 def test_conquer_result_breakdown_line_absent_without_breakdown():
     ConquerGameScreen = _conquer_screen_class()
     # Auto-loss / withdrawal payloads have no figure/tactic split → no line.
@@ -564,13 +628,13 @@ def test_conquer_result_breakdown_line_absent_without_breakdown():
         None, {'fig_diff': 2}, True) == ''
 
 
-def test_conquer_battle_intro_pauses_until_overview_seen():
+def test_conquer_battle_intro_only_pauses_while_modal_is_open():
     ConquerGameScreen, screen = _battle_coach_screen()
+    screen._battle_intro_dialogue = object()
 
     assert ConquerGameScreen._conquer_battle_intro_paused(screen) is True
 
-    screen.state.user_dict['onboarding']['menu_hints_seen'] = list(
-        ConquerGameScreen._conquer_battle_intro_step_ids())
+    screen._battle_intro_dialogue = None
 
     assert ConquerGameScreen._conquer_battle_intro_paused(screen) is False
 
@@ -2203,6 +2267,36 @@ def test_battle_state_poll_applies_authoritative_final_total():
 
     assert game.battle_total_diff == -9
     assert game._game_data_version == 8
+
+
+def test_finished_battle_poll_does_not_erase_authoritative_final_total():
+    ConquerGameScreen = _conquer_screen_class()
+    screen = ConquerGameScreen.__new__(ConquerGameScreen)
+    game = SimpleNamespace(
+        battle_confirmed=True,
+        battle_turn_player_id=None,
+        battle_round=2,
+        battle_total_diff=11,
+        conquer_resolution_step=0,
+        _game_data_version=7,
+        _conquer_result_dialogue_shown=True,
+    )
+    screen.state = SimpleNamespace(game=game)
+
+    # Once resolution removes the losing tutorial figure, the live score can
+    # briefly be unavailable.  That completed snapshot must not replace +11.
+    ConquerGameScreen._apply_battle_state_result(screen, {
+        'success': True,
+        'battle_complete': True,
+        'battle_round': 2,
+        'battle_turn_player_id': None,
+        'player_tactics': [],
+        'opponent_tactics': [],
+        'battle_total_diff': None,
+    })
+
+    assert game.battle_total_diff == 11
+    assert game._game_data_version == 7
 
 
 def test_battle_state_poll_skips_game_version_bump_when_snapshot_is_unchanged():

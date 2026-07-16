@@ -342,6 +342,26 @@ class ConquerRoundLedger:
 
         if not isinstance(last_result, dict):
             return None
+
+        # Completed conquer results persist one immutable score in the
+        # advancing battle side's perspective.  Orient it directly to this
+        # viewer instead of rebuilding the score after resolution has removed
+        # the losing figure.  This is the normal tutorial path too; Invader
+        # Swap merely makes the perspective marker especially important.
+        score_diff = last_result.get('battle_score_diff')
+        score_player_id = last_result.get('battle_score_player_id')
+        player_id = getattr(game, 'player_id', None)
+        if (score_diff is not None
+                and score_player_id is not None
+                and player_id is not None):
+            try:
+                score_diff = int(score_diff)
+                return (score_diff
+                        if self._same_id(score_player_id, player_id)
+                        else -score_diff)
+            except (TypeError, ValueError):
+                pass
+
         if (last_result.get('fig_diff') is None
                 or last_result.get('round_diff') is None):
             return None
@@ -358,7 +378,6 @@ class ConquerRoundLedger:
             or last_result.get('winner')
             or last_result.get('fold_winner_id')
         )
-        player_id = getattr(game, 'player_id', None)
         if winner_id is not None and player_id is not None:
             magnitude = abs(total)
             return (magnitude if self._same_id(winner_id, player_id)

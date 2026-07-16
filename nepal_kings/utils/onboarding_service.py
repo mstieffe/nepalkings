@@ -32,6 +32,26 @@ def mark_tip(tip_key):
     return response.json()
 
 
+def prepare_starter_reveal():
+    """Choose the roulette result without granting the starter cards."""
+    response = requests.post(
+        f'{settings.SERVER_URL}/onboarding/starter_reveal/prepare',
+        timeout=6,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def complete_starter_reveal():
+    """Grant starter cards after the roulette has visibly settled."""
+    response = requests.post(
+        f'{settings.SERVER_URL}/onboarding/starter_reveal/complete',
+        timeout=6,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
 def mark_tips(tip_keys, *, event=None):
     payload = {'tip_keys': list(tip_keys or [])}
     if event:

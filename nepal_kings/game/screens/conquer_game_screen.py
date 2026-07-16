@@ -2652,6 +2652,9 @@ class ConquerGameScreen(GameScreen):
         if win.update(events) == 'done':
             self._battle_intro_dialogue = None
             self._mark_conquer_battle_coach_seen('battle_intro_window')
+            # The modal held the overview step in place. Release that duplicate
+            # beat immediately so the prepared pre-battle sequence starts now.
+            self._advance_active_timeline_step()
         return True
 
     @staticmethod
@@ -2790,6 +2793,8 @@ class ConquerGameScreen(GameScreen):
             if step_id in seen:
                 continue
             if step_id == 'conquer_battle_tactics':
+                if not self._conquer_tactics_coach_ready():
+                    return None
                 rects = (self._conquer_battle_tactic_action_rects()
                          or []) + (self._conquer_battle_tactics_target_rects() or [])
                 rects = rects or self._conquer_battle_intro_fallback_rects()
@@ -2800,18 +2805,36 @@ class ConquerGameScreen(GameScreen):
                     'title': 'Choose A Tactic',
                     'body': 'Pick one prepared tactic each round. Play it, or Gamble it for two replacements.',
                     'action': 'next',
-                    'button_label': 'Start Battle!',
+                    'button_label': 'Choose a tactic',
                     'max_lines': 4,
                 }
         return None
 
-    def _conquer_battle_intro_paused(self):
-        # The teaching window pauses auto-advance/auto-finish while it is up.
-        if getattr(self, '_battle_intro_dialogue', None) is not None:
-            return True
-        if not self._conquer_battle_coach_allowed():
+    def _conquer_tactics_coach_ready(self):
+        """Wait for the complete battle-start reveal before coaching tactics."""
+        game = getattr(self.state, 'game', None)
+        if not game or getattr(game, 'last_battle_result', None):
             return False
-        return self._current_conquer_battle_intro_step(self._conquer_menu_coach_seen()) is not None
+        try:
+            if not self._is_battle_phase_active():
+                return False
+            if self._conquer_clash_diff_hidden():
+                return False
+        except Exception:
+            return False
+        # These rects are populated only after the fighters have actually been
+        # drawn into the duel lane; two entries cover the normal one-v-one case.
+        if len(getattr(self, '_conquer_lane_figure_rects', None) or []) < 2:
+            return False
+        return bool(
+            self._conquer_battle_tactic_action_rects()
+            or self._conquer_battle_tactics_target_rects()
+        )
+
+    def _conquer_battle_intro_paused(self):
+        # Only the modal explainer pauses the prepared pre-battle sequence. The
+        # tactics card is delayed until battle is already live.
+        return getattr(self, '_battle_intro_dialogue', None) is not None
 
     def _current_conquer_battle_coach_step(self):
         if not self._conquer_battle_coach_allowed():
@@ -4806,7 +4829,16 @@ class ConquerGameScreen(GameScreen):
         if 'battle_skipped_rounds' in result:
             _update_game_attr('battle_skipped_rounds', result.get('battle_skipped_rounds') or {})
         if 'battle_total_diff' in result:
-            _update_game_attr('battle_total_diff', result.get('battle_total_diff'))
+            incoming_total = result.get('battle_total_diff')
+            known_total = getattr(game, 'battle_total_diff', None)
+            resolved = bool(result.get('battle_complete')
+                            or result.get('conquer_result'))
+            # Resolution destroys the losing figure, so a snapshot caught
+            # between the live calculation and the persisted result can carry
+            # ``None``.  Never let that completed snapshot erase the last
+            # authoritative value already shown by the ledger.
+            if not (resolved and incoming_total is None and known_total is not None):
+                _update_game_attr('battle_total_diff', incoming_total)
         if 'conquer_round_deadline_ts' in result:
             _update_game_attr('conquer_round_deadline_ts', result.get('conquer_round_deadline_ts'))
         if 'conquer_round_timeout_sec' in result:

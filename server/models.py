@@ -75,7 +75,9 @@ class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False)
     password_hash = db.Column(db.String(128), nullable=False)
-    gold = db.Column(db.Integer, nullable=False, default=server_config.INITIAL_GOLD)  # Starting gold
+    # Legacy/default construction value; registration explicitly starts at 0
+    # and awards INITIAL_GOLD at the First Journey finale.
+    gold = db.Column(db.Integer, nullable=False, default=server_config.INITIAL_GOLD)
     last_active = db.Column(db.DateTime, nullable=True)  # Heartbeat timestamp
     is_ai = db.Column(db.Boolean, nullable=False, default=False)  # AI opponent flag
     # Email verification fields (all optional for backward compatibility)

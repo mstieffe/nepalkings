@@ -1486,6 +1486,7 @@ def _finalize_game_over(game, winner_player, reason='stake', checkmate_figure_na
                    'card_lost_suit', 'card_lost_rank',
                    'loot_lost_cards', 'consumed_cards',
                    'cards_spent', 'is_ai_defender',
+                   'attacker_first_conquest', 'onboarding',
                    'victory_review_available',
                    'victory_review_config_id',
                    'victory_review_land_id'):
@@ -6867,6 +6868,7 @@ def finish_battle():
                                'loot_lost_cards', 'consumed_cards',
                                'defence_consumed_cards', 'cards_spent',
                                'is_ai_defender',
+                               'attacker_first_conquest', 'onboarding',
                                'victory_review_available',
                                'victory_review_config_id',
                                'victory_review_land_id'):
@@ -6921,11 +6923,11 @@ def finish_battle():
     # server_diff > 0 means invader wins; convert to caller's perspective
     total_diff = server_diff if is_invader else -server_diff
 
-    # Figure-vs-tactic split for the result dialog (invader/attacker
-    # perspective: fig_diff = attacker figure power − defender figure power,
-    # round_diff = attacker tactic total − defender tactic total).  The client
-    # orients these to the viewer.  Surfaced so players learn that figures,
-    # not tactics, usually decide a conquer battle.
+    # Figure-vs-tactic split for the result dialog.  These values are in the
+    # *advancing battle side's* perspective, which is not always the original
+    # conquer attacker's perspective (Invader Swap reverses those roles).
+    # Persist that perspective explicitly so every client can orient the final
+    # score correctly after resolution clears/destroys battle figures.
     battle_math = {}
     if isinstance(breakdown, dict):
         battle_math = {
@@ -6933,6 +6935,8 @@ def finish_battle():
             'round_diff': breakdown.get('round_diff'),
             'adv_power': breakdown.get('adv_power'),
             'def_power': breakdown.get('def_power'),
+            'battle_score_diff': server_diff,
+            'battle_score_player_id': game.advancing_player_id,
         }
 
     # ── Discrepancy check ──
@@ -7028,6 +7032,8 @@ def finish_battle():
                 'outcome': 'draw',
                 'conquer_result': 'draw',
                 'attacker_won': False,
+                'total_diff': 0,
+                'battle_total_diff': 0,
                 'land_id': game.land_id,
                 'message': ('Conquer battle ended in a draw. No cards were looted; '
                             'all attack cards returned to your collection.'),
@@ -7219,6 +7225,7 @@ def finish_battle():
             'destroyed_figure_name': destroyed_name,
             'destroyed_figure_family': destroyed_family,
             'total_diff': total_diff,
+            'battle_total_diff': total_diff,
             'returnable_cards': returnable_cards,
             **battle_math,
             'game': serialize_game_for_viewer(game, g.user_id),
@@ -7233,6 +7240,7 @@ def finish_battle():
                        'loot_lost_cards', 'consumed_cards',
                        'defence_consumed_cards', 'cards_spent',
                        'is_ai_defender',
+                       'attacker_first_conquest', 'onboarding',
                        'victory_review_available',
                        'victory_review_config_id',
                        'victory_review_land_id'):
@@ -7658,6 +7666,24 @@ def _return_config_attack_only_cards(cfg):
     cfg.counter_spell_target_figure_id = None
 
 
+def _serialize_viewer_onboarding(viewer_user_id):
+    """Return the viewer's current onboarding snapshot for a game response."""
+    if viewer_user_id is None:
+        return None
+    viewer = db.session.get(User, viewer_user_id)
+    if viewer is None:
+        return None
+    try:
+        from onboarding_service import serialize_onboarding_state
+        return serialize_onboarding_state(viewer)
+    except Exception:
+        logger.exception(
+            "Failed to serialize onboarding for conquer viewer %s",
+            viewer_user_id,
+        )
+        return dict(viewer.onboarding_state or {})
+
+
 def _resolve_conquer_battle(game, winner, requesting_player):
     """Resolve a conquer battle after the single battle round.
 
@@ -7670,12 +7696,12 @@ def _resolve_conquer_battle(game, winner, requesting_player):
     """
     import random as _random
 
-    viewer_user_id = getattr(requesting_player, 'user_id', None)
+    try:
+        viewer_user_id = getattr(g, 'user_id', None)
+    except RuntimeError:
+        viewer_user_id = None
     if viewer_user_id is None:
-        try:
-            viewer_user_id = getattr(g, 'user_id', None)
-        except RuntimeError:
-            viewer_user_id = None
+        viewer_user_id = getattr(requesting_player, 'user_id', None)
 
     # Idempotency: if a previous call already ran the consumption / loot /
     # log side-effects, just rebuild the response from persisted state.
@@ -8015,18 +8041,9 @@ def _resolve_conquer_battle(game, winner, requesting_player):
                     seed_first_conquest_production(seeded_kingdom, now=_utcnow())
             except Exception:
                 logger.exception("Failed to seed first-conquest production")
-        if attacker_first_conquest and attacker_user is not None:
-            # Award the first main booster as the conquest "reward pack" so the
-            # open-a-booster tutorial beat is genuinely earned (boosters are no
-            # longer dumped at registration).
-            try:
-                attacker_user.booster_packs = int(attacker_user.booster_packs or 0) + 1
-            except Exception:
-                logger.exception("Failed to grant first-conquest reward pack")
-            # No separate defence draft is staged for the tutorial: the won
-            # land's conquer config is converted into its defence config above,
-            # so the first defence is "just the conquer config". (New players are
-            # granted only an offensive starter set.)
+        # No separate defence draft is staged for the tutorial: the won land's
+        # conquer config is converted above. Economy rewards wait for the First
+        # Journey completion reveal.
         lost_user_for_event = None if is_ai_land else (defender_user.id if defender_user else None)
         _create_kingdom_loot_events(
             attack_log_id=log.id,
@@ -8075,6 +8092,7 @@ def _resolve_conquer_battle(game, winner, requesting_player):
         'card_won_suit': card_won_suit,
         'card_won_rank': card_won_rank,
         'is_ai_defender': bool(is_ai_land),
+        'attacker_first_conquest': bool(attacker_first_conquest),
         'victory_review_config_id': victory_review_config_id,
         'victory_review_land_id': game.land_id if attacker_won else None,
     })
@@ -8093,10 +8111,11 @@ def _resolve_conquer_battle(game, winner, requesting_player):
         and victory_review_config_id
         and attacker_user
         and not getattr(attacker_user, 'is_ai', False)
+        and not attacker_first_conquest
         and game.victory_reviewed_at is None
     )
 
-    return {
+    response = {
         'success': True,
         'message': f'Conquer battle resolved: {result}',
         'conquer_result': result,
@@ -8115,6 +8134,7 @@ def _resolve_conquer_battle(game, winner, requesting_player):
         'card_lost_suit': card_lost_suit,
         'card_lost_rank': card_lost_rank,
         'is_ai_defender': bool(is_ai_land),
+        'attacker_first_conquest': bool(attacker_first_conquest),
         'loot_lost_cards': looted_lost_cards,
         'loot_gained_cards': loot_gained_cards,
         'consumed_cards': consumed_cards,
@@ -8130,6 +8150,10 @@ def _resolve_conquer_battle(game, winner, requesting_player):
             else game.serialize()
         ),
     }
+    onboarding = _serialize_viewer_onboarding(viewer_user_id)
+    if onboarding is not None:
+        response['onboarding'] = onboarding
+    return response
 
 
 def _serialize_finished_conquer_result(game, viewer_user_id=None):
@@ -8171,6 +8195,61 @@ def _serialize_finished_conquer_result(game, viewer_user_id=None):
         'land_tier': land.tier if land else None,
         'game': serialized_game,
     }
+    onboarding = _serialize_viewer_onboarding(viewer_user_id)
+    if onboarding is not None:
+        payload['onboarding'] = onboarding
+
+    # Battle math is stored in one stable, non-viewer-specific perspective:
+    # the player who was advancing when the clash resolved.  This matters for
+    # Invader Swap, where that player is the original conquer defender.  Emit
+    # both the canonical breakdown and a viewer-oriented final total so result
+    # polling/reconnects cannot fall back to post-destruction client math.
+    battle_math_keys = ('fig_diff', 'round_diff', 'adv_power', 'def_power')
+    for key in battle_math_keys:
+        if key in last_result:
+            payload[key] = last_result.get(key)
+
+    score_player_id = last_result.get('battle_score_player_id')
+    if score_player_id is None and (
+            last_result.get('fig_diff') is not None
+            and last_result.get('round_diff') is not None):
+        # Legacy completed rows predate the explicit perspective marker.  The
+        # current invader was the advancing side, including after Invader Swap.
+        score_player_id = game.invader_player_id
+
+    score_diff = last_result.get('battle_score_diff')
+    if score_diff is None and (
+            last_result.get('fig_diff') is not None
+            and last_result.get('round_diff') is not None):
+        try:
+            score_diff = (int(last_result.get('fig_diff') or 0)
+                          + int(last_result.get('round_diff') or 0))
+        except (TypeError, ValueError):
+            score_diff = None
+
+    if score_player_id is not None:
+        payload['battle_score_player_id'] = score_player_id
+    if score_diff is not None:
+        try:
+            score_diff = int(score_diff)
+            payload['battle_score_diff'] = score_diff
+        except (TypeError, ValueError):
+            score_diff = None
+
+    viewer_player = None
+    if viewer_user_id is not None:
+        viewer_player = next(
+            (p for p in game.players if str(p.user_id) == str(viewer_user_id)),
+            None,
+        )
+    if score_diff is not None and score_player_id is not None and viewer_player:
+        viewer_total = (
+            score_diff
+            if str(viewer_player.id) == str(score_player_id)
+            else -score_diff
+        )
+        payload['total_diff'] = viewer_total
+        payload['battle_total_diff'] = viewer_total
 
     card_detail_keys = ('card_won_suit', 'card_won_rank',
                         'card_lost_suit', 'card_lost_rank')
@@ -8236,6 +8315,7 @@ def _serialize_finished_conquer_result(game, viewer_user_id=None):
         and cached_review_cfg
         and attacker_user_obj is not None
         and not getattr(attacker_user_obj, 'is_ai', False)
+        and not bool(last_result.get('attacker_first_conquest'))
         and game.victory_reviewed_at is None
     )
     payload['victory_review_available'] = review_available

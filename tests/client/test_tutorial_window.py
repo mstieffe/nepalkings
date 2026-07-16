@@ -53,6 +53,21 @@ def test_window_last_page_next_returns_done():
     assert win.update([_click(win._btn_next.rect)]) == 'done'
 
 
+def test_window_uses_specific_final_action_label_without_pause_button():
+    from game.components.tutorial_window import TutorialWindowDialogue
+    surf = _real_window()
+    win = TutorialWindowDialogue(
+        surf,
+        [{'title': 'Only', 'lines': ['x'], 'button_label': 'Begin'}],
+        title='Tutorial',
+    )
+    win._created_at = pygame.time.get_ticks() - 1000
+    win.draw()
+
+    assert win._btn_next.text == 'Begin'
+    assert not hasattr(win, '_btn_pause')
+
+
 def test_mobile_tutorial_uses_roomy_panel_and_visible_touch_buttons(monkeypatch):
     from config import settings
     from game.components.tutorial_window import TutorialWindowDialogue
@@ -277,11 +292,49 @@ def test_reveal_runs_spin_then_done():
     r = _reveal('Diamonds')
     # Force the spin to finish.
     r._phase_started = pygame.time.get_ticks() - (tw._REEL_SPIN_MS + 50)
-    assert r.update([]) is None
+    assert r.update([]) == 'revealed'
     assert r._phase == 'done'
     assert r._current_reel_suit() == 'Diamonds'
     # Acknowledge -> done.
     assert r.update([_click(r._btn.rect)]) == 'done'
+
+
+def test_reveal_supports_direct_kingdom_button_label():
+    from game.components.tutorial_window import StarterSuitRevealDialogue
+    _display()
+    r = StarterSuitRevealDialogue(
+        pygame.display.get_surface(), 'Hearts', done_label='Go to Kingdom')
+    r._phase = 'done'
+    r._reveal_notified = True
+    r.draw()
+    assert r._btn.text == 'Go to Kingdom'
+
+
+def test_reveal_waits_for_server_grant_and_exposes_retry():
+    from game.components import tutorial_window as tw
+    from game.components.tutorial_window import StarterSuitRevealDialogue
+    _display()
+    r = StarterSuitRevealDialogue(
+        pygame.display.get_surface(), 'Hearts',
+        done_label='Go to Kingdom', wait_for_grant=True)
+    r._created_at = pygame.time.get_ticks() - 1000
+    r._phase_started = pygame.time.get_ticks() - (tw._REEL_SPIN_MS + 50)
+
+    assert r.update([]) == 'revealed'
+    r.draw()
+    assert r._btn.disabled is True
+    assert r._btn.text == '…'
+
+    r.set_grant_result(False)
+    r.update([])
+    r.draw()
+    assert r._btn.text == 'Retry'
+    assert r.update([_click(r._btn.rect)]) == 'retry'
+
+    r.set_grant_result(True)
+    r.update([])
+    r.draw()
+    assert r._btn.text == 'Go to Kingdom'
 
 
 def test_reveal_button_disabled_while_spinning():
@@ -290,6 +343,13 @@ def test_reveal_button_disabled_while_spinning():
     assert r._btn.disabled is True
     # A click while spinning is ignored.
     assert r.update([_click(r._btn.rect)]) is None
+
+
+def test_reveal_has_no_pause_button():
+    from game.components.tutorial_window import StarterSuitRevealDialogue
+    _display()
+    reveal = StarterSuitRevealDialogue(None, 'Hearts')
+    assert not hasattr(reveal, '_btn_pause')
 
 
 def _kinds(win, page):

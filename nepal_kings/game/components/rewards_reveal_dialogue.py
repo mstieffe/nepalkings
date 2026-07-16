@@ -117,7 +117,8 @@ class RewardsRevealDialogueBox:
                  footer_when_done="All loot collected!",
                  summary_image=None,
                  hint_text=None,
-                 kicker=None):
+                 kicker=None,
+                 ok_label='ok'):
         """
         :param summary_lines: list[str] — always-visible text shown above the
             chest row (e.g. "Stake winnings: +90 gold" or "Stake lost: -45 gold").
@@ -350,11 +351,11 @@ class RewardsRevealDialogueBox:
         # Glow halo surface — pre-rendered once.
         self._glow_surf = self._build_glow(frame_size)
 
-        # Place the OK button (single action). Disabled until all revealed.
+        # Place the claim button. Disabled until every chest is revealed.
         _btn_w = min(_btn_w, max(1, self.rect.w - int(0.08 * _SW)))
         first_x = self.rect.centerx - _btn_w // 2
         btn_y = self.rect.bottom - btn_h + int(0.004 * _SH)
-        self._ok_button = _DlgButton(window, first_x, btn_y, 'ok',
+        self._ok_button = _DlgButton(window, first_x, btn_y, ok_label,
                                      width=_btn_w, height=_btn_visual_h)
 
         # Position chest rects (recomputed once now; centres on x).

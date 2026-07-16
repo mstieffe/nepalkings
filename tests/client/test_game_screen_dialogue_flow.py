@@ -39,6 +39,7 @@ def _make_conquer_game_screen():
     game_screen = GameScreen.__new__(GameScreen)
     game_screen.window = object()
     game_screen.state = SimpleNamespace(
+        user_dict={'onboarding': {'completed_steps': []}},
         game=_DummyGame(
             game_id=1,
             player_id=10,
@@ -1346,6 +1347,29 @@ class TestGameScreenVictoryReviewRouting:
 
         review = getattr(game_screen.state.game, '_pending_victory_review', None)
         assert review == {'available': True, 'land_id': 7, 'config_id': 999}
+
+    def test_first_conquest_suppresses_defence_review_handoff(self):
+        GameScreen, game_screen, _notifications = _make_conquer_game_screen()
+        game_screen._is_current_player_conquer_attacker = lambda result=None: True
+
+        GameScreen._handle_conquer_result_response(game_screen, {
+            'conquer_result': 'attacker_won',
+            'attacker_won': True,
+            'attacker_first_conquest': True,
+            'onboarding': {
+                'completed_steps': ['finish_first_conquer_battle'],
+            },
+            'victory_review_available': True,
+            'victory_review_land_id': 7,
+            'victory_review_config_id': 999,
+            'conquer_attacker_player_id': 10,
+        })
+
+        review = getattr(game_screen.state.game, '_pending_victory_review', None)
+        assert review == {'available': False, 'land_id': 7, 'config_id': 999}
+        assert game_screen.state.user_dict['onboarding']['completed_steps'] == [
+            'finish_first_conquer_battle',
+        ]
 
     def test_handle_conquer_result_response_clears_review_for_defender(self):
         GameScreen, game_screen, _notifications = _make_conquer_game_screen()

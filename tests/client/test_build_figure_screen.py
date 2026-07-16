@@ -491,6 +491,39 @@ class TestSecondBuildHintText:
         assert 'Collection' in text
         assert 'reward packs' in text
 
+    def test_no_recipe_hint_exposes_clickable_collection_button(self):
+        import pygame
+        from game.screens.build_figure_screen import BuildFigureScreen
+
+        pygame.font.init()
+        screen = self._screen([])
+        screen.window = pygame.Surface((854, 480))
+        screen.figure_family_buttons = {
+            'offensive': [SimpleNamespace(is_active=False)],
+            'defensive': [SimpleNamespace(is_active=False)],
+        }
+        screen._collection_tutorial_button_rect = None
+
+        BuildFigureScreen._draw_second_build_hint(screen)
+
+        button = screen._collection_tutorial_button_rect
+        assert isinstance(button, pygame.Rect)
+        assert button.width > 0
+        assert button.height > 0
+
+    def test_collection_button_navigates_away_from_conquer_builder(self, monkeypatch):
+        from game.screens.build_figure_screen import BuildFigureScreen
+
+        screen = self._screen([])
+        screen.state = SimpleNamespace(screen='conquer')
+        played = []
+        monkeypatch.setattr('utils.sound.play', played.append)
+
+        BuildFigureScreen._open_collection_from_tutorial(screen)
+
+        assert screen.state.screen == 'collection'
+        assert played == ['ui_click']
+
 
 def _ensure_display():
     """Kingdom-icon tests need a real surface so icon images can convert."""

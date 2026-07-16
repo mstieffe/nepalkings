@@ -46,7 +46,6 @@ def render(width: int, height: int, ui_scale: str, mobile: bool) -> None:
 
     from game.components.tutorial_window import (
         TutorialWindowDialogue, StarterSuitRevealDialogue)
-    from game.components.rewards_reveal_dialogue import RewardsRevealDialogueBox
     from game.tutorial_content import (
         collection_basics_pages,
         conquer_battle_intro_pages,
@@ -55,8 +54,6 @@ def render(width: int, height: int, ui_scale: str, mobile: bool) -> None:
         loot_risk_pages,
         starter_present_pages,
         welcome_pages,
-        welcome_gift_lines,
-        reward_reveal_items,
     )
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -76,22 +73,6 @@ def render(width: int, height: int, ui_scale: str, mobile: bool) -> None:
         welcome_pages('Mira', screen_height=height),
         title='Welcome to Nepal Kings')
     shot('welcome-1', welcome, page=0)
-
-    gift = RewardsRevealDialogueBox(
-        surf, 'Your Welcome Gift', 'welcome',
-        welcome_gift_lines(),
-        reward_reveal_items({
-            'gold': 2000, 'booster_packs': 2,
-            'booster_packs_side': 1, 'maps': 0,
-        }),
-        footer_when_done='Added to your collection!',
-        hint_text='Open each chest to reveal your gift.',
-        kicker='Welcome to Nepal Kings')
-    shot('welcome-gift', gift)
-    for item in gift.items:
-        item.revealed = True
-    gift._last_revealed_item = gift.items[-1] if gift.items else None
-    shot('welcome-gift-revealed', gift)
 
     reveal = StarterSuitRevealDialogue(surf, 'Hearts')
     reveal._phase = 'done'

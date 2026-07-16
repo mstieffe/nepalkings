@@ -722,10 +722,9 @@ def test_main_menu_area_coach_leads_with_journey():
     screen._icon_home = SimpleNamespace(rect=pygame.Rect(760, 20, 42, 42))
     screen._icon_guide = SimpleNamespace(rect=pygame.Rect(760, 70, 42, 42))
 
-    # Action-first: the coach leads straight into the journey (open a starter
-    # booster pack in the collection) — no generic area tour up front.
+    # Action-first: reveal the prepared starter set in Collection.
     step = screen._current_area_coach_step()
-    assert step['id'] == 'open_starter_pack'
+    assert step['id'] == 'open_starter_cards'
     assert step['rect'] == screen.button_collection.rect
 
 
@@ -758,19 +757,21 @@ def _journey_ready_menu_screen(completed_steps):
     return screen
 
 
-def test_main_menu_journey_coach_routes_pack_conquer_kingdom_then_quiet():
-    # Fresh account: open a starter booster pack first (collection).
+def test_main_menu_journey_coach_routes_starter_reveal_then_conquer():
+    # Fresh account: visit Collection to learn cards and run the roulette.
     screen = _journey_ready_menu_screen(completed_steps=[])
     step = screen._current_area_coach_step()
-    assert step['id'] == 'open_starter_pack'
+    assert step['id'] == 'open_starter_cards'
     assert step['rect'] == screen.button_collection.rect
+    assert step['title'] == 'Visit Your Collection'
+    assert step['body'] == (
+        'This is the main menu. Let us visit your collection first.')
 
-    # Pack opened: now conquer the first land.
-    screen.state.user_dict['onboarding']['completed_steps'] = [
-        'open_first_main_booster',
-    ]
+    # Starter set revealed: now conquer the first land.
+    screen.state.user_dict['onboarding']['menu_hints_seen'].append(
+        'starter_suit_reveal')
     step = screen._current_area_coach_step()
-    assert step['id'] == 'post_boosters_kingdom'
+    assert step['id'] == 'post_starter_cards_kingdom'
     assert step['rect'] == screen.button_kingdom.rect
 
     # First land conquered but the final kingdom card has not been acknowledged:
@@ -795,7 +796,6 @@ def test_duel_never_blocks_tutorial_completion_in_journey():
     # the completion box and started from the Duel menu on opt-in.
     screen = _journey_ready_menu_screen(completed_steps=[
         'finish_first_conquer_battle',
-        'open_first_main_booster',
         'finish_tutorial',
     ])
     assert screen._current_journey_coach_step() is None
@@ -807,7 +807,6 @@ def test_menu_coach_quiet_after_tutorial_complete():
     # without adding value and was removed).
     screen = _journey_ready_menu_screen(completed_steps=[
         'finish_first_conquer_battle',
-        'open_first_main_booster',
         'finish_tutorial',
         'finish_first_duel',
     ])
@@ -821,7 +820,6 @@ def test_menu_coach_does_not_point_at_guide_before_final_land_card():
     # Even while the final "Your First Land" card is unfinished, the menu does
     # not surface a guide coach card; only the actionable journey steps appear.
     screen = _journey_ready_menu_screen(completed_steps=[
-        'open_first_main_booster',
         'finish_first_conquer_battle',
     ])
     # return_to_kingdom_loop already seen, so the journey coach is quiet and the
@@ -1014,10 +1012,24 @@ def test_conquer_coach_collapses_to_single_battle_handoff():
     assert step['id'] == 'conquer_config_to_battle'
     assert step['rect'] == screen._btn_battle
     assert step['action'] == 'next'
-    assert step['button_label'] == 'Got it'
+    assert step['button_label'] == 'Start Battle'
 
     screen.state.user_dict['onboarding']['menu_hints_seen'] = ['conquer_config_to_battle']
     assert screen._current_conquer_coach_step() is None
+
+
+def test_conquer_coach_handoff_launches_battle_directly():
+    from game.screens.conquer_screen import ConquerScreen
+
+    screen = object.__new__(ConquerScreen)
+    screen.state = SimpleNamespace(screen='conquer')
+    screen._menu_coach_step = {'id': 'conquer_config_to_battle'}
+    launched = []
+    screen._on_battle_click = lambda: launched.append(True)
+
+    screen._after_menu_coach_next('conquer_config_to_battle')
+
+    assert launched == [True]
 
 
 def test_conquer_second_build_coach_guides_manual_build():
@@ -1302,6 +1314,25 @@ def test_tutorial_completion_celebrates_conquer_then_duel():
     assert 'Duel Tutorial Complete' in pending[1]
 
 
+def test_first_journey_completion_surfaces_full_final_reward():
+    screen = _menu_screen_for_completion([
+        _core_step('finish_first_conquer_battle', completed=True, claimed=False,
+                   reward={}),
+        _core_step('finish_tutorial', completed=True, claimed=False,
+                   reward={'gold': 2000, 'booster_packs': 9,
+                           'booster_packs_side': 4, 'maps': 4}),
+    ])
+
+    pending = screen._pending_tutorial_completion()
+
+    assert pending[3] == {
+        'gold': 2000,
+        'booster_packs_side': 4,
+        'maps': 4,
+        'booster_packs': 9,
+    }
+
+
 def test_tutorial_completion_skips_claimed_and_incomplete():
     screen = _menu_screen_for_completion([
         _core_step('finish_tutorial', completed=True, claimed=True),
@@ -1560,7 +1591,7 @@ def test_welcome_sequence_advances_through_stages_then_marks_seen():
         def update(self, events):
             return 'done'
 
-    # Three welcome stages: each dismiss advances; the last marks welcome seen.
+    # The welcome and gift are one stage; dismissing it marks welcome seen.
     for expected_stage in range(GameMenuScreen._WELCOME_STAGES):
         screen._welcome_present_dialogue = _FakeDlg()
         assert screen._handle_welcome_present_events([]) is True
@@ -1575,6 +1606,7 @@ def test_welcome_intro_uses_supplied_conquer_image_without_extra_frame():
     from game.screens.game_menu_screen import GameMenuScreen
     screen = object.__new__(GameMenuScreen)
     screen.window = None
+    screen.state = SimpleNamespace(user_dict={'onboarding': {}})
 
     dialogue = screen._build_welcome_stage(0, 'Maya')
 
@@ -1591,7 +1623,7 @@ def test_welcome_intro_uses_supplied_conquer_image_without_extra_frame():
     assert image.get_width() > 1 and image.get_height() > 1
 
 
-def test_welcome_gift_uses_tutorial_header_hierarchy():
+def test_welcome_defers_gift_and_routes_to_starter_cards():
     import pygame
 
     _ensure_pygame_display()
@@ -1609,8 +1641,14 @@ def test_welcome_gift_uses_tutorial_header_hierarchy():
         }},
     }})
 
-    dialogue = screen._build_welcome_stage(1, 'Maya')
+    dialogue = screen._build_welcome_stage(0, 'Maya')
 
-    assert dialogue.title == 'Your Welcome Gift'
-    assert dialogue.kicker == 'Welcome to Nepal Kings'
-    assert dialogue._header_h > dialogue.title_font.get_height()
+    assert dialogue.title == 'Welcome to Nepal Kings'
+    assert len(dialogue.pages) == 1
+    page = dialogue.pages[0]
+    lines = ' '.join(page['lines'])
+    assert page['button_label'] == 'Start Tutorial'
+    assert 'You want to become the greatest king of Nepal?' in lines
+    assert '2,000 gold' not in lines
+    assert 'booster' not in lines.lower()
+    assert not hasattr(dialogue, '_btn_pause')

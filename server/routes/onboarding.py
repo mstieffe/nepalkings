@@ -4,17 +4,19 @@
 
 from flask import Blueprint, jsonify, request, g
 
-from models import db, User
+from models import db, CollectionCard, User
 from analytics import track
 from routes.auth import require_token
 from onboarding_service import (
     DUEL_HINT_IDS,
     MENU_HINT_IDS,
     claim_reward,
+    complete_starter_suit_reveal,
     complete_tutorial,
     mark_duel_hints,
     mark_menu_hints,
     mark_welcome_seen,
+    prepare_starter_suit_reveal,
     reset_onboarding,
     resume_onboarding,
     serialize_onboarding_state,
@@ -40,6 +42,66 @@ def get_onboarding_state():
     return jsonify({
         'success': True,
         'onboarding': onboarding_payload,
+    })
+
+
+def _starter_cards_payload(user, suit):
+    """Return truthful post-grant Collection counts for the starter ranks."""
+    import server_settings as settings
+    starter_ranks = {rank for rank, _value in settings.STARTER_OFFENSIVE_SET}
+    totals = {rank: 0 for rank in starter_ranks}
+    locked = {rank: 0 for rank in starter_ranks}
+    for card in CollectionCard.query.filter_by(user_id=user.id, suit=suit).all():
+        if card.rank not in starter_ranks:
+            continue
+        totals[card.rank] += 1
+        if card.locked:
+            locked[card.rank] += 1
+    return [
+        {
+            'suit': suit,
+            'rank': rank,
+            'total': totals[rank],
+            'locked': locked[rank],
+        }
+        for rank in sorted(starter_ranks)
+    ]
+
+
+@onboarding.route('/starter_reveal/prepare', methods=['POST'])
+@require_token
+def prepare_starter_reveal_route():
+    user = _current_user()
+    suit, error = prepare_starter_suit_reveal(user, commit=False)
+    if error:
+        return jsonify({'success': False, 'message': error}), 400
+    payload = serialize_onboarding_state(user)
+    db.session.commit()
+    return jsonify({
+        'success': True,
+        'suit': suit,
+        'onboarding': payload,
+    })
+
+
+@onboarding.route('/starter_reveal/complete', methods=['POST'])
+@require_token
+def complete_starter_reveal_route():
+    user = _current_user()
+    suit, error = complete_starter_suit_reveal(user, commit=False)
+    if error:
+        return jsonify({'success': False, 'message': error}), 400
+    payload = serialize_onboarding_state(user)
+    track('tutorial_step_completed', user_id=user.id,
+          track='menu', step_id='starter_suit_reveal',
+          coach_version=payload.get('coach_version'))
+    cards = _starter_cards_payload(user, suit)
+    db.session.commit()
+    return jsonify({
+        'success': True,
+        'suit': suit,
+        'starter_cards': cards,
+        'onboarding': payload,
     })
 
 
@@ -116,10 +178,18 @@ def mark_tip():
               step_ids=changed_ids,
               coach_version=after.get('coach_version'))
     db.session.commit()
-    return jsonify({
+    response_payload = {
         'success': True,
         'onboarding': after,
-    })
+    }
+    if welcome:
+        response_payload['balances'] = {
+            'gold': int(user.gold or 0),
+            'booster_packs': int(user.booster_packs or 0),
+            'booster_packs_side': int(user.booster_packs_side or 0),
+            'maps': int(user.maps or 0),
+        }
+    return jsonify(response_payload)
 
 
 @onboarding.route('/complete_step', methods=['POST'])

@@ -576,8 +576,12 @@ class TutorialWindowDialogue:
                 col = self._accent if i == self.page_index else settings.DIALOGUE_BOX_SEP_CLR
                 pygame.draw.circle(self.window, col, (dx + i * gap, dy), dot_r)
 
-        # ── Buttons (Next becomes Got it on the last page) ──
-        self._btn_next.text = 'Got it' if self._is_last else 'Next'
+        # ── Buttons (the last page may supply a specific action label) ──
+        page = self.pages[self.page_index] if self.pages else {}
+        if self._is_last:
+            self._btn_next.text = page.get('button_label') or 'Got it'
+        else:
+            self._btn_next.text = 'Next'
         if self.page_index > 0:
             self._btn_back.draw()
         self._btn_next.draw()
@@ -601,26 +605,25 @@ _DEFENSIVE_SUITS = ('Clubs', 'Spades')
 # All four suits cycle on the reel; the player is seeded an offensive suit but
 # the reveal is framed as a draw "from all four suits".
 _ALL_SUITS = ('Hearts', 'Diamonds', 'Clubs', 'Spades')
-# The granted starter set (mirrors server_settings STARTER_OFFENSIVE_SET).
-_OFFENSIVE_SET_RANKS = ['K', 'A', 'J', '7', '7', '8', '8', '9', '10']
-
-
 class StarterSuitRevealDialogue:
     """One-armed-bandit reveal of the player's starter suit.
 
     The reel spins through all four suit icons, settles on the player's
     assigned suit, then announces the granted starter set. Presented as a draw
     "from all four suits" (new players are seeded an offensive suit, but the
-    reveal does not label it as such). ``update`` returns ``'done'`` once the
-    suit is revealed and acknowledged.
+    reveal does not label it as such). ``update`` returns ``'revealed'`` once
+    when the reel settles, then ``'done'`` after the result is acknowledged.
     """
 
-    def __init__(self, window, suit):
+    def __init__(self, window, suit, *, done_label='Got it', wait_for_grant=False):
         self.window = window
         self.suit = suit
+        self.done_label = done_label
+        self._grant_status = 'pending' if wait_for_grant else 'confirmed'
         self._created_at = pygame.time.get_ticks()
         self._phase = 'spin'   # spin -> done
         self._phase_started = self._created_at
+        self._reveal_notified = False
 
         _SW = settings.SCREEN_WIDTH
         _SH = settings.SCREEN_HEIGHT
@@ -691,9 +694,13 @@ class StarterSuitRevealDialogue:
 
     def update(self, events):
         self._advance_spin()
-        self._btn.disabled = self._phase == 'spin'
+        self._btn.disabled = (
+            self._phase == 'spin' or self._grant_status == 'pending')
         self._btn.update()
         _apply_wheel_drag_scroll(events, self._content_rect, self)
+        if self._phase == 'done' and not self._reveal_notified:
+            self._reveal_notified = True
+            return 'revealed'
         if pygame.time.get_ticks() - self._created_at < 200:
             return None
         for event in events:
@@ -702,8 +709,14 @@ class StarterSuitRevealDialogue:
                 if self._btn.disabled or not self._btn.collide(pos):
                     continue
                 if self._phase == 'done':
+                    if self._grant_status == 'failed':
+                        return 'retry'
                     return 'done'
         return None
+
+    def set_grant_result(self, success):
+        """Unlock the truthful result view, or expose an explicit retry."""
+        self._grant_status = 'confirmed' if success else 'failed'
 
     def _sized_breakdown(self, td, max_w):
         """The starter-set breakdown rendered to fill ``max_w`` so the cards and
@@ -743,7 +756,7 @@ class StarterSuitRevealDialogue:
             self.window.blit(ic, ic.get_rect(center=(self.rect.centerx, y + icon_sz // 2)))
         y += icon_sz + int(0.014 * _SH)
 
-        if settled:
+        if settled and self._grant_status == 'confirmed':
             y = self._draw_centered_lines(
                 [f'{self.suit} is your starter suit!'], self.font,
                 settings.TITLE_TEXT_COLOR, y)
@@ -780,12 +793,29 @@ class StarterSuitRevealDialogue:
                 else:
                     self.window.blit(
                         breakdown, (bx, content_top + max(0, (content_h - bh) // 2)))
-        else:
+        elif not settled:
             spin = self.font.render('Drawing from all four suits…', True,
                                     settings.DIALOGUE_BOX_MSG_TEXT_CLR)
             self.window.blit(spin, spin.get_rect(center=(self.rect.centerx, y + spin.get_height() // 2)))
+        else:
+            status = (
+                'Adding your starter cards…'
+                if self._grant_status == 'pending'
+                else 'Could not add your starter cards. Please retry.'
+            )
+            y = self._draw_centered_lines(
+                [f'{self.suit} is your starter suit!', status],
+                self.font,
+                settings.DIALOGUE_BOX_MSG_TEXT_CLR,
+                y,
+            )
 
-        self._btn.text = '…' if self._btn.disabled else 'Got it'
+        if self._btn.disabled:
+            self._btn.text = '…'
+        elif self._grant_status == 'failed':
+            self._btn.text = 'Retry'
+        else:
+            self._btn.text = self.done_label
         self._btn.draw()
 
     def get_tooltip(self, pos):

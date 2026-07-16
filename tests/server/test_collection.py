@@ -377,7 +377,7 @@ class TestOpenBoosterSide:
 # ═══════════════════════════════════════════════════════════════════
 
 class TestRegistrationStarterPacks:
-    def test_welcome_gift_is_deferred_until_opened(self, client, db):
+    def test_registration_and_welcome_grant_no_economy_items(self, client, db):
         rv = client.post('/auth/register', data={
             'username': 'newplayer',
             'password': 'secret123',
@@ -391,24 +391,30 @@ class TestRegistrationStarterPacks:
 
         user = User.query.filter_by(username='newplayer').first()
         assert user is not None
-        # The welcome gift (gold + packs) is NOT granted at signup; it is
-        # credited when the player opens the gift boxes in the welcome sequence.
+        # No economy items are granted at signup.
         assert user.gold == 0
         assert user.booster_packs == 0
         assert user.booster_packs_side == 0
         assert data['user']['booster_packs'] == 0
         assert data['user']['booster_packs_side'] == 0
 
-        # Opening the welcome gift credits the starter defaults, idempotently.
-        from onboarding_service import grant_welcome_gift
-        grant_welcome_gift(user, commit=True)
-        assert user.gold == settings.INITIAL_GOLD
-        assert user.booster_packs == settings.STARTER_BOOSTER_PACKS
-        assert user.booster_packs_side == settings.STARTER_BOOSTER_PACKS_SIDE
-        # A second grant does not double-credit.
-        grant_welcome_gift(user, commit=True)
-        assert user.booster_packs == settings.STARTER_BOOSTER_PACKS
-        assert user.gold == settings.INITIAL_GOLD
+        # Starting the tutorial also grants nothing; all economy items remain
+        # in the First Journey completion reward.
+        welcome = client.post(
+            '/onboarding/mark_tip',
+            headers={'Authorization': f"Bearer {data['token']}"},
+            json={'tip_key': 'welcome'},
+        )
+        assert welcome.status_code == 200
+        assert welcome.get_json()['balances'] == {
+            'gold': 0,
+            'booster_packs': 0,
+            'booster_packs_side': 0,
+            'maps': 0,
+        }
+        db.session.refresh(user)
+        assert (user.gold, user.booster_packs,
+                user.booster_packs_side, user.maps) == (0, 0, 0, 0)
 
 
 # ═══════════════════════════════════════════════════════════════════

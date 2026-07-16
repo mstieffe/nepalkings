@@ -81,17 +81,20 @@ def draw_coach_highlight(window, target_rects, ticks):
 
 def _wrap_lines(font, text, max_width, max_lines):
     lines = []
-    current = ''
-    for word in str(text or '').split():
-        candidate = word if not current else f'{current} {word}'
-        if font.size(candidate)[0] <= max_width:
-            current = candidate
-        else:
-            if current:
-                lines.append(current)
-            current = word
-    if current:
-        lines.append(current)
+    for paragraph in str(text or '').split('\n'):
+        current = ''
+        for word in paragraph.split():
+            candidate = word if not current else f'{current} {word}'
+            if font.size(candidate)[0] <= max_width:
+                current = candidate
+            else:
+                if current:
+                    lines.append(current)
+                current = word
+        if current:
+            lines.append(current)
+        if len(lines) >= max_lines:
+            break
     return lines[:max_lines]
 
 

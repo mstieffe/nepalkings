@@ -66,7 +66,7 @@ DEFAULT_GAME_STAKE = 35  # Default gold stake
 DEFAULT_GAME_LIMIT = DEFAULT_GAME_STAKE  # Default point threshold to win
 MAX_GAME_LIMIT = 100
 
-# New player starting gold
+# Gold portion of the First Journey completion reward.
 INITIAL_GOLD = 2000
 
 # Auth token settings: TOKEN_EXPIRY_SECONDS now lives in config/security.py
@@ -128,17 +128,16 @@ AI_WATCHDOG_RETRY_DELAY = float(os.getenv('AI_WATCHDOG_RETRY_DELAY', '4.0'))
 AI_WATCHDOG_MAX_RETRIES = int(os.getenv('AI_WATCHDOG_MAX_RETRIES', '3'))
 
 # ── v2.0: Collection & Boosters ──
-# A small WELCOME GIFT granted at registration and revealed (as gift boxes) in
-# the third welcome window: gold (INITIAL_GOLD) + a few booster packs to seed
-# the player's permanent collection. Larger amounts are still earned as tutorial
-# milestone rewards (and the first conquest win grants its reward pack).
-STARTER_BOOSTER_PACKS = 2                   # Welcome-gift main packs
-STARTER_BOOSTER_PACKS_SIDE = 1             # Welcome-gift side pack
+# Legacy welcome-gift amounts, now folded into the First Journey completion
+# chest reveal instead of being granted before the tutorial.
+STARTER_BOOSTER_PACKS = 2
+STARTER_BOOSTER_PACKS_SIDE = 1
 
-# Each new player is assigned a random OFFENSIVE (red) suit at registration and
-# granted its starter set, so the first conquer attack is always buildable,
-# independent of booster luck (see _preassemble_tutorial_conquer_attack in
-# routes/kingdom.py). No defensive set is granted: a won conquest converts the
+# Each new player draws a random OFFENSIVE (red) suit in the Collection roulette
+# and receives its starter set when the reel settles. The first conquer attack
+# is therefore buildable independent of booster luck (see
+# _preassemble_tutorial_conquer_attack in routes/kingdom.py). No defensive set
+# is granted: a won conquest converts the
 # conquer config into the land's defence config (see routes/games.py), so the
 # first defence is "just the conquer config".
 OFFENSIVE_SUITS = ('Hearts', 'Diamonds')

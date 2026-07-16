@@ -1324,12 +1324,22 @@ class ConquerScreen(MenuScreenMixin, Screen):
                 'id': 'conquer_config_to_battle',
                 'rect': self._btn_battle,
                 'title': 'Your Attack Is Ready',
-                'body': 'Here is your attack: figures for power, three tactics for the rounds, and a prelude spell. Tap Start Battle to try it out.',
+                'body': (
+                    'We prepared your first attack:\n'
+                    '• 3 figures on the field\n'
+                    '• 3 tactic moves to steer the battle\n'
+                    '• 1 prelude spell that fires before battle'
+                ),
                 'action': 'next',
-                'button_label': 'Got it',
-                'max_lines': 5,
+                'button_label': 'Start Battle',
+                'max_lines': 7,
             }
         return None
+
+    def _after_menu_coach_next(self, step_id):
+        super()._after_menu_coach_next(step_id)
+        if step_id == 'conquer_config_to_battle':
+            self._on_battle_click()
 
     # ── Entrance animations (draw-only) ──────────────────────────────
 

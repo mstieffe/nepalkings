@@ -1690,6 +1690,78 @@ def test_conquer_lane_figure_full_power_includes_modifiers():
     assert full == 12  # 8 + 4 buff
 
 
+def test_tutorial_starter_ledger_matches_server_final_breakdown():
+    """Reproduce the first-conquest matchup from a production result.
+
+    The live lane and the server breakdown should both total +11 for the
+    starter player: figures +9 and tactics +2.
+    """
+    from game.components.conquer_round_ledger import ConquerRoundLedger
+    from game.screens.conquer_game_screen import ConquerGameScreen
+
+    player_id = 327
+    opponent_id = 328
+    king = _fighter(958, 'Djungle King', 15, player_id, (160, 120, 80),
+                    suit='Hearts', field='castle', battle_bonus=4)
+    rice = _fighter(959, 'Small Rice Farm', 11, player_id, (150, 180, 90),
+                    suit='Hearts', field='village', battle_bonus=1)
+    warriors = _fighter(960, 'Gorkha Warriors', 12, player_id, (180, 80, 80),
+                        suit='Hearts', field='military', battle_bonus=0)
+    warriors.get_total_enchantment_modifier = lambda: 6
+    defender_king = _fighter(
+        961, 'Himalaya King', 15, opponent_id, (80, 100, 170),
+        suit='Clubs', field='castle', battle_bonus=4)
+    defender = _fighter(962, 'Small Yack Farm', 8, opponent_id, (90, 120, 160),
+                        suit='Clubs', field='village', battle_bonus=1)
+
+    player_moves = [
+        _move(1, family='Block', suit='Hearts', rank='Q', value=2,
+              status='played', played_round=0),
+        _move(2, family='Call Villager', suit='Hearts', rank='J', value=1,
+              status='played', played_round=1, call_figure_id=rice.id),
+        _move(3, family='Call King', suit='Hearts', rank='K', value=4,
+              status='played', played_round=2, call_figure_id=king.id),
+    ]
+    opponent_moves = [
+        _move(4, family='Block', suit='Clubs', rank='Q', value=2,
+              status='played', played_round=0),
+        _move(5, family='Call King', suit='Spades', rank='K', value=4,
+              status='played', played_round=1, call_figure_id=defender_king.id),
+        _move(6, family='Double Dagger', suit='Clubs', rank='7+7', value=14,
+              status='played', played_round=2, card_id_b=106),
+    ]
+    game = SimpleNamespace(
+        mode='conquer', conquer_move_model='tactics_hand',
+        game_id=None, player_id=player_id, opponent_id=opponent_id,
+        advancing_player_id=player_id, advancing_figure_id=warriors.id,
+        defending_figure_id=defender.id,
+        advancing_figure_id_2=None, defending_figure_id_2=None,
+        battle_turn_player_id=None, battle_round=2,
+        last_battle_result=None, battle_total_diff=None,
+        opponent_name='Tutorial Border Watch',
+        land_suit_bonus_suit='Clubs', land_suit_bonus_value=2,
+        conquer_tactics=player_moves,
+        conquer_opponent_tactics=opponent_moves,
+        conquer_resolution_step=0,
+    )
+    screen = ConquerGameScreen.__new__(ConquerGameScreen)
+    screen.window = pygame.Surface((100, 100))
+    screen.state = SimpleNamespace(game=game)
+    screen.subscreens = {
+        'field': SimpleNamespace(
+            figures=[king, rice, warriors, defender_king, defender],
+            icon_cache={},
+        ),
+        'battle': SimpleNamespace(opp_played=opponent_moves),
+    }
+    ledger = ConquerRoundLedger(screen)
+
+    assert ConquerGameScreen._conquer_lane_figure_diff(screen) == 9
+    you_per, opp_per = ledger._played_per_round_pair()
+    assert [ledger._round_diff(y, o) for y, o in zip(you_per, opp_per)] == [0, -3, 5]
+    assert ledger.current_total_diff() == 11
+
+
 def test_handle_conquer_lane_figure_click_opens_detail_box():
     from game.screens.conquer_game_screen import ConquerGameScreen
 
@@ -1899,6 +1971,31 @@ def test_round_ledger_result_uses_winner_identity_after_invader_swap():
     ledger = ConquerRoundLedger(parent)
 
     assert ledger.current_total_diff() == 6
+
+
+def test_round_ledger_result_uses_persisted_score_perspective():
+    from game.components.conquer_round_ledger import ConquerRoundLedger
+
+    game = SimpleNamespace(
+        player_id=327,
+        last_battle_result={
+            'battle_score_diff': 11,
+            'battle_score_player_id': 327,
+            'fig_diff': 9,
+            'round_diff': 2,
+        },
+        battle_total_diff=None,
+    )
+    parent = SimpleNamespace(
+        window=pygame.Surface((100, 100)),
+        state=SimpleNamespace(game=game),
+        _conquer_lane_played_tactics=lambda: ([None] * 3, [None] * 3),
+    )
+    ledger = ConquerRoundLedger(parent)
+
+    assert ledger.current_total_diff() == 11
+    game.player_id = 328
+    assert ledger.current_total_diff() == -11
 
 
 def test_round_ledger_reveal_total_adjustment_glides_with_tally():

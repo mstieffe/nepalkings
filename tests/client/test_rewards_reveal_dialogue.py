@@ -100,3 +100,31 @@ def test_revealed_reward_captions_wrap_inside_their_slots(monkeypatch):
 
     dialogue._last_revealed_item = dialogue.items[-1]
     dialogue.draw()
+
+
+def test_completion_reward_keeps_chest_reveal_with_specific_action(monkeypatch):
+    from config import settings
+    from game.components import rewards_reveal_dialogue as reward_dialogue
+
+    _display()
+    icon = pygame.Surface((64, 64), pygame.SRCALPHA)
+    monkeypatch.setattr(reward_dialogue, '_load_chest_image', lambda: icon)
+    monkeypatch.setattr(reward_dialogue, '_load_reward_icon', lambda kind: icon)
+    dialogue = reward_dialogue.RewardsRevealDialogueBox(
+        pygame.Surface((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT)),
+        title='First Journey Complete!',
+        icon=None,
+        summary_lines=['Well played.'],
+        items=[{'kind': 'map', 'label': '4 maps'}],
+        ok_label='Collect & continue',
+    )
+    dialogue._created_at = pygame.time.get_ticks() - 1000
+
+    assert all(not item.revealed for item in dialogue.items)
+    assert dialogue._ok_button.text == 'Collect & continue'
+    dialogue.update([])
+    assert dialogue._ok_button.disabled is True
+    dialogue.items[0].revealed = True
+    event = pygame.event.Event(
+        pygame.MOUSEBUTTONUP, button=1, pos=dialogue._ok_button.rect.center)
+    assert dialogue.update([event]) == 'ok'

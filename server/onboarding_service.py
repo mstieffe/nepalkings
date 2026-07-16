@@ -28,30 +28,32 @@ def _nonnegative_int(value):
 DAILY_QUEST_REWARD_ID = 'daily_quest'
 DAILY_QUEST_RESET_HOUR_UTC = 0
 
+FIRST_JOURNEY_REWARD = {
+    # Preserve every existing opening/tutorial grant, but pay it out once the
+    # player has actually conquered a land and completed the map return.
+    'gold': int(getattr(settings, 'INITIAL_GOLD', 0) or 0),
+    'booster_packs': int(getattr(settings, 'STARTER_BOOSTER_PACKS', 0) or 0) + 7,
+    'booster_packs_side': int(
+        getattr(settings, 'STARTER_BOOSTER_PACKS_SIDE', 0) or 0) + 3,
+    'maps': 4,
+}
 
-# Ordered to match the real first-session journey: open a booster, fight the
-# first conquer battle, finish the conquer tutorial, then the optional duel and
-# the remaining exploratory steps.
+
+# Ordered to match the real first-session journey: reveal the prepared starter
+# collection, conquer a land, collect the finale, then explore optional systems.
 CORE_STEPS = [
-    {
-        'id': 'open_first_main_booster',
-        'title': 'Open a main booster',
-        'description': 'Open one of your starter booster packs to grow your collection.',
-        'reward': {'booster_packs_side': 1},
-        'group': 'first_journey',
-    },
     {
         'id': 'finish_first_conquer_battle',
         'title': 'Conquer your first land',
         'description': 'Win your first land battle as the attacker.',
-        'reward': {'maps': 4},
+        'reward': {},
         'group': 'first_journey',
     },
     {
         'id': 'finish_tutorial',
         'title': 'Finish the kingdom tour',
         'description': 'Return to the kingdom map and complete the final guided step.',
-        'reward': {'booster_packs': 6, 'booster_packs_side': 2},
+        'reward': FIRST_JOURNEY_REWARD,
         'group': 'first_journey',
     },
     {
@@ -387,10 +389,11 @@ DUEL_HINT_IDS = (
 MENU_HINT_IDS = (
     'duel', 'kingdom', 'collection', 'rankings', 'guide',
     'guide_first_duel_reward',
-    'open_starter_pack',
+    'open_starter_pack', 'open_starter_cards',
     'collection_basics_window', 'collection_open_main_booster',
     'starter_cards_present_window', 'starter_suit_reveal',
-    'post_boosters_kingdom', 'kingdom_overview_window',
+    'post_boosters_kingdom', 'post_starter_cards_kingdom',
+    'kingdom_overview_window',
     'kingdom_pick_land',
     'kingdom_conquer_button',
     'conquer_config_build_edit', 'conquer_config_to_battle',
@@ -433,11 +436,8 @@ def default_onboarding_state(*, new_user=False):
         'schema_version': ONBOARDING_SCHEMA_VERSION,
         'welcome_pending': bool(new_user),
         'welcome_seen': False,
-        # Set once the welcome gift (gold + packs + maps) has been credited, so
-        # opening the gift (or skipping onboarding) never double-grants.
-        'welcome_gift_granted': False,
-        # Set once the offensive starter set has been granted (on the first
-        # booster open, or on skip), so it is never granted twice.
+        # Set once the offensive starter set has been granted after the
+        # Collection roulette settles, so it is never granted twice.
         'starter_set_granted': False,
         'completed_steps': [],
         'claimed_rewards': [],
@@ -445,8 +445,8 @@ def default_onboarding_state(*, new_user=False):
         'duel_hints_seen': [],
         'menu_hints_seen': [],
         'onboarding_skipped': False,
-        # {'offensive': <red suit>, 'defensive': <black suit>} assigned at
-        # registration; revealed one-armed-bandit style in the starter window.
+        # {'offensive': <red suit>, 'defensive': <black suit>} selected before
+        # the Collection roulette; revealed one-armed-bandit style there.
         'starter_suits': None,
         'daily_quest': None,
         'daily_quests_claimed_count': 0,
@@ -525,10 +525,9 @@ def assign_starter_suits(user, *, commit=False):
 def grant_starter_set(user, *, commit=False):
     """Assign the random offensive starter suit and grant its curated set — once.
 
-    Deferred from signup: the player receives the starter set when they open
-    their first booster pack, just before the first conquest, and it is revealed
-    one-armed-bandit style on the collection screen. Idempotent via the
-    'starter_set_granted' state flag. Returns the assigned offensive suit.
+    Deferred from signup and welcome: the player receives the set only after
+    the Collection roulette settles. Idempotent via the 'starter_set_granted'
+    state flag. Returns the assigned offensive suit.
     """
     if not user:
         return None
@@ -551,6 +550,35 @@ def grant_starter_set(user, *, commit=False):
     state['starter_set_granted'] = True
     _save_state(user, state, commit=commit)
     return offensive
+
+
+def prepare_starter_suit_reveal(user, *, commit=False):
+    """Choose the hidden roulette result without granting any cards yet."""
+    if not user:
+        return None, 'User not found'
+    state = _state(user)
+    if not state.get('welcome_seen'):
+        return None, 'Start the tutorial before revealing starter cards'
+    suits = assign_starter_suits(user, commit=commit)
+    return suits.get('offensive'), None
+
+
+def complete_starter_suit_reveal(user, *, commit=False):
+    """Grant the starter cards after the roulette has visibly settled."""
+    if not user:
+        return None, 'User not found'
+    state = _state(user)
+    if not state.get('welcome_seen'):
+        return None, 'Start the tutorial before revealing starter cards'
+    seen = set(state.get('menu_hints_seen') or [])
+    if 'collection_basics_window' not in seen:
+        return None, 'Learn the Collection basics before revealing starter cards'
+    suit = grant_starter_set(user, commit=False)
+    mark_menu_hints(user, (
+        'starter_cards_present_window',
+        'starter_suit_reveal',
+    ), commit=commit)
+    return suit, None
 
 
 def get_starter_suits(user):
@@ -681,44 +709,14 @@ def mark_menu_hints(user, hint_ids, *, commit=False):
     return changed
 
 
-def _credit_welcome_gift(user, state):
-    """Credit the welcome gift (gold + booster packs + maps) into ``user`` and
-    flag it on ``state`` — no save. Idempotent; returns True if it credited.
-
-    These are intentionally NOT granted at signup; the player receives them by
-    opening the gift boxes in the welcome sequence.
-    """
-    if not user or state.get('welcome_gift_granted'):
-        return False
-    user.gold = int(user.gold or 0) + int(getattr(settings, 'INITIAL_GOLD', 0) or 0)
-    user.booster_packs = int(user.booster_packs or 0) + int(
-        getattr(settings, 'STARTER_BOOSTER_PACKS', 0) or 0)
-    user.booster_packs_side = int(user.booster_packs_side or 0) + int(
-        getattr(settings, 'STARTER_BOOSTER_PACKS_SIDE', 0) or 0)
-    user.maps = int(user.maps or 0) + int(getattr(settings, 'STARTER_MAPS', 0) or 0)
-    state['welcome_gift_granted'] = True
-    return True
-
-
-def grant_welcome_gift(user, *, commit=False):
-    """Public, idempotent welcome-gift grant (loads + saves state)."""
-    if not user:
-        return False
-    state = _state(user)
-    if _credit_welcome_gift(user, state):
-        _save_state(user, state, commit=commit)
-        return True
-    return False
-
-
 def mark_welcome_seen(user, *, commit=False):
     if not user:
         return False
+    # Welcome is orientation only. Cards arrive after the Collection roulette;
+    # all economy items arrive in the First Journey finale reward.
     state = _state(user)
     state['welcome_pending'] = False
     state['welcome_seen'] = True
-    # Opening the gift boxes is what completes the welcome — credit it now.
-    _credit_welcome_gift(user, state)
     _save_state(user, state, commit=commit)
     return True
 
@@ -727,11 +725,8 @@ def skip_onboarding(user, *, commit=False):
     state = _state(user)
     state['onboarding_skipped'] = True
     state['welcome_pending'] = False
-    # Skipping the tutorial still grants the welcome gift (no soft-lock).
-    _credit_welcome_gift(user, state)
-    _save_state(user, state, commit=False)
-    # ...and the starter set, so a skipper still has a buildable attack.
-    grant_starter_set(user, commit=commit)
+    # Pausing guidance must not bypass or duplicate the end-of-journey reward.
+    _save_state(user, state, commit=commit)
     return state
 
 
@@ -1047,28 +1042,28 @@ def _step_payload(step, completed, claimed):
     payload['reward_label'] = _reward_label(reward)
     payload['completed'] = bool(completed)
     payload['claimed'] = bool(claimed)
-    payload['claimable'] = bool(completed and not claimed)
+    payload['claimable'] = bool(completed and not claimed and reward)
     return payload
 
 
-def _journey_metadata(completed_steps):
+def _journey_metadata(completed_steps, menu_hints_seen=None):
     """First-session guided path.
 
-    The mandatory tutorial is the kingdom core loop: open a starter booster
-    (grow the collection) -> conquer a land. It ends on the first owned land;
-    production, kingdom-config, and defence setup are deferred to on-demand
-    coaching, and the duel is offered as an optional next step, not as a
-    tutorial gate.
+    The mandatory tutorial is the kingdom core loop: reveal the prepared
+    starter collection -> conquer a land. Booster opening is deferred until
+    after the finale, and the duel remains optional.
     """
     completed = set(completed_steps or [])
-    if 'open_first_main_booster' not in completed:
+    seen = set(menu_hints_seen or [])
+    if ('starter_suit_reveal' not in seen
+            and 'finish_first_conquer_battle' not in completed):
         return {
             'coach_version': COACH_VERSION,
-            'journey_phase': 'open_starter_pack',
+            'journey_phase': 'reveal_starter_cards',
             'next_action': {
                 'screen': 'collection',
-                'label': 'Open a Booster Pack',
-                'target_id': 'collection_open_main_booster',
+                'label': 'Reveal Starter Cards',
+                'target_id': 'starter_suit_reveal',
             },
         }
     if 'finish_first_conquer_battle' not in completed:
@@ -1137,7 +1132,8 @@ def serialize_onboarding_state(user):
     facts_payload = dict(facts)
     facts_payload['completed_steps'] = sorted(facts['completed_steps'])
     facts_payload['early_completed'] = sorted(facts['early_completed'])
-    journey = _journey_metadata(facts['completed_steps'])
+    journey = _journey_metadata(
+        facts['completed_steps'], state.get('menu_hints_seen') or [])
     return {
         **journey,
         'schema_version': (
@@ -1151,6 +1147,7 @@ def serialize_onboarding_state(user):
         'duel_hints_seen': list(state.get('duel_hints_seen') or []),
         'menu_hints_seen': list(state.get('menu_hints_seen') or []),
         'starter_suits': dict(state.get('starter_suits') or {}),
+        'starter_set_granted': bool(state.get('starter_set_granted')),
         'onboarding_skipped': bool(state.get('onboarding_skipped')),
         'counters': dict(state.get('counters') or {}),
         'daily_quests_claimed_count': _nonnegative_int(

@@ -547,6 +547,7 @@ class TestBattleScreenVictoryReviewRouting:
         screen.game = game
         screen.state = SimpleNamespace(
             screen='conquer_game', subscreen='battle', action={'status': None},
+            user_dict={'onboarding': {'completed_steps': []}},
         )
         return BattleScreen, screen
 
@@ -581,6 +582,44 @@ class TestBattleScreenVictoryReviewRouting:
         assert game._pending_victory_review == {
             'available': True, 'land_id': 7, 'config_id': 999,
         }
+
+    def test_first_conquest_ignores_review_and_returns_to_map(self, monkeypatch):
+        class _DummyCardImg:
+            def __init__(self, *_a, **_k):
+                self.front_img = None
+        monkeypatch.setattr('game.components.cards.card_img.CardImg', _DummyCardImg)
+
+        game = SimpleNamespace(
+            player_id=10,
+            invader=True,
+            game_over=False,
+            mode='conquer',
+            land_id=7,
+            last_battle_result={
+                'conquer_attacker_player_id': 10,
+                'conquer_defender_player_id': 20,
+            },
+        )
+        BattleScreen, screen = self._make_screen(game)
+        screen.make_dialogue_box = lambda message, **kwargs: None
+
+        BattleScreen._handle_conquer_end(screen, {
+            'conquer_result': 'attacker_won',
+            'attacker_won': True,
+            'attacker_first_conquest': True,
+            'onboarding': {
+                'completed_steps': ['finish_first_conquer_battle'],
+            },
+            # Even a stale/legacy positive flag must not open defence setup.
+            'victory_review_available': True,
+            'victory_review_land_id': 7,
+            'victory_review_config_id': 999,
+        })
+
+        assert game._pending_victory_review['available'] is False
+        assert screen.state.user_dict['onboarding']['completed_steps'] == [
+            'finish_first_conquer_battle',
+        ]
 
     def test_ack_routes_to_defence_when_review_pending(self):
         game = SimpleNamespace(

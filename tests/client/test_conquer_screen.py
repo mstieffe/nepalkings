@@ -333,10 +333,12 @@ class TestConquerCoachCopy:
         assert step['id'] == 'conquer_config_to_battle'
         assert step['title'] == 'Your Attack Is Ready'
         assert 'guided tour ends here' not in step['body']
-        assert 'Here is your attack' in step['body']
+        assert 'We prepared your first attack' in step['body']
+        assert '3 figures on the field' in step['body']
+        assert '3 tactic moves to steer the battle' in step['body']
         assert 'prelude spell' in step['body']
         assert 'only looted cards' not in step['body']
-        assert step['button_label'] == 'Got it'
+        assert step['button_label'] == 'Start Battle'
 
 
 class TestConquerScreenNavigation:

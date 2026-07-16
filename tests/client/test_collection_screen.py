@@ -290,7 +290,7 @@ class TestCollectionVisibilityFilter:
         assert len(screen._card_rects) == len(positions)
 
 
-def test_collection_basics_window_splits_rarity_and_recipe_pages():
+def test_collection_basics_window_teaches_cards_recipes_then_roulette():
     import pygame
     from game.components import tutorial_diagrams as td
     from game.screens.collection_screen import CollectionScreen
@@ -318,16 +318,173 @@ def test_collection_basics_window_splits_rarity_and_recipe_pages():
 
     dialogue = screen._collection_basics_dialogue
     assert dialogue is not None
-    assert len(dialogue.pages) == 2
-    first, second = dialogue.pages
-    assert first['title'] == 'Key and number cards'
-    assert 'orange is Uncommon' in ' '.join(first['lines'])
-    assert first['image']() is td.card_rarity_code_diagram()
-    assert 'rarity' in ' '.join(first['lines'])
-    assert second['title'] == 'Cards become actions'
-    assert second['image']() is td.card_recipe_examples()
-    assert 'single card' in ' '.join(second['lines'])
-    assert 'recipe' in ' '.join(second['lines'])
+    assert [page['title'] for page in dialogue.pages] == [
+        'Cards become actions',
+        'Your starter set',
+    ]
+    recipe_page = dialogue.pages[0]
+    assert recipe_page['image']() is td.card_recipe_examples()
+    recipe_copy = ' '.join(recipe_page['lines']).lower()
+    assert 'figure' in recipe_copy
+    assert "don't worry about memorizing recipes" in recipe_copy
+    starter_copy = ' '.join(dialogue.pages[1]['lines']).lower()
+    assert 'spin the roulette' in starter_copy
+    assert dialogue.pages[1]['button_label'] == 'Spin Roulette'
+
+
+def test_finishing_collection_lesson_starts_roulette_immediately(monkeypatch):
+    from game.screens.collection_screen import CollectionScreen
+
+    onboarding = {
+        'welcome_seen': True,
+        'starter_suits': {},
+        'completed_steps': [],
+        'menu_hints_seen': [],
+        'onboarding_skipped': False,
+        'starter_set_granted': False,
+    }
+    screen = object.__new__(CollectionScreen)
+    screen.state = SimpleNamespace(
+        user_dict={'onboarding': onboarding},
+        set_msg=lambda _msg: None,
+    )
+    screen.window = None
+    screen._collection_basics_dialogue = SimpleNamespace(
+        update=lambda _events: 'done')
+    screen._starter_reveal_dialogue = None
+    screen._starter_reveal_prepare_attempted = False
+    screen._data_loaded = True
+    screen._cards = {}
+    screen._locked = {}
+    screen._reveal_overlay = None
+    screen._booster_poller = None
+    screen._sell_dialogue = None
+    screen._trade_dialogue = None
+    screen._profile_dialogue = None
+    screen.dialogue_box = None
+    screen._menu_coach_allowed_common = lambda: True
+    screen._onboarding = lambda: screen.state.user_dict['onboarding']
+    screen._menu_coach_seen = lambda: set(
+        screen._onboarding().get('menu_hints_seen') or [])
+    screen._mark_menu_coaches_seen = lambda ids: screen._onboarding().update({
+        'menu_hints_seen': list(ids)})
+    screen._apply_onboarding_payload = lambda data: screen.state.user_dict.update(
+        {'onboarding': data['onboarding']})
+    monkeypatch.setattr(
+        'game.screens.collection_screen.onboarding_service.prepare_starter_reveal',
+        lambda: {
+            'suit': 'Diamonds',
+            'onboarding': {
+                **screen._onboarding(),
+                'starter_suits': {
+                    'offensive': 'Diamonds', 'defensive': 'Spades'},
+            },
+        })
+
+    assert screen._handle_collection_basics_events([]) is True
+
+    assert screen._collection_basics_dialogue is None
+    assert screen._starter_reveal_dialogue is not None
+    assert screen._starter_reveal_dialogue.suit == 'Diamonds'
+
+
+def test_starter_reveal_starts_without_booster_or_pregranted_cards(monkeypatch):
+    import pygame
+    from game.screens.collection_screen import CollectionScreen
+
+    if not pygame.display.get_init():
+        pygame.display.init()
+    if pygame.display.get_surface() is None:
+        pygame.display.set_mode((1, 1))
+    screen = object.__new__(CollectionScreen)
+    screen.state = SimpleNamespace(user_dict={'onboarding': {
+        'starter_suits': {},
+        'completed_steps': [],
+        'menu_hints_seen': ['collection_basics_window'],
+        'onboarding_skipped': False,
+        'starter_set_granted': False,
+    }}, set_msg=lambda _msg: None)
+    screen.window = None
+    screen._starter_reveal_dialogue = None
+    screen._menu_coach_allowed_common = lambda: True
+    screen._starter_reveal_prepare_attempted = False
+    screen._data_loaded = True
+    screen._cards = {}
+    screen._locked = {}
+    screen._reveal_overlay = None
+    screen._collection_basics_dialogue = None
+    screen._booster_poller = None
+    screen._sell_dialogue = None
+    screen._trade_dialogue = None
+    screen._profile_dialogue = None
+    screen.dialogue_box = None
+    screen._apply_onboarding_payload = lambda data: screen.state.user_dict.update(
+        {'onboarding': data['onboarding']})
+    monkeypatch.setattr(
+        'game.screens.collection_screen.onboarding_service.prepare_starter_reveal',
+        lambda: {
+            'suit': 'Hearts',
+            'onboarding': {
+                **screen.state.user_dict['onboarding'],
+                'starter_suits': {'offensive': 'Hearts', 'defensive': 'Clubs'},
+            },
+        })
+
+    screen._maybe_show_starter_reveal()
+
+    assert screen._starter_reveal_dialogue is not None
+    assert screen._starter_reveal_dialogue.done_label == 'Go to Kingdom'
+    assert screen._cards == {}
+
+
+def test_starter_cards_are_added_on_reel_settle_then_routes_to_kingdom(monkeypatch):
+    from game.screens.collection_screen import CollectionScreen
+
+    screen = object.__new__(CollectionScreen)
+    onboarding = {
+        'starter_suits': {'offensive': 'Hearts', 'defensive': 'Clubs'},
+        'completed_steps': [],
+        'menu_hints_seen': ['collection_basics_window'],
+        'onboarding_skipped': False,
+        'starter_set_granted': False,
+    }
+    screen.state = SimpleNamespace(
+        user_dict={'onboarding': onboarding},
+        screen='collection',
+        set_msg=lambda _msg: None,
+    )
+    screen._cards = {}
+    screen._locked = {}
+    results = iter(['revealed', 'done'])
+    screen._starter_reveal_dialogue = SimpleNamespace(
+        update=lambda _events: next(results),
+        set_grant_result=lambda _success: None,
+    )
+    screen._apply_onboarding_payload = lambda data: screen.state.user_dict.update(
+        {'onboarding': data['onboarding']})
+    monkeypatch.setattr(
+        'game.screens.collection_screen.onboarding_service.complete_starter_reveal',
+        lambda: {
+            'onboarding': {
+                **onboarding,
+                'starter_set_granted': True,
+                'menu_hints_seen': [
+                    'collection_basics_window', 'starter_suit_reveal'],
+            },
+            'starter_cards': [
+                {'suit': 'Hearts', 'rank': 'K', 'total': 2, 'locked': 0},
+                {'suit': 'Hearts', 'rank': 'J', 'total': 2, 'locked': 0},
+            ],
+        })
+
+    assert screen._cards == {}
+    assert screen._handle_starter_reveal_events([]) is True
+    assert screen._cards == {('Hearts', 'K'): 2, ('Hearts', 'J'): 2}
+    assert screen.state.screen == 'collection'
+
+    assert screen._handle_starter_reveal_events([]) is True
+    assert screen._starter_reveal_dialogue is None
+    assert screen.state.screen == 'kingdom'
 
 
 class TestCollectionSettings:
@@ -1134,20 +1291,16 @@ class TestCollectionCoach:
         screen._icon_home = SimpleNamespace(rect=pygame.Rect(200, 20, 40, 40))
         return screen
 
-    def test_coach_routes_open_pack_then_kingdom_then_loop(self):
+    def test_coach_routes_starter_reveal_then_kingdom_then_loop(self):
         screen = self._screen()
-        # Collection-first journey: the basics window teaches cards, then the
-        # coach points straight at opening a starter pack (the redundant
-        # 'collection_starter_cards' reinforcement card was removed).
-        step = screen._current_collection_coach_step()
-        assert step['id'] == 'collection_open_main_booster'
+        # The modal owns the starter reveal; no booster coach interrupts it.
+        assert screen._current_collection_coach_step() is None
 
-        # Once a pack is opened, the player is sent to the Kingdom to conquer.
-        screen.state.user_dict['onboarding']['completed_steps'].append('open_first_main_booster')
-        step = screen._current_collection_coach_step()
-        assert step['id'] == 'post_boosters_kingdom'
-        assert step['button_label'] == 'Go to Kingdom'
-        assert step['navigate_screen'] == 'kingdom'
+        # Once revealed, the roulette button routes directly to Kingdom; no
+        # coach is attached to the global Home icon.
+        screen.state.user_dict['onboarding']['menu_hints_seen'].append(
+            'starter_suit_reveal')
+        assert screen._current_collection_coach_step() is None
 
         # After the first conquest the collection screen no longer nudges back
         # and forth (the reward-pack round-trip is gone); the kingdom and menu
@@ -1168,12 +1321,12 @@ class TestCollectionCoach:
         # never navigate to the duel. With the round-trip removed it simply goes
         # quiet here (the kingdom/menu coaches steer back to production).
         screen = self._screen(
-            completed=['finish_first_conquer_battle', 'open_first_main_booster'],
+            completed=['finish_first_conquer_battle'],
             seen=['collection_starter_cards'])
         step = screen._current_collection_coach_step()
         assert step is None or step.get('navigate_screen') != 'duel_menu'
 
-    def test_coach_opens_main_reward_pack_after_conquest_if_intro_seen(self):
+    def test_coach_never_requires_main_booster_during_first_journey(self):
         screen = self._screen(completed=[
             'finish_first_conquer_battle',
         ])
@@ -1187,9 +1340,9 @@ class TestCollectionCoach:
 
         step = screen._current_collection_coach_step()
 
-        assert step['id'] == 'collection_open_main_booster'
+        assert step is None
 
-    def test_open_booster_result_marks_local_onboarding_step(self, monkeypatch):
+    def test_open_booster_result_does_not_mark_removed_tutorial_step(self, monkeypatch):
         from game.screens.collection_screen import CollectionScreen
         from game.components import booster_reveal
 
@@ -1210,7 +1363,7 @@ class TestCollectionCoach:
             'cards': [{'suit': 'Hearts', 'rank': '7'}],
         })
 
-        assert 'open_first_main_booster' in screen.state.user_dict['onboarding']['completed_steps']
+        assert 'open_first_main_booster' not in screen.state.user_dict['onboarding']['completed_steps']
         assert screen.state.user_dict['booster_packs'] == 0
         assert screen._cards[('Hearts', '7')] == 1
 

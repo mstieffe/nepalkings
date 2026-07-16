@@ -347,9 +347,8 @@ def register():
             terms_accepted_at=_utcnow(),
             privacy_version=settings.LEGAL_PRIVACY_VERSION,
             privacy_accepted_at=_utcnow(),
-            # Welcome gift (gold, packs, maps) is NOT granted at signup; it is
-            # credited when the player opens the gift boxes in the welcome
-            # sequence. See grant_welcome_gift() in onboarding_service.
+            # No items are granted at signup. Starter cards arrive after the
+            # Collection roulette; economy rewards arrive at journey completion.
             gold=0,
             booster_packs=0,
             booster_packs_side=0,
@@ -362,10 +361,9 @@ def register():
             logger.exception("Failed to initialize onboarding for new user")
         db.session.add(user)
         db.session.flush()
-        # The starter suit + offensive set are NOT assigned at signup. They are
-        # granted when the player opens their first booster pack (just before the
-        # first conquest) and revealed one-armed-bandit style on the collection
-        # screen, framed as a draw from all four suits. No defensive set is
+        # The starter suit + offensive set are NOT assigned at signup. The suit
+        # is selected for the Collection roulette and its cards are granted only
+        # after that reel settles. No defensive set is
         # granted: after a won conquest the conquer config is converted into the
         # land's defence config. See grant_starter_set() in onboarding_service.
         track('signup', user_id=user.id, has_email=bool(email))

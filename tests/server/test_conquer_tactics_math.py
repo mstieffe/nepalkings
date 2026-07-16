@@ -451,6 +451,54 @@ def test_completed_battle_state_returns_authoritative_total_for_each_viewer(app,
     assert defender_resp.get_json()['battle_total_diff'] == -9
 
 
+def test_finished_invader_swap_state_orients_persisted_total_to_each_viewer(app, db):
+    client = app.test_client()
+    game, attacker, defender, _attacker_fig, _defender_fig = _setup_tactics_battle(
+        db.session)
+
+    # Production-shaped completed Invader Swap battle: the original conquer
+    # attacker defended, so the original defender was the advancing score side.
+    # Canonical -21 therefore means +21 for the conquer attacker.
+    game.state = 'finished'
+    game.invader_player_id = defender.id
+    game.advancing_player_id = defender.id
+    game.winner_player_id = attacker.id
+    game.last_battle_result = {
+        'conquer_resolved': True,
+        'winner_player_id': attacker.id,
+        'loser_player_id': defender.id,
+        'conquer_attacker_player_id': attacker.id,
+        'conquer_attacker_user_id': attacker.user_id,
+        'conquer_defender_player_id': defender.id,
+        'conquer_defender_user_id': defender.user_id,
+        'fig_diff': -9,
+        'round_diff': -12,
+        'adv_power': 15,
+        'def_power': 24,
+    }
+    db.session.commit()
+
+    attacker_resp = client.get(
+        '/games/get_battle_state',
+        query_string={'game_id': game.id, 'player_id': attacker.id},
+        headers=_auth_headers(attacker.user_id),
+    )
+    defender_resp = client.get(
+        '/games/get_battle_state',
+        query_string={'game_id': game.id, 'player_id': defender.id},
+        headers=_auth_headers(defender.user_id),
+    )
+
+    assert attacker_resp.status_code == 200, attacker_resp.get_json()
+    assert defender_resp.status_code == 200, defender_resp.get_json()
+    assert attacker_resp.get_json()['conquer_result'] == 'attacker_won'
+    assert attacker_resp.get_json()['battle_score_player_id'] == defender.id
+    assert attacker_resp.get_json()['battle_total_diff'] == 21
+    assert attacker_resp.get_json()['total_diff'] == 21
+    assert defender_resp.get_json()['battle_total_diff'] == -21
+    assert defender_resp.get_json()['total_diff'] == -21
+
+
 def test_conquer_tactics_cleanup_returns_only_unplayed_runtime_cards(db):
     game, attacker, _defender, _attacker_fig, _defender_fig = _setup_tactics_battle(db.session)
     played_tactic, played_card, _played_b = _add_tactic(
@@ -606,6 +654,31 @@ def test_finish_battle_win_response_includes_figure_tactic_breakdown(app, db):
     assert data['def_power'] == 4
     assert data['fig_diff'] == 3
     assert data['round_diff'] == 3
+    assert data['battle_score_diff'] == 6
+    assert data['battle_score_player_id'] == attacker.id
+    assert data['total_diff'] == 6
+    assert data['battle_total_diff'] == 6
+
+    # Resolution destroys one fighter, so the live DB calculation is no longer
+    # available.  Both viewers must still receive the persisted final total in
+    # their own perspective from the completed-battle payload.
+    attacker_state = client.get(
+        '/games/get_battle_state',
+        query_string={'game_id': game.id, 'player_id': attacker.id},
+        headers=_auth_headers(attacker.user_id),
+    )
+    defender_state = client.get(
+        '/games/get_battle_state',
+        query_string={'game_id': game.id, 'player_id': defender.id},
+        headers=_auth_headers(defender.user_id),
+    )
+    assert attacker_state.status_code == 200, attacker_state.get_json()
+    assert defender_state.status_code == 200, defender_state.get_json()
+    assert attacker_state.get_json()['battle_total_diff'] == 6
+    assert attacker_state.get_json()['total_diff'] == 6
+    assert defender_state.get_json()['battle_total_diff'] == -6
+    assert defender_state.get_json()['total_diff'] == -6
+    assert defender_state.get_json()['battle_score_player_id'] == attacker.id
 
 
 def test_finish_battle_draw_response_includes_figure_tactic_breakdown(app, db):
@@ -630,3 +703,7 @@ def test_finish_battle_draw_response_includes_figure_tactic_breakdown(app, db):
     # Equal figures (4 vs 4) and equal tactics (7 vs 7) → both diffs zero.
     assert data['fig_diff'] == 0
     assert data['round_diff'] == 0
+    assert data['battle_score_diff'] == 0
+    assert data['battle_score_player_id'] == attacker.id
+    assert data['total_diff'] == 0
+    assert data['battle_total_diff'] == 0

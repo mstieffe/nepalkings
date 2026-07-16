@@ -892,9 +892,7 @@ class BuildFigureScreen(SubScreen):
                         self, '_collection_tutorial_button_rect', None)
                     if (tutorial_collection is not None
                             and tutorial_collection.collidepoint(event.pos)):
-                        from utils import sound
-                        sound.play('ui_click')
-                        self.state.screen = 'collection'
+                        self._open_collection_from_tutorial()
                         continue
 
                     # Suit-filter chips (kingdom mode only) — handle before
@@ -1144,7 +1142,7 @@ class BuildFigureScreen(SubScreen):
             for fig in self._kingdom_figures()
         }
         if not self._has_buildable_figure_family():
-            return 'No recipe is glowing yet. Open your conquest reward packs in Collection, then return here.'
+            return 'No recipe is glowing yet. Open your First Journey reward packs in Collection, then return here.'
         if 'castle' not in fields:
             return 'Choose any glowing Castle recipe, then press "create!".'
         if 'village' not in fields:
@@ -1152,6 +1150,12 @@ class BuildFigureScreen(SubScreen):
         if 'military' not in fields:
             return 'Now build your Warriors (military) — they spend the Farm’s food to fight.'
         return 'Army ready! Close the builder, then add any three available tactics.'
+
+    def _open_collection_from_tutorial(self):
+        """Leave the config builder for the Collection reward-pack screen."""
+        from utils import sound
+        sound.play('ui_click')
+        self.state.screen = 'collection'
 
     def _draw_second_build_hint(self):
         """Draw a progressive instruction banner along the bottom of the builder.
@@ -1189,6 +1193,7 @@ class BuildFigureScreen(SubScreen):
             pygame.draw.rect(self.window, (238, 206, 130), rect, 1, border_radius=6)
             txt = font.render('Go to Collection', True, (255, 244, 210))
             self.window.blit(txt, txt.get_rect(center=rect.center))
+            self._collection_tutorial_button_rect = rect
 
     def draw(self):
         """Draw the screen, including buttons and background."""

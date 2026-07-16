@@ -3667,11 +3667,16 @@ class GameScreen(Screen):
             'round_diff': last.get('round_diff'),
             'adv_power': last.get('adv_power'),
             'def_power': last.get('def_power'),
+            'battle_score_diff': last.get('battle_score_diff'),
+            'battle_score_player_id': last.get('battle_score_player_id'),
+            'total_diff': last.get('total_diff'),
+            'battle_total_diff': last.get('battle_total_diff'),
         }
         return result
 
     def _handle_conquer_result_response(self, result):
         """Show conquer resolution from non-battle-screen server responses."""
+        self._apply_game_onboarding_payload(result)
         if not result or not result.get('conquer_result') or not self.state.game:
             return False
 
@@ -3679,6 +3684,18 @@ class GameScreen(Screen):
             self.state.game.update_from_dict(result['game'])
 
         game = self.state.game
+        # ``update_from_dict`` replaces last_battle_result with the canonical
+        # persisted record.  Preserve the top-level viewer-oriented score from
+        # the finish/poll response separately so the bottom ledger cannot fall
+        # back to post-destruction figure math.
+        response_total = result.get('battle_total_diff')
+        if response_total is None:
+            response_total = result.get('total_diff')
+        if response_total is not None:
+            try:
+                game.battle_total_diff = int(response_total)
+            except (TypeError, ValueError):
+                pass
         if getattr(game, '_conquer_result_dialogue_shown', False):
             return True
 
@@ -3698,7 +3715,9 @@ class GameScreen(Screen):
         # trigger the review.
         if attacker_won and is_attacker:
             game._pending_victory_review = {
-                'available': bool(result.get('victory_review_available')),
+                'available': bool(
+                    result.get('victory_review_available')
+                    and not result.get('attacker_first_conquest')),
                 'land_id': result.get('victory_review_land_id'),
                 'config_id': result.get('victory_review_config_id'),
             }
@@ -3724,8 +3743,9 @@ class GameScreen(Screen):
             # First conquest is a milestone — celebrate it (the dialog already
             # plays the conquer_win fanfare via sound.play_for_dialogue).
             _onboarding = (getattr(self.state, 'user_dict', None) or {}).get('onboarding') or {}
-            _first_conquest = ('finish_first_conquer_battle'
-                               not in set(_onboarding.get('completed_steps') or []))
+            _first_conquest = bool(result.get('attacker_first_conquest')) or (
+                'finish_first_conquer_battle'
+                not in set(_onboarding.get('completed_steps') or []))
             if _first_conquest:
                 message = (f'Your first land is yours! You conquered {land_label}, '
                            'and this kingdom now grows from the map. '
@@ -3878,11 +3898,12 @@ class GameScreen(Screen):
     def _conquer_result_breakdown_line(self, result, is_attacker):
         """One-line figure-vs-tactic split for the conquer result dialog.
 
-        The server stores ``fig_diff`` / ``round_diff`` in attacker
-        perspective; flip them for a viewer who defended.  Surfacing this
-        teaches players that figure power, not tactics, usually decides a
-        conquer battle.  Returns '' when the breakdown is absent (e.g.
-        auto-loss / withdrawal outcomes) so the line collapses cleanly.
+        The server stores ``fig_diff`` / ``round_diff`` in the advancing battle
+        side's perspective.  That is normally the conquer attacker, but
+        Invader Swap makes the original attacker defend, so prefer the explicit
+        ``battle_score_player_id`` perspective marker.  Legacy payloads fall
+        back to the original attacker/defender orientation.  Returns '' when
+        the breakdown is absent (e.g. auto-loss / withdrawal outcomes).
         """
         if not isinstance(result, dict):
             return ''
@@ -3893,7 +3914,19 @@ class GameScreen(Screen):
             rounds = int(result.get('round_diff') or 0)
         except (TypeError, ValueError):
             return ''
-        if not is_attacker:
+        score_player_id = result.get('battle_score_player_id')
+        local_player_id = None
+        try:
+            game = self.state.game if self is not None and self.state else None
+            local_player_id = getattr(game, 'player_id', None) if game else None
+        except Exception:
+            local_player_id = None
+        if score_player_id is not None and local_player_id is not None:
+            viewer_uses_score_perspective = (
+                str(score_player_id) == str(local_player_id))
+        else:
+            viewer_uses_score_perspective = bool(is_attacker)
+        if not viewer_uses_score_perspective:
             fig = -fig
             rounds = -rounds
         total = fig + rounds
@@ -3920,6 +3953,7 @@ class GameScreen(Screen):
 
     def _show_game_over_dialogue(self, game_over_info):
         """Show a game-over dialogue with the result and gold awarded."""
+        self._apply_game_onboarding_payload(game_over_info)
         if self.state.game.game_over_shown:
             return
         self.state.game.game_over = True
@@ -3936,7 +3970,9 @@ class GameScreen(Screen):
             # Stash Victory Review handoff for the checkmate-driven path.
             if is_winner and is_attacker:
                 self.state.game._pending_victory_review = {
-                    'available': bool(game_over_info.get('victory_review_available')),
+                    'available': bool(
+                        game_over_info.get('victory_review_available')
+                        and not game_over_info.get('attacker_first_conquest')),
                     'land_id': game_over_info.get('victory_review_land_id'),
                     'config_id': game_over_info.get('victory_review_config_id'),
                 }

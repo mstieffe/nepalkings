@@ -693,7 +693,7 @@ class MenuScreenMixin:
     # Ordered: conquer tutorial completes first, the duel tutorial later.
     _TUTORIAL_COMPLETIONS = (
         ('finish_tutorial', 'First Journey Complete!', [
-            "You know the first conquer loop: open packs, prepare an attack, and take a land.",
+            "You revealed your starter cards, launched a prepared attack, chose tactics, and took your first land.",
             "Keep expanding your kingdom, or try the Duel tutorial from the Duel menu whenever you're ready.",
         ]),
         ('finish_first_duel', 'Duel Tutorial Complete!', [
@@ -754,8 +754,13 @@ class MenuScreenMixin:
             'victory',
             lines,
             self._reward_reveal_items(reward),
-            footer_when_done='Reward claimed. Well played!',
+            footer_when_done='All rewards revealed. Well played!',
             hint_text='Click each box to reveal your reward.',
+            ok_label=(
+                'Collect & continue'
+                if step_id == 'finish_tutorial'
+                else 'ok'
+            ),
         )
 
     def _draw_tutorial_complete_dialogue(self):
@@ -1659,14 +1664,15 @@ class MenuScreenMixin:
     def _first_session_journey_phase(self):
         """Client mirror of onboarding_service._journey_metadata.
 
-        The mandatory tutorial is the kingdom core loop: open a starter booster
-        -> conquer the first land. Production, the kingdom-config tour, and
+        The mandatory tutorial is the kingdom core loop: reveal the prepared
+        starter cards -> conquer the first land. Production, kingdom config, and
         defence setup are deferred to on-demand coaching, and the duel is
         optional, so no phase routes to those areas.
         """
         completed = self._onboarding_completed_steps()
-        if 'open_first_main_booster' not in completed:
-            return 'open_starter_pack'
+        if ('starter_suit_reveal' not in self._menu_coach_seen()
+                and 'finish_first_conquer_battle' not in completed):
+            return 'reveal_starter_cards'
         if 'finish_first_conquer_battle' not in completed:
             return 'first_conquest'
         if 'finish_tutorial' not in completed:
@@ -1675,11 +1681,11 @@ class MenuScreenMixin:
 
     def _first_session_next_action(self):
         phase = self._first_session_journey_phase()
-        if phase == 'open_starter_pack':
+        if phase == 'reveal_starter_cards':
             return {
                 'screen': 'collection',
-                'label': 'Open a Booster Pack',
-                'target_id': 'collection_open_main_booster',
+                'label': 'Reveal Starter Cards',
+                'target_id': 'starter_suit_reveal',
             }
         if phase == 'first_conquest':
             return {

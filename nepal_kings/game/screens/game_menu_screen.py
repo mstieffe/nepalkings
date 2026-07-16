@@ -499,9 +499,11 @@ class GameMenuScreen(MenuScreenMixin, Screen):
             self.state.screen = 'rankings'
             logger.debug("Rankings button clicked")
 
-    def _main_reward_booster_unopened(self):
-        completed = self._onboarding_completed_steps()
-        return 'open_first_main_booster' not in completed
+    def _starter_cards_unrevealed(self):
+        return (
+            self._first_conquer_incomplete()
+            and 'starter_suit_reveal' not in self._menu_coach_seen()
+        )
 
     def _first_conquer_incomplete(self):
         return ('finish_first_conquer_battle'
@@ -511,31 +513,29 @@ class GameMenuScreen(MenuScreenMixin, Screen):
         return 'finish_tutorial' in self._onboarding_completed_steps()
 
     def _current_journey_coach_step(self):
-        """Guided first-session path: open a pack → conquer → kingdom loop.
+        """Guided first-session path: reveal starter cards → conquer → reward.
 
-        Collection comes first: after the welcome gift, the player opens a
-        starter booster (learning how the collection grows) before their first
-        conquest. The conquer battle follows, then the first owned land closes
-        the tutorial. The duel is NOT part of this path and is not pushed from
-        here; the completion box points the player to the Duel menu.
+        Collection comes first only to reveal the prepared starter set. Booster
+        opening waits until after the first conquest, whose map return closes
+        the tutorial with the full economy reward.
         """
         seen = self._menu_coach_seen()
-        if self._main_reward_booster_unopened():
-            if 'open_starter_pack' not in seen:
+        if self._starter_cards_unrevealed():
+            if 'open_starter_cards' not in seen:
                 return {
-                    'id': 'open_starter_pack',
+                    'id': 'open_starter_cards',
                     'rect': self.button_collection.rect,
-                    'title': 'Open Your Booster Packs',
-                    'body': 'Your gift is waiting in the Collection. Tap it and open your first booster pack.',
+                    'title': 'Visit Your Collection',
+                    'body': 'This is the main menu. Let us visit your collection first.',
                     'action': 'click',
                     'mark_on_click': True,
                     'max_lines': 4,
                 }
-            return None  # the collection screen guides opening the pack
+            return None
         if self._first_conquer_incomplete():
-            if 'post_boosters_kingdom' not in seen:
+            if 'post_starter_cards_kingdom' not in seen:
                 return {
-                    'id': 'post_boosters_kingdom',
+                    'id': 'post_starter_cards_kingdom',
                     'rect': self.button_kingdom.rect,
                     'title': 'Conquer Your First Land',
                     'body': 'Your first attack is prepared. Open your Kingdom and take the marked land.',
@@ -583,8 +583,8 @@ class GameMenuScreen(MenuScreenMixin, Screen):
 
     # ── Welcome present reveal ─────────────────────────────────────
 
-    # Number of welcome-window stages before the starter-suit reveal.
-    _WELCOME_STAGES = 2
+    # One concise welcome surface; cards and economy rewards are deferred.
+    _WELCOME_STAGES = 1
 
     def _build_welcome_stage(self, stage, username):
         """Build the dialogue for one welcome stage (or None)."""
@@ -595,29 +595,6 @@ class GameMenuScreen(MenuScreenMixin, Screen):
                 self.window,
                 welcome_pages(username, screen_height=_SH),
                 title='Welcome to Nepal Kings',
-            )
-        if stage == 1:
-            from game.components.rewards_reveal_dialogue import RewardsRevealDialogueBox
-            from game.tutorial_content import welcome_gift_lines
-            present = (self._onboarding() or {}).get('starter_present') or {}
-            # The gift is credited only when these boxes are opened, so the
-            # account balance is still 0 here — reveal the starter DEFAULTS.
-            defaults = present.get('starter_defaults') or {}
-            items = self._reward_reveal_items({
-                'gold': defaults.get('gold'),
-                'booster_packs': defaults.get('booster_packs'),
-                'booster_packs_side': defaults.get('booster_packs_side'),
-                'maps': defaults.get('maps'),
-            })
-            return RewardsRevealDialogueBox(
-                self.window,
-                'Your Welcome Gift',
-                'welcome',
-                welcome_gift_lines(),
-                items,
-                footer_when_done='Added to your collection!',
-                hint_text='Open each chest to reveal your gift.',
-                kicker='Welcome to Nepal Kings',
             )
         return None
 
@@ -649,7 +626,6 @@ class GameMenuScreen(MenuScreenMixin, Screen):
         if self._welcome_present_dialogue:
             if any(event.type == QUIT for event in events):
                 return False
-            # All three welcome dialogue types return a truthy value when done.
             if self._welcome_present_dialogue.update(events):
                 self._welcome_present_dialogue = None
                 self._welcome_stage += 1

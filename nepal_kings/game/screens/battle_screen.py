@@ -2415,6 +2415,11 @@ class BattleScreen(SubScreen):
     def _handle_conquer_end(self, result):
         """Handle the end of a conquer battle — show result and route to kingdom."""
         from game.components.cards.card_img import CardImg
+        state = getattr(self, 'state', None)
+        user_dict = getattr(state, 'user_dict', None)
+        onboarding = result.get('onboarding') if isinstance(result, dict) else None
+        if onboarding is not None and isinstance(user_dict, dict):
+            user_dict['onboarding'] = onboarding
         if self.game:
             if getattr(self.game, '_conquer_result_dialogue_shown', False):
                 return
@@ -2427,7 +2432,11 @@ class BattleScreen(SubScreen):
         # the dialogue closes, independent of poll cache timing.
         if self.game is not None and attacker_won and is_attacker:
             self.game._pending_victory_review = {
-                'available': bool(result.get('victory_review_available')),
+                # The first tutorial conquest returns directly to the map; its
+                # converted defence is taught later when opened on demand.
+                'available': bool(
+                    result.get('victory_review_available')
+                    and not result.get('attacker_first_conquest')),
                 'land_id': result.get('victory_review_land_id'),
                 'config_id': result.get('victory_review_config_id'),
             }
@@ -2490,9 +2499,8 @@ class BattleScreen(SubScreen):
             land_label = "Tier {} land".format(land_tier) if land_tier else "this land"
             title = "Land Conquered!"
             icon = 'victory'
-            _state = getattr(self, 'state', None)
-            onboarding = (getattr(_state, 'user_dict', None) or {}).get('onboarding') or {}
-            first_conquest = (
+            onboarding = (user_dict or {}).get('onboarding') or {}
+            first_conquest = bool(result.get('attacker_first_conquest')) or (
                 'finish_first_conquer_battle'
                 not in set(onboarding.get('completed_steps') or [])
             )

@@ -2655,6 +2655,32 @@ class TestConquerFinishedIdempotency:
             assert payload['victory_review_config_id'] is None
             assert payload['victory_review_land_id'] is None
 
+    def test_serialize_omits_review_for_first_conquest(self, app, db):
+        with app.app_context():
+            from routes.games import _serialize_finished_conquer_result
+            from models import User, Game
+            client, atk_headers, game, atk_player = self._make_finished_conquer_game(
+                app, db, result='attacker_won')
+            attacker = db.session.get(User, atk_player.user_id)
+            def_player = [p for p in game.players if p.id != atk_player.id][0]
+            defender = db.session.get(User, def_player.user_id)
+            self._attach_victory_review(db, game, attacker, defender,
+                                        atk_player, land_id=game.land_id)
+            last_result = dict(game.last_battle_result or {})
+            last_result['attacker_first_conquest'] = True
+            game.last_battle_result = last_result
+            _mark_first_conquer_done(attacker)
+            db.session.commit()
+
+            payload = _serialize_finished_conquer_result(
+                db.session.get(Game, game.id), viewer_user_id=attacker.id)
+
+            assert payload['victory_review_available'] is False
+            assert payload['victory_review_config_id'] is None
+            assert 'finish_first_conquer_battle' in (
+                payload['onboarding']['completed_steps']
+            )
+
     def test_serialize_omits_review_for_defender_win(self, app, db):
         with app.app_context():
             from routes.games import _serialize_finished_conquer_result
@@ -3069,13 +3095,12 @@ class TestAITemplateCardRewards:
             cap = kingdom_vault_cap(kingdom)
             assert float(kingdom.pending_gold or 0.0) >= cap - 1e-6
 
-    def test_first_conquest_grants_reward_pack(self, app, db):
-        """The first conquest win awards one main booster as the reward pack."""
+    def test_first_conquest_defers_economy_reward_to_tutorial_finale(self, app, db):
         with app.app_context():
             result, user, land, game, cfg = self._start_battle_and_resolve(
                 app, db, attacker_wins=True)
             db.session.refresh(user)
-            assert int(user.booster_packs or 0) == 1
+            assert int(user.booster_packs or 0) == 0
 
     def test_attacker_wins_sets_land_conquer_protection(self, app, db):
         """Successful conquest sets a temporary land-level conquer protection timestamp."""
@@ -3319,12 +3344,27 @@ class TestAITemplateCardRewards:
         """
         with app.app_context():
             result, user, land, game, cfg = self._start_battle_and_resolve(
-                app, db, attacker_wins=True)
+                app, db, attacker_wins=True, past_tutorial=True)
 
             assert result['attacker_won'] is True
             assert result.get('victory_review_available') is True
             assert result.get('victory_review_config_id') == cfg.id
             assert result.get('victory_review_land_id') == land.id
+
+    def test_first_conquest_goes_directly_to_map_without_victory_review(self, app, db):
+        with app.app_context():
+            result, user, land, game, cfg = self._start_battle_and_resolve(
+                app, db, attacker_wins=True)
+
+            assert result['attacker_won'] is True
+            assert result['attacker_first_conquest'] is True
+            assert 'finish_first_conquer_battle' in (
+                result['onboarding']['completed_steps']
+            )
+            assert result['victory_review_available'] is False
+            assert result['victory_review_config_id'] is None
+            db.session.refresh(cfg)
+            assert cfg.config_type == 'defence'
 
     def test_defender_wins_omits_victory_review_fields(self, app, db):
         with app.app_context():
