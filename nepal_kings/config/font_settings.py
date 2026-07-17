@@ -16,6 +16,20 @@ FS_BUTTON   = int(0.030 * _FS)  # Standard game/confirm/sub-screen button labels
 FS_SMALL    = int(0.026 * _FS)  # Small text — icon captions, turn indicator, mini scroll
 FS_TINY     = int(0.026 * _FS)  # Fine detail — tooltips, power circles, scoreboard sub-labels
 
+# Legibility floor: the smallest canvas-px size that stays readable after the
+# mobile canvas is CSS-downscaled (~0.78x on small phones). Every conquer tier
+# below floors on this instead of the old, always-dead max(7..10, ...) guards.
+FS_FLOOR    = max(12, int(0.016 * _FS))
+
+# ── Conquer battle semantic tiers ────────────────────────────────────────────
+# The conquer screen previously derived ~40 ad-hoc sizes from FS_TINY with
+# 0.50–0.95 multipliers, landing below legibility on the mobile canvas. All
+# conquer battle text maps onto these four roles instead.
+FS_CONQUER_PRIMARY   = max(FS_FLOOR * 2, int(0.046 * _FS))            # fighter totals, diff value
+FS_CONQUER_SECONDARY = max(int(FS_FLOOR * 1.3), int(0.030 * _FS))     # chip values, support totals
+FS_CONQUER_LABEL     = max(FS_FLOOR, int(0.020 * _FS))                # SUPPORT/CLASH/R#, captions
+FS_CONQUER_META      = FS_FLOOR                                       # sources, fine print
+
 # ── Legacy aliases (keep existing constant names mapped to groups) ────────────
 FONT_PATH               = None
 FONT_SIZE               = FS_DISPLAY   # hero/large display font

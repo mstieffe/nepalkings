@@ -547,6 +547,10 @@ class ConquerRoundLedger:
     def rect(self) -> pygame.Rect:
         return pygame.Rect(*self._ensure_layout().round_ledger.rect)
 
+    def clear_touch_pin(self):
+        """Dismiss the pinned round recap (single-pin rule coordination)."""
+        self._touch_round_idx = None
+
     # ------------------------------------------------------------------ events
     def handle_event(self, event) -> Optional[str]:
         """Handle total-result clicks and touch-friendly round inspection."""
@@ -641,16 +645,23 @@ class ConquerRoundLedger:
             border = (210, 168, 72) if is_active else _BORDER_RGBA
         pygame.draw.rect(self.window, border, rect, 2, border_radius=6)
 
-        title_font = settings.get_font(max(10, int(settings.FS_TINY * 0.95)), bold=True)
-        title_label = self._fit_text(f'Round {idx + 1}', title_font, rect.width - 12)
-        ts = title_font.render(title_label, True, _TEXT_SECONDARY)
-        self.window.blit(ts, (rect.left + 6, rect.top + 4))
+        # Short bands (compact mobile ledger) drop the "Round N" caption row
+        # and overlay a tiny R# tag instead, so the tactic chips keep nearly
+        # the whole height and the reveal/ghost animations render unchanged.
+        compact = rect.height < 64
+        if compact:
+            chip_y = rect.top + 3
+        else:
+            title_font = settings.get_font(max(10, int(settings.FS_TINY * 0.95)), bold=True)
+            title_label = self._fit_text(f'Round {idx + 1}', title_font, rect.width - 12)
+            ts = title_font.render(title_label, True, _TEXT_SECONDARY)
+            self.window.blit(ts, (rect.left + 6, rect.top + 4))
+            chip_y = rect.top + 4 + ts.get_height() + 4
 
         # Three columns: you-chip | diff | opp-chip
         chip_w = int(rect.width * 0.34)
         diff_w = rect.width - chip_w * 2
-        chip_y = rect.top + 4 + ts.get_height() + 4
-        chip_h = rect.bottom - chip_y - 6
+        chip_h = rect.bottom - chip_y - (3 if compact else 6)
         you_rect = pygame.Rect(rect.left + 4, chip_y, chip_w - 8, chip_h)
         diff_rect = pygame.Rect(rect.left + chip_w, chip_y, diff_w, chip_h)
         opp_rect = pygame.Rect(rect.right - chip_w + 4, chip_y, chip_w - 8, chip_h)
@@ -676,6 +687,18 @@ class ConquerRoundLedger:
             self._draw_diff_pill(diff_rect, you, opp,
                                  played=(you is not None and opp is not None),
                                  ghost_move=ghost_move)
+        if compact:
+            # Round tag overlays the card corner (drawn last — the chips
+            # span the full compact height and would cover it otherwise).
+            tag_font = settings.get_font(settings.FS_CONQUER_META, bold=True)
+            tag = tag_font.render(f'R{idx + 1}', True,
+                                  (250, 226, 150) if is_active
+                                  else _TEXT_SECONDARY)
+            tag_bg = tag.get_rect().inflate(6, 2)
+            tag_bg.topleft = (rect.left + 2, rect.top + 2)
+            pygame.draw.rect(self.window, (24, 18, 12), tag_bg,
+                             border_radius=max(2, tag_bg.height // 3))
+            self.window.blit(tag, tag.get_rect(center=tag_bg.center))
 
     # -- staged reveal (choreographed by ConquerRevealSequencer)
     def _draw_opp_chip_revealing(self, rect: pygame.Rect, opp, reveal_stage):
@@ -835,7 +858,8 @@ class ConquerRoundLedger:
         pwr_font = settings.get_font(max(13, int(settings.FS_SMALL * 1.1)), bold=True)
         text_col = _GHOST_BLUE if ghost else _TEXT_SECONDARY
         power_col = _GHOST_BLUE if ghost else _TEXT_PRIMARY
-        icon_size = max(28, min(rect.height - 4, int(rect.width * 0.58)))
+        icon_size = max(min(28, max(12, rect.height - 4)),
+                        min(rect.height - 4, int(rect.width * 0.58)))
         icon_x = rect.left + 4 + icon_size // 2
         icon_y = rect.centery
         icon_drawn = self._draw_move_icon(icon_x, icon_y, icon_size, move, ghost=ghost)
@@ -950,13 +974,24 @@ class ConquerRoundLedger:
         bg.fill((44, 33, 20, 240))
         self.window.blit(bg, rect.topleft)
         pygame.draw.rect(self.window, (210, 168, 72), rect, 2, border_radius=6)
-        title_font = settings.get_font(max(11, int(settings.FS_TINY * 1.05)), bold=True)
-        title_label = 'BATTLE TOTAL'
-        if title_font.size(title_label)[0] > rect.width - 8:
-            title_label = 'TOTAL'
-        title_label = self._fit_text(title_label, title_font, rect.width - 8)
-        ts = title_font.render(title_label, True, (238, 206, 130))
-        self.window.blit(ts, ts.get_rect(midtop=(rect.centerx, rect.top + 3)))
+        # Compact bands lay the caption beside the circle instead of above
+        # it — stacking would shrink the circle below legibility.
+        compact = rect.height < 64
+        if compact:
+            title_font = settings.get_font(settings.FS_CONQUER_META, bold=True)
+            title_label = self._fit_text(
+                'TOTAL', title_font, max(24, rect.width - rect.height - 18))
+            ts = title_font.render(title_label, True, (238, 206, 130))
+            self.window.blit(ts, ts.get_rect(
+                midleft=(rect.left + 8, rect.centery)))
+        else:
+            title_font = settings.get_font(max(11, int(settings.FS_TINY * 1.05)), bold=True)
+            title_label = 'BATTLE TOTAL'
+            if title_font.size(title_label)[0] > rect.width - 8:
+                title_label = 'TOTAL'
+            title_label = self._fit_text(title_label, title_font, rect.width - 8)
+            ts = title_font.render(title_label, True, (238, 206, 130))
+            self.window.blit(ts, ts.get_rect(midtop=(rect.centerx, rect.top + 3)))
 
         total_diff = self._ghost_total_diff(you_per, opp_per, ghost_preview)
         if ghost_preview is None:
@@ -988,14 +1023,20 @@ class ConquerRoundLedger:
                 label = f'{display_total:+d}' if played_count else '–'
 
         # Circle -- enlarged + gold halo so the battle-total reading
-        # dominates the ledger band. The circle is anchored below the
-        # "BATTLE TOTAL" caption so they don't overlap.
-        title_clearance = title_font.get_height() + 6
-        avail_h = max(8, rect.height - title_clearance - 4)
-        diameter = min(circle_rect.width, avail_h)
-        radius = max(8, diameter // 2 - 2)
-        cx = circle_rect.centerx
-        cy = rect.top + title_clearance + (avail_h // 2)
+        # dominates the ledger band. Full-height cards anchor it below the
+        # caption; compact cards centre it right of the side caption.
+        if compact:
+            diameter = min(circle_rect.width, rect.height - 6)
+            radius = max(8, diameter // 2 - 2)
+            cx = rect.right - radius - 10
+            cy = rect.centery
+        else:
+            title_clearance = title_font.get_height() + 6
+            avail_h = max(8, rect.height - title_clearance - 4)
+            diameter = min(circle_rect.width, avail_h)
+            radius = max(8, diameter // 2 - 2)
+            cx = circle_rect.centerx
+            cy = rect.top + title_clearance + (avail_h // 2)
         # Outer halo glow.
         halo = pygame.Surface((radius * 2 + 16, radius * 2 + 16), pygame.SRCALPHA)
         for i, alpha in enumerate((40, 70, 110)):
@@ -1018,9 +1059,9 @@ class ConquerRoundLedger:
         font = settings.get_font(value_size, bold=True)
         ts = font.render(label, True, col)
         self.window.blit(ts, ts.get_rect(center=(cx, cy)))
-        # Hover hint
-        if last_result:
-            hint = settings.get_font(max(9, int(settings.FS_TINY * 0.85)))
+        # Hover hint (skipped on compact bands — no free row under the circle)
+        if last_result and not compact:
+            hint = settings.get_font(settings.FS_CONQUER_LABEL)
             hint_label = ('tap for details'
                           if settings.TOUCH_TARGET_MIN > 0
                           else 'click for details')
@@ -1072,7 +1113,7 @@ class ConquerRoundLedger:
             glyph, col = '=', _TIE_GREY
 
         title_font = settings.get_font(max(10, int(settings.FS_SMALL * 0.90)), bold=True)
-        body_font = settings.get_font(max(9, int(settings.FS_TINY * 0.85)), bold=True)
+        body_font = settings.get_font(settings.FS_CONQUER_LABEL, bold=True)
         title = title_font.render(f'Round {idx + 1} recap', True, _TEXT_PRIMARY)
         self.window.blit(title, (rect.left + 10, rect.top + 7))
 

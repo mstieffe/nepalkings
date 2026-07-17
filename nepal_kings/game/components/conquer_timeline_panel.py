@@ -100,6 +100,14 @@ class ConquerTimelinePanel:
         self._spell_hover = None
         self._figure_hover = None
         self._overflow_hover = None
+        self._tap_rects = []
+        # Touch pin: phones have no hover, so a tapped bubble pins its step
+        # tooltip until the same target (or empty space) is tapped again.
+        # Keys: ('step', kind, title) or ('overflow',). ``_tap_rects`` holds
+        # (key, rect, payload) triples registered while drawing, so taps are
+        # hit-tested against exactly what was last on screen.
+        self._touch_pinned_step = None
+        self._tap_rects = []
         self._card_back_cache = {}
         # Spell-replay coupling: lags the server's ``conquer_resolution_step`` by
         # one when a spell-driven step is currently being animated/active so the
@@ -199,6 +207,7 @@ class ConquerTimelinePanel:
         self._spell_hover = None
         self._figure_hover = None
         self._overflow_hover = None
+        self._tap_rects = []
 
         steps = self.derive_display_steps(screen)
         active_idx = self._active_index(steps)
@@ -279,6 +288,7 @@ class ConquerTimelinePanel:
         self._spell_hover = None
         self._figure_hover = None
         self._overflow_hover = None
+        self._tap_rects = []
 
         if rect.width <= 32 or rect.height <= 24:
             return
@@ -350,6 +360,40 @@ class ConquerTimelinePanel:
                 body_top, info_w, body_h)
             self._draw_info_box(screen, info_rect, info_step, active_idx, steps)
 
+    def active_step(self, screen):
+        """Return the currently-active timeline step, or None."""
+        steps = self.derive_display_steps(screen)
+        idx = self._active_index(steps)
+        return steps[idx] if idx is not None else None
+
+    def draw_focus_card(self, screen, rect, step):
+        """One-line active-step summary for the collapsed mobile header row:
+        step icon + headline. Tapping pins the full wrapped tooltip (the row
+        is far too short for buttons — CTAs stay in the info box / top row).
+        """
+        card = pygame.Rect(rect)
+        if card.width <= 40 or card.height <= 14:
+            return
+        border = _TONE_COLOR.get(step.tone, _TONE_COLOR['neutral'])
+        bg = pygame.Surface(card.size, pygame.SRCALPHA)
+        bg.fill((30, 26, 20, 235))
+        self.window.blit(bg, card.topleft)
+        pygame.draw.rect(self.window, border, card, 1, border_radius=6)
+        icon_side = max(16, card.height - 8)
+        icon_rect = pygame.Rect(card.left + 4,
+                                card.centery - icon_side // 2,
+                                icon_side, icon_side)
+        self._draw_step_icon(screen, icon_rect, step)
+        text_left = icon_rect.right + 6
+        headline = step.info_headline or step.title or ''
+        font = self.bubble_title_font
+        text = self._fit(headline, font, card.right - 6 - text_left)
+        surf = font.render(text, True, (235, 222, 185))
+        self.window.blit(surf,
+                         (text_left, card.centery - surf.get_height() // 2))
+        self._tap_rects.append(
+            (self._step_pin_key(step), pygame.Rect(card), step))
+
     def draw_collapsed_strip(self, screen, rect):
         # Reset hover state every frame so tooltips disappear immediately
         # when the timeline collapses (or the mouse leaves the strip).
@@ -357,6 +401,7 @@ class ConquerTimelinePanel:
         self._spell_hover = None
         self._figure_hover = None
         self._overflow_hover = None
+        self._tap_rects = []
         steps = [
             step for step in self.derive_display_steps(screen)
             if step.completed or step.active
@@ -417,6 +462,8 @@ class ConquerTimelinePanel:
                 border_radius=5,
             )
             self._draw_step_icon(screen, icon_rect.inflate(-4, -4), step)
+            self._tap_rects.append(
+                (self._step_pin_key(step), pygame.Rect(icon_rect), step))
             if icon_rect.collidepoint(pygame.mouse.get_pos()):
                 self._step_hover = (step, icon_rect)
             x += icon_size + gap
@@ -786,6 +833,8 @@ class ConquerTimelinePanel:
         label = self.owner_font.render(
             f'+{len(hidden_steps)}', True, (210, 196, 156))
         self.window.blit(label, label.get_rect(center=rect.center))
+        self._tap_rects.append(
+            (('overflow',), pygame.Rect(rect), tuple(hidden_steps)))
         if rect.collidepoint(pygame.mouse.get_pos()):
             self._overflow_hover = (tuple(hidden_steps), rect)
 
@@ -877,6 +926,8 @@ class ConquerTimelinePanel:
                 self.window, (245, 255, 240), False,
                 [(cx - 3, cy), (cx - 1, cy + 3), (cx + 4, cy - 3)], 2)
 
+        self._tap_rects.append(
+            (self._step_pin_key(step), pygame.Rect(rect), step))
         if rect.collidepoint(pygame.mouse.get_pos()):
             self._step_hover = (step, rect)
 
@@ -1293,17 +1344,41 @@ class ConquerTimelinePanel:
             return
 
         headline = step.info_headline or step.title
-        headline_text = self._fit(headline, self.info_headline_font, text_w)
-        headline_surf = self.info_headline_font.render(headline_text, True, border)
-        self.window.blit(headline_surf, (x, y))
-        cursor_y = y + headline_surf.get_height() + 3
-
+        line_h = self.info_headline_font.get_height()
         body_h = self.info_body_font.get_height()
-        if step.info_body and cursor_y + body_h <= rect.bottom - _INFO_PAD:
-            body_text = self._fit(step.info_body, self.info_body_font, text_w)
-            body_surf = self.info_body_font.render(
-                body_text, True, (224, 214, 188))
-            self.window.blit(body_surf, (x, cursor_y))
+        avail_h = max(0, rect.bottom - _INFO_PAD - y)
+        # Wrap instead of hard-truncating: a second headline line is granted
+        # whenever the row still fits at least one body line beneath it, and
+        # the body wraps into whatever height remains (up to 3 lines).
+        headline_lines = [self._fit(headline, self.info_headline_font, text_w)]
+        if avail_h >= 2 * line_h + 3 + body_h:
+            wrapped = self._wrap(headline, self.info_headline_font, text_w, 2)
+            if wrapped:
+                headline_lines = wrapped
+        cursor_y = y
+        for line in headline_lines:
+            headline_surf = self.info_headline_font.render(line, True, border)
+            self.window.blit(headline_surf, (x, cursor_y))
+            cursor_y += line_h + 1
+        cursor_y += 2
+
+        if step.info_body:
+            remaining = rect.bottom - _INFO_PAD - cursor_y
+            max_body_lines = max(0, min(3, (remaining + 2) // max(1, body_h)))
+            if max_body_lines >= 2:
+                body_lines = self._wrap(
+                    step.info_body, self.info_body_font, text_w,
+                    max_body_lines)
+            elif max_body_lines == 1:
+                body_lines = [self._fit(
+                    step.info_body, self.info_body_font, text_w)]
+            else:
+                body_lines = []
+            for line in body_lines:
+                body_surf = self.info_body_font.render(
+                    line, True, (224, 214, 188))
+                self.window.blit(body_surf, (x, cursor_y))
+                cursor_y += body_h + 1
 
         if visual_items:
             self._draw_compact_visual_items(screen, rect, visual_layout)
@@ -1847,17 +1922,72 @@ class ConquerTimelinePanel:
                 self.window.blit(hint, (rect.left + _INFO_PAD, btn_y + 4))
             return []
 
-        # Next skips the countdown of a held sequence beat. It only does
+        # Continue skips the countdown of a held sequence beat. It only does
         # anything for those beats (which carry primary_action == 'next'); other
         # non-interactive steps — battle rounds, the game-start/intro overview —
-        # advance on game state, so a Next button there has no effect. Draw it
-        # only where it works.
+        # advance on game state, so a button there has no effect. Draw it only
+        # where it works. (Labelled Continue: it resumes a narrative pause,
+        # unlike the single-option Next above which advances a selection.)
         if step.primary_action != 'next':
             return []
         next_rect = pygame.Rect(x_left, btn_y, btn_w, btn_h)
-        self._draw_rect_button(next_rect, 'Next', (86, 106, 134))
+        self._draw_rect_button(next_rect, 'Continue', (86, 106, 134))
         screen._conquer_objective_action_rects['next'] = next_rect
         return [next_rect]
+
+    # ------------------------------------------------------------ touch pin
+
+    @staticmethod
+    def _step_pin_key(step):
+        return ('step', step.kind, step.title)
+
+    def clear_touch_pin(self):
+        self._touch_pinned_step = None
+
+    def handle_tap(self, pos):
+        """Toggle a pinned step tooltip from a tap (touch parity for hover).
+
+        Hit-tests against the bubbles/strip icons registered during the last
+        drawn frame, with touch-target inflation and nearest-center
+        resolution. Returns True when the tap claimed a timeline target;
+        an unclaimed tap only dismisses the pin and is not consumed.
+        """
+        if settings.TOUCH_TARGET_MIN <= 0:
+            return False
+        best_key = None
+        best_d = None
+        for key, rect, _payload in getattr(self, '_tap_rects', []) or []:
+            hit = rect.inflate(
+                max(0, settings.TOUCH_TARGET_MIN - rect.width),
+                max(0, settings.TOUCH_TARGET_MIN - rect.height))
+            if not hit.collidepoint(pos):
+                continue
+            d = ((rect.centerx - pos[0]) ** 2
+                 + (rect.centery - pos[1]) ** 2)
+            if best_d is None or d < best_d:
+                best_key, best_d = key, d
+        if best_key is None:
+            self._touch_pinned_step = None
+            return False
+        self._touch_pinned_step = (
+            None if getattr(self, '_touch_pinned_step', None) == best_key
+            else best_key)
+        return True
+
+    def _apply_touch_pin_to_hover(self):
+        """Make a pinned step render exactly like a hovered one."""
+        if getattr(self, '_touch_pinned_step', None) is None:
+            return
+        if self._step_hover or self._overflow_hover:
+            return
+        for key, rect, payload in getattr(self, '_tap_rects', []) or []:
+            if key != self._touch_pinned_step:
+                continue
+            if key[0] == 'overflow':
+                self._overflow_hover = (payload, rect)
+            else:
+                self._step_hover = (payload, rect)
+            return
 
     # ------------------------------------------------------------ tooltips
 
@@ -1865,6 +1995,7 @@ class ConquerTimelinePanel:
         self._draw_hover_tooltips(screen)
 
     def _draw_hover_tooltips(self, screen):
+        self._apply_touch_pin_to_hover()
         if self._step_hover:
             step, anchor = self._step_hover
             self._draw_step_info_tooltip(screen, step, anchor)

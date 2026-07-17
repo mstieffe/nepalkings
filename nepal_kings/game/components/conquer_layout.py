@@ -54,7 +54,10 @@ _TOP_ROW_H_PCT = 0.064 if _IS_MOBILE else 0.05
 # Vertical layout
 _HEADER_TO_CONTENT_GAP_H_PCT = 0.0185   # gap between header and content
 _CONTENT_TO_LEDGER_GAP_H_PCT = 0.0167
-_LEDGER_H_PCT = 0.190 if _IS_MOBILE else 0.1685  # ledger band height (pre+battle modes)
+# Ledger band height (pre+battle modes). Mobile runs a compact single-row
+# ledger (the tall cards ate ~19% of an already short canvas); the freed
+# height flows to the battlefield via _compute_content_y_band.
+_LEDGER_H_PCT = 0.110 if _IS_MOBILE else 0.1685
 
 # Tactics rail (LEFT) — battlefield (RIGHT)
 _RAIL_X_PCT = 0.018
@@ -71,9 +74,13 @@ _RAIL_MAX_W_PCT = 0.23
 _FIELD_INNER_PAD_X_PCT = 0.00833
 _FIELD_INNER_PAD_Y_PCT = 0.024
 
-# Battlefield columns + duel lane (fractions of the battlefield inner width)
-_FIELD_COL_W_FRAC = 0.115
-_FIELD_LANE_W_FRAC = 0.295
+# Battlefield columns + duel lane (fractions of the battlefield inner width).
+# Mobile gives the duel lane (the battle math) more of the interior: the
+# aggregated support chips need a slightly wider side rail, and the fighter
+# bands are inset by that rail, so the lane grows to keep the center channel
+# dominant. Field columns give up the difference.
+_FIELD_COL_W_FRAC = 0.110 if _IS_MOBILE else 0.115
+_FIELD_LANE_W_FRAC = 0.340 if _IS_MOBILE else 0.295
 
 # Far-right strip showing the opponent's hidden hand (face-down tactic cards),
 # carved from the battlefield interior's right edge. Fractions of screen width.
@@ -101,9 +108,10 @@ _LANE_FIGHTER_BAND_H_FRAC = 0.42
 _LANE_DIFF_BAND_H_FRAC = 0.13
 _LANE_BAND_GAP_H_FRAC = 0.015
 
-# Support strip widths (inside the duel lane). The chip rail is now
-# retired; round/tactic details live in the bottom round ledger.
-_SUPPORT_BADGE_RAIL_W_PCT = 0.040
+# Support strip widths (inside the duel lane). The old per-effect chip rail
+# is retired; on mobile the badge rail hosts the aggregated, tappable
+# support chips instead of stacked micro-badges, so it runs slightly wider.
+_SUPPORT_BADGE_RAIL_W_PCT = 0.048 if _IS_MOBILE else 0.040
 _SUPPORT_CHIP_RAIL_W_PCT = 0.000
 
 # Narrow / mobile breakpoint (W/H aspect ratio)
@@ -423,6 +431,9 @@ def _compute_round_ledger(W: int, H: int,
     rect = _r(x_px, y_px, w_px, h_px)
     pad_x = int(round(_LEDGER_INNER_PAD_X_PCT * W))
     pad_y = int(round(_LEDGER_INNER_PAD_Y_PCT * H))
+    # Short (compact/mobile) bands cannot afford the full percentage
+    # padding — it would eat over a third of the row.
+    pad_y = min(pad_y, max(2, h_px // 12))
     inner = _r(x_px + pad_x, y_px + pad_y,
                w_px - 2 * pad_x, h_px - 2 * pad_y)
     ix, iy, iw, ih = inner

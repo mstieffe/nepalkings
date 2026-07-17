@@ -261,7 +261,7 @@ class ConquerGameScreen(GameScreen):
         self._conquer_tactic_power_cache_key = None
         self._conquer_tactic_power_cache = {}
         self._conquer_move_panel_title_font = settings.get_font(
-            max(10, int(settings.FS_TINY * 0.80)), bold=True)
+            settings.FS_CONQUER_LABEL, bold=True)
         self._conquer_move_panel_empty_font = settings.get_font(
             max(12, int(settings.FS_TINY * 0.95)), bold=True)
 
@@ -271,6 +271,11 @@ class ConquerGameScreen(GameScreen):
         # ``battle_move`` games they remain inert.
         self._tactics_rail = ConquerTacticsRail(self)
         self._round_ledger = ConquerRoundLedger(self)
+        # Touch pin owner: phones have no hover, so explanations pin on tap.
+        # Only one pin may be active across the three pinnable surfaces
+        # (support badges here, timeline steps in the panel, round cards in
+        # the ledger); setting any pin dismisses the others.
+        self._conquer_support_touch_pin = None
         self._tactic_flight_animation = None
         # Battle-result payoff: the outcome banner/confetti sequence that
         # plays on this screen before the result dialogue opens.
@@ -1500,8 +1505,28 @@ class ConquerGameScreen(GameScreen):
                 max(1, strip_right - inline_rect.left),
                 inline_rect.height,
             )
+            # Mobile focus card: the history strip alone leaves the active
+            # step unreadable until the overlay is expanded, so give the
+            # right half of the row to a one-line icon + headline card
+            # (tap pins the full tooltip).
+            focus_rect = None
+            focus_step = None
+            if (settings.TOUCH_TARGET_MIN > 0 and strip_rect.width >= 260
+                    and hasattr(panel, 'draw_focus_card')):
+                focus_step = panel.active_step(self)
+                if focus_step is not None:
+                    focus_w = int(strip_rect.width * 0.56)
+                    focus_rect = pygame.Rect(
+                        strip_rect.right - focus_w,
+                        strip_rect.top + 1,
+                        focus_w,
+                        max(1, strip_rect.height - 2),
+                    )
+                    strip_rect.width = max(1, strip_rect.width - focus_w - 6)
             if strip_rect.width >= 80 and strip_rect.height >= 16:
                 panel.draw_collapsed_strip(self, strip_rect)
+                if focus_rect is not None and focus_step is not None:
+                    panel.draw_focus_card(self, focus_rect, focus_step)
             self._draw_conquer_timeline_toggle_button(btn_rect)
             self._conquer_timeline_toggle_rect = btn_rect
 
@@ -1578,6 +1603,103 @@ class ConquerGameScreen(GameScreen):
             if self._conquer_touch_hit_rect(toggle).collidepoint(event.pos):
                 self._toggle_conquer_timeline_overlay()
                 return True
+        return False
+
+    # ------------------------------------------------------------ touch pins
+
+    def _clear_conquer_touch_pins(self, except_for=None):
+        """Enforce the single-pin rule across the pinnable surfaces.
+
+        Support badges (this screen), timeline steps (the panel) and round
+        cards (the ledger) each pin on tap; whichever pins last dismisses
+        the others so at most one popover is ever on screen.
+        """
+        if except_for != 'support':
+            self._conquer_support_touch_pin = None
+        if except_for != 'timeline':
+            panel = getattr(self, '_conquer_timeline_panel', None)
+            if panel is not None and hasattr(panel, 'clear_touch_pin'):
+                panel.clear_touch_pin()
+        if except_for != 'ledger':
+            ledger = getattr(self, '_round_ledger', None)
+            if ledger is not None and hasattr(ledger, 'clear_touch_pin'):
+                ledger.clear_touch_pin()
+
+    def _conquer_support_pin_key(self, info):
+        """Stable per-frame identity for a registered badge/chip rect."""
+        entry = info.get('entry') if isinstance(info, dict) else None
+        entry = entry if isinstance(entry, dict) else {}
+        return (
+            'badge',
+            bool(info.get('is_player')),
+            self._conquer_support_section_key(entry),
+            str(entry.get('kind') or ''),
+            str(entry.get('suit') or ''),
+            str(entry.get('label') or ''),
+            tuple(sorted(str(fig_id) for fig_id in
+                         entry.get('source_figure_ids') or []
+                         if fig_id is not None)),
+        )
+
+    def _conquer_support_tap_target(self, pos):
+        """Badge/overflow chip under a tap, nearest-center among the
+        touch-inflated hit rects (badge stacks overlap once inflated)."""
+        best = None
+        best_d = None
+        for kind, infos in (
+            ('badge', getattr(self, '_conquer_support_badge_rects', None) or []),
+            ('overflow', getattr(self, '_conquer_support_overflow_rects', None) or []),
+        ):
+            for info in infos:
+                rect = info.get('rect')
+                if not rect:
+                    continue
+                rect = pygame.Rect(rect)
+                if not self._conquer_touch_hit_rect(rect).collidepoint(pos):
+                    continue
+                d = ((rect.centerx - pos[0]) ** 2
+                     + (rect.centery - pos[1]) ** 2)
+                if best_d is None or d < best_d:
+                    best, best_d = (kind, info), d
+        return best
+
+    def _conquer_support_overflow_pin_key(self, info):
+        return ('overflow', bool(info.get('is_player')),
+                str(info.get('section') or ''))
+
+    def _handle_conquer_touch_pin_events(self, events):
+        """Tap-to-pin dispatch (touch only).
+
+        Slotted after the CTA buttons and the header chevron so those always
+        win, and before lane-figure clicks so a badge tap cannot fall
+        through to the figure underneath. Unclaimed taps dismiss any active
+        pin but are NOT consumed — they still reach the surfaces below.
+        """
+        if settings.TOUCH_TARGET_MIN <= 0:
+            return False
+        if self.dialogue_box:
+            return False
+        sequencer = getattr(self, '_conquer_reveal_sequencer', None)
+        if sequencer is not None and sequencer.is_active():
+            return False
+        for event in events:
+            if event.type != MOUSEBUTTONDOWN or getattr(event, 'button', 0) != 1:
+                continue
+            panel = getattr(self, '_conquer_timeline_panel', None)
+            if (panel is not None and hasattr(panel, 'handle_tap')
+                    and panel.handle_tap(event.pos)):
+                self._clear_conquer_touch_pins(except_for='timeline')
+                return True
+            target = self._conquer_support_tap_target(event.pos)
+            if target is not None:
+                kind, info = target
+                key = (self._conquer_support_pin_key(info) if kind == 'badge'
+                       else self._conquer_support_overflow_pin_key(info))
+                toggled_off = (self._conquer_support_touch_pin == key)
+                self._clear_conquer_touch_pins(except_for='support')
+                self._conquer_support_touch_pin = None if toggled_off else key
+                return True
+            self._clear_conquer_touch_pins()
         return False
 
     def _conquer_timeline_overlay_right_reserve(self):
@@ -1768,7 +1890,7 @@ class ConquerGameScreen(GameScreen):
         if name == 'Dagger' and (move.get('card_id_b') or move.get('secondary_card_id')):
             name = '2x Dagger'
         power = 0 if name == 'Block' else int(move.get('value') or 0)
-        font = settings.get_font(max(9, int(settings.FS_TINY * 0.85)), bold=True)
+        font = settings.get_font(settings.FS_CONQUER_LABEL, bold=True)
         label = self._fit_text(f'{name} {power}', font, max(72, target.width))
         label_surf = font.render(label, True, (218, 246, 244))
         pill = label_surf.get_rect()
@@ -3629,7 +3751,7 @@ class ConquerGameScreen(GameScreen):
                 label = font.render('!', True, (255, 240, 200))
                 self.window.blit(label, label.get_rect(center=rect.center))
             name = snapshot.get('name') or snapshot.get('family_name') or 'Target'
-            font = settings.get_font(max(9, int(settings.FS_TINY * 0.72)), bold=True)
+            font = settings.get_font(settings.FS_CONQUER_LABEL, bold=True)
             label = self._fit_text(name, font, max(48, rect.width + 28))
             surf = font.render(label, True, (255, 228, 176))
             label_rect = surf.get_rect(midtop=(rect.centerx, rect.bottom + 2))
@@ -4714,7 +4836,7 @@ class ConquerGameScreen(GameScreen):
     def _conquer_move_title_font(self):
         font = getattr(self, '_conquer_move_panel_title_font', None)
         if font is None:
-            font = settings.get_font(max(10, int(settings.FS_TINY * 0.80)), bold=True)
+            font = settings.get_font(settings.FS_CONQUER_LABEL, bold=True)
             self._conquer_move_panel_title_font = font
         return font
 
@@ -6430,7 +6552,7 @@ class ConquerGameScreen(GameScreen):
         bg = (34, 44, 50, 165) if is_player else (52, 40, 43, 165)
         pygame.draw.rect(self.window, bg, band, border_radius=7)
 
-        label_font = settings.get_font(max(10, int(settings.FS_TINY * 0.78)), bold=True)
+        label_font = settings.get_font(settings.FS_CONQUER_LABEL, bold=True)
         text = label_font.render(label, True, (230, 222, 190))
         self.window.blit(text, (band.left + 8, band.top + 4))
 
@@ -6454,8 +6576,10 @@ class ConquerGameScreen(GameScreen):
         enemy_support = enemy_support_entries or []
         side_blocked = any(e.get('kind') == 'blocks_bonus' for e in enemy_support)
 
-        name_font = settings.get_font(max(11, int(settings.FS_TINY * 0.92)), bold=True)
-        value_font = settings.get_font(max(12, int(settings.FS_TINY * 0.95)), bold=True)
+        # The battle math is the headline of this band: the figure's total
+        # renders a full tier above its name and breakdown segments.
+        name_font = settings.get_font(settings.FS_CONQUER_LABEL, bold=True)
+        value_font = settings.get_font(settings.FS_CONQUER_SECONDARY, bold=True)
         count = min(2, len(figures))
         slot_w = max(1, band.width // count)
         max_art_size = max(34, min(int(band.height * 0.50), int(slot_w * 0.56)))
@@ -6517,7 +6641,7 @@ class ConquerGameScreen(GameScreen):
                 ring.center = center
                 pygame.draw.rect(self.window, (210, 70, 70), ring, 3,
                                  border_radius=max(4, ring.height // 6))
-                tag_font = settings.get_font(max(8, int(settings.FS_TINY * 0.62)), bold=True)
+                tag_font = settings.get_font(settings.FS_CONQUER_META, bold=True)
                 tag = tag_font.render('BLOCKED', True, (252, 232, 222))
                 tag_bg = tag.get_rect()
                 tag_bg.inflate_ip(8, 4)
@@ -6553,7 +6677,7 @@ class ConquerGameScreen(GameScreen):
             # Segmented colour-coded pill (#2): [base|+buff|+spell|+sup] = total.
             # Anchored directly below the name so it no longer collides
             # with long figure labels (#round6).
-            seg_font = settings.get_font(max(10, int(settings.FS_TINY * 0.78)), bold=True)
+            seg_font = settings.get_font(settings.FS_CONQUER_LABEL, bold=True)
             total_color = (235, 250, 220) if total > base else (250, 230, 220) if total < base else (42, 32, 20)
             total_bg = (40, 110, 60) if total > base else (148, 50, 50) if total < base else (238, 206, 111)
             pill_anchor_y = min(name_rect.bottom + 2, power_bottom_limit - 2)
@@ -6582,7 +6706,7 @@ class ConquerGameScreen(GameScreen):
                     else:
                         text = f'+{value}'
                     seg_surfaces.append((seg_font.render(text, True, (24, 18, 12)), colour))
-                total_surf = seg_font.render(f'={total}', True, total_color)
+                total_surf = value_font.render(f'={total}', True, total_color)
                 pad_x = 4
                 gap = 2
                 total_w = sum(s.get_width() + 2 * pad_x for s, _ in seg_surfaces) + gap * len(seg_surfaces) + total_surf.get_width() + 2 * pad_x
@@ -6735,7 +6859,7 @@ class ConquerGameScreen(GameScreen):
         overflow = max(0, len(items) - len(visible))
         total_w = len(visible) * icon_size + max(0, len(visible) - 1) * gap
         if overflow:
-            count_font = settings.get_font(max(8, int(settings.FS_TINY * 0.58)), bold=True)
+            count_font = settings.get_font(settings.FS_CONQUER_META, bold=True)
             count_surf = count_font.render(f'+{overflow}', True, (246, 239, 214))
             count_w = max(icon_size, count_surf.get_width() + 6)
             total_w += gap + count_w
@@ -6753,7 +6877,7 @@ class ConquerGameScreen(GameScreen):
             if icon:
                 self.window.blit(icon, icon.get_rect(center=icon_rect.center))
             else:
-                tiny = settings.get_font(max(7, int(settings.FS_TINY * 0.52)), bold=True)
+                tiny = settings.get_font(settings.FS_CONQUER_META, bold=True)
                 letter = (label or key or '?')[:1].upper()
                 surf = tiny.render(letter, True, (238, 222, 178))
                 self.window.blit(surf, surf.get_rect(center=icon_rect.center))
@@ -6924,7 +7048,7 @@ class ConquerGameScreen(GameScreen):
                 self.window.blit(icon, icon.get_rect(center=icon_center))
             else:
                 pygame.draw.rect(self.window, border, icon_box, border_radius=5)
-                tiny = settings.get_font(max(7, int(settings.FS_TINY * 0.50)), bold=True)
+                tiny = settings.get_font(settings.FS_CONQUER_META, bold=True)
                 label = str(entry.get('label') or kind or '?')[:1]
                 letter = tiny.render(label, True, (20, 16, 10))
                 self.window.blit(letter, letter.get_rect(center=icon_center))
@@ -6943,7 +7067,7 @@ class ConquerGameScreen(GameScreen):
 
         count = int(entry.get('aggregate_count') or 1)
         if count > 1:
-            count_font = settings.get_font(max(9, int(settings.FS_TINY * 0.66)), bold=True)
+            count_font = settings.get_font(settings.FS_CONQUER_META, bold=True)
             count_surf = count_font.render(f'x{count}', True, (24, 18, 12))
             count_chip = count_surf.get_rect()
             count_chip.inflate_ip(6, 4)
@@ -6952,7 +7076,7 @@ class ConquerGameScreen(GameScreen):
                              border_radius=count_chip.height // 2)
             self.window.blit(count_surf, count_surf.get_rect(center=count_chip.center))
 
-        value_font = settings.get_font(max(9, int(settings.FS_TINY * 0.68)), bold=True)
+        value_font = settings.get_font(settings.FS_CONQUER_LABEL, bold=True)
         value = str(entry.get('value') or '')
         if not value:
             return
@@ -7003,6 +7127,17 @@ class ConquerGameScreen(GameScreen):
         })
 
     def _current_conquer_support_hover_entry(self):
+        # A touch pin substitutes for hover, so every hover consumer (badge
+        # glow, field source highlight, face-down reveal, popovers) behaves
+        # identically for pinned badges without further changes.
+        pin = getattr(self, '_conquer_support_touch_pin', None)
+        if pin is not None:
+            if pin[0] != 'badge':
+                return None
+            for info in reversed(getattr(self, '_conquer_support_badge_rects', []) or []):
+                if self._conquer_support_pin_key(info) == pin:
+                    return info
+            return None
         mouse = pygame.mouse.get_pos()
         for info in reversed(getattr(self, '_conquer_support_badge_rects', []) or []):
             rect = info.get('rect')
@@ -7015,6 +7150,14 @@ class ConquerGameScreen(GameScreen):
         return None
 
     def _current_conquer_support_overflow_entry(self):
+        pin = getattr(self, '_conquer_support_touch_pin', None)
+        if pin is not None:
+            if pin[0] != 'overflow':
+                return None
+            for info in reversed(getattr(self, '_conquer_support_overflow_rects', []) or []):
+                if self._conquer_support_overflow_pin_key(info) == pin:
+                    return info
+            return None
         mouse = pygame.mouse.get_pos()
         for info in reversed(getattr(self, '_conquer_support_overflow_rects', []) or []):
             rect = info.get('rect')
@@ -7172,8 +7315,8 @@ class ConquerGameScreen(GameScreen):
             return
         anchor = pygame.Rect(info.get('rect'))
         is_player = info.get('is_player', True)
-        font = settings.get_font(max(8, int(settings.FS_TINY * 0.58)), bold=True)
-        title_font = settings.get_font(max(9, int(settings.FS_TINY * 0.66)), bold=True)
+        font = settings.get_font(settings.FS_CONQUER_META, bold=True)
+        title_font = settings.get_font(settings.FS_CONQUER_META, bold=True)
         width = 178
         line_h = font.get_height() + 3
         visible = entries[:5]
@@ -7212,6 +7355,266 @@ class ConquerGameScreen(GameScreen):
             self.window.blit(surf, (panel.left + 8, y))
             y += line_h
 
+    def _conquer_support_chip_summary(self, sections):
+        """Fold grouped support entries into a few aggregate chips (mobile).
+
+        Returns synthetic entry dicts compatible with the badge rect
+        registration / pin / popover pipeline: each carries the union of
+        contributing ``source_figure_ids`` (so a pinned chip highlights every
+        contributing figure on the field) plus the flat ``source_entries``
+        rows the breakdown popover lists. Called-tactic entries keep their
+        own icon chips — folding them would lose the call identity.
+        """
+        plus, ranged, blocks, called = [], [], [], []
+        plus_total = 0
+        ranged_total = 0
+        block_count = 0
+        for section_entries in sections.values():
+            for entry in section_entries:
+                kind = entry.get('kind')
+                if kind == 'called':
+                    called.append(entry)
+                    continue
+                if kind == 'blocks_bonus':
+                    blocks.append(entry)
+                    block_count += int(entry.get('aggregate_count') or 1)
+                    continue
+                if entry.get('blocked_bonus'):
+                    value = int(entry.get('unblocked_numeric_value') or 0)
+                else:
+                    value = int(entry.get('numeric_value') or 0)
+                if kind == 'distance_attack':
+                    # This side's outgoing ranged damage onto the enemy
+                    # fighter — displayed as the projected minus.
+                    ranged.append(entry)
+                    ranged_total += abs(value)
+                else:
+                    # Support / buffs / land. Landslide can flip land
+                    # negative, which correctly lowers the support sum.
+                    plus.append(entry)
+                    plus_total += value
+
+        def _fold(kind, label, value, folded):
+            sources = []
+            fig_ids = []
+            for entry in folded:
+                sources.extend(entry.get('source_entries') or [entry])
+                for fig_id in entry.get('source_figure_ids') or []:
+                    if fig_id is not None and fig_id not in fig_ids:
+                        fig_ids.append(fig_id)
+            return {
+                'kind': kind,
+                'label': label,
+                'value': value,
+                'source_entries': sources,
+                'source_figure_ids': fig_ids,
+                'section': 'aggregate',
+            }
+
+        chips = []
+        if plus:
+            chips.append(_fold(
+                'aggregate_support', 'SUP', f'{plus_total:+d}', plus))
+        if blocks:
+            chips.append(_fold(
+                'aggregate_block', 'BLK', f'x{block_count}', blocks))
+        if ranged:
+            chips.append(_fold(
+                'aggregate_ranged', 'RNG', f'-{ranged_total}', ranged))
+        chips.extend(called)
+        return chips
+
+    def _draw_conquer_support_chip(self, chip, entry, *, is_player,
+                                   hovered=False, pulse=False):
+        kind = entry.get('kind')
+        if kind == 'aggregate_support':
+            fill, border = (24, 62, 46, 236), (112, 220, 150)
+            value_color = (198, 248, 204)
+        elif kind == 'aggregate_block':
+            fill, border = (30, 46, 66, 236), (130, 180, 235)
+            value_color = (200, 226, 250)
+        elif kind == 'aggregate_ranged':
+            fill, border = (66, 32, 34, 236), (235, 130, 118)
+            value_color = (250, 198, 190)
+        else:  # called tactic keeps the side palette + family icon
+            fill = (28, 56, 50, 232) if is_player else (62, 40, 42, 232)
+            border = (112, 220, 150) if is_player else (232, 118, 110)
+            value_color = (246, 226, 150)
+        if hovered:
+            border = (120, 220, 235)
+        pygame.draw.rect(self.window, fill, chip, border_radius=8)
+        pygame.draw.rect(self.window, border, chip, 3 if hovered else 2,
+                         border_radius=8)
+        if pulse or hovered:
+            phase = (pygame.time.get_ticks() % 900) / 900.0
+            pulse_alpha = int(70 + 90 * (1.0 - abs(0.5 - phase) * 2.0))
+            glow = pygame.Surface(chip.size, pygame.SRCALPHA)
+            pygame.draw.rect(glow, (*border, pulse_alpha),
+                             glow.get_rect().inflate(-2, -2), 3,
+                             border_radius=8)
+            self.window.blit(glow, chip.topleft)
+
+        if kind == 'called' and isinstance(entry.get('move'), dict):
+            icon_box = pygame.Rect(chip).inflate(-10, -12)
+            self._draw_conquer_call_family_icon(icon_box, entry['move'])
+            value = str(entry.get('value') or '')
+            if value:
+                value_font = settings.get_font(
+                    settings.FS_CONQUER_LABEL, bold=True)
+                value_surf = value_font.render(value, True, value_color)
+                value_chip = value_surf.get_rect().inflate(6, 3)
+                value_chip.midbottom = (chip.centerx, chip.bottom - 2)
+                pygame.draw.rect(self.window, (24, 18, 12), value_chip,
+                                 border_radius=value_chip.height // 2)
+                self.window.blit(value_surf,
+                                 value_surf.get_rect(center=value_chip.center))
+            return
+
+        label_font = settings.get_font(settings.FS_CONQUER_META, bold=True)
+        value_font = settings.get_font(settings.FS_CONQUER_SECONDARY, bold=True)
+        label_surf = label_font.render(
+            str(entry.get('label') or ''), True, border)
+        self.window.blit(label_surf, label_surf.get_rect(
+            midtop=(chip.centerx, chip.top + 3)))
+        value_text = str(entry.get('value') or '')
+        value_surf = value_font.render(value_text, True, value_color)
+        if value_surf.get_width() > chip.width - 6:
+            small = settings.get_font(settings.FS_CONQUER_LABEL, bold=True)
+            value_surf = small.render(value_text, True, value_color)
+        self.window.blit(value_surf, value_surf.get_rect(
+            midbottom=(chip.centerx, chip.bottom - 3)))
+
+    def _draw_conquer_lane_support_chips(self, rail, sections, *, is_player,
+                                         pulse=False):
+        """Mobile support rail: 2–3 aggregated, tappable chips instead of
+        stacked per-effect micro-badges. Section identity (R1/R2/R3) lives
+        in the pinned breakdown popover rather than persistent labels."""
+        border = (84, 150, 132) if is_player else (160, 94, 88)
+        header_font = settings.get_font(settings.FS_CONQUER_META, bold=True)
+        header_surf = header_font.render('SUP', True, border)
+        header_h = header_surf.get_height() + 4
+        self.window.blit(header_surf, header_surf.get_rect(
+            center=(rail.centerx, rail.top + header_h // 2)))
+        if not hasattr(self, '_conquer_lane_tooltips'):
+            self._conquer_lane_tooltips = []
+        self._conquer_lane_tooltips.append({
+            'rect': pygame.Rect(rail.left, rail.top, rail.width, header_h),
+            'text': 'Support on this side — tap a chip for the breakdown',
+        })
+        chips = self._conquer_support_chip_summary(sections)
+        if not chips:
+            return
+        inner = pygame.Rect(rail.left + 2, rail.top + header_h + 2,
+                            rail.width - 4, rail.height - header_h - 4)
+        label_h = settings.get_font(settings.FS_CONQUER_META, bold=True).get_height()
+        value_h = settings.get_font(settings.FS_CONQUER_SECONDARY, bold=True).get_height()
+        chip_h = min(max(label_h + value_h + 9,
+                         settings.TOUCH_COMPACT_MIN or 36), 52)
+        gap = 5
+        max_fit = max(1, (inner.height + gap) // (chip_h + gap))
+        visible = chips[:max_fit]
+        if len(chips) > len(visible) and len(visible) > 1:
+            visible = visible[:-1]
+        pin = getattr(self, '_conquer_support_touch_pin', None)
+        mouse = pygame.mouse.get_pos()
+        y = inner.top
+        for entry in visible:
+            chip = pygame.Rect(inner.left, y, inner.width, chip_h)
+            hovered = chip.collidepoint(mouse)
+            if pin is not None and not hovered:
+                hovered = (self._conquer_support_pin_key(
+                    {'entry': entry, 'is_player': is_player}) == pin)
+            self._register_conquer_support_badge_rect(
+                chip, entry, is_player=is_player)
+            self._draw_conquer_support_chip(
+                chip, entry, is_player=is_player, hovered=hovered,
+                pulse=pulse and entry.get('kind') == 'aggregate_support')
+            y += chip_h + gap
+        overflow_entries = chips[len(visible):]
+        if overflow_entries:
+            font = settings.get_font(settings.FS_CONQUER_META, bold=True)
+            text = font.render(f'+{len(overflow_entries)}', True,
+                               (246, 239, 214))
+            chip = text.get_rect().inflate(10, 6)
+            chip.midbottom = (inner.centerx, inner.bottom - 1)
+            if not hasattr(self, '_conquer_support_overflow_rects'):
+                self._conquer_support_overflow_rects = []
+            self._conquer_support_overflow_rects.append({
+                'rect': pygame.Rect(chip),
+                'entries': overflow_entries,
+                'is_player': is_player,
+                'section': 'aggregate',
+            })
+            pygame.draw.rect(self.window, (26, 20, 14), chip,
+                             border_radius=chip.height // 2)
+            pygame.draw.rect(self.window, border, chip, 1,
+                             border_radius=chip.height // 2)
+            self.window.blit(text, text.get_rect(center=chip.center))
+
+    def _draw_conquer_support_badge_popover(self):
+        """Breakdown popover for the hovered/pinned aggregate support chip.
+
+        Mobile chip mode only — desktop badges explain themselves through
+        field highlights and per-badge values.
+        """
+        if settings.TOUCH_TARGET_MIN <= 0:
+            return
+        info = self._current_conquer_support_hover_entry()
+        if not info:
+            return
+        entry = info.get('entry') if isinstance(info, dict) else None
+        entry = entry if isinstance(entry, dict) else {}
+        if not str(entry.get('kind') or '').startswith('aggregate'):
+            return
+        rows = entry.get('source_entries') or []
+        if not rows:
+            return
+        anchor = pygame.Rect(info.get('rect'))
+        is_player = info.get('is_player', True)
+        font = settings.get_font(settings.FS_CONQUER_META, bold=True)
+        title_font = settings.get_font(settings.FS_CONQUER_LABEL, bold=True)
+        titles = {
+            'aggregate_support': 'Support',
+            'aggregate_block': 'Blocks',
+            'aggregate_ranged': 'Ranged strikes',
+        }
+        title_text = (f"{titles.get(entry.get('kind'), 'Support')} "
+                      f"{entry.get('value') or ''}").strip()
+        width = max(200, int(settings.SCREEN_WIDTH * 0.26))
+        line_h = font.get_height() + 3
+        visible = rows[:6]
+        height = 12 + title_font.get_height() + len(visible) * line_h
+        panel = pygame.Rect(0, 0, width, height)
+        panel.centery = anchor.centery
+        if is_player:
+            panel.left = anchor.right + 8
+        else:
+            panel.right = anchor.left - 8
+        panel.clamp_ip(pygame.Rect(0, 0, settings.SCREEN_WIDTH,
+                                   settings.SCREEN_HEIGHT))
+        bg = pygame.Surface(panel.size, pygame.SRCALPHA)
+        pygame.draw.rect(bg, (22, 20, 18, 238), bg.get_rect(), border_radius=7)
+        pygame.draw.rect(bg, (120, 220, 235), bg.get_rect(), 1, border_radius=7)
+        self.window.blit(bg, panel.topleft)
+        title = title_font.render(title_text, True, (246, 226, 150))
+        self.window.blit(title, (panel.left + 8, panel.top + 6))
+        y = panel.top + 8 + title_font.get_height()
+        for row in visible:
+            source_names = []
+            figure = row.get('figure')
+            if figure is not None:
+                source_names.append(getattr(figure, 'name', 'Figure'))
+            if not source_names and row.get('kind') == 'land_bonus':
+                source_names.append(str(row.get('suit') or 'Land'))
+            name = ', '.join(source_names[:2]) if source_names else 'Effect'
+            label = row.get('label') or row.get('kind') or 'Support'
+            value = row.get('value') or ''
+            text = self._fit_text(f'{label} {value} · {name}'.strip(),
+                                  font, panel.width - 16)
+            surf = font.render(text, True, (232, 220, 180))
+            self.window.blit(surf, (panel.left + 8, y))
+            y += line_h
+
     def _draw_conquer_lane_support_rail(self, rect, entries, *, is_player, pulse=False):
         rail = pygame.Rect(rect).inflate(-3, -8)
         if rail.width <= 0 or rail.height <= 0:
@@ -7221,8 +7624,15 @@ class ConquerGameScreen(GameScreen):
         pygame.draw.rect(self.window, bg, rail, border_radius=7)
         pygame.draw.rect(self.window, border, rail, 1, border_radius=7)
 
+        # Mobile: aggregated, tappable chips instead of per-effect badges.
+        if settings.TOUCH_TARGET_MIN > 0:
+            sections = self._conquer_support_display_sections(entries)
+            self._draw_conquer_lane_support_chips(
+                rail, sections, is_player=is_player, pulse=pulse)
+            return
+
         # Header label so players know what the column represents (#6).
-        header_font = settings.get_font(max(8, int(settings.FS_TINY * 0.62)), bold=True)
+        header_font = settings.get_font(settings.FS_CONQUER_META, bold=True)
         header_text = self._fit_text('SUPPORT', header_font, rail.width - 4)
         header_surf = header_font.render(header_text, True, border)
         header_h = header_surf.get_height() + 4
@@ -7255,7 +7665,7 @@ class ConquerGameScreen(GameScreen):
                 section_defs.append((key, title))
         if not section_defs:
             section_defs = [('clash', 'CLASH')]
-        title_font = settings.get_font(max(7, int(settings.FS_TINY * 0.52)), bold=True)
+        title_font = settings.get_font(settings.FS_CONQUER_META, bold=True)
         gap = max(3, int(rail_inner.height * 0.010))
         section_h = max(1, (rail_inner.height - gap * (len(section_defs) - 1)) // len(section_defs))
         mouse = pygame.mouse.get_pos()
@@ -7288,6 +7698,7 @@ class ConquerGameScreen(GameScreen):
             if len(section_entries) > len(visible) and len(visible) > 1:
                 visible = visible[:-1]
             y = entry_top
+            pin = getattr(self, '_conquer_support_touch_pin', None)
             for entry in visible:
                 badge = pygame.Rect(0, 0, badge_w, badge_h)
                 badge.centerx = section_rect.centerx
@@ -7298,6 +7709,9 @@ class ConquerGameScreen(GameScreen):
                     if source_rect and source_rect.collidepoint(mouse):
                         hovered = True
                         break
+                if pin is not None and not hovered:
+                    hovered = (self._conquer_support_pin_key(
+                        {'entry': entry, 'is_player': is_player}) == pin)
                 self._register_conquer_support_badge_rect(badge, entry, is_player=is_player)
                 self._draw_conquer_lane_support_badge(
                     badge,
@@ -7309,7 +7723,7 @@ class ConquerGameScreen(GameScreen):
                 y += badge_h + entry_gap
             overflow_entries = section_entries[len(visible):]
             if overflow_entries:
-                font = settings.get_font(max(7, int(settings.FS_TINY * 0.52)), bold=True)
+                font = settings.get_font(settings.FS_CONQUER_META, bold=True)
                 text = font.render(f'+{len(overflow_entries)}', True, (246, 239, 214))
                 chip = text.get_rect()
                 chip.inflate_ip(8, 4)
@@ -7321,6 +7735,7 @@ class ConquerGameScreen(GameScreen):
                     'rect': pygame.Rect(chip),
                     'entries': overflow_entries,
                     'is_player': is_player,
+                    'section': section_key,
                 })
                 pygame.draw.rect(self.window, (26, 20, 14), chip, border_radius=chip.height // 2)
                 pygame.draw.rect(self.window, (120, 220, 235) if overflow_hovered else border,
@@ -7337,7 +7752,7 @@ class ConquerGameScreen(GameScreen):
         pygame.draw.rect(self.window, border, rail, 1, border_radius=7)
 
         # Header label so players know what the column represents (#6).
-        header_font = settings.get_font(max(7, int(settings.FS_TINY * 0.55)), bold=True)
+        header_font = settings.get_font(settings.FS_CONQUER_META, bold=True)
         header_text = self._fit_text('MOD', header_font, rail.width - 2)
         header_surf = header_font.render(header_text, True, border)
         header_h = header_surf.get_height() + 3
@@ -7352,7 +7767,7 @@ class ConquerGameScreen(GameScreen):
         rail_inner = pygame.Rect(rail.left, rail.top + header_h, rail.width, rail.height - header_h)
         if not chips:
             return
-        font = settings.get_font(max(7, int(settings.FS_TINY * 0.52)), bold=True)
+        font = settings.get_font(settings.FS_CONQUER_META, bold=True)
         max_visible = min(4, len(chips))
         gap = max(3, int(rail_inner.height * 0.014))
         chip_h = min(max(20, int(rail_inner.width * 1.10)),
@@ -7399,8 +7814,8 @@ class ConquerGameScreen(GameScreen):
             )
             self.window.blit(pulse_surf, badge.topleft)
 
-        tiny = settings.get_font(max(8, int(settings.FS_TINY * 0.62)), bold=True)
-        name_font = settings.get_font(max(8, int(settings.FS_TINY * 0.68)), bold=True)
+        tiny = settings.get_font(settings.FS_CONQUER_META, bold=True)
+        name_font = settings.get_font(settings.FS_CONQUER_LABEL, bold=True)
         value_font = settings.get_font(max(11, int(settings.FS_TINY * 0.88)), bold=True)
         round_surf = tiny.render(f'R{round_idx + 1}', True, (232, 220, 180))
         self.window.blit(round_surf, round_surf.get_rect(center=(badge.centerx, badge.top + 9)))
@@ -8041,7 +8456,7 @@ class ConquerGameScreen(GameScreen):
         area = pygame.Rect(area)
         if area.width <= 0 or area.height <= 0:
             return
-        font = settings.get_font(max(9, int(settings.FS_TINY * 0.72)), bold=True)
+        font = settings.get_font(settings.FS_CONQUER_LABEL, bold=True)
         # Build segments: (text, color)
         segments = []
         total_text = '0'
@@ -8096,7 +8511,7 @@ class ConquerGameScreen(GameScreen):
         summary mode).
         """
         area = pygame.Rect(area)
-        font = settings.get_font(max(8, int(settings.FS_TINY * 0.62)), bold=True)
+        font = settings.get_font(settings.FS_CONQUER_META, bold=True)
         line_h = font.get_height() + 1
         rects = getattr(self, '_conquer_receipt_row_rects', None)
         if rects is None:
@@ -8119,7 +8534,7 @@ class ConquerGameScreen(GameScreen):
 
     def _draw_conquer_lane_receipt_rows(self, area, rows, *, align_right, color):
         area = pygame.Rect(area)
-        font = settings.get_font(max(8, int(settings.FS_TINY * 0.62)), bold=True)
+        font = settings.get_font(settings.FS_CONQUER_META, bold=True)
         if area.width <= 0 or area.height <= 0:
             return
         line_h = font.get_height() + 1
@@ -8156,8 +8571,8 @@ class ConquerGameScreen(GameScreen):
         panel = pygame.Rect(anchor)
         if panel.width <= 0 or panel.height <= 0:
             return
-        font = settings.get_font(max(7, int(settings.FS_TINY * 0.54)), bold=True)
-        title_font = settings.get_font(max(8, int(settings.FS_TINY * 0.62)), bold=True)
+        font = settings.get_font(settings.FS_CONQUER_META, bold=True)
+        title_font = settings.get_font(settings.FS_CONQUER_META, bold=True)
         rows_left = [row for row in player_rows if self._conquer_receipt_row_parts(row)[0] != 'Total']
         rows_right = [row for row in opponent_rows if self._conquer_receipt_row_parts(row)[0] != 'Total']
         line_h = font.get_height() + 1
@@ -8277,7 +8692,7 @@ class ConquerGameScreen(GameScreen):
         self.window.blit(surf, surf.get_rect(center=chip.center))
 
         # Small caption above the chip clarifying this is figures-only.
-        caption_font = settings.get_font(max(8, int(settings.FS_TINY * 0.62)), bold=True)
+        caption_font = settings.get_font(settings.FS_CONQUER_META, bold=True)
         caption_surf = caption_font.render('FIGURES', True, (190, 170, 130))
         caption_rect = caption_surf.get_rect(
             midbottom=(chip.centerx, chip.top - 2))
@@ -8363,7 +8778,7 @@ class ConquerGameScreen(GameScreen):
             enemy_support_entries=opponent_support,
         )
         opponent = getattr(self.state.game, 'opponent_name', None) or 'OPPONENT'
-        opponent_font = settings.get_font(max(10, int(settings.FS_TINY * 0.78)), bold=True)
+        opponent_font = settings.get_font(settings.FS_CONQUER_LABEL, bold=True)
         # Allow ~10 more characters of opponent name before truncating
         # so common usernames are not clipped (round 10 #5).
         opp_band_rect = pygame.Rect(opp_band)
@@ -8419,6 +8834,7 @@ class ConquerGameScreen(GameScreen):
                     is_player=is_player_side,
                 )
         self._draw_conquer_support_overflow_popover()
+        self._draw_conquer_support_badge_popover()
         self._draw_conquer_lane_tooltips()
 
     def _draw_conquer_lane_tooltips(self):
@@ -8433,7 +8849,7 @@ class ConquerGameScreen(GameScreen):
             text = str(tip.get('text', ''))
             if not text:
                 continue
-            font = settings.get_font(max(10, int(settings.FS_TINY * 0.78)), bold=False)
+            font = settings.get_font(settings.FS_CONQUER_LABEL, bold=False)
             surf = font.render(text, True, (244, 230, 188))
             box = surf.get_rect()
             box.inflate_ip(12, 8)
@@ -8450,6 +8866,11 @@ class ConquerGameScreen(GameScreen):
     def _conquer_duel_lane_render_key(self):
         rect = getattr(self, '_conquer_duel_lane_last_rect', None)
         if rect is not None and rect.collidepoint(pygame.mouse.get_pos()):
+            return None
+        # A pinned support chip renders its pulsing glow + breakdown popover
+        # inside the lane pass; the cache would freeze a pre-pin frame (and
+        # popover pixels must never leak into a snapshot).
+        if getattr(self, '_conquer_support_touch_pin', None) is not None:
             return None
         if getattr(self, '_tactic_flight_animation', None):
             return None
@@ -8634,7 +9055,7 @@ class ConquerGameScreen(GameScreen):
         stack_h = card_h + (visible - 1) * step
 
         # Count badge dimensions (centred just below the fan).
-        font = settings.get_font(max(9, int(settings.FS_TINY * 0.82)), bold=True)
+        font = settings.get_font(settings.FS_CONQUER_LABEL, bold=True)
         label = font.render(str(count), True, (244, 232, 200))
         badge_gap = max(2, int(card_h * 0.16))
         bw, bh = label.get_width() + 12, label.get_height() + 4
@@ -9195,6 +9616,9 @@ class ConquerGameScreen(GameScreen):
         if self._handle_collapsed_header_events(events):
             return
 
+        if self._handle_conquer_touch_pin_events(events):
+            return
+
         # Tactics-hand rail + ledger event capture (Phase 9 redesign).
         # Runs *before* subscreen event handling so the rail can intercept
         # clicks that would otherwise hit the field/battle subscreen.
@@ -9214,9 +9638,11 @@ class ConquerGameScreen(GameScreen):
                     return
                 ledger_action = self._round_ledger.handle_event(event)
                 if ledger_action == 'open_result':
+                    self._clear_conquer_touch_pins()
                     self._open_tactics_hand_result_dialogue()
                     return
                 if ledger_action:
+                    self._clear_conquer_touch_pins(except_for='ledger')
                     return
                 if self._tactics_rail.handle_event(event):
                     pending = self._tactics_rail.consume_pending_action()
