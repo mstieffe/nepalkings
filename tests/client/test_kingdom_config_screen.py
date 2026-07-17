@@ -237,12 +237,13 @@ class TestKingdomConfigLoading:
 
 class TestKingdomConfigInteractions:
 
-    def test_current_coach_step_follows_post_conquer_config_order(self):
+    def test_current_coach_step_follows_the_active_lesson(self):
         KingdomConfigScreen, screen = _screen_base()
         screen._kingdom = _kingdom_payload()
         screen.state.user_dict['onboarding'] = {
             'menu_hints_seen': [],
             'completed_steps': ['finish_first_conquer_battle'],
+            'active_lesson': 'run_kingdom',
         }
         screen._kingdom_config_header_rect = pygame.Rect(20, 20, 360, 72)
         screen._kingdom_config_vault_rect = pygame.Rect(420, 120, 280, 120)
@@ -262,6 +263,41 @@ class TestKingdomConfigInteractions:
         screen.state.user_dict['onboarding']['menu_hints_seen'] = ['kingdom_config_essentials']
         step = KingdomConfigScreen._current_kingdom_config_coach_step(screen)
         assert step['id'] == 'kingdom_config_shields_style'
+        assert step['button_label'] == 'Choose a style'
+
+        buy_rect = pygame.Rect(80, 180, 120, 30)
+        screen._buttons = [('buy_cosmetic', 'badge_bronze', buy_rect)]
+        screen.state.user_dict['onboarding']['menu_hints_seen'].append(
+            'kingdom_config_shields_style')
+        step = KingdomConfigScreen._current_kingdom_config_coach_step(screen)
+        assert step['id'] == 'kingdom_buy_cosmetic'
+        assert step['rect'] == buy_rect
+        assert step['action'] == 'click'
+        assert step['mark_on_click'] is False
+        assert 'completes this lesson' in step['body']
+
+    def test_buy_cosmetic_coach_stays_on_catalogue_when_no_buy_is_visible(self):
+        KingdomConfigScreen, screen = _screen_base()
+        screen._kingdom = _kingdom_payload()
+        screen.state.user_dict['onboarding'] = {
+            'menu_hints_seen': [
+                'kingdom_config_essentials',
+                'kingdom_config_shields_style',
+            ],
+            'completed_steps': ['finish_first_conquer_battle'],
+            'active_lesson': 'run_kingdom',
+        }
+        screen._content_scroll_area = pygame.Rect(20, 100, 360, 180)
+        screen._kingdom_config_cosmetics_rect = pygame.Rect(
+            20, 100, 320, 260)
+        screen._buttons = []
+
+        step = KingdomConfigScreen._current_kingdom_config_coach_step(screen)
+
+        assert step['id'] == 'kingdom_buy_cosmetic'
+        assert step['action'] == 'coach'
+        assert step['interactive_rects'] == [pygame.Rect(20, 100, 320, 180)]
+        assert 'skip this step' in step['body']
 
     def test_coach_visibility_helper_scrolls_shields_panel_into_view(self):
         KingdomConfigScreen, screen = _screen_base()
@@ -269,6 +305,7 @@ class TestKingdomConfigInteractions:
         screen.state.user_dict['onboarding'] = {
             'menu_hints_seen': ['kingdom_config_essentials'],
             'completed_steps': ['finish_first_conquer_battle'],
+            'active_lesson': 'run_kingdom',
         }
         layout = {
             'content_viewport': pygame.Rect(30, 140, 700, 240),
@@ -318,6 +355,7 @@ class TestKingdomConfigInteractions:
         screen.state.user_dict['onboarding'] = {
             'menu_hints_seen': [],
             'completed_steps': ['finish_first_conquer_battle'],
+            'active_lesson': 'run_kingdom',
         }
         screen._content_scroll_area = pygame.Rect(20, 100, 360, 120)
         screen._collect_btn_rect = pygame.Rect(60, 82, 90, 42)

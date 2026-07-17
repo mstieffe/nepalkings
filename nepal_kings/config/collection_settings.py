@@ -58,13 +58,13 @@ COLLECTION_TIER_LABELS = {
 # Keep these in sync with server BOOSTER_TIER_RANKS / BOOSTER_SIDE_TIER_RANKS.
 COLLECTION_TIER_MAIN_RANKS = {
     1: ('7', '8', '9'),
-    2: ('J', '10', 'A'),
-    3: ('K', 'Q'),
+    2: ('J', 'Q', '10'),
+    3: ('K', 'A'),
 }
 COLLECTION_TIER_SIDE_RANKS = {
-    1: ('2', '3'),
-    2: ('4', '5'),
-    3: ('6',),
+    1: ('3',),
+    2: ('2', '6'),
+    3: ('4', '5'),
 }
 COLLECTION_MAIN_RANK_TO_TIER = {
     rank: tier

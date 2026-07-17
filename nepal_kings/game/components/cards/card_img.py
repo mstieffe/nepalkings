@@ -25,6 +25,11 @@ class CardImg():
         self.front_img = self._card_image_cache[self.front_img_path]
         self.back_img = self._card_image_cache[self.back_img_path]
 
+        # The unscaled source art. front_img is downscaled below to the caller's
+        # cell size; consumers that render the card larger (e.g. detail dialogs)
+        # should scale from this instead to avoid upscaling a thumbnail.
+        self.front_img_source = self.front_img
+
         if width == None:
             width = settings.CARD_WIDTH
         if height == None:

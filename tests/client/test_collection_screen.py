@@ -40,12 +40,15 @@ class TestSellPriceCalculation:
         from game.screens.collection_screen import _sell_price
         assert _sell_price('K', 5) == 200
 
-    def test_side_card_sell_price(self):
+    def test_side_key_card_sell_price(self):
         from game.screens.collection_screen import _sell_price
-        assert _sell_price('2', 1) == 2
+        assert _sell_price('2', 1) == 20
+        assert _sell_price('4', 1) == 40
+        assert _sell_price('5', 1) == 50
 
-    def test_side_card_6(self):
+    def test_side_number_card_sell_price(self):
         from game.screens.collection_screen import _sell_price
+        assert _sell_price('3', 1) == 3
         assert _sell_price('6', 2) == 12
 
 
@@ -81,16 +84,15 @@ class TestCardOrdering:
     """Test the rank ordering for main and side card tabs."""
 
     def test_main_ranks_order(self):
-        """Main ranks should be displayed A, K, Q, J, 10, 9, 8, 7."""
-        from config.card_settings import RANKS_MAIN_CARDS
-        display_order = list(reversed(RANKS_MAIN_CARDS))
-        assert display_order == ['A', 'K', 'Q', 'J', '10', '9', '8', '7']
+        """Main keys lead by value, followed by descending number cards."""
+        from game.screens.collection_screen import _ordered_main_ranks
+        assert _ordered_main_ranks() == [
+            'MK', 'K', 'A', 'Q', 'J', '10', '9', '8', '7']
 
     def test_side_ranks_order(self):
-        """Side ranks should be displayed 6, 5, 4, 3, 2."""
-        from config.card_settings import RANKS_SIDE_CARDS
-        display_order = list(reversed(RANKS_SIDE_CARDS))
-        assert display_order == ['6', '5', '4', '3', '2']
+        """Side keys lead by value, followed by descending number cards."""
+        from game.screens.collection_screen import _ordered_side_ranks
+        assert _ordered_side_ranks() == ['5', '4', '2', '6', '3']
 
     def test_four_suits(self):
         from config.card_settings import SUITS
@@ -106,16 +108,18 @@ class TestCollectionTierMapping:
         from game.screens.collection_screen import _card_tier, _tier_label
         assert _card_tier('7', 'main') == 1
         assert _card_tier('J', 'main') == 2
-        assert _card_tier('A', 'main') == 2
-        assert _card_tier('Q', 'main') == 3
+        assert _card_tier('Q', 'main') == 2
+        assert _card_tier('10', 'main') == 2
+        assert _card_tier('A', 'main') == 3
         assert _tier_label('K', 'main') == 'Rare'
 
     def test_side_card_tiers(self):
         from game.screens.collection_screen import _card_tier, _tier_label
-        assert _card_tier('2', 'side') == 1
-        assert _card_tier('4', 'side') == 2
-        assert _card_tier('6', 'side') == 3
-        assert _tier_label('6', 'side') == 'Rare'
+        assert _card_tier('3', 'side') == 1
+        assert _card_tier('2', 'side') == 2
+        assert _card_tier('6', 'side') == 2
+        assert _card_tier('4', 'side') == 3
+        assert _tier_label('5', 'side') == 'Rare'
 
     def test_pack_type_inference(self):
         from game.screens.collection_screen import _card_pack_type
@@ -681,6 +685,84 @@ assert row_bottom + 2 <= button_top, (row_bottom, button_top)
         )
         assert result.returncode == 0, result.stdout + result.stderr
 
+    @pytest.mark.parametrize('size,ui_scale', [
+        ('854x480', '1.6'),
+        ('390x844', '1.0'),
+    ])
+    def test_card_workshop_stays_on_screen_with_touch_sized_controls(
+            self, size, ui_scale):
+        """Every workshop view remains usable in landscape and portrait."""
+        import os
+        from pathlib import Path
+        import subprocess
+        import sys
+
+        root = Path(__file__).resolve().parents[2]
+        app_dir = root / 'nepal_kings'
+        width, height = size.split('x')
+        env = os.environ.copy()
+        env.update({
+            'SDL_VIDEODRIVER': 'dummy',
+            'SDL_AUDIODRIVER': 'dummy',
+            'NK_SCREEN_WIDTH': width,
+            'NK_SCREEN_HEIGHT': height,
+            'NK_UI_SCALE': ui_scale,
+            'NK_IS_MOBILE': '1',
+            'PYTHONPATH': str(app_dir),
+        })
+        code = r'''
+import pygame
+pygame.init()
+pygame.display.set_mode((1, 1))
+from config import settings
+from game.components.card_workshop_dialogue import CardWorkshopDialogue
+
+window = pygame.Surface(
+    (settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT), pygame.SRCALPHA)
+cards = {
+    suit: pygame.Surface((60, 90), pygame.SRCALPHA)
+    for suit in settings.SUITS
+}
+dialogue = CardWorkshopDialogue(
+    window,
+    suit='Hearts',
+    rank='A',
+    card_surfaces=cards,
+    uses={'figures': [], 'spells': [], 'battle_moves': []},
+    qty=5,
+    locked=1,
+    unit_price=30,
+    tier_label='Uncommon',
+    pack_label='Main',
+    category_label='Key Card',
+    stock_by_suit={'Diamonds': (2, 1)},
+)
+screen = pygame.Rect(
+    0, 0, settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT)
+assert screen.contains(dialogue.rect), (screen, dialogue.rect)
+for view in ('details', 'sell', 'convert'):
+    dialogue.set_view(view)
+    dialogue.draw()
+    assert screen.contains(dialogue.rect)
+    for button in dialogue.buttons:
+        assert dialogue.rect.contains(button.rect), (view, button.rect)
+        assert button.rect.h >= settings.TOUCH_TARGET_MIN
+    for rect in dialogue._control_rects.values():
+        assert dialogue.rect.contains(rect), (view, rect)
+    for rect in dialogue._target_rects.values():
+        assert dialogue.rect.contains(rect), (view, rect)
+'''
+        result = subprocess.run(
+            [sys.executable, '-c', code],
+            cwd=app_dir,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+
 
 class TestBoosterRevealLayout:
     """Guard against visual regressions in the booster reveal overlay."""
@@ -914,8 +996,11 @@ class TestMaharajaCraft:
         from config import settings
         from game.screens.collection_screen import _ordered_main_ranks
         ranks = _ordered_main_ranks()
-        assert ranks[0] == settings.RANK_MAHARAJA
-        assert set(ranks[1:]) == set(settings.RANKS_MAIN_CARDS)
+        assert ranks == [
+            settings.RANK_MAHARAJA,
+            'K', 'A', 'Q', 'J',
+            '10', '9', '8', '7',
+        ]
 
     def test_craft_progress_ready_when_all_free(self):
         from config import settings
@@ -1230,7 +1315,7 @@ def test_open_all_status_starts_bulk_booster_request():
     assert calls == [('open', 'main', 5)]
 
 
-def test_card_profile_keeps_card_art_and_contextual_copy_actions(monkeypatch):
+def test_card_profile_opens_unified_workshop_with_contextual_actions(monkeypatch):
     import pygame
     from config import settings
     from game.screens.collection_screen import CollectionScreen
@@ -1244,7 +1329,8 @@ def test_card_profile_keeps_card_art_and_contextual_copy_actions(monkeypatch):
     screen._locked = {('Hearts', 'A'): 1}
     screen._card_imgs = {
         ('Hearts', 'A'): SimpleNamespace(
-            front_img=pygame.Surface((60, 90), pygame.SRCALPHA))
+            front_img=pygame.Surface((60, 90), pygame.SRCALPHA),
+            front_img_source=pygame.Surface((102, 149), pygame.SRCALPHA))
     }
     monkeypatch.setattr(card_uses, 'get_card_uses', lambda _suit, _rank: {
         'figures': [], 'spells': [], 'battle_moves': [],
@@ -1255,20 +1341,135 @@ def test_card_profile_keeps_card_art_and_contextual_copy_actions(monkeypatch):
     dialogue = screen._profile_dialogue
     assert dialogue.title == 'Hearts A'
     assert [button.text for button in dialogue.buttons] == [
-        'Sell copies', 'Convert', 'Close']
+        'Sell copies', 'Convert suit', 'Close']
+    assert dialogue.view == dialogue.VIEW_DETAILS
     assert dialogue._lead_items
     assert all(button.disabled is False for button in dialogue.buttons)
-    assert all(group['icon'] is not None for group in dialogue.image_groups)
-    assert all(group['badge_icon'] is None for group in dialogue.image_groups)
+    assert [group['title'] for group in dialogue.image_groups] == [
+        'Figures', 'Spells', 'Tactics']
+    assert dialogue.free == 2
+    assert dialogue.locked == 1
     assert '3 owned' in dialogue.message
     assert '2 free' in dialogue.message
     assert '1 in use' in dialogue.message
 
 
-class TestCollectionCoach:
-    """Verify post-duel collection tour step selection."""
+def test_sell_and_convert_open_as_views_of_the_same_workshop(monkeypatch):
+    import pygame
+    from config import settings
+    from game.screens.collection_screen import CollectionScreen
+    from utils import card_uses
 
-    def _screen(self, completed=None, seen=None):
+    window = pygame.display.get_surface() or pygame.display.set_mode(
+        (settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+    screen = object.__new__(CollectionScreen)
+    screen.window = window
+    screen._cards = {
+        ('Hearts', 'A'): 5,
+        ('Diamonds', 'A'): 2,
+    }
+    screen._locked = {
+        ('Hearts', 'A'): 1,
+        ('Diamonds', 'A'): 1,
+    }
+    screen._card_imgs = {
+        (suit, 'A'): SimpleNamespace(
+            front_img=pygame.Surface((60, 90), pygame.SRCALPHA),
+            front_img_source=pygame.Surface((102, 149), pygame.SRCALPHA))
+        for suit in settings.SUITS
+    }
+    screen._profile_dialogue = None
+    screen._profile_card = None
+    screen._profile_pinned_tooltip = None
+    screen._profile_pinned_tooltip_pos = None
+    screen._sell_dialogue = None
+    screen._trade_dialogue = None
+    monkeypatch.setattr(card_uses, 'get_card_uses', lambda _suit, _rank: {
+        'figures': [], 'spells': [], 'battle_moves': [],
+    })
+
+    screen._open_sell_dialogue('Hearts', 'A')
+    sell = screen._profile_dialogue
+    assert sell.view == sell.VIEW_SELL
+    assert sell.sell_qty == 1
+    assert sell.free == 4
+    assert screen._sell_dialogue is None
+
+    screen._open_trade_dialogue('Hearts', 'A')
+    convert = screen._profile_dialogue
+    assert convert.view == convert.VIEW_CONVERT
+    assert convert.target_suit == 'Diamonds'
+    assert convert.selected_ratio == 2
+    assert convert.convert_max == 2
+    assert convert.stock_by_suit['Diamonds'] == (2, 1)
+    assert screen._trade_dialogue is None
+
+
+def test_workshop_controls_update_quantity_and_reject_unaffordable_suit(
+        monkeypatch):
+    import pygame
+    from config import settings
+    from game.components.card_workshop_dialogue import CardWorkshopDialogue
+
+    window = pygame.display.get_surface() or pygame.display.set_mode(
+        (settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+    cards = {
+        suit: pygame.Surface((60, 90), pygame.SRCALPHA)
+        for suit in settings.SUITS
+    }
+    dialogue = CardWorkshopDialogue(
+        window,
+        suit='Hearts',
+        rank='A',
+        card_surfaces=cards,
+        uses={'figures': [], 'spells': [], 'battle_moves': []},
+        qty=5,
+        locked=1,
+        unit_price=30,
+        tier_label='Uncommon',
+        pack_label='Main',
+        category_label='Key Card',
+        stock_by_suit={'Diamonds': (2, 1)},
+        start_view='sell',
+    )
+    dialogue._created_at = 0
+
+    plus = dialogue._control_rects['plus']
+    event = pygame.event.Event(
+        pygame.MOUSEBUTTONUP, {'button': 1, 'pos': plus.center})
+    assert dialogue.update([event]) is None
+    assert dialogue.sell_qty == 2
+
+    sell_button = next(
+        button for button in dialogue.buttons if button.action == 'sell')
+    event = pygame.event.Event(
+        pygame.MOUSEBUTTONUP,
+        {'button': 1, 'pos': sell_button.rect.center})
+    assert dialogue.update([event]) == 'sell'
+
+    dialogue.set_view('convert')
+    clubs_rect = dialogue._target_rects['Clubs']
+    event = pygame.event.Event(
+        pygame.MOUSEBUTTONUP, {'button': 1, 'pos': clubs_rect.center})
+    assert dialogue.update([event]) is None
+    assert dialogue.target_suit == 'Clubs'
+    assert dialogue._notice == ''
+
+    dialogue.free = 2
+    dialogue.target_suit = 'Diamonds'
+    dialogue.set_view('convert')
+    clubs_rect = dialogue._target_rects['Clubs']
+    event = pygame.event.Event(
+        pygame.MOUSEBUTTONUP, {'button': 1, 'pos': clubs_rect.center})
+    assert dialogue.update([event]) is None
+    assert dialogue.target_suit == 'Diamonds'
+    assert 'Need 4 free copies' in dialogue._notice
+
+
+class TestCollectionCoach:
+    """Verify explicit Collection lesson step selection."""
+
+    def _screen(self, completed=None, seen=None, active_lesson=None):
         import pygame
         from game.screens.collection_screen import CollectionScreen
 
@@ -1276,6 +1477,7 @@ class TestCollectionCoach:
         screen.state = SimpleNamespace(user_dict={'onboarding': {
             'completed_steps': list(completed or []),
             'menu_hints_seen': list(seen or []),
+            'active_lesson': active_lesson,
         }})
         screen._onboarding_guide_open = False
         screen._welcome_present_dialogue = None
@@ -1285,10 +1487,17 @@ class TestCollectionCoach:
         screen._sell_dialogue = None
         screen._trade_dialogue = None
         screen._profile_dialogue = None
+        screen._collection_growth_dialogue = None
+        screen._collection_growth_recap_dialogue = None
         screen._panel_rect = pygame.Rect(20, 120, 280, 160)
         screen._btn_open_main_rect = pygame.Rect(10, 20, 80, 32)
         screen._btn_open_side_rect = pygame.Rect(10, 70, 80, 32)
         screen._icon_home = SimpleNamespace(rect=pygame.Rect(200, 20, 40, 40))
+        screen._boosters = 1
+        screen._boosters_side = 1
+        screen._cards = {}
+        screen._locked = {}
+        screen._card_rects = []
         return screen
 
     def test_coach_routes_starter_reveal_then_kingdom_then_loop(self):
@@ -1310,8 +1519,8 @@ class TestCollectionCoach:
             'finish_first_conquer_battle')
         assert screen._current_collection_coach_step() is None
 
-        # After the tutorial completes the collection screen has no further
-        # coaching (the side-booster nudge was removed).
+        # After the tutorial completes, Collection stays quiet unless a lesson
+        # is started explicitly from Guide.
         screen.state.user_dict['onboarding']['completed_steps'].extend([
             'collect_first_kingdom_production', 'finish_tutorial'])
         assert screen._current_collection_coach_step() is None
@@ -1333,7 +1542,7 @@ class TestCollectionCoach:
         screen.state.user_dict['onboarding']['next_action'] = {
             'screen': 'collection',
             'label': 'Open Reward Pack',
-            'target_id': 'collection_open_main_booster',
+            'target_id': 'grow_collection',
         }
         screen.state.user_dict['onboarding']['menu_hints_seen'].append(
             'collection_starter_cards')
@@ -1341,6 +1550,119 @@ class TestCollectionCoach:
         step = screen._current_collection_coach_step()
 
         assert step is None
+
+    def test_grow_collection_guides_main_then_side_pack(self):
+        screen = self._screen(
+            completed=['finish_tutorial'],
+            seen=['collection_growth_intro'],
+            active_lesson='grow_collection',
+        )
+
+        step = screen._current_collection_coach_step()
+        assert step['id'] == 'collection_growth_main'
+        assert step['rect'] == screen._btn_open_main_rect
+
+        screen.state.user_dict['onboarding']['completed_steps'].append(
+            'open_first_main_booster')
+        step = screen._current_collection_coach_step()
+        assert step['id'] == 'collection_growth_side'
+        assert step['rect'] == screen._btn_open_side_rect
+
+    def test_pack_coach_remains_visible_without_a_pack_so_it_can_be_skipped(
+            self):
+        screen = self._screen(
+            completed=['finish_tutorial'],
+            seen=['collection_growth_intro'],
+            active_lesson='grow_collection',
+        )
+        screen._boosters = 0
+        screen._boosters_side = 0
+
+        step = screen._current_collection_coach_step()
+        assert step['id'] == 'collection_growth_main'
+
+        screen.state.user_dict['onboarding']['completed_steps'].append(
+            'open_first_main_booster')
+        step = screen._current_collection_coach_step()
+        assert step['id'] == 'collection_growth_side'
+
+    def test_collection_lesson_continues_from_packs_to_sell_and_trade(self):
+        import pygame
+
+        card_rect = pygame.Rect(40, 150, 40, 58)
+        second_card_rect = pygame.Rect(90, 150, 40, 58)
+        maharaja_rect = pygame.Rect(140, 150, 40, 58)
+        screen = self._screen(
+            completed=[
+                'finish_tutorial',
+                'open_first_main_booster',
+                'open_first_side_booster',
+            ],
+            seen=['collection_growth_intro'],
+            active_lesson='grow_collection',
+        )
+        screen._cards = {
+            ('Hearts', '9'): 3,
+            ('Clubs', '8'): 2,
+            ('Hearts', 'MK'): 3,
+        }
+        screen._locked = {
+            ('Hearts', '9'): 1,
+            ('Clubs', '8'): 0,
+            ('Hearts', 'MK'): 0,
+        }
+        screen._card_rects = [
+            (card_rect, 'Hearts', '9', 'main'),
+            (second_card_rect, 'Clubs', '8', 'main'),
+            (maharaja_rect, 'Hearts', 'MK', 'main'),
+        ]
+
+        step = screen._current_collection_coach_step()
+        assert step['id'] == 'collection_sell_spare'
+        assert step['rects'] == [card_rect, second_card_rect]
+        assert step['click_through_rects'] == [
+            card_rect, second_card_rect]
+        assert step['mark_on_click'] is False
+
+        screen.state.user_dict['onboarding']['completed_steps'].append(
+            'sell_first_card')
+        step = screen._current_collection_coach_step()
+        assert step['id'] == 'collection_trade_spare'
+        assert step['rects'] == [card_rect, second_card_rect]
+        assert step['click_through_rects'] == [
+            card_rect, second_card_rect]
+        assert step['mark_on_click'] is False
+
+    def test_collection_capacity_recap_waits_until_sell_and_trade_are_done(self):
+        import pygame
+
+        screen = self._screen(
+            completed=[
+                'finish_tutorial',
+                'open_first_main_booster',
+                'open_first_side_booster',
+                'sell_first_card',
+            ],
+            seen=['collection_growth_intro'],
+            active_lesson='grow_collection',
+        )
+        screen.window = pygame.Surface((1280, 800), pygame.SRCALPHA)
+        screen._data_loaded = True
+        screen._collection_basics_dialogue = None
+        screen._starter_reveal_dialogue = None
+
+        screen._maybe_show_collection_growth_recap()
+        assert screen._collection_growth_recap_dialogue is None
+
+        screen.state.user_dict['onboarding']['completed_steps'].append(
+            'trade_first_card')
+        screen._maybe_show_collection_growth_recap()
+
+        dialogue = screen._collection_growth_recap_dialogue
+        assert dialogue is not None
+        assert [page['title'] for page in dialogue.pages] == [
+            'Your cards build the kingdom']
+        assert dialogue.pages[0]['button_label'] == 'Complete Lesson'
 
     def test_open_booster_result_does_not_mark_removed_tutorial_step(self, monkeypatch):
         from game.screens.collection_screen import CollectionScreen

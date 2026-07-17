@@ -419,7 +419,9 @@ class TestBuildFigureScreenKingdomExtras:
 
 
 class TestSecondBuildTutorialGating:
-    def _screen(self, completed, conquered_lands, skipped=False):
+    def _screen(
+            self, completed, conquered_lands, skipped=False,
+            active_lesson='build_attack'):
         from game.screens.build_figure_screen import BuildFigureScreen
         screen = BuildFigureScreen.__new__(BuildFigureScreen)
         screen.mode = 'conquer'
@@ -427,6 +429,7 @@ class TestSecondBuildTutorialGating:
             'completed_steps': completed,
             'facts': {'conquered_lands': conquered_lands},
             'onboarding_skipped': skipped,
+            'active_lesson': active_lesson,
         }})
         return screen
 
@@ -440,9 +443,26 @@ class TestSecondBuildTutorialGating:
         screen = self._screen([], 0)
         assert BuildFigureScreen._second_build_tutorial_active(screen) is False
 
-    def test_inactive_after_two_conquests(self):
+    def test_remains_active_after_two_conquests_until_lesson_completes(self):
         from game.screens.build_figure_screen import BuildFigureScreen
         screen = self._screen(['finish_first_conquer_battle'], 2)
+        assert BuildFigureScreen._second_build_tutorial_active(screen) is True
+
+    def test_inactive_after_lesson_completion(self):
+        from game.screens.build_figure_screen import BuildFigureScreen
+        screen = self._screen([
+            'finish_first_conquer_battle',
+            'finish_build_attack_lesson',
+        ], 2)
+        assert BuildFigureScreen._second_build_tutorial_active(screen) is False
+
+    def test_inactive_when_another_lesson_is_active(self):
+        from game.screens.build_figure_screen import BuildFigureScreen
+        screen = self._screen(
+            ['finish_first_conquer_battle'],
+            1,
+            active_lesson='run_kingdom',
+        )
         assert BuildFigureScreen._second_build_tutorial_active(screen) is False
 
     def test_inactive_when_tutorial_skipped(self):

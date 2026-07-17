@@ -47,9 +47,14 @@ def render(width: int, height: int, ui_scale: str, mobile: bool) -> None:
     from game.components.tutorial_window import (
         TutorialWindowDialogue, StarterSuitRevealDialogue)
     from game.tutorial_content import (
+        build_attack_intro_pages,
         collection_basics_pages,
+        collection_growth_pages,
+        collection_growth_recap_pages,
         conquer_battle_intro_pages,
+        defend_land_intro_pages,
         duel_intro_pages,
+        kingdom_management_pages,
         kingdom_overview_pages,
         loot_risk_pages,
         starter_present_pages,
@@ -87,8 +92,35 @@ def render(width: int, height: int, ui_scale: str, mobile: bool) -> None:
     for index in range(len(collection_basics_pages())):
         shot(f'collection-{index + 1}', collection, page=index)
 
+    collection_growth = TutorialWindowDialogue(
+        surf, collection_growth_pages(), title='Grow Your Collection')
+    for index in range(len(collection_growth_pages())):
+        shot(
+            f'lesson-collection-{index + 1}',
+            collection_growth,
+            page=index,
+        )
+    collection_growth_recap = TutorialWindowDialogue(
+        surf,
+        collection_growth_recap_pages(),
+        title='Grow Your Collection',
+    )
+    shot('lesson-collection-recap', collection_growth_recap, page=0)
+
+    build_attack = TutorialWindowDialogue(
+        surf, build_attack_intro_pages(), title='Build Your Own Attack')
+    shot('lesson-build-attack', build_attack, page=0)
+
+    run_kingdom = TutorialWindowDialogue(
+        surf, kingdom_management_pages(), title='Run Your Kingdom')
+    shot('lesson-run-kingdom', run_kingdom, page=0)
+
+    defend_land = TutorialWindowDialogue(
+        surf, defend_land_intro_pages(), title='Defend Your Land')
+    shot('lesson-defend-land', defend_land, page=0)
+
     duel = TutorialWindowDialogue(
-        surf, duel_intro_pages(), title='Duel Tutorial')
+        surf, duel_intro_pages(), title='Duel Basics')
     for index in range(len(duel_intro_pages())):
         shot(f'duel-{index + 1}', duel, page=index)
 
@@ -96,8 +128,8 @@ def render(width: int, height: int, ui_scale: str, mobile: bool) -> None:
         surf,
         conquer_battle_intro_pages(),
         title='How Battles Work')
-    shot('battle-1', battle, page=0)
-    shot('battle-2', battle, page=1)
+    for index in range(len(conquer_battle_intro_pages())):
+        shot(f'battle-{index + 1}', battle, page=index)
 
     kingdom = TutorialWindowDialogue(
         surf,

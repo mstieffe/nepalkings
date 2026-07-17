@@ -116,12 +116,12 @@ def test_completion_reward_keeps_chest_reveal_with_specific_action(monkeypatch):
         icon=None,
         summary_lines=['Well played.'],
         items=[{'kind': 'map', 'label': '4 maps'}],
-        ok_label='Collect & continue',
+        ok_label='Finish tutorial',
     )
     dialogue._created_at = pygame.time.get_ticks() - 1000
 
     assert all(not item.revealed for item in dialogue.items)
-    assert dialogue._ok_button.text == 'Collect & continue'
+    assert dialogue._ok_button.text == 'Finish tutorial'
     dialogue.update([])
     assert dialogue._ok_button.disabled is True
     dialogue.items[0].revealed = True

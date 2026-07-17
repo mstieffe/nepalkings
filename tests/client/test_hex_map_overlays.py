@@ -1,6 +1,8 @@
 # Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
 # See LICENSE file in the project root for full license information.
 """Tests for the redesigned per-tile overlays on the kingdom hex map."""
+import math
+
 import pygame
 import pytest
 
@@ -11,11 +13,13 @@ def _make_land(col=0, row=0, land_id=1, tier=1, gold_rate=5.0,
                kingdom_id=None, kingdom_name=None,
                kingdom_component_id=None, kingdom_component_size=0,
                kingdom_level=0,
-               kingdom_is_shielded=False, kingdom_shield_remaining=0):
+               kingdom_is_shielded=False, kingdom_shield_remaining=0,
+               region=None):
     return {
         'id': land_id, 'col': col, 'row': row,
         'tier': tier, 'gold_rate': gold_rate,
         'suit_bonus_suit': suit, 'suit_bonus_value': bonus,
+        'region': region,
         'owner': owner, 'owner_style': owner_style or {},
         'is_mine': is_mine,
         'defence_incomplete': defence_incomplete,
@@ -188,6 +192,179 @@ class TestProgressiveDisclosure:
             lambda *a, **kw: called.__setitem__('n', called['n'] + 1))
         hm._draw_hex_details(hm.tiles[0], 100, 100, 60)
         assert called['n'] == 1
+
+    def test_suit_resolution_progresses_region_cluster_land(self):
+        from config import settings
+        overview_zoom = settings.REGION_CLUSTER_ICON_START_ZOOM - 0.01
+        hm = _new_map([_make_land()], zoom=overview_zoom)
+
+        assert hm._region_main_suit_factor() == 1.0
+        assert hm._suit_cluster_icon_factor() == 0.0
+
+        hm.zoom = settings.REGION_CLUSTER_ICON_FULL_ZOOM
+        assert hm._region_main_suit_factor() == 0.0
+        assert hm._suit_cluster_icon_factor() == 1.0
+
+        hm.zoom = settings.HEX_MAP_LAND_NUMBERS_MIN_ZOOM
+        assert hm._region_main_suit_factor() == 0.0
+        assert hm._suit_cluster_icon_factor() == 0.0
+
+    def test_region_main_suit_icon_is_drawn_below_name(self):
+        from config import settings
+        hm = _new_map([
+            _make_land(region='karnali', suit='Spades'),
+        ], zoom=settings.REGION_CLUSTER_ICON_START_ZOOM - 0.01)
+        hm._suit_icon_raw['Spades'] = pygame.Surface(
+            (20, 20), pygame.SRCALPHA)
+        label_rect = pygame.Rect(120, 90, 100, 20)
+
+        icon_rect = hm._draw_region_main_suit_icon(
+            {'dominant_suit': 'Spades'},
+            {'dominant_suit': 'Spades'},
+            label_rect,
+            18,
+            1.0,
+        )
+
+        assert icon_rect is not None
+        assert icon_rect.centerx == label_rect.centerx
+        assert icon_rect.top > label_rect.bottom
+
+    def test_region_without_main_suit_has_no_overview_icon(self):
+        from config import settings
+        hm = _new_map([
+            _make_land(region='kathmandu', suit='Neutral'),
+        ], zoom=settings.REGION_CLUSTER_ICON_START_ZOOM - 0.01)
+
+        icon_rect = hm._draw_region_main_suit_icon(
+            {'dominant_suit': None},
+            {'dominant_suit': None},
+            pygame.Rect(120, 90, 100, 20),
+            18,
+            1.0,
+        )
+
+        assert icon_rect is None
+
+    def test_cluster_icons_only_draw_in_intermediate_zoom(self, monkeypatch):
+        from config import settings
+        hm = _new_map([
+            _make_land(col=0, row=0, land_id=1, suit='Hearts'),
+            _make_land(col=1, row=0, land_id=2, suit='Hearts'),
+        ])
+        hm._suit_icon_raw['Hearts'] = pygame.Surface(
+            (20, 20), pygame.SRCALPHA)
+        calls = []
+
+        def scaled(cache_key, raw, size):
+            calls.append((cache_key, size))
+            return pygame.Surface((size, size), pygame.SRCALPHA)
+
+        monkeypatch.setattr(hm, '_get_scaled_icon', scaled)
+
+        hm.zoom = settings.REGION_CLUSTER_ICON_START_ZOOM - 0.01
+        hm._draw_suit_cluster_icons(60)
+        assert calls == []
+
+        hm.zoom = settings.REGION_CLUSTER_ICON_FULL_ZOOM
+        hm._draw_suit_cluster_icons(60)
+        assert len(calls) == 1
+
+        calls.clear()
+        hm.zoom = settings.HEX_MAP_LAND_NUMBERS_MIN_ZOOM
+        hm._draw_suit_cluster_icons(60)
+        assert calls == []
+
+    def test_touching_same_suit_peaks_remain_separate_clusters(self):
+        tiers = [6, 5, 4, 3, 4, 5, 6]
+        hm = _new_map([
+            _make_land(
+                col=0, row=row, land_id=row + 1,
+                suit='Spades', tier=tier, region='karnali')
+            for row, tier in enumerate(tiers)
+        ])
+
+        clusters = hm._suit_clusters()
+
+        assert len(clusters) == 2
+        assert {cluster['suit'] for cluster in clusters} == {'Spades'}
+        assert sorted(cluster['tile_count'] for cluster in clusters) == [3, 4]
+
+    def test_touching_cluster_with_lower_local_peak_stays_separate(self):
+        tiers = [6, 5, 4, 3, 4, 5, 5]
+        hm = _new_map([
+            _make_land(
+                col=0, row=row, land_id=row + 1,
+                suit='Hearts', tier=tier, region='lumbini')
+            for row, tier in enumerate(tiers)
+        ])
+
+        clusters = hm._suit_clusters()
+
+        assert len(clusters) == 2
+        assert sorted(cluster['tile_count'] for cluster in clusters) == [3, 4]
+
+    def test_terrain_landmarks_follow_large_clusters_and_scale_with_size(
+            self, monkeypatch):
+        from config import settings
+
+        lands = []
+        land_id = 1
+        for row in range(4):
+            lands.append(_make_land(
+                col=0, row=row, land_id=land_id,
+                suit='Spades', tier=6 if row == 0 else 5,
+                region='karnali'))
+            land_id += 1
+        for row in range(4):
+            lands.append(_make_land(
+                col=4, row=row, land_id=land_id,
+                suit='Hearts', tier=6 if row == 0 else 5,
+                region='karnali'))
+            land_id += 1
+        for row in range(8):
+            lands.append(_make_land(
+                col=8, row=row, land_id=land_id,
+                suit='Clubs', tier=6 if row == 0 else 5,
+                region='kirat'))
+            land_id += 1
+        for row in range(4):
+            lands.append(_make_land(
+                col=12, row=row, land_id=land_id,
+                suit='Diamonds', region='kathmandu'))
+            land_id += 1
+
+        hm = _new_map(lands)
+        monkeypatch.setattr(
+            settings, 'REGION_SCENERY_CLUSTER_MIN_TILES', 3)
+        monkeypatch.setattr(
+            settings, 'REGION_SCENERY_CLUSTER_REFERENCE_TILES', 4)
+        monkeypatch.setattr(
+            settings, 'REGION_SCENERY_CLUSTER_SCALE_MIN', 0.5)
+        monkeypatch.setattr(
+            settings, 'REGION_SCENERY_CLUSTER_SCALE_MAX', 2.0)
+        hm._terrain_landmarks_cache = None
+
+        landmarks = hm._terrain_landmarks()
+        outer = {item[0]: item for item in landmarks
+                 if item[0] != 'kathmandu'}
+        kathmandu = [item for item in landmarks
+                     if item[0] == 'kathmandu']
+
+        assert set(outer) == {'karnali', 'kirat'}
+        assert [item[0] for item in landmarks].count('karnali') == 1
+        assert len(kathmandu) == 1
+        assert kathmandu[0][4] == 1.0
+        assert outer['karnali'][4] == pytest.approx(1.0)
+        assert outer['kirat'][4] == pytest.approx(math.sqrt(2))
+
+        tile_centers = {
+            (tile.region, tile.cx, tile.cy) for tile in hm.tiles
+        }
+        assert all(
+            (region, wx, wy) in tile_centers
+            for region, wx, wy, _variant, _scale in outer.values()
+        )
 
 
 # ───────────────────── kingdom badge cluster gating ───────────────

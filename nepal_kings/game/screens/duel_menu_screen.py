@@ -178,13 +178,17 @@ class DuelMenuScreen(MenuScreenMixin, Screen):
         self._draw_menu_coach(self._current_duel_menu_coach_step())
         if getattr(self, '_duel_tutorial_intro_dialogue', None):
             self._duel_tutorial_intro_dialogue.draw()
+        self._draw_tutorial_complete_dialogue()
 
     def update(self, events):
         super().update()
         self._update_icon_buttons()
         self._maybe_show_duel_tutorial_intro_window()
+        self._maybe_show_tutorial_completion()
 
     def handle_events(self, events):
+        if self._handle_tutorial_completion_events(events):
+            return
         if self._handle_duel_tutorial_intro_events(events):
             return
         coach_step = self._current_duel_menu_coach_step()
@@ -241,11 +245,26 @@ class DuelMenuScreen(MenuScreenMixin, Screen):
     def _first_duel_incomplete(self):
         onboarding = (getattr(self.state, 'user_dict', None) or {}).get('onboarding') or {}
         completed = set(onboarding.get('completed_steps') or [])
-        return bool(onboarding and 'finish_first_duel' not in completed)
+        return bool(
+            onboarding
+            and (
+                onboarding.get('replaying_lesson') == 'duel_basics'
+                or 'finish_duel_basics_lesson' not in completed
+            )
+        )
+
+    def _duel_basics_active(self):
+        onboarding = (
+            (getattr(self.state, 'user_dict', None) or {})
+            .get('onboarding') or {}
+        )
+        return onboarding.get('active_lesson') == 'duel_basics'
 
     def _duel_tutorial_intro_allowed(self):
         onboarding = (getattr(self.state, 'user_dict', None) or {}).get('onboarding') or {}
         if not onboarding or onboarding.get('onboarding_skipped'):
+            return False
+        if not self._duel_basics_active():
             return False
         if not self._first_duel_incomplete():
             return False
@@ -269,7 +288,7 @@ class DuelMenuScreen(MenuScreenMixin, Screen):
         self._duel_tutorial_intro_dialogue = TutorialWindowDialogue(
             self.window,
             self._duel_tutorial_intro_pages(),
-            title='Duel Tutorial',
+            title='Duel Basics',
         )
 
     def _handle_duel_tutorial_intro_events(self, events):
@@ -286,7 +305,9 @@ class DuelMenuScreen(MenuScreenMixin, Screen):
         return True
 
     def _current_duel_menu_coach_step(self):
-        if not self._menu_coach_allowed_common() or not self._first_duel_incomplete():
+        if (not self._menu_coach_allowed_common()
+                or not self._duel_basics_active()
+                or not self._first_duel_incomplete()):
             return None
         if getattr(self, '_duel_tutorial_intro_dialogue', None):
             return None

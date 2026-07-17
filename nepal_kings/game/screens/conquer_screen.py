@@ -1245,20 +1245,19 @@ class ConquerScreen(MenuScreenMixin, Screen):
         return bounds
 
     def _second_build_coach_ready(self):
-        """True during the player's guided second conquest (build-it-yourself).
-
-        The first conquer attack is pre-assembled; this coaches the *next* one,
-        which the player builds by hand. Gated to exactly one conquered land,
-        so a no-penalty loss before the first win does not suppress it.
-        """
+        """True while the persistent Build Your Own Attack lesson is active."""
         onboarding = (getattr(self.state, 'user_dict', None) or {}).get('onboarding') or {}
         if not onboarding or onboarding.get('onboarding_skipped'):
+            return False
+        if onboarding.get('active_lesson') != 'build_attack':
             return False
         completed = set(onboarding.get('completed_steps') or [])
         if 'finish_first_conquer_battle' not in completed:
             return False
-        facts = onboarding.get('facts') or {}
-        return int(facts.get('conquered_lands') or 0) == 1
+        return (
+            onboarding.get('replaying_lesson') == 'build_attack'
+            or 'finish_build_attack_lesson' not in completed
+        )
 
     def _second_build_coach_step(self, seen):
         if not self._second_build_coach_ready():
@@ -1288,6 +1287,17 @@ class ConquerScreen(MenuScreenMixin, Screen):
                 'action': 'click',
                 'mark_on_click': False,
                 'max_lines': 4,
+            }
+        if (len(moves) >= 3 and self._btn_prelude_edit
+                and 'conquer_build_yourself_prelude' not in seen):
+            return {
+                'id': 'conquer_build_yourself_prelude',
+                'rect': self._btn_prelude_edit,
+                'title': 'Review Your Prelude',
+                'body': 'A prelude spell fires before figures enter the battle. It is optional, so choose one if it helps your plan or continue without it.',
+                'action': 'next',
+                'button_label': 'Got it',
+                'max_lines': 5,
             }
         if (self._btn_battle and self._is_battle_ready()
                 and 'conquer_build_yourself_battle' not in seen):

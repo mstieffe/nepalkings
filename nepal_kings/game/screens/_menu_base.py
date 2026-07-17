@@ -674,6 +674,10 @@ class MenuScreenMixin:
             return
         onboarding = data.get('onboarding')
         if onboarding is not None:
+            replaying = onboarding.get('replaying_lesson')
+            celebrated = getattr(self, '_tutorial_celebrated', None)
+            if replaying and celebrated is not None:
+                celebrated.discard(f'replay:{replaying}')
             self.state.user_dict['onboarding'] = self._merge_onboarding_state(onboarding)
         balances = data.get('balances') or {}
         for key in ('gold', 'booster_packs', 'booster_packs_side', 'maps'):
@@ -690,21 +694,36 @@ class MenuScreenMixin:
         from game.tutorial_content import reward_reveal_items
         return reward_reveal_items(reward)
 
-    # Ordered: conquer tutorial completes first, the duel tutorial later.
+    # Ordered curriculum: the First Journey, then the optional Guide lessons.
     _TUTORIAL_COMPLETIONS = (
         ('finish_tutorial', 'First Journey Complete!', [
             "You revealed your starter cards, launched a prepared attack, chose tactics, and took your first land.",
-            "Keep expanding your kingdom, or try the Duel tutorial from the Duel menu whenever you're ready.",
+            "Your First Journey rewards are below. From now on, open Guide to claim completed lesson rewards and choose when to start the next lesson.",
         ]),
-        ('finish_first_duel', 'Duel Tutorial Complete!', [
-            "You've played a full duel: building figures, casting spells, and winning battles.",
-            "Quick duels and kingdom conquests are all yours now. Have fun!",
+        ('finish_collection_lesson', 'Grow Your Collection Complete!', [
+            "You opened both pack types and learned how free, locked, spare, sold, and converted cards fit together.",
+            "Next in Guide: Build Your Own Attack, where you choose every part of a conquest plan.",
+        ]),
+        ('finish_build_attack_lesson', 'Build Your Own Attack Complete!', [
+            "You assembled the figures, tactics, and prelude for a real attack, then carried the plan through battle.",
+            "Next in Guide: Run Your Kingdom and learn how conquered land becomes lasting strength.",
+        ]),
+        ('finish_run_kingdom_lesson', 'Run Your Kingdom Complete!', [
+            "You found production, skills, maps, loot, shields, and kingdom style—and made the kingdom your own.",
+            "Next in Guide: Defend Your Land by preparing the plan that rivals must overcome.",
+        ]),
+        ('finish_defend_land_lesson', 'Defend Your Land Complete!', [
+            "You saved a complete defence with figures, tactics, a prelude, and a final response.",
+            "Next in Guide: Duel Basics, the full head-to-head game from setup to final score.",
+        ]),
+        ('finish_duel_basics_lesson', 'Duel Basics Complete!', [
+            "You played a full duel and learned setup turns, advancing, battle moves, responses, and scoring.",
+            "The guided lessons are complete. Keep growing through Goals, daily quests, Conquer, and Duel.",
         ]),
     )
 
     def _pending_tutorial_completion(self):
-        """Return ``(step_id, title, lines, reward)`` for a completed-but-
-        uncelebrated tutorial milestone, or ``None``."""
+        """Return completion-dialogue data for a finished lesson."""
         onboarding = self._onboarding()
         if not onboarding or onboarding.get('welcome_pending'):
             return None
@@ -713,6 +732,35 @@ class MenuScreenMixin:
         celebrated = getattr(self, '_tutorial_celebrated', None)
         if celebrated is None:
             celebrated = self._tutorial_celebrated = set()
+        # Lesson starts can be triggered from a Guide overlay owned by a
+        # different persistent screen object.  Clear this screen's stale replay
+        # guard as soon as it observes the shared active replay; otherwise a
+        # second replay can finish on this screen without reopening its recap,
+        # leaving replay_completion_pending stuck on the server.
+        replaying_lesson_id = onboarding.get('replaying_lesson')
+        if replaying_lesson_id:
+            celebrated.discard(f'replay:{replaying_lesson_id}')
+        replay_lesson_id = onboarding.get('replay_completion_pending')
+        if replay_lesson_id:
+            lesson = next((
+                item for item in (onboarding.get('lessons') or [])
+                if item.get('id') == replay_lesson_id
+            ), None)
+            completion_step = (lesson or {}).get('completion_step')
+            completion = next((
+                item for item in self._TUTORIAL_COMPLETIONS
+                if item[0] == completion_step
+            ), None)
+            celebration_id = f'replay:{replay_lesson_id}'
+            if completion and celebration_id not in celebrated:
+                _step_id, title, lines = completion
+                return (
+                    celebration_id,
+                    title,
+                    lines,
+                    {},
+                    replay_lesson_id,
+                )
         steps = {s.get('id'): s for s in (onboarding.get('core_steps') or [])}
         for step_id, title, lines in self._TUTORIAL_COMPLETIONS:
             payload = steps.get(step_id)
@@ -722,7 +770,7 @@ class MenuScreenMixin:
                 continue
             if self._tutorial_completion_blocked(step_id):
                 continue
-            return step_id, title, lines, payload.get('reward')
+            return step_id, title, lines, payload.get('reward'), None
         return None
 
     def _tutorial_completion_blocked(self, step_id):
@@ -743,23 +791,35 @@ class MenuScreenMixin:
         if not pending:
             return
         from game.components.rewards_reveal_dialogue import RewardsRevealDialogueBox
-        step_id, title, lines, reward = pending
+        step_id, title, lines, reward, replay_lesson_id = pending
         if getattr(self, '_tutorial_celebrated', None) is None:
             self._tutorial_celebrated = set()
         self._tutorial_celebrated.add(step_id)
         self._tutorial_complete_step_id = step_id
+        self._tutorial_complete_replay_lesson_id = replay_lesson_id
         self._tutorial_complete_dialogue = RewardsRevealDialogueBox(
             self.window,
             title,
             'victory',
             lines,
             self._reward_reveal_items(reward),
-            footer_when_done='All rewards revealed. Well played!',
-            hint_text='Click each box to reveal your reward.',
+            footer_when_done=(
+                'Replay complete. No additional reward is granted.'
+                if replay_lesson_id
+                else (
+                    'All rewards revealed. First Journey complete!'
+                    if step_id == 'finish_tutorial'
+                    else 'All rewards revealed. Lesson complete!'
+                )
+            ),
+            hint_text=(
+                None if replay_lesson_id
+                else 'Click each box to reveal your reward.'
+            ),
             ok_label=(
-                'Collect & continue'
+                'Finish tutorial'
                 if step_id == 'finish_tutorial'
-                else 'ok'
+                else 'Finish Lesson'
             ),
         )
 
@@ -775,9 +835,24 @@ class MenuScreenMixin:
         response = self._tutorial_complete_dialogue.update(events)
         if response:
             step_id = getattr(self, '_tutorial_complete_step_id', None)
+            replay_lesson_id = getattr(
+                self, '_tutorial_complete_replay_lesson_id', None)
             self._tutorial_complete_dialogue = None
             self._tutorial_complete_step_id = None
-            if step_id:
+            self._tutorial_complete_replay_lesson_id = None
+            if replay_lesson_id:
+                try:
+                    data = onboarding_service.acknowledge_replay_completion(
+                        replay_lesson_id)
+                    self._apply_onboarding_payload(data)
+                    if getattr(self.state, 'set_msg', None):
+                        self.state.set_msg(
+                            'Lesson replay complete. No additional reward.')
+                except Exception:
+                    import logging
+                    logging.getLogger(__name__).exception(
+                        "Failed to acknowledge tutorial lesson replay")
+            elif step_id:
                 try:
                     data = onboarding_service.claim_reward(step_id)
                     reward = (data or {}).get('reward') or {}
@@ -797,6 +872,10 @@ class MenuScreenMixin:
             return incoming
         current = self._onboarding()
         if not isinstance(current, dict):
+            return incoming
+        if incoming.get('replaying_lesson'):
+            # Starting a replay intentionally clears that lesson's historical
+            # hint ids. Merging the previous client state here would undo it.
             return incoming
         merged = dict(incoming)
         for key in ('duel_hints_seen', 'menu_hints_seen'):
@@ -833,12 +912,16 @@ class MenuScreenMixin:
         journey_count = sum(
             1 for item in onboarding.get('core_steps') or []
             if item.get('claimable'))
-        if (onboarding.get('daily_quest') or {}).get('claimable'):
-            journey_count += 1
         goals_count = sum(
             1 for item in onboarding.get('early_goals') or []
             if item.get('claimable'))
-        return {'journey': journey_count, 'goals': goals_count}
+        if (onboarding.get('daily_quest') or {}).get('claimable'):
+            goals_count += 1
+        return {
+            'journey': journey_count,
+            'goals': goals_count,
+            'rulebook': 0,
+        }
 
     def _reset_onboarding_guide_scroll(self):
         self._onboarding_guide_scroll = 0
@@ -847,7 +930,7 @@ class MenuScreenMixin:
         self._onboarding_guide_touch_moved = 0
 
     def _onboarding_guide_row_metrics(self):
-        row_h = max(42, min(64, int(0.060 * _SH)))
+        row_h = max(52, min(72, int(0.070 * _SH)))
         return row_h, 6
 
     @staticmethod
@@ -992,106 +1075,429 @@ class MenuScreenMixin:
         if self._onboarding_guide_tab == 'rulebook':
             self._draw_onboarding_guide_rulebook()
             return
-
         if self._onboarding_guide_tab == 'goals':
-            self._draw_onboarding_guide_goals(content_top)
+            self._draw_onboarding_guide_goals(rect, content_top)
             return
+        self._draw_onboarding_guide_journey(rect, content_top, onboarding)
 
-        intro = 'Follow one clear next step. Optional lessons and goals wait until you are ready.'
+    def _draw_onboarding_guide_intro(self, rect, content_top, text):
         intro_surf = self._onboarding_guide_small_font.render(
-            self._fit_text(intro, self._onboarding_guide_small_font, rect.w - 44),
+            self._fit_text(
+                text, self._onboarding_guide_small_font, rect.w - 44),
             True,
             settings.DIALOGUE_BOX_MSG_TEXT_CLR,
         )
-        intro_y = content_top
-        self.window.blit(intro_surf, (rect.x + 22, intro_y))
+        self.window.blit(intro_surf, (rect.x + 22, content_top))
+        return intro_surf.get_height()
 
-        area_top = intro_y + intro_surf.get_height() + int(0.026 * _SH)
-        if onboarding.get('onboarding_skipped'):
-            pause_h = max(42, int(0.052 * _SH))
-            pause_rect = pygame.Rect(rect.x + 22, area_top, rect.w - 44, pause_h)
-            pause_bg = pygame.Surface((pause_rect.w, pause_rect.h), pygame.SRCALPHA)
-            pause_bg.fill((34, 29, 23, 168))
-            self.window.blit(pause_bg, pause_rect.topleft)
-            pygame.draw.rect(self.window, (150, 126, 74), pause_rect, 1, border_radius=5)
-            label = self._onboarding_guide_font.render(
-                'Tutorial paused', True, (235, 222, 184))
-            self.window.blit(label, (
-                pause_rect.x + 12,
-                pause_rect.y + pause_rect.h // 2 - label.get_height() // 2,
-            ))
-            resume_label = 'Continue tutorial'
-            resume_w = max(138, self._onboarding_guide_small_font.size(resume_label)[0] + 26)
-            resume_h = max(28, self._onboarding_guide_small_font.get_height() + 8)
-            resume_rect = pygame.Rect(
-                pause_rect.right - resume_w - 12,
-                pause_rect.y + (pause_rect.h - resume_h) // 2,
-                resume_w,
-                resume_h,
-            )
-            self._draw_onboarding_guide_button(
-                resume_rect, resume_label, ('resume_tutorial', None))
-            area_top = pause_rect.bottom + int(0.018 * _SH)
-
-        hero_h = max(52, int(0.062 * _SH))
-        self._draw_onboarding_next_action(
-            pygame.Rect(rect.x + 22, area_top, rect.w - 44, hero_h))
-        area_top += hero_h + int(0.014 * _SH)
-
-        area_h = max(78, int(0.104 * _SH))
-        self._draw_onboarding_area_overview(
-            pygame.Rect(rect.x + 22, area_top, rect.w - 44, area_h))
-
-        top = area_top + area_h + int(0.020 * _SH)
-        gap = int(0.018 * _SW)
-        scroll_gutter = max(10, int(0.010 * _SW))
-        columns_w = rect.w - 44 - scroll_gutter
-        col_w = (columns_w - gap) // 2
-        header_h = self._onboarding_guide_section_font.get_height() + 8
-        rows_viewport = pygame.Rect(rect.x + 22, top + header_h,
-                                    columns_w, rect.bottom - top - header_h - 22)
-        rows_viewport.h = max(42, rows_viewport.h)
-        core_steps = onboarding.get('core_steps') or []
-        first_journey = self._onboarding_pending_items(
-            [item for item in core_steps if item.get('group') == 'first_journey'])
-        tutorial_complete = 'finish_tutorial' in set(
-            onboarding.get('completed_steps') or [])
-        learn_next = self._onboarding_pending_items(
-            [item for item in core_steps
-             if item.get('group') in ('learn_next', 'explore')])
-        if not tutorial_complete:
-            learn_next = [{
-                'id': 'learn_next_locked',
-                'title': 'Finish your First Journey',
-                'description': 'Optional lessons unlock after the kingdom tour.',
-                'locked': True,
-            }]
-        content_h = max(
-            self._onboarding_guide_rows_height(first_journey),
-            self._onboarding_guide_rows_height(learn_next),
+    def _draw_onboarding_pause_banner(self, rect, top):
+        onboarding = self._onboarding() or {}
+        if not onboarding.get('onboarding_skipped'):
+            return top
+        pause_h = max(42, int(0.052 * _SH))
+        pause_rect = pygame.Rect(rect.x + 22, top, rect.w - 44, pause_h)
+        pause_bg = pygame.Surface(
+            (pause_rect.w, pause_rect.h), pygame.SRCALPHA)
+        pause_bg.fill((34, 29, 23, 168))
+        self.window.blit(pause_bg, pause_rect.topleft)
+        pygame.draw.rect(
+            self.window, (150, 126, 74), pause_rect, 1, border_radius=5)
+        label = self._onboarding_guide_font.render(
+            'Tutorial paused', True, (235, 222, 184))
+        self.window.blit(
+            label,
+            (pause_rect.x + 12,
+             pause_rect.y + pause_rect.h // 2 - label.get_height() // 2),
         )
-        self._onboarding_guide_scroll_area = rows_viewport.copy()
-        self._onboarding_guide_content_h = content_h
+        resume_label = 'Continue tutorial'
+        resume_w = max(
+            138,
+            self._onboarding_guide_small_font.size(resume_label)[0] + 26)
+        resume_h = max(
+            28, self._onboarding_guide_small_font.get_height() + 8)
+        resume_rect = pygame.Rect(
+            pause_rect.right - resume_w - 12,
+            pause_rect.y + (pause_rect.h - resume_h) // 2,
+            resume_w,
+            resume_h,
+        )
+        self._draw_onboarding_guide_button(
+            resume_rect, resume_label, ('resume_tutorial', None))
+        return pause_rect.bottom + int(0.018 * _SH)
+
+    def _draw_onboarding_guide_journey(
+            self, rect, content_top, onboarding=None):
+        onboarding = onboarding or self._onboarding() or {}
+        intro_h = self._draw_onboarding_guide_intro(
+            rect,
+            content_top,
+            'Choose a lesson. Each cover shows its progress and reward.',
+        )
+        top = content_top + intro_h + int(0.018 * _SH)
+        top = self._draw_onboarding_pause_banner(rect, top)
+        scroll_gutter = max(10, int(0.010 * _SW))
+        viewport = pygame.Rect(
+            rect.x + 22,
+            top,
+            rect.w - 44 - scroll_gutter,
+            max(52, rect.bottom - top - 22),
+        )
+        lessons = self._onboarding_journey_catalogue(onboarding)
+        self._draw_onboarding_lesson_catalogue(lessons, viewport)
+
+    def _draw_onboarding_guide_goals(self, rect, content_top):
+        intro_h = self._draw_onboarding_guide_intro(
+            rect,
+            content_top,
+            'Complete today\'s quest and long-term goals to earn rewards.',
+        )
+        top = content_top + intro_h + int(0.018 * _SH)
+        quest_h = max(78, int(0.104 * _SH))
+        self._draw_onboarding_area_overview(
+            pygame.Rect(rect.x + 22, top, rect.w - 44, quest_h))
+
+        section_top = top + quest_h + int(0.020 * _SH)
+        header_h = self._onboarding_guide_section_font.get_height() + 8
+        scroll_gutter = max(10, int(0.010 * _SW))
+        viewport = pygame.Rect(
+            rect.x + 22,
+            section_top + header_h,
+            rect.w - 44 - scroll_gutter,
+            max(42, rect.bottom - section_top - header_h - 22),
+        )
+        goals = self._onboarding_pending_items(
+            (self._onboarding() or {}).get('early_goals') or [])
+        self._onboarding_guide_scroll_area = viewport.copy()
+        self._onboarding_guide_content_h = self._onboarding_guide_rows_height(
+            goals)
+        self._clamp_onboarding_guide_scroll()
+        section = pygame.Rect(
+            viewport.x,
+            section_top,
+            viewport.w,
+            header_h + viewport.h,
+        )
+        self._draw_onboarding_guide_section(
+            'Goals',
+            goals,
+            section,
+            scroll_offset=int(
+                getattr(self, '_onboarding_guide_scroll', 0) or 0),
+            clip_rect=viewport,
+        )
+        self._draw_onboarding_guide_scrollbar(viewport)
+
+    _GUIDE_LESSON_COVERS = {
+        'finish_tutorial': 'conquer_start_image',
+        'grow_collection': 'collection_growth_start_image',
+        'build_attack': 'build_attack_start_image',
+        'run_kingdom': 'run_kingdom_start_image',
+        'defend_land': 'defend_land_start_image',
+        'duel_basics': 'duel_start_image',
+    }
+
+    def _onboarding_journey_catalogue(self, onboarding=None):
+        """Return the complete, ordered lesson catalogue for Journey."""
+        onboarding = onboarding or self._onboarding() or {}
+        core_steps = onboarding.get('core_steps') or []
+        first_steps = [
+            item for item in core_steps
+            if item.get('group') == 'first_journey'
+        ]
+        first_finish = next(
+            (item for item in first_steps
+             if item.get('id') == 'finish_tutorial'),
+            {},
+        )
+        first_progress = sum(
+            1 for item in first_steps if item.get('completed'))
+        next_action = onboarding.get('next_action') or {}
+        first_completed = bool(first_finish.get('completed'))
+        first_started = bool(
+            first_progress
+            or onboarding.get('welcome_seen')
+            or onboarding.get('starter_set_granted')
+            or onboarding.get('menu_hints_seen')
+        )
+        first_journey = {
+            'id': 'finish_tutorial',
+            'title': 'Your Path to the Crown',
+            'description': (
+                'Reveal your starter cards, conquer your first land, and '
+                'claim your royal welcome.'
+            ),
+            'lesson': True,
+            'first_journey': True,
+            'progress': first_progress,
+            'total_steps': len(first_steps),
+            'progress_label': (
+                f'{first_progress}/{len(first_steps)}'
+                if first_steps else ''
+            ),
+            'completed': first_completed,
+            'claimed': bool(first_finish.get('claimed')),
+            'claimable': bool(first_finish.get('claimable')),
+            'reward': dict(first_finish.get('reward') or {}),
+            'reward_id': 'finish_tutorial',
+            'locked': False,
+            'started': first_started,
+            'active': not first_completed and first_started,
+            'entry_screen': next_action.get('screen') or 'collection',
+        }
+        lessons = [
+            dict(item)
+            for item in onboarding.get('lessons') or []
+            if item.get('group') == 'lessons'
+        ]
+        return [first_journey, *lessons]
+
+    def _onboarding_lesson_catalogue_metrics(self):
+        card_h = max(124, min(150, int(0.168 * _SH)))
+        gap = max(8, int(0.012 * _SH))
+        return card_h, gap
+
+    def _draw_onboarding_lesson_catalogue(self, lessons, viewport):
+        card_h, gap = self._onboarding_lesson_catalogue_metrics()
+        self._onboarding_guide_scroll_area = viewport.copy()
+        self._onboarding_guide_content_h = (
+            len(lessons) * card_h + max(0, len(lessons) - 1) * gap
+        )
         self._clamp_onboarding_guide_scroll()
         scroll = int(getattr(self, '_onboarding_guide_scroll', 0) or 0)
-        col_h = header_h + rows_viewport.h
-        left = pygame.Rect(rect.x + 22, top, col_w, col_h)
-        right = pygame.Rect(left.right + gap, top, col_w, col_h)
-        self._draw_onboarding_guide_section(
-            'First Journey',
-            first_journey,
-            left,
-            scroll_offset=scroll,
-            clip_rect=pygame.Rect(left.x, rows_viewport.y, left.w, rows_viewport.h),
+        old_clip = self.window.get_clip()
+        self.window.set_clip(viewport)
+        y = viewport.y - scroll
+        for item in lessons:
+            card = pygame.Rect(viewport.x, y, viewport.w, card_h)
+            if card.colliderect(viewport):
+                item_id = item.get('id')
+                if item_id:
+                    self._onboarding_guide_item_rects[item_id] = card.clip(
+                        viewport)
+                self._draw_onboarding_lesson_card(
+                    item, card, clip_rect=viewport)
+            y += card_h + gap
+        self.window.set_clip(old_clip)
+        self._draw_onboarding_guide_scrollbar(viewport)
+
+    def _draw_onboarding_lesson_card(self, item, card, clip_rect=None):
+        completed = bool(item.get('completed'))
+        claimable = bool(item.get('claimable'))
+        locked = bool(item.get('locked'))
+        active = bool(item.get('active'))
+        started = bool(item.get('started'))
+
+        bg = pygame.Surface((card.w, card.h), pygame.SRCALPHA)
+        if claimable:
+            fill = (45, 35, 20, 220)
+        elif completed:
+            fill = (22, 34, 25, 188)
+        elif active:
+            fill = (36, 31, 22, 196)
+        else:
+            fill = (24, 22, 19, 165)
+        bg.fill(fill)
+        self.window.blit(bg, card.topleft)
+        if claimable:
+            border = (225, 188, 82)
+        elif completed:
+            border = (91, 156, 101)
+        elif active:
+            border = (170, 142, 73)
+        else:
+            border = (112, 96, 66)
+        pygame.draw.rect(
+            self.window, border, card, 1, border_radius=7)
+
+        pad = 8
+        cover_h = card.h - pad * 2
+        cover_w = min(
+            int(cover_h * 1.78),
+            max(118, int(card.w * 0.34)),
         )
-        self._draw_onboarding_guide_section(
-            'Learn Next',
-            learn_next,
-            right,
-            scroll_offset=scroll,
-            clip_rect=pygame.Rect(right.x, rows_viewport.y, right.w, rows_viewport.h),
+        cover_rect = pygame.Rect(
+            card.x + pad, card.y + pad, cover_w, cover_h)
+        pygame.draw.rect(
+            self.window, (15, 14, 12), cover_rect, border_radius=5)
+        cover = self._onboarding_lesson_cover(
+            item.get('id'), cover_rect.size)
+        if cover is not None:
+            self.window.blit(cover, cover_rect.topleft)
+        pygame.draw.rect(
+            self.window, (137, 112, 64), cover_rect, 1, border_radius=5)
+
+        if completed:
+            veil = pygame.Surface(cover_rect.size, pygame.SRCALPHA)
+            veil.fill((18, 70, 34, 54))
+            self.window.blit(veil, cover_rect.topleft)
+
+        info_x = cover_rect.right + 12
+        info_right = card.right - 10
+        info_w = max(80, info_right - info_x)
+        status, status_color = self._onboarding_lesson_status(item)
+        status_surf = self._onboarding_guide_small_font.render(
+            status, True, status_color)
+        status_pad_x = 8
+        status_rect = pygame.Rect(
+            info_right - status_surf.get_width() - status_pad_x * 2,
+            card.y + 8,
+            status_surf.get_width() + status_pad_x * 2,
+            status_surf.get_height() + 6,
         )
-        self._draw_onboarding_guide_scrollbar(rows_viewport)
+        status_bg = pygame.Surface(status_rect.size, pygame.SRCALPHA)
+        status_bg.fill((18, 17, 15, 185))
+        self.window.blit(status_bg, status_rect.topleft)
+        pygame.draw.rect(
+            self.window, status_color, status_rect, 1, border_radius=8)
+        self.window.blit(
+            status_surf, status_surf.get_rect(center=status_rect.center))
+
+        title_w = max(50, status_rect.x - info_x - 8)
+        title = self._fit_text(
+            item.get('title') or '', self._onboarding_guide_font, title_w)
+        title_surf = self._onboarding_guide_font.render(
+            title, True, (238, 225, 188))
+        self.window.blit(title_surf, (info_x, card.y + 9))
+
+        description = self._fit_text(
+            item.get('description') or '',
+            self._onboarding_guide_small_font,
+            info_w,
+        )
+        desc_surf = self._onboarding_guide_small_font.render(
+            description, True, (174, 164, 139))
+        desc_y = card.y + 39
+        self.window.blit(desc_surf, (info_x, desc_y))
+
+        progress_label = item.get('progress_label') or ''
+        if progress_label:
+            unit = 'milestones' if item.get('first_journey') else 'steps'
+            progress_surf = self._onboarding_guide_small_font.render(
+                f'{progress_label} {unit}',
+                True,
+                (195, 180, 140),
+            )
+            self.window.blit(
+                progress_surf,
+                (info_x, desc_y + desc_surf.get_height() + 5),
+            )
+
+        action_label = None
+        action = None
+        if claimable:
+            action_label = 'Claim'
+            action = ('claim', item.get('reward_id') or item.get('id'))
+        elif completed and not item.get('first_journey'):
+            action_label = 'Replay'
+            action = ('start_lesson', item.get('id'))
+        elif not completed and locked:
+            action_label = 'Locked'
+        elif not completed and item.get('first_journey'):
+            action_label = 'Continue' if started else 'Start Tutorial'
+            action = ('continue_journey', item.get('entry_screen'))
+        elif not completed:
+            action_label = (
+                'Continue' if active or started
+                else ('Restart' if item.get('dismissed') else 'Start')
+            )
+            action = ('start_lesson', item.get('id'))
+
+        button_rect = None
+        if action_label:
+            button_w = max(
+                72,
+                self._onboarding_guide_small_font.size(action_label)[0] + 22,
+            )
+            button_h = max(
+                28, self._onboarding_guide_small_font.get_height() + 8)
+            button_rect = pygame.Rect(
+                info_right - button_w,
+                card.bottom - button_h - 9,
+                button_w,
+                button_h,
+            )
+            if action:
+                hit_rect = (
+                    button_rect.clip(clip_rect)
+                    if clip_rect else button_rect.copy()
+                )
+                self._draw_onboarding_guide_button(
+                    button_rect,
+                    action_label,
+                    action,
+                    hit_rect=hit_rect,
+                )
+            else:
+                self._draw_onboarding_guide_disabled_button(
+                    button_rect, action_label)
+
+        reward = item.get('reward') or {}
+        if reward and (not completed or claimable):
+            reward_label = self._onboarding_guide_small_font.render(
+                'Reward', True, (205, 184, 125))
+            reward_y = card.bottom - max(
+                28, self._onboarding_guide_small_font.get_height() + 8) // 2 - 9
+            self.window.blit(
+                reward_label,
+                (info_x, reward_y - reward_label.get_height() // 2),
+            )
+            reward_right = (
+                button_rect.left - 8 if button_rect else info_right)
+            self._draw_onboarding_reward_icons(
+                reward, reward_right, reward_y)
+
+    @staticmethod
+    def _onboarding_lesson_status(item):
+        if item.get('completed'):
+            return 'Completed', (105, 205, 120)
+        if item.get('locked'):
+            return 'Locked', (154, 145, 126)
+        if item.get('active') or item.get('started'):
+            return 'In progress', (226, 190, 96)
+        return 'Not started', (174, 164, 139)
+
+    def _onboarding_lesson_cover(self, lesson_id, size):
+        loader_name = self._GUIDE_LESSON_COVERS.get(lesson_id)
+        if not loader_name:
+            return None
+        cache_key = ('lesson_cover', lesson_id, int(size[0]), int(size[1]))
+        cached = self._onboarding_guide_icon_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        from game.components import tutorial_diagrams
+        source = getattr(tutorial_diagrams, loader_name)()
+        if source is None or source.get_width() <= 0 or source.get_height() <= 0:
+            return None
+        target_w, target_h = max(1, int(size[0])), max(1, int(size[1]))
+        scale = max(
+            target_w / source.get_width(),
+            target_h / source.get_height(),
+        )
+        scaled = pygame.transform.smoothscale(
+            source,
+            (
+                max(1, int(round(source.get_width() * scale))),
+                max(1, int(round(source.get_height() * scale))),
+            ),
+        )
+        cover = pygame.Surface((target_w, target_h), pygame.SRCALPHA)
+        cover.blit(
+            scaled,
+            (
+                (target_w - scaled.get_width()) // 2,
+                (target_h - scaled.get_height()) // 2,
+            ),
+        )
+        self._onboarding_guide_icon_cache[cache_key] = cover
+        return cover
+
+    def _draw_onboarding_guide_disabled_button(self, rect, label):
+        pygame.draw.rect(self.window, (38, 35, 30), rect, border_radius=4)
+        pygame.draw.rect(
+            self.window, (91, 84, 72), rect, 1, border_radius=4)
+        txt = self._onboarding_guide_small_font.render(
+            label, True, (145, 137, 120))
+        self.window.blit(txt, txt.get_rect(center=rect.center))
 
     def _draw_onboarding_guide_close_x(self):
         r = self._onboarding_guide_close_rect
@@ -1107,10 +1513,13 @@ class MenuScreenMixin:
         txt = self._onboarding_guide_section_font.render('X', True, txt_clr)
         self.window.blit(txt, txt.get_rect(center=r.center))
 
-    # ── Guide tabs (Journey / Rulebook) ────────────────────────────
+    # ── Guide tabs (Journey / Goals / Rulebook) ────────────────────
 
     _GUIDE_TABS = (
-        ('journey', 'Journey'), ('goals', 'Goals'), ('rulebook', 'Rulebook'))
+        ('journey', 'Journey'),
+        ('goals', 'Goals'),
+        ('rulebook', 'Rulebook'),
+    )
 
     def _onboarding_guide_tab_metrics(self, rect):
         """Shared geometry for the tab bar: (tabs_y, tab_h, content_top)."""
@@ -1121,7 +1530,7 @@ class MenuScreenMixin:
         return tabs_y, tab_h, content_top
 
     def _draw_onboarding_guide_tabs(self, rect):
-        """Draw the segmented Journey/Rulebook control; returns content top y."""
+        """Draw the segmented Guide tabs; returns content top y."""
         self._onboarding_guide_tab_rects = {}
         tabs_y, tab_h, content_top = self._onboarding_guide_tab_metrics(rect)
 
@@ -1197,24 +1606,25 @@ class MenuScreenMixin:
         action = onboarding.get('next_action')
         if isinstance(action, dict) and action.get('screen'):
             return action
-        destinations = {
-            'finish_first_duel': ('duel_menu', 'Try the Duel lesson'),
-            'collect_first_kingdom_production': ('kingdom', 'Collect production'),
-            'open_first_side_booster': ('collection', 'Open a side booster'),
-            'save_first_defence_config': ('kingdom', 'Prepare a defence'),
-            'sell_first_card': ('collection', 'Sell a spare card'),
-            'trade_first_card': ('collection', 'Trade a spare card'),
-        }
-        for item in onboarding.get('core_steps') or []:
-            if item.get('completed'):
+        lessons = onboarding.get('lessons') or []
+        active_id = onboarding.get('active_lesson')
+        ordered = (
+            [item for item in lessons if item.get('id') == active_id]
+            + [item for item in lessons
+               if item.get('group') == 'lessons'
+               and item.get('id') != active_id]
+        )
+        for item in ordered:
+            if item.get('completed') or item.get('locked'):
                 continue
-            destination = destinations.get(item.get('id'))
-            if destination:
-                return {
-                    'screen': destination[0],
-                    'label': destination[1],
-                    'target_id': item.get('id'),
-                }
+            if item.get('dismissed') and item.get('id') != active_id:
+                continue
+            return {
+                'screen': item.get('entry_screen'),
+                'label': item.get('entry_label') or item.get('title'),
+                'target_id': item.get('id'),
+                'lesson_id': item.get('id'),
+            }
         return None
 
     def _draw_onboarding_next_action(self, rect):
@@ -1228,7 +1638,7 @@ class MenuScreenMixin:
         label = self._onboarding_guide_small_font.render(
             'DO NEXT', True, (224, 190, 105))
         self.window.blit(label, (rect.x + 12, rect.y + 7))
-        text = action.get('label') if action else 'First Journey complete — explore at your pace.'
+        text = action.get('label') if action else 'All lessons complete — explore at your pace.'
         text_surf = self._onboarding_guide_font.render(
             self._fit_text(text, self._onboarding_guide_font, rect.w - 210),
             True, (240, 226, 188))
@@ -1243,50 +1653,10 @@ class MenuScreenMixin:
                 button_h,
             )
             self._draw_onboarding_guide_button(
-                button, 'Go', ('navigate', action.get('screen')))
-
-    def _draw_onboarding_guide_goals(self, content_top):
-        onboarding = self._onboarding() or {}
-        rect = self._onboarding_guide_rect()
-        tutorial_complete = 'finish_tutorial' in set(
-            onboarding.get('completed_steps') or [])
-        if not tutorial_complete:
-            card = pygame.Rect(
-                rect.x + 22, content_top, rect.w - 44, max(76, int(0.12 * _SH)))
-            bg = pygame.Surface((card.w, card.h), pygame.SRCALPHA)
-            bg.fill((26, 23, 20, 175))
-            self.window.blit(bg, card.topleft)
-            pygame.draw.rect(self.window, (105, 94, 74), card, 1, border_radius=6)
-            title = self._onboarding_guide_font.render(
-                'Goals unlock after your First Journey', True, (220, 204, 170))
-            body = self._onboarding_guide_small_font.render(
-                'Conquer your first land and finish the kingdom tour first.',
-                True, (160, 150, 130))
-            self.window.blit(title, title.get_rect(center=(card.centerx, card.centery - 12)))
-            self.window.blit(body, body.get_rect(center=(card.centerx, card.centery + 15)))
-            self._onboarding_guide_scroll_area = None
-            self._onboarding_guide_content_h = 0
-            return
-
-        goals = self._onboarding_pending_items(onboarding.get('early_goals') or [])
-        viewport = pygame.Rect(
-            rect.x + 22,
-            content_top + self._onboarding_guide_section_font.get_height() + 8,
-            rect.w - 54,
-            rect.bottom - content_top - self._onboarding_guide_section_font.get_height() - 30,
-        )
-        self._onboarding_guide_scroll_area = viewport.copy()
-        self._onboarding_guide_content_h = self._onboarding_guide_rows_height(goals)
-        self._clamp_onboarding_guide_scroll()
-        section = pygame.Rect(
-            rect.x + 22, content_top, viewport.w,
-            viewport.h + self._onboarding_guide_section_font.get_height() + 8)
-        self._draw_onboarding_guide_section(
-            'Goals', goals, section,
-            scroll_offset=int(getattr(self, '_onboarding_guide_scroll', 0) or 0),
-            clip_rect=viewport,
-        )
-        self._draw_onboarding_guide_scrollbar(viewport)
+                button, 'Go',
+                (('start_lesson', action.get('lesson_id'))
+                 if action.get('lesson_id')
+                 else ('navigate', action.get('screen'))))
 
     def _draw_onboarding_area_overview(self, rect):
         onboarding = self._onboarding() or {}
@@ -1438,13 +1808,19 @@ class MenuScreenMixin:
             dot = pygame.Rect(row.x + 8, row.y + row_h // 2 - 5, 10, 10)
             dot_clr = (96, 190, 105) if item.get('completed') else (105, 100, 86)
             pygame.draw.ellipse(self.window, dot_clr, dot)
-            title_max_w = row.w - 132
+            title_max_w = row.w - 146
             title = self._fit_text(item.get('title') or '', self._onboarding_guide_font, title_max_w)
             title_surf = self._onboarding_guide_font.render(title, True, (235, 222, 184))
             self.window.blit(title_surf, (row.x + 26, row.y + 6))
 
-            desc_max_w = row.w - 138
-            desc = self._fit_text(item.get('description') or '', self._onboarding_guide_small_font, desc_max_w)
+            desc_max_w = row.w - 146
+            description = item.get('description') or ''
+            if item.get('lesson') and item.get('total_steps'):
+                description = (
+                    f"{item.get('progress_label', '0/0')} steps  ·  "
+                    f"{description}")
+            desc = self._fit_text(
+                description, self._onboarding_guide_small_font, desc_max_w)
             desc_surf = self._onboarding_guide_small_font.render(desc, True, (170, 160, 135))
             self.window.blit(desc_surf, (row.x + 26, row.y + row_h - desc_surf.get_height() - 6))
 
@@ -1454,12 +1830,58 @@ class MenuScreenMixin:
                 claim_rect = pygame.Rect(row.right - claim_w - 12, row.y + (row_h - claim_h) // 2,
                                          claim_w, claim_h)
                 hit_rect = claim_rect.clip(clip_rect) if clip_rect else claim_rect.copy()
-                self._draw_onboarding_guide_button(claim_rect, 'Claim', ('claim', item.get('id')), hit_rect=hit_rect)
+                self._draw_onboarding_guide_button(
+                    claim_rect,
+                    'Claim',
+                    ('claim', item.get('reward_id') or item.get('id')),
+                    hit_rect=hit_rect,
+                )
                 self._draw_onboarding_reward_icons(item.get('reward') or {}, claim_rect.left - 10, row.y + row_h // 2)
             elif item.get('claimed'):
                 claimed = self._onboarding_guide_small_font.render('claimed', True, (120, 190, 125))
                 self.window.blit(claimed, (row.right - claimed.get_width() - 10,
                                            row.y + row_h // 2 - claimed.get_height() // 2))
+            elif item.get('lesson') and not item.get('completed'):
+                if item.get('locked'):
+                    lock = self._onboarding_guide_small_font.render(
+                        'locked', True, (145, 135, 116))
+                    self.window.blit(
+                        lock,
+                        (row.right - lock.get_width() - 12,
+                         row.y + row_h // 2 - lock.get_height() // 2),
+                    )
+                else:
+                    action_label = (
+                        'Continue' if item.get('active') or item.get('started')
+                        else ('Restart' if item.get('dismissed') else 'Start')
+                    )
+                    action_w = max(
+                        70,
+                        self._onboarding_guide_small_font.size(
+                            action_label)[0] + 20)
+                    action_h = max(
+                        28,
+                        self._onboarding_guide_small_font.get_height() + 8)
+                    action_rect = pygame.Rect(
+                        row.right - action_w - 10,
+                        row.y + (row_h - action_h) // 2,
+                        action_w,
+                        action_h,
+                    )
+                    hit_rect = (
+                        action_rect.clip(clip_rect)
+                        if clip_rect else action_rect.copy())
+                    self._draw_onboarding_guide_button(
+                        action_rect,
+                        action_label,
+                        ('start_lesson', item.get('id')),
+                        hit_rect=hit_rect,
+                    )
+                    self._draw_onboarding_reward_icons(
+                        item.get('reward') or {},
+                        action_rect.left - 8,
+                        row.y + row_h // 2,
+                    )
             else:
                 self._draw_onboarding_reward_icons(item.get('reward') or {}, row.right - 88, row.y + row_h // 2)
             y += row_h + gap
@@ -1589,6 +2011,7 @@ class MenuScreenMixin:
                     from utils import sound
                     sound.play('ui_click')
                     self._onboarding_guide_tab = tab_key
+                    self._reset_onboarding_guide_scroll()
                     if tab_key == 'rulebook':
                         self._ensure_guide_rulebook()
                 return True
@@ -1622,6 +2045,21 @@ class MenuScreenMixin:
                             self.state.set_msg(data.get('reward_label') or 'Reward claimed')
                     elif kind == 'resume_tutorial':
                         self._resume_onboarding_tutorial()
+                    elif kind == 'continue_journey' and value:
+                        if (self._onboarding() or {}).get(
+                                'onboarding_skipped'):
+                            self._resume_onboarding_tutorial()
+                        self._onboarding_guide_open = False
+                        self._reset_onboarding_guide_scroll()
+                        self.state.screen = value
+                    elif kind == 'start_lesson' and value:
+                        data = onboarding_service.start_lesson(value)
+                        self._apply_onboarding_payload(data)
+                        destination = data.get('screen')
+                        if destination:
+                            self._onboarding_guide_open = False
+                            self._reset_onboarding_guide_scroll()
+                            self.state.screen = destination
                     elif kind == 'navigate' and value:
                         self._onboarding_guide_open = False
                         self._reset_onboarding_guide_scroll()
@@ -1658,8 +2096,87 @@ class MenuScreenMixin:
         onboarding = self._onboarding()
         return set(onboarding.get('menu_hints_seen') or [])
 
+    _REPLAY_STEP_IDS_BY_LESSON = {
+        'grow_collection': {
+            'open_first_main_booster',
+            'open_first_side_booster',
+            'sell_first_card',
+            'trade_first_card',
+            'finish_collection_lesson',
+        },
+        'build_attack': {
+            'finish_second_conquer_battle',
+            'finish_build_attack_lesson',
+        },
+        'run_kingdom': {
+            'buy_first_cosmetic',
+            'finish_run_kingdom_lesson',
+        },
+        'defend_land': {
+            'save_first_defence_config',
+            'finish_defend_land_lesson',
+        },
+        'duel_basics': {
+            'finish_first_duel',
+            'finish_duel_basics_lesson',
+        },
+    }
+
+    _SKIPPABLE_MENU_COACH_STEPS = {
+        'collection_growth_main': (
+            'collection_growth_main', 'open_first_main_booster'),
+        'collection_growth_side': (
+            'collection_growth_side', 'open_first_side_booster'),
+        'collection_sell_spare': (
+            'collection_sell_spare', 'sell_first_card'),
+        'collection_trade_spare': (
+            'collection_trade_spare', 'trade_first_card'),
+        'conquer_choose_next_land': ('conquer_choose_next_land',),
+        'conquer_open_next_attack': ('conquer_open_next_attack',),
+        'conquer_build_yourself': ('conquer_build_yourself',),
+        'conquer_build_yourself_tactics': (
+            'conquer_build_yourself_tactics',),
+        'conquer_build_yourself_battle': (
+            'conquer_build_yourself_battle',
+            'finish_second_conquer_battle',
+        ),
+        'kingdom_buy_cosmetic': (
+            'kingdom_buy_cosmetic', 'buy_first_cosmetic'),
+        'defence_save': (
+            'defence_save', 'save_first_defence_config'),
+    }
+
+    def _replaying_onboarding_lesson_id(self):
+        return (self._onboarding() or {}).get('replaying_lesson')
+
+    def _onboarding_lesson_replaying(self, lesson_id):
+        return self._replaying_onboarding_lesson_id() == lesson_id
+
     def _onboarding_completed_steps(self):
-        return set((self._onboarding() or {}).get('completed_steps') or [])
+        onboarding = self._onboarding() or {}
+        completed = set(onboarding.get('completed_steps') or [])
+        replaying = onboarding.get('replaying_lesson')
+        if replaying:
+            completed.difference_update(
+                self._REPLAY_STEP_IDS_BY_LESSON.get(replaying) or ())
+            completed.update(onboarding.get('lesson_replay_steps') or [])
+        completed.update(onboarding.get('lesson_skipped_steps') or [])
+        return completed
+
+    def _active_onboarding_lesson_id(self):
+        onboarding = self._onboarding() or {}
+        lesson_id = onboarding.get('active_lesson')
+        dismissed = set(onboarding.get('lessons_dismissed') or [])
+        return lesson_id if lesson_id and lesson_id not in dismissed else None
+
+    def _active_onboarding_lesson(self):
+        lesson_id = self._active_onboarding_lesson_id()
+        if not lesson_id:
+            return None
+        return next((
+            lesson for lesson in (self._onboarding() or {}).get('lessons') or []
+            if lesson.get('id') == lesson_id
+        ), None)
 
     def _first_session_journey_phase(self):
         """Client mirror of onboarding_service._journey_metadata.
@@ -1760,20 +2277,89 @@ class MenuScreenMixin:
     @staticmethod
     def _menu_coach_lesson_ids(step_id):
         groups = {
+            'collection_growth_intro': (
+                'collection_growth_intro',),
+            'collection_growth_main': (
+                'collection_growth_main', 'collection_growth_side'),
+            'collection_growth_side': (
+                'collection_growth_main', 'collection_growth_side',
+                'collection_sell_spare', 'collection_trade_spare'),
+            'collection_sell_spare': (
+                'collection_growth_main', 'collection_growth_side',
+                'collection_sell_spare', 'collection_trade_spare'),
+            'collection_trade_spare': (
+                'collection_growth_main', 'collection_growth_side',
+                'collection_sell_spare', 'collection_trade_spare'),
+            'build_attack_intro_window': (
+                'build_attack_intro_window',
+                'conquer_choose_next_land',
+                'conquer_open_next_attack',
+                'conquer_build_yourself',
+                'conquer_build_yourself_tactics',
+                'conquer_build_yourself_prelude',
+                'conquer_build_yourself_battle',
+            ),
             'conquer_build_yourself': (
                 'conquer_build_yourself',
                 'conquer_build_yourself_tactics',
+                'conquer_build_yourself_prelude',
                 'conquer_build_yourself_battle',
             ),
             'conquer_build_yourself_tactics': (
                 'conquer_build_yourself',
                 'conquer_build_yourself_tactics',
+                'conquer_build_yourself_prelude',
+                'conquer_build_yourself_battle',
+            ),
+            'conquer_build_yourself_prelude': (
+                'conquer_build_yourself',
+                'conquer_build_yourself_tactics',
+                'conquer_build_yourself_prelude',
                 'conquer_build_yourself_battle',
             ),
             'conquer_build_yourself_battle': (
                 'conquer_build_yourself',
                 'conquer_build_yourself_tactics',
+                'conquer_build_yourself_prelude',
                 'conquer_build_yourself_battle',
+            ),
+            'conquer_choose_next_land': (
+                'conquer_choose_next_land',
+                'conquer_open_next_attack',
+                'conquer_build_yourself',
+                'conquer_build_yourself_tactics',
+                'conquer_build_yourself_prelude',
+                'conquer_build_yourself_battle',
+            ),
+            'conquer_open_next_attack': (
+                'conquer_choose_next_land',
+                'conquer_open_next_attack',
+                'conquer_build_yourself',
+                'conquer_build_yourself_tactics',
+                'conquer_build_yourself_prelude',
+                'conquer_build_yourself_battle',
+            ),
+            'kingdom_management_intro': (
+                'kingdom_management_intro',),
+            'kingdom_open_management': (
+                'kingdom_open_management',
+                'kingdom_collect_production',
+                'kingdom_config_essentials',
+            ),
+            'kingdom_collect_production': (
+                'kingdom_open_management',
+                'kingdom_collect_production',
+                'kingdom_config_essentials',
+            ),
+            'defence_choose_land': (
+                'defence_choose_land', 'defence_open_config',
+                'defence_intro', 'defence_battle_plan',
+                'defence_final_response', 'defence_save',
+            ),
+            'defence_open_config': (
+                'defence_choose_land', 'defence_open_config',
+                'defence_intro', 'defence_battle_plan',
+                'defence_final_response', 'defence_save',
             ),
             'defence_intro': (
                 'defence_intro', 'defence_battle_plan',
@@ -1792,11 +2378,56 @@ class MenuScreenMixin:
                 'defence_final_response', 'defence_save',
             ),
             'kingdom_config_essentials': (
-                'kingdom_config_essentials', 'kingdom_config_shields_style'),
+                'kingdom_config_essentials',),
             'kingdom_config_shields_style': (
-                'kingdom_config_essentials', 'kingdom_config_shields_style'),
+                'kingdom_config_shields_style',),
+            'kingdom_buy_cosmetic': (
+                'kingdom_buy_cosmetic',),
+            'defend_land_intro_window': (
+                'defend_land_intro_window',
+                'defence_choose_land', 'defence_open_config',
+                'defence_intro', 'defence_battle_plan',
+                'defence_final_response', 'defence_save',
+            ),
         }
         return groups.get(step_id)
+
+    @staticmethod
+    def _menu_coach_lesson_id(step_id):
+        if step_id in (
+                'collection_growth_intro',
+                'collection_growth_main',
+                'collection_growth_side',
+                'collection_sell_spare',
+                'collection_trade_spare'):
+            return 'grow_collection'
+        if step_id in (
+                'build_attack_intro_window',
+                'conquer_choose_next_land',
+                'conquer_open_next_attack',
+                'conquer_build_yourself',
+                'conquer_build_yourself_tactics',
+                'conquer_build_yourself_prelude',
+                'conquer_build_yourself_battle'):
+            return 'build_attack'
+        if step_id in (
+                'kingdom_management_intro',
+                'kingdom_open_management',
+                'kingdom_collect_production',
+                'kingdom_config_essentials',
+                'kingdom_config_shields_style',
+                'kingdom_buy_cosmetic'):
+            return 'run_kingdom'
+        if step_id in (
+                'defend_land_intro_window',
+                'defence_choose_land',
+                'defence_open_config',
+                'defence_intro',
+                'defence_battle_plan',
+                'defence_final_response',
+                'defence_save'):
+            return 'defend_land'
+        return None
 
     def _wrap_menu_coach_lines(self, text, max_width, max_lines=5):
         words = str(text or '').split()
@@ -1854,7 +2485,13 @@ class MenuScreenMixin:
         target_rects = self._menu_coach_target_rects(step)
         draws_next = step.get('action', 'next') == 'next'
         draws_finish = bool(step.get('finish_tutorial_button'))
-        draws_skip = (
+        lesson_id = self._menu_coach_lesson_id(step.get('id'))
+        draws_step_skip = bool(
+            lesson_id
+            and step.get('id') in self._SKIPPABLE_MENU_COACH_STEPS
+            and step.get('allow_skip', True)
+        )
+        draws_pause = (
             not draws_finish
             and not (self._onboarding() or {}).get('onboarding_skipped')
             and step.get('allow_skip', True)
@@ -1868,11 +2505,12 @@ class MenuScreenMixin:
             body_font=self._menu_coach_font,
             ticks=pygame.time.get_ticks(),
             width_ratio=0.36,
-            min_width=320,
+            min_width=390 if draws_step_skip else 320,
             max_width=420,
             min_height=152,
             max_lines=step.get('max_lines', 5),
-            has_button_row=draws_next or draws_finish or draws_skip,
+            has_button_row=(
+                draws_next or draws_finish or draws_step_skip or draws_pause),
             placement=step.get('coach_placement'),
         )
         if card is None:
@@ -1893,15 +2531,24 @@ class MenuScreenMixin:
                                       button_w, button_h)
             self._draw_menu_coach_button(
                 finish_rect, label, ('finish_tutorial', step['id']))
-        if draws_skip:
-            lesson_ids = self._menu_coach_lesson_ids(step['id'])
-            label = 'Skip this lesson' if lesson_ids else 'Pause guidance'
+        left_x = card.x + 14
+        if draws_step_skip:
+            label = 'Skip this step'
             button_w = max(96, self._menu_coach_font.size(label)[0] + 20)
-            skip_rect = pygame.Rect(card.x + 14, card.bottom - button_h - 12,
-                                    button_w, button_h)
-            action = 'dismiss_lesson' if lesson_ids else 'skip_tutorial'
-            self._draw_menu_coach_button(skip_rect, label, (action, step['id']),
-                                         muted=True)
+            skip_rect = pygame.Rect(
+                left_x, card.bottom - button_h - 12, button_w, button_h)
+            self._draw_menu_coach_button(
+                skip_rect, label, ('skip_lesson_step', step['id']),
+                muted=True)
+            left_x = skip_rect.right + 8
+        if draws_pause:
+            label = 'Pause guidance'
+            button_w = max(72, self._menu_coach_font.size(label)[0] + 20)
+            pause_rect = pygame.Rect(
+                left_x, card.bottom - button_h - 12, button_w, button_h)
+            self._draw_menu_coach_button(
+                pause_rect, label, ('skip_tutorial', step['id']),
+                muted=True)
 
     def _menu_coach_blocking_event_types(self):
         event_types = {
@@ -1975,7 +2622,8 @@ class MenuScreenMixin:
                     kind, step_id = button_action
                     from utils import sound
                     sound.play('ui_back' if kind in (
-                        'skip_tutorial', 'dismiss_lesson') else 'ui_click')
+                        'skip_tutorial', 'skip_lesson_step',
+                        'dismiss_lesson') else 'ui_click')
                     if kind == 'next':
                         self._mark_menu_coach_seen(step_id)
                         self._after_menu_coach_next(step_id)
@@ -1987,10 +2635,58 @@ class MenuScreenMixin:
                             self._mark_menu_coach_seen(step_id)
                     elif kind == 'skip_tutorial':
                         self._pause_onboarding_tutorial()
+                    elif kind == 'skip_lesson_step':
+                        lesson_id = self._menu_coach_lesson_id(step_id)
+                        try:
+                            data = onboarding_service.skip_lesson_step(
+                                lesson_id, step_id)
+                            self._apply_onboarding_payload(data)
+                        except Exception:
+                            onboarding = dict(self._onboarding() or {})
+                            skipped = set(
+                                onboarding.get('lesson_skipped_steps') or [])
+                            skipped.update(
+                                self._SKIPPABLE_MENU_COACH_STEPS.get(
+                                    step_id) or ())
+                            onboarding['lesson_skipped_steps'] = sorted(
+                                skipped)
+                            seen = set(
+                                onboarding.get('menu_hints_seen') or [])
+                            seen.update(
+                                skipped_id for skipped_id in skipped
+                                if self._menu_coach_lesson_id(skipped_id)
+                            )
+                            onboarding['menu_hints_seen'] = list(seen)
+                            if getattr(self.state, 'user_dict', None):
+                                self.state.user_dict[
+                                    'onboarding'] = onboarding
+                        if getattr(self.state, 'set_msg', None):
+                            self.state.set_msg(
+                                'Step skipped. Continue with the next step.')
                     elif kind == 'dismiss_lesson':
-                        lesson_ids = self._menu_coach_lesson_ids(step_id) or (step_id,)
-                        self._mark_menu_coaches_seen(
-                            lesson_ids, event='lesson_dismissed')
+                        lesson_id = self._menu_coach_lesson_id(step_id)
+                        if lesson_id:
+                            try:
+                                data = onboarding_service.dismiss_lesson(
+                                    lesson_id)
+                                self._apply_onboarding_payload(data)
+                            except Exception:
+                                onboarding = dict(self._onboarding() or {})
+                                dismissed = list(
+                                    onboarding.get('lessons_dismissed') or [])
+                                if lesson_id not in dismissed:
+                                    dismissed.append(lesson_id)
+                                onboarding['lessons_dismissed'] = dismissed
+                                onboarding['active_lesson'] = None
+                                if getattr(self.state, 'user_dict', None):
+                                    self.state.user_dict[
+                                        'onboarding'] = onboarding
+                        else:
+                            lesson_ids = (
+                                self._menu_coach_lesson_ids(step_id)
+                                or (step_id,))
+                            self._mark_menu_coaches_seen(
+                                lesson_ids, event='lesson_dismissed')
                         if getattr(self.state, 'set_msg', None):
                             self.state.set_msg('Lesson skipped. Other guidance stays active.')
                     return True
@@ -2041,13 +2737,13 @@ class MenuScreenMixin:
         if 'finish_tutorial' in completed:
             return None
         seen = self._menu_coach_seen()
-        if 'guide_first_duel_reward' not in seen:
+        if 'guide_rewards_track' not in seen:
             row = (self._onboarding_guide_item_rects.get('finish_tutorial')
                    or self._onboarding_guide_item_rects.get('collect_first_kingdom_production'))
             if row is None:
                 row = self._onboarding_guide_rect().inflate(-40, -140)
             return {
-                'id': 'guide_first_duel_reward',
+                'id': 'guide_rewards_track',
                 'title': 'Rewards Track Your Progress',
                 'rect': row,
                 'body': 'The checklist and goals grant rewards as you learn. Finish the kingdom tutorial to claim this one.',

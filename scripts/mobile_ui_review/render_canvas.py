@@ -76,6 +76,8 @@ BOOSTER_REVEAL_ALIASES = {
 COLLECTION_SCREEN_ALIASES = {
     "collection": "default",
     "collection_profile": "profile",
+    "collection_sell": "sell",
+    "collection_convert": "convert",
     "collection_maharaja_craft": "maharaja_craft",
     "collection_maharaja_craft_ready": "maharaja_craft_ready",
     "collection_locked": "locked",
@@ -1378,6 +1380,10 @@ def prepare_screen(client, screen_name: str):
         variant = COLLECTION_SCREEN_ALIASES[screen_name]
         if variant == "profile":
             screen._open_profile_dialogue("Hearts", "A")
+        elif variant == "sell":
+            screen._open_sell_dialogue("Hearts", "A")
+        elif variant == "convert":
+            screen._open_trade_dialogue("Hearts", "A")
         elif variant == "maharaja_craft":
             screen._open_craft_dialogue("Hearts")
         elif variant == "maharaja_craft_ready":
@@ -1498,7 +1504,8 @@ def main() -> int:
         default=(
             "login,game_menu,duel_menu,new_game,load_game,rankings,"
             "settings,kingdom,kingdom_config,conquer,defence,collection,"
-            "collection_profile,collection_locked,collection_loading,collection_error,"
+            "collection_profile,collection_sell,collection_convert,"
+            "collection_locked,collection_loading,collection_error,"
             "collection_booster_reveal_special,"
             "game_field,game_battle_shop,game_battle,"
             "conquer_game_field,conquer_game_battle_shop,conquer_game_battle,"

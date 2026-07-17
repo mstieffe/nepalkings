@@ -1104,20 +1104,19 @@ class BuildFigureScreen(SubScreen):
         self.scroll_text_list_shifter.set_displayed_texts(self.scroll_text_list)
 
     def _second_build_tutorial_active(self):
-        """True during the player's guided second conquest build.
-
-        The first conquer attack is pre-assembled; this teaches the player to
-        build the next one by hand. Gated to exactly one conquered land so a
-        failed first attempt cannot skip the lesson.
-        """
+        """True while the persistent Build Your Own Attack lesson is active."""
         onboarding = (getattr(self.state, 'user_dict', None) or {}).get('onboarding') or {}
         if not onboarding or onboarding.get('onboarding_skipped'):
+            return False
+        if onboarding.get('active_lesson') != 'build_attack':
             return False
         completed = set(onboarding.get('completed_steps') or [])
         if 'finish_first_conquer_battle' not in completed:
             return False
-        facts = onboarding.get('facts') or {}
-        return int(facts.get('conquered_lands') or 0) == 1
+        return (
+            onboarding.get('replaying_lesson') == 'build_attack'
+            or 'finish_build_attack_lesson' not in completed
+        )
 
     def _has_buildable_figure_family(self):
         buttons = getattr(self, 'figure_family_buttons', None)

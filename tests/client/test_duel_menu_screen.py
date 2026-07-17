@@ -7,7 +7,9 @@ from types import SimpleNamespace
 import pygame
 
 
-def _duel_menu_screen(*, seen=None, completed=None, skipped=False, pending=False):
+def _duel_menu_screen(
+        *, seen=None, completed=None, skipped=False, pending=False,
+        active_lesson='duel_basics'):
     from game.screens.duel_menu_screen import DuelMenuScreen
 
     if not pygame.display.get_init():
@@ -27,6 +29,7 @@ def _duel_menu_screen(*, seen=None, completed=None, skipped=False, pending=False
             'menu_hints_seen': list(seen or []),
             'completed_steps': list(completed or []),
             'onboarding_skipped': skipped,
+            'active_lesson': active_lesson,
         }},
         pending_duel_tutorial_intro=pending,
     )
@@ -36,9 +39,10 @@ def _duel_menu_screen(*, seen=None, completed=None, skipped=False, pending=False
 def test_duel_tutorial_intro_pages_explain_core_loop():
     _cls, screen = _duel_menu_screen()
 
+    pages = screen._duel_tutorial_intro_pages()
     parts = []
     images = []
-    for page in screen._duel_tutorial_intro_pages():
+    for page in pages:
         parts.append(page.get('title', ''))
         parts.extend(page.get('lines', []))
         images.append(page.get('image')())
@@ -48,8 +52,16 @@ def test_duel_tutorial_intro_pages_explain_core_loop():
     assert 'point goal' in text
     assert 'building phase' in text
     assert 'battle phase' in text
-    assert 'shared deck' in text
+    assert 'shared card pool' in text
+    assert 'same deck' in text
     assert all(isinstance(image, pygame.Surface) for image in images)
+
+    shared_pool = pages[2]
+    assert shared_pool['title'] == 'One shared card pool'
+    assert shared_pool['image_frame'] is False
+    assert shared_pool['image']().get_size() == (904, 454)
+    assert 'Every draw changes' in shared_pool['image_caption']
+    assert 'ceasefire' not in ' '.join(shared_pool['lines']).lower()
 
 
 def test_duel_menu_auto_opens_intro_on_first_visit():
@@ -63,8 +75,9 @@ def test_duel_menu_auto_opens_intro_on_first_visit():
 def test_duel_menu_intro_suppressed_after_seen_or_completion():
     for kwargs in (
         {'seen': ['duel_tutorial_start_window']},
-        {'completed': ['finish_first_duel']},
+        {'completed': ['finish_duel_basics_lesson']},
         {'skipped': True},
+        {'active_lesson': 'grow_collection'},
     ):
         DuelMenuScreen, screen = _duel_menu_screen(**kwargs)
 

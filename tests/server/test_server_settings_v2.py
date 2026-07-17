@@ -40,10 +40,42 @@ class TestV2ServerSettings:
         assert 'side' in config.DUEL_BOOSTER_REWARD_PROBABILITIES
 
     def test_key_card_ranks(self):
-        assert 'J' in config.KEY_CARD_RANKS
-        assert 'Q' in config.KEY_CARD_RANKS
-        assert 'K' in config.KEY_CARD_RANKS
-        assert 'A' in config.KEY_CARD_RANKS
+        assert set(config.KEY_CARD_RANKS) == {
+            'J', 'Q', 'K', 'A', '2', '4', '5'}
+
+    def test_booster_rarity_assignments_and_per_rank_probabilities(self):
+        assert config.BOOSTER_TIER_RANKS == {
+            1: ['7', '8', '9'],
+            2: ['J', 'Q', '10'],
+            3: ['K', 'A'],
+        }
+        assert config.BOOSTER_SIDE_TIER_RANKS == {
+            1: ['3'],
+            2: ['2', '6'],
+            3: ['4', '5'],
+        }
+
+        def per_rank(probabilities, ranks, tier):
+            return probabilities[tier] / len(ranks[tier])
+
+        main = [
+            per_rank(
+                config.BOOSTER_TIER_PROBABILITIES,
+                config.BOOSTER_TIER_RANKS,
+                tier,
+            )
+            for tier in (1, 2, 3)
+        ]
+        side = [
+            per_rank(
+                config.BOOSTER_SIDE_TIER_PROBABILITIES,
+                config.BOOSTER_SIDE_TIER_RANKS,
+                tier,
+            )
+            for tier in (1, 2, 3)
+        ]
+        assert main[0] > main[1] > main[2]
+        assert side[0] > side[1] > side[2]
 
     def test_kingdom_map_dimensions(self):
         assert config.KINGDOM_MAP_COLS > 0

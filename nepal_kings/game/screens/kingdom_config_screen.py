@@ -661,6 +661,8 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
                     self._kingdom = data['kingdom']
                 if 'gold' in data:
                     self._sync_gold(data['gold'])
+                if data.get('onboarding') is not None:
+                    self._apply_onboarding_payload(data)
                 return data
             self._set_msg(data.get('message', 'Action failed'))
         except Exception as exc:
@@ -1401,14 +1403,18 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
             return None
         if self._rename_dialog or self._pending_purchase:
             return None
-        if 'finish_first_conquer_battle' not in self._onboarding_completed_steps():
-            return None
+        active_lesson = self._active_onboarding_lesson_id()
         seen = self._menu_coach_seen()
-        for step_id in (
-                'kingdom_config_essentials',
-                'kingdom_config_shields_style'):
-            if step_id not in seen:
-                return step_id
+        if (active_lesson == 'run_kingdom'
+                and 'kingdom_config_essentials' not in seen):
+            return 'kingdom_config_essentials'
+        if (active_lesson == 'run_kingdom'
+                and 'kingdom_config_shields_style' not in seen):
+            return 'kingdom_config_shields_style'
+        if (active_lesson == 'run_kingdom'
+                and 'buy_first_cosmetic' not in
+                self._onboarding_completed_steps()):
+            return 'kingdom_buy_cosmetic'
         return None
 
     def _ensure_kingdom_config_coach_visible(self, layout, step_id=None):
@@ -1431,6 +1437,8 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
                 layout.get('cosmetics_h', 0) + gap,
                 layout.get('shield_h', 0),
             ),
+            # Keep the catalogue visible for the final hands-on action.
+            'kingdom_buy_cosmetic': (0, layout.get('cosmetics_h', 0)),
         }
         target = targets.get(step_id)
         if not target:
@@ -1500,9 +1508,39 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
                     'id': step_id,
                     'rect': rects[0],
                     'rects': rects,
-                    'title': 'Shields and Style',
-                    'body': 'Shields protect a kingdom for a time; cosmetics change how it looks on the map.',
+                    'title': 'Choose Your Kingdom Style',
+                    'body': 'Shields protect a kingdom for a time. Preview cosmetics here; next you will choose one affordable style.',
                     'action': 'next',
+                    'button_label': 'Choose a style',
+                    'max_lines': 4,
+                }
+        if step_id == 'kingdom_buy_cosmetic':
+            buy_rect = next((
+                pygame.Rect(rect)
+                for action, _value, rect in list(self._buttons)
+                if action == 'buy_cosmetic'
+            ), None)
+            if buy_rect is not None:
+                return {
+                    'id': step_id,
+                    'rect': buy_rect,
+                    'title': 'Buy One Kingdom Style',
+                    'body': 'Choose any affordable cosmetic and confirm the purchase. It equips immediately and completes this lesson.',
+                    'action': 'click',
+                    'mark_on_click': False,
+                    'max_lines': 4,
+                }
+            rects = self._clip_kingdom_config_coach_rects(
+                getattr(self, '_kingdom_config_cosmetics_rect', None),
+            )
+            if rects:
+                return {
+                    'id': step_id,
+                    'rect': rects[0],
+                    'title': 'Buy One Kingdom Style',
+                    'body': 'Browse this catalogue and buy any affordable cosmetic. If none is available now, skip this step and continue later.',
+                    'action': 'coach',
+                    'interactive_rects': rects,
                     'max_lines': 4,
                 }
         return None

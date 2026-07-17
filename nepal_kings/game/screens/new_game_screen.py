@@ -808,7 +808,20 @@ class NewGameScreen(MenuScreenMixin, Screen):
     def _first_duel_incomplete(self):
         onboarding = (getattr(self.state, 'user_dict', None) or {}).get('onboarding') or {}
         completed = set(onboarding.get('completed_steps') or [])
-        return bool(onboarding and 'finish_first_duel' not in completed)
+        return bool(
+            onboarding
+            and (
+                onboarding.get('replaying_lesson') == 'duel_basics'
+                or 'finish_duel_basics_lesson' not in completed
+            )
+        )
+
+    def _duel_basics_active(self):
+        onboarding = (
+            (getattr(self.state, 'user_dict', None) or {})
+            .get('onboarding') or {}
+        )
+        return onboarding.get('active_lesson') == 'duel_basics'
 
     def _beginner_duel_sent(self):
         return 'send_first_duel_challenge' in self._menu_coach_seen()
@@ -820,7 +833,8 @@ class NewGameScreen(MenuScreenMixin, Screen):
         return next((u for u in ai_opponents if 'Strategos' in u.get('username', '')), ai_opponents[0])
 
     def _ensure_beginner_duel_defaults(self):
-        if (not self._first_duel_incomplete()
+        if (not self._duel_basics_active()
+                or not self._first_duel_incomplete()
                 or self._beginner_duel_sent()
                 or self._selected_opponent):
             return
@@ -837,7 +851,9 @@ class NewGameScreen(MenuScreenMixin, Screen):
         self.game_limit_field.deactivate()
 
     def _current_beginner_duel_coach_step(self):
-        if not self._menu_coach_allowed_common() or not self._first_duel_incomplete():
+        if (not self._menu_coach_allowed_common()
+                or not self._duel_basics_active()
+                or not self._first_duel_incomplete()):
             return None
         self._ensure_beginner_duel_defaults()
         if not self._selected_opponent:

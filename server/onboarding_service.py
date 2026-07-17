@@ -57,55 +57,366 @@ CORE_STEPS = [
         'group': 'first_journey',
     },
     {
-        'id': 'finish_first_duel',
-        'title': 'Finish the duel tutorial',
-        'description': 'Play a guided duel from start to finish.',
-        'reward': {'booster_packs': 3},
-        'group': 'learn_next',
+        'id': 'finish_collection_lesson',
+        'title': 'Grow your collection',
+        'description': 'Open both pack types, then learn how to sell and convert spare cards.',
+        'reward': {
+            'gold': 250,
+            'booster_packs': 2,
+            'booster_packs_side': 1,
+        },
+        'group': 'lessons',
     },
     {
-        'id': 'collect_first_kingdom_production',
-        'title': 'Collect kingdom production',
-        'description': 'Claim produced gold, packs, or maps from a kingdom.',
-        'reward': {'gold': 50},
-        'group': 'learn_next',
+        'id': 'finish_build_attack_lesson',
+        'title': 'Build your own attack',
+        'description': 'Assemble your next attack and finish a real land battle.',
+        'reward': {'gold': 250, 'maps': 2},
+        'group': 'lessons',
     },
     {
-        'id': 'open_first_side_booster',
-        'title': 'Open a side booster',
-        'description': 'Side cards enable advanced figures and spells.',
-        'reward': {'gold': 50},
-        'group': 'learn_next',
+        'id': 'finish_run_kingdom_lesson',
+        'title': 'Run your kingdom',
+        'description': 'Manage production, skills, loot, protection, and kingdom style.',
+        'reward': {'gold': 500, 'maps': 1},
+        'group': 'lessons',
     },
     {
-        'id': 'save_first_defence_config',
-        'title': 'Save a defence',
-        'description': 'Prepare a land so it can protect itself.',
-        'reward': {'booster_packs': 1},
-        'group': 'learn_next',
+        'id': 'finish_defend_land_lesson',
+        'title': 'Defend your land',
+        'description': 'Prepare and save a complete land defence.',
+        'reward': {
+            'gold': 250,
+            'booster_packs': 2,
+            'booster_packs_side': 1,
+        },
+        'group': 'lessons',
     },
     {
-        'id': 'sell_first_card',
-        'title': 'Sell a card',
-        'description': 'Turn spare unlocked cards into gold.',
-        'reward': {'gold': 25},
-        'group': 'explore',
-    },
-    {
-        'id': 'trade_first_card',
-        'title': 'Trade a card',
-        'description': 'Convert spare cards into a suit you need.',
-        'reward': {'gold': 50},
-        'group': 'explore',
-    },
-    {
-        'id': 'buy_first_cosmetic',
-        'title': 'Buy a cosmetic',
-        'description': 'Customize a kingdom badge, color, surface, or border.',
-        'reward': {'gold': 100},
-        'group': 'explore',
+        'id': 'finish_duel_basics_lesson',
+        'title': 'Complete Duel Basics',
+        'description': 'Finish a duel after seeing every contextual Duel Basics tip.',
+        'reward': {
+            'gold': 500,
+            'booster_packs': 3,
+            'booster_packs_side': 2,
+        },
+        'group': 'lessons',
     },
 ]
+
+
+FOLLOW_UP_LESSONS = [
+    {
+        'id': 'grow_collection',
+        'title': 'Grow Your Collection',
+        'description': 'Open both pack types and learn how spare copies become gold or cards you need.',
+        'group': 'lessons',
+        'entry_screen': 'collection',
+        'entry_label': 'Start Grow Your Collection',
+        'completion_step': 'finish_collection_lesson',
+        'substeps': [
+            {
+                'id': 'collection_growth_intro',
+                'title': 'Learn main cards, side cards, and copy states',
+                'source': 'menu_hint',
+            },
+            {
+                'id': 'open_first_main_booster',
+                'title': 'Open a main booster',
+                'source': 'completed_step',
+            },
+            {
+                'id': 'open_first_side_booster',
+                'title': 'Open a side booster',
+                'source': 'completed_step',
+            },
+            {
+                'id': 'sell_first_card',
+                'title': 'Sell a free spare card',
+                'source': 'completed_step',
+            },
+            {
+                'id': 'trade_first_card',
+                'title': 'Convert spare copies into another suit',
+                'source': 'completed_step',
+            },
+            {
+                'id': 'collection_growth_recap',
+                'title': 'See how copies power kingdom growth',
+                'source': 'menu_hint',
+            },
+        ],
+    },
+    {
+        'id': 'build_attack',
+        'title': 'Build Your Own Attack',
+        'description': 'Build figures, choose tactics and a prelude, then fight a real conquest.',
+        'group': 'lessons',
+        'entry_screen': 'kingdom',
+        'entry_label': 'Start Build Your Own Attack',
+        'completion_step': 'finish_build_attack_lesson',
+        'substeps': [
+            {
+                'id': 'build_attack_intro_window',
+                'title': 'Learn the attack-building plan',
+                'source': 'menu_hint',
+            },
+            {
+                'id': 'conquer_build_yourself',
+                'title': 'Build a figure from your Collection',
+                'source': 'menu_hint',
+            },
+            {
+                'id': 'conquer_build_yourself_tactics',
+                'title': 'Add three tactics',
+                'source': 'menu_hint',
+            },
+            {
+                'id': 'conquer_build_yourself_prelude',
+                'title': 'Review the optional prelude spell',
+                'source': 'menu_hint',
+            },
+            {
+                'id': 'finish_second_conquer_battle',
+                'title': 'Finish the land battle',
+                'source': 'completed_step',
+            },
+        ],
+    },
+    {
+        'id': 'run_kingdom',
+        'title': 'Run Your Kingdom',
+        'description': 'Manage production, skills, maps, loot, protection, and kingdom appearance.',
+        'group': 'lessons',
+        'entry_screen': 'kingdom',
+        'entry_label': 'Start Run Your Kingdom',
+        'completion_step': 'finish_run_kingdom_lesson',
+        'substeps': [
+            {
+                'id': 'kingdom_management_intro',
+                'title': 'Learn production, maps, and the Loot Inbox',
+                'source': 'menu_hint',
+            },
+            {
+                'id': 'kingdom_collect_production',
+                'title': 'Find the production collection control',
+                'source': 'menu_hint',
+            },
+            {
+                'id': 'kingdom_config_essentials',
+                'title': 'Review production and kingdom skills',
+                'source': 'menu_hint',
+            },
+            {
+                'id': 'kingdom_config_shields_style',
+                'title': 'Review shields and kingdom cosmetics',
+                'source': 'menu_hint',
+            },
+            {
+                'id': 'buy_first_cosmetic',
+                'title': 'Buy and equip one kingdom cosmetic',
+                'source': 'completed_step',
+            },
+        ],
+    },
+    {
+        'id': 'defend_land',
+        'title': 'Defend Your Land',
+        'description': 'Choose figures, tactics, and a defender response, then save the defence.',
+        'group': 'lessons',
+        'entry_screen': 'kingdom',
+        'entry_label': 'Start Defend Your Land',
+        'completion_step': 'finish_defend_land_lesson',
+        'substeps': [
+            {
+                'id': 'defend_land_intro_window',
+                'title': 'Learn how a saved defence protects land',
+                'source': 'menu_hint',
+            },
+            {
+                'id': 'defence_intro',
+                'title': 'Review defending figures',
+                'source': 'menu_hint',
+            },
+            {
+                'id': 'defence_battle_plan',
+                'title': 'Fill the three-round battle plan',
+                'source': 'menu_hint',
+            },
+            {
+                'id': 'defence_final_response',
+                'title': 'Choose the defender response',
+                'source': 'menu_hint',
+            },
+            {
+                'id': 'save_first_defence_config',
+                'title': 'Save the completed defence',
+                'source': 'completed_step',
+            },
+        ],
+    },
+    {
+        'id': 'duel_basics',
+        'title': 'Duel Basics',
+        'description': 'Play a friendly AI duel and learn setup turns, advancing, tactics, and scoring.',
+        'group': 'lessons',
+        'entry_screen': 'duel_menu',
+        'entry_label': 'Start Duel Basics',
+        'completion_step': 'finish_duel_basics_lesson',
+        'substeps': [
+            {
+                'id': 'duel_tutorial_start_window',
+                'title': 'Learn the duel objective and round rhythm',
+                'source': 'menu_hint',
+            },
+            {
+                'id': 'field',
+                'title': 'Read setup turns, roles, and resources',
+                'source': 'duel_hint',
+            },
+            {
+                'id': 'build',
+                'title': 'Build a figure',
+                'source': 'duel_hint',
+            },
+            {
+                'id': 'cast_spell',
+                'title': 'Review spells and card changes',
+                'source': 'duel_hint',
+            },
+            {
+                'id': 'battle_shop_select_moves',
+                'title': 'Buy battle moves',
+                'source': 'duel_hint',
+            },
+            {
+                'id': 'battle_shop_ready',
+                'title': 'Lock in the battle plan',
+                'source': 'duel_hint',
+            },
+            {
+                'id': 'battle_move_panel',
+                'title': 'Open a battle move',
+                'source': 'duel_hint',
+            },
+            {
+                'id': 'battle_move_actions',
+                'title': 'Use a battle move',
+                'source': 'duel_hint',
+            },
+            {
+                'id': 'battle_score',
+                'title': 'Read the battle score',
+                'source': 'duel_hint',
+            },
+            {
+                'id': 'finish_first_duel',
+                'title': 'Finish the duel',
+                'source': 'completed_step',
+            },
+        ],
+    },
+]
+FOLLOW_UP_LESSON_BY_ID = {
+    lesson['id']: lesson for lesson in FOLLOW_UP_LESSONS
+}
+
+REPLAY_MENU_HINT_IDS_BY_LESSON = {
+    'grow_collection': (
+        'collection_growth_intro',
+        'collection_growth_main',
+        'collection_growth_side',
+        'collection_sell_spare',
+        'collection_trade_spare',
+        'collection_growth_recap',
+    ),
+    'build_attack': (
+        'build_attack_intro_window',
+        'conquer_choose_next_land',
+        'conquer_open_next_attack',
+        'conquer_build_yourself',
+        'conquer_build_yourself_tactics',
+        'conquer_build_yourself_prelude',
+        'conquer_build_yourself_battle',
+    ),
+    'run_kingdom': (
+        'kingdom_management_intro',
+        'kingdom_open_management',
+        'kingdom_collect_production',
+        'kingdom_config_essentials',
+        'kingdom_config_shields_style',
+        'kingdom_buy_cosmetic',
+    ),
+    'defend_land': (
+        'defend_land_intro_window',
+        'defence_choose_land',
+        'defence_open_config',
+        'defence_intro',
+        'defence_battle_plan',
+        'defence_final_response',
+        'defence_save',
+    ),
+    'duel_basics': (
+        'duel_tutorial_start_window',
+        'beginner_duel',
+        'send_first_duel_challenge',
+    ),
+}
+
+REPLAY_STEP_IDS_BY_LESSON = {
+    'grow_collection': (
+        'open_first_main_booster',
+        'open_first_side_booster',
+        'sell_first_card',
+        'trade_first_card',
+    ),
+    'build_attack': ('finish_second_conquer_battle',),
+    'run_kingdom': ('buy_first_cosmetic',),
+    'defend_land': ('save_first_defence_config',),
+    'duel_basics': ('finish_first_duel',),
+}
+
+SKIPPABLE_LESSON_COACH_STEPS = {
+    'grow_collection': {
+        'collection_growth_main': (
+            'collection_growth_main', 'open_first_main_booster'),
+        'collection_growth_side': (
+            'collection_growth_side', 'open_first_side_booster'),
+        'collection_sell_spare': (
+            'collection_sell_spare', 'sell_first_card'),
+        'collection_trade_spare': (
+            'collection_trade_spare', 'trade_first_card'),
+    },
+    'build_attack': {
+        'conquer_choose_next_land': ('conquer_choose_next_land',),
+        'conquer_open_next_attack': ('conquer_open_next_attack',),
+        'conquer_build_yourself': ('conquer_build_yourself',),
+        'conquer_build_yourself_tactics': (
+            'conquer_build_yourself_tactics',),
+        'conquer_build_yourself_battle': (
+            'conquer_build_yourself_battle',
+            'finish_second_conquer_battle',
+        ),
+    },
+    'run_kingdom': {
+        'kingdom_buy_cosmetic': (
+            'kingdom_buy_cosmetic',
+            'buy_first_cosmetic',
+        ),
+    },
+    'defend_land': {
+        'defence_save': ('defence_save', 'save_first_defence_config'),
+    },
+}
+
+DUEL_COACH_SKIP_HINTS = {
+    'build': ('build',),
+    'battle_shop_select_moves': ('battle_shop_select_moves',),
+    'battle_shop_ready': ('battle_shop_ready',),
+    'battle_move_panel': ('battle_move_panel',),
+    'battle_move_actions': ('battle_move_actions',),
+}
 
 
 EARLY_GOALS = [
@@ -376,11 +687,33 @@ DAILY_QUEST_FACT_KEYS = (
 
 
 CORE_STEP_IDS = {step['id'] for step in CORE_STEPS}
+MILESTONE_STEP_IDS = {
+    'open_first_main_booster',
+    'open_first_side_booster',
+    'finish_second_conquer_battle',
+    'collect_first_kingdom_production',
+    'save_first_defence_config',
+    'finish_first_duel',
+    'sell_first_card',
+    'trade_first_card',
+    'buy_first_cosmetic',
+}
+ONBOARDING_STEP_IDS = CORE_STEP_IDS | MILESTONE_STEP_IDS
 EARLY_GOAL_IDS = {goal['id'] for goal in EARLY_GOALS}
 DUEL_HINT_IDS = (
     'field', 'build', 'cast_spell', 'change_cards', 'game_status',
     'resource_panel', 'battle_shop_select_moves', 'battle_shop_ready',
     'battle_move_panel', 'battle_move_actions', 'battle_score',
+)
+DUEL_BASICS_REQUIRED_HINT_IDS = (
+    'field',
+    'build',
+    'cast_spell',
+    'battle_shop_select_moves',
+    'battle_shop_ready',
+    'battle_move_panel',
+    'battle_move_actions',
+    'battle_score',
 )
 # Order matters: mark_menu_hint re-sorts a user's seen hints by this tuple's
 # order, and several tests assert that ordering. Keep ids in journey order.
@@ -388,34 +721,44 @@ DUEL_HINT_IDS = (
 # main-menu buttons, so they remain even though they are no longer tour steps.)
 MENU_HINT_IDS = (
     'duel', 'kingdom', 'collection', 'rankings', 'guide',
-    'guide_first_duel_reward',
-    'open_starter_pack', 'open_starter_cards',
-    'collection_basics_window', 'collection_open_main_booster',
+    'guide_rewards_track',
+    'open_starter_cards',
+    'collection_basics_window',
     'starter_cards_present_window', 'starter_suit_reveal',
-    'post_boosters_kingdom', 'post_starter_cards_kingdom',
+    'collection_growth_intro', 'collection_growth_main',
+    'collection_growth_side',
+    'post_starter_cards_kingdom',
     'kingdom_overview_window',
     'kingdom_pick_land',
     'kingdom_conquer_button',
-    'conquer_config_build_edit', 'conquer_config_to_battle',
+    'conquer_config_to_battle',
+    'build_attack_intro_window',
+    'conquer_choose_next_land', 'conquer_open_next_attack',
     'conquer_build_yourself', 'conquer_build_yourself_tactics',
+    'conquer_build_yourself_prelude',
     'conquer_build_yourself_battle',
     'battle_intro_window',
-    'conquer_battle_timeline_intro', 'conquer_battle_figure_power',
-    'conquer_battle_tactics', 'conquer_battle_block_call',
-    'conquer_battle_tactic_recap', 'conquer_battle_finish',
+    'conquer_battle_tactics',
     'kingdom_after_conquer_map',
-    'return_to_kingdom_loop', 'open_boosters_first',
+    'return_to_kingdom_loop',
     'new_game', 'duel_tutorial_start_window',
     'beginner_duel', 'send_first_duel_challenge',
-    'kingdom_production_intro',
+    'kingdom_management_intro',
+    'kingdom_open_management', 'kingdom_collect_production',
+    'kingdom_open_style',
+    'defend_land_intro_window',
+    'defence_choose_land', 'defence_open_config',
     'defence_intro', 'defence_battle_plan',
     'defence_final_response', 'defence_save',
+    'collection_sell_spare', 'collection_trade_spare',
+    'collection_growth_recap',
     'loot_risk_intro',
     'kingdom_config_essentials',
     'kingdom_config_shields_style',
+    'kingdom_buy_cosmetic',
 )
-COACH_VERSION = 'first_session_v6'
-ONBOARDING_SCHEMA_VERSION = 2
+COACH_VERSION = 'first_session_v7'
+ONBOARDING_SCHEMA_VERSION = 5
 
 
 def ensure_onboarding_state_column():
@@ -445,6 +788,24 @@ def default_onboarding_state(*, new_user=False):
         'duel_hints_seen': [],
         'menu_hints_seen': [],
         'onboarding_skipped': False,
+        'active_lesson': None,
+        'lessons_dismissed': [],
+        # Completed lessons can be replayed without changing their historical
+        # completion or claimed reward. These fields hold the temporary replay
+        # session and the hints hidden while it is active.
+        'replaying_lesson': None,
+        'lesson_replay_baseline': {},
+        'lesson_replay_steps': [],
+        'lesson_replay_original_menu_hints': [],
+        'lesson_replay_original_duel_hints': [],
+        # Milestones performed after the current lesson was started.  Some
+        # global milestones may already be true before a lesson begins (the
+        # first conquest, for example, creates an active defence), so lesson
+        # completion must be able to distinguish old history from the action
+        # the lesson is currently asking the player to perform.
+        'lesson_session_steps': [],
+        'lesson_skipped_steps': [],
+        'replay_completion_pending': None,
         # {'offensive': <red suit>, 'defensive': <black suit>} selected before
         # the Collection roulette; revealed one-armed-bandit style there.
         'starter_suits': None,
@@ -469,26 +830,18 @@ def _state(user):
             base[key] = value
     for list_key in (
         'completed_steps', 'claimed_rewards', 'early_goals_claimed',
-        'duel_hints_seen', 'menu_hints_seen',
+        'duel_hints_seen', 'menu_hints_seen', 'lessons_dismissed',
+        'lesson_replay_steps', 'lesson_replay_original_menu_hints',
+        'lesson_replay_original_duel_hints', 'lesson_session_steps',
+        'lesson_skipped_steps',
     ):
         if not isinstance(base.get(list_key), list):
             base[list_key] = []
     if not isinstance(base.get('counters'), dict):
         base['counters'] = default_onboarding_state()['counters']
-    # Before schema v2, finish_tutorial was synthesized from the first land
-    # win. Preserve it only when the account demonstrably reached the final
-    # kingdom card (or already claimed its reward). Players who never saw that
-    # card can now return and finish the tour explicitly.
-    raw_version = _nonnegative_int(raw.get('schema_version')) or 1
-    if raw_version < 2:
-        completed = set(base.get('completed_steps') or [])
-        claimed = set(base.get('claimed_rewards') or [])
-        seen = set(base.get('menu_hints_seen') or [])
-        if ('finish_tutorial' in claimed
-                or 'kingdom_after_conquer_map' in seen):
-            completed.add('finish_tutorial')
-        base['completed_steps'] = sorted(completed)
-        base['schema_version'] = ONBOARDING_SCHEMA_VERSION
+    if not isinstance(base.get('lesson_replay_baseline'), dict):
+        base['lesson_replay_baseline'] = {}
+    base['schema_version'] = ONBOARDING_SCHEMA_VERSION
     return base
 
 
@@ -592,13 +945,37 @@ def get_starter_suits(user):
 
 
 def mark_step(user, step_id, *, commit=False):
-    if not user or step_id not in CORE_STEP_IDS:
+    if not user or step_id not in ONBOARDING_STEP_IDS:
         return False
     state = _state(user)
     completed = set(state.get('completed_steps') or [])
-    if step_id in completed:
+    replaying = state.get('replaying_lesson')
+    replay_step_ids = set(
+        REPLAY_STEP_IDS_BY_LESSON.get(replaying) or ())
+    replay_steps = set(state.get('lesson_replay_steps') or [])
+    replay_changed = bool(
+        replaying and step_id in replay_step_ids
+        and step_id not in replay_steps)
+    if replay_changed:
+        state['lesson_replay_steps'] = sorted(
+            replay_steps | {step_id})
+
+    active_lesson = state.get('active_lesson')
+    lesson_step_ids = set(
+        REPLAY_STEP_IDS_BY_LESSON.get(active_lesson) or ())
+    lesson_session_steps = set(
+        state.get('lesson_session_steps') or [])
+    lesson_session_changed = bool(
+        active_lesson and step_id in lesson_step_ids
+        and step_id not in lesson_session_steps)
+    if lesson_session_changed:
+        state['lesson_session_steps'] = sorted(
+            lesson_session_steps | {step_id})
+
+    if step_id in completed and not replay_changed and not lesson_session_changed:
         return False
-    state['completed_steps'] = sorted(completed | {step_id})
+    if step_id not in completed:
+        state['completed_steps'] = sorted(completed | {step_id})
     _save_state(user, state, commit=commit)
     return True
 
@@ -737,12 +1114,180 @@ def resume_onboarding(user, *, commit=False):
     return state
 
 
+def _clear_lesson_replay(state, *, restore_hints=True):
+    """End a replay session and optionally restore its historical hints."""
+    if restore_hints:
+        menu_seen = set(state.get('menu_hints_seen') or [])
+        menu_seen.update(
+            state.get('lesson_replay_original_menu_hints') or [])
+        state['menu_hints_seen'] = [
+            hint for hint in MENU_HINT_IDS if hint in menu_seen]
+
+        duel_seen = set(state.get('duel_hints_seen') or [])
+        duel_seen.update(
+            state.get('lesson_replay_original_duel_hints') or [])
+        state['duel_hints_seen'] = [
+            hint for hint in DUEL_HINT_IDS if hint in duel_seen]
+
+    state['replaying_lesson'] = None
+    state['lesson_replay_baseline'] = {}
+    state['lesson_replay_steps'] = []
+    state['lesson_replay_original_menu_hints'] = []
+    state['lesson_replay_original_duel_hints'] = []
+
+
+def start_lesson(user, lesson_id, *, commit=False):
+    """Activate one optional lesson and return its configured entry point."""
+    if not user:
+        return None, 'User not found'
+    lesson = FOLLOW_UP_LESSON_BY_ID.get(lesson_id)
+    if not lesson:
+        return None, 'Unknown lesson'
+    state = _state(user)
+    if state.get('replay_completion_pending'):
+        return None, 'Finish the completed lesson recap before starting another lesson'
+    facts = _facts(user, state)
+    if 'finish_tutorial' not in facts.get('completed_steps', set()):
+        return None, 'Finish the First Journey before starting this lesson'
+    _clear_lesson_replay(state, restore_hints=True)
+    state['lesson_session_steps'] = []
+    state['lesson_skipped_steps'] = []
+    facts = _facts(user, state)
+    completed = (
+        lesson.get('completion_step')
+        in set(facts.get('completed_steps') or []))
+    if completed:
+        menu_seen = set(state.get('menu_hints_seen') or [])
+        replay_menu = set(
+            REPLAY_MENU_HINT_IDS_BY_LESSON.get(lesson_id) or ())
+        state['lesson_replay_original_menu_hints'] = [
+            hint for hint in MENU_HINT_IDS
+            if hint in menu_seen and hint in replay_menu]
+        state['menu_hints_seen'] = [
+            hint for hint in MENU_HINT_IDS
+            if hint in menu_seen and hint not in replay_menu]
+
+        duel_seen = set(state.get('duel_hints_seen') or [])
+        replay_duel = (
+            set(DUEL_HINT_IDS) if lesson_id == 'duel_basics' else set())
+        state['lesson_replay_original_duel_hints'] = [
+            hint for hint in DUEL_HINT_IDS
+            if hint in duel_seen and hint in replay_duel]
+        state['duel_hints_seen'] = [
+            hint for hint in DUEL_HINT_IDS
+            if hint in duel_seen and hint not in replay_duel]
+        state['replaying_lesson'] = lesson_id
+        state['lesson_replay_baseline'] = {
+            'conquer_battles': _nonnegative_int(
+                facts.get('conquer_battles')),
+            'duel_finishes': _nonnegative_int(
+                facts.get('duel_finishes')),
+        }
+        state['lesson_replay_steps'] = (
+            ['buy_first_cosmetic']
+            if lesson_id == 'run_kingdom' else [])
+    state['active_lesson'] = lesson_id
+    state['onboarding_skipped'] = False
+    dismissed = set(state.get('lessons_dismissed') or [])
+    dismissed.discard(lesson_id)
+    state['lessons_dismissed'] = sorted(dismissed)
+    _save_state(user, state, commit=commit)
+    return lesson, None
+
+
+def dismiss_lesson(user, lesson_id, *, commit=False):
+    """Dismiss one optional lesson without pausing every tutorial track."""
+    if not user or lesson_id not in FOLLOW_UP_LESSON_BY_ID:
+        return False
+    state = _state(user)
+    dismissed = set(state.get('lessons_dismissed') or [])
+    changed = (
+        lesson_id not in dismissed
+        or state.get('active_lesson') == lesson_id
+        or state.get('replaying_lesson') == lesson_id
+        or bool(state.get('lesson_skipped_steps'))
+    )
+    dismissed.add(lesson_id)
+    state['lessons_dismissed'] = sorted(dismissed)
+    if state.get('active_lesson') == lesson_id:
+        state['active_lesson'] = None
+    if state.get('replaying_lesson') == lesson_id:
+        _clear_lesson_replay(state, restore_hints=True)
+    state['lesson_session_steps'] = []
+    state['lesson_skipped_steps'] = []
+    if changed:
+        _save_state(user, state, commit=commit)
+    return True
+
+
+def skip_lesson_step(user, lesson_id, step_id, *, commit=False):
+    """Mark one blocked optional-lesson coach step as intentionally skipped."""
+    if not user:
+        return False, 'User not found'
+    if lesson_id not in FOLLOW_UP_LESSON_BY_ID:
+        return False, 'Unknown lesson'
+    state = _state(user)
+    if state.get('active_lesson') != lesson_id:
+        return False, 'Lesson is not active'
+
+    if lesson_id == 'duel_basics':
+        skipped_ids = DUEL_COACH_SKIP_HINTS.get(step_id)
+        if not skipped_ids:
+            return False, 'This lesson step cannot be skipped'
+        seen = set(state.get('duel_hints_seen') or [])
+        state['duel_hints_seen'] = [
+            hint for hint in DUEL_HINT_IDS
+            if hint in seen | set(skipped_ids)]
+    else:
+        skipped_ids = (
+            SKIPPABLE_LESSON_COACH_STEPS
+            .get(lesson_id, {})
+            .get(step_id)
+        )
+        if not skipped_ids:
+            return False, 'This lesson step cannot be skipped'
+        menu_seen = set(state.get('menu_hints_seen') or [])
+        menu_seen.update(
+            skipped_id for skipped_id in skipped_ids
+            if skipped_id in MENU_HINT_IDS)
+        state['menu_hints_seen'] = [
+            hint for hint in MENU_HINT_IDS if hint in menu_seen]
+
+    skipped = set(state.get('lesson_skipped_steps') or [])
+    skipped.update(skipped_ids)
+    state['lesson_skipped_steps'] = sorted(skipped)
+    completed = set(state.get('completed_steps') or [])
+    completed.update(set(skipped_ids) & ONBOARDING_STEP_IDS)
+    state['completed_steps'] = sorted(completed)
+    _save_state(user, state, commit=commit)
+    return True, None
+
+
+def acknowledge_replay_completion(
+        user, lesson_id, *, commit=False):
+    """Clear the replay finale after the player closes its recap window."""
+    if not user:
+        return False
+    state = _state(user)
+    if state.get('replay_completion_pending') != lesson_id:
+        return False
+    state['replay_completion_pending'] = None
+    _save_state(user, state, commit=commit)
+    return True
+
+
 def reset_onboarding(user, *, commit=False):
     state = _state(user)
     state['onboarding_skipped'] = False
     state['welcome_pending'] = True
     state['welcome_seen'] = False
     state['duel_hints_seen'] = []
+    state['active_lesson'] = None
+    state['lessons_dismissed'] = []
+    _clear_lesson_replay(state, restore_hints=False)
+    state['lesson_session_steps'] = []
+    state['lesson_skipped_steps'] = []
+    state['replay_completion_pending'] = None
     _save_state(user, state, commit=commit)
     return state
 
@@ -780,6 +1325,73 @@ def _saved_defence_count(user_id):
     ).count()
 
 
+def _lesson_replay_complete(
+        lesson_id, state, *, menu_hints_seen,
+        duel_finishes, conquer_battles):
+    """Return whether the temporary, reward-free replay reached its end."""
+    replay_steps = set(state.get('lesson_replay_steps') or [])
+    lesson_session_steps = set(
+        state.get('lesson_session_steps') or [])
+    skipped_steps = set(state.get('lesson_skipped_steps') or [])
+    replay_or_skipped_steps = (
+        replay_steps | lesson_session_steps | skipped_steps)
+    baseline = state.get('lesson_replay_baseline') or {}
+    if lesson_id == 'grow_collection':
+        return (
+            {
+                'collection_growth_intro',
+                'collection_growth_recap',
+            }.issubset(menu_hints_seen)
+            and set(REPLAY_STEP_IDS_BY_LESSON[lesson_id]).issubset(
+                replay_or_skipped_steps)
+        )
+    if lesson_id == 'build_attack':
+        return (
+            {
+                'build_attack_intro_window',
+                'conquer_build_yourself',
+                'conquer_build_yourself_tactics',
+                'conquer_build_yourself_prelude',
+            }.issubset(menu_hints_seen)
+            and (
+                conquer_battles > _nonnegative_int(
+                    baseline.get('conquer_battles'))
+                or 'finish_second_conquer_battle' in skipped_steps
+            )
+        )
+    if lesson_id == 'run_kingdom':
+        # Replaying management should not force the player to buy another
+        # cosmetic. Revisiting the full guidance is sufficient.
+        return {
+            'kingdom_management_intro',
+            'kingdom_config_essentials',
+            'kingdom_collect_production',
+            'kingdom_config_shields_style',
+        }.issubset(menu_hints_seen)
+    if lesson_id == 'defend_land':
+        return (
+            {
+                'defend_land_intro_window',
+                'defence_intro',
+                'defence_battle_plan',
+                'defence_final_response',
+            }.issubset(menu_hints_seen)
+            and 'save_first_defence_config' in replay_or_skipped_steps
+        )
+    if lesson_id == 'duel_basics':
+        return (
+            'duel_tutorial_start_window' in menu_hints_seen
+            and set(DUEL_BASICS_REQUIRED_HINT_IDS).issubset(
+                set(state.get('duel_hints_seen') or []))
+            and (
+                duel_finishes > _nonnegative_int(
+                    baseline.get('duel_finishes'))
+                or 'finish_first_duel' in skipped_steps
+            )
+        )
+    return True
+
+
 def _facts(user, state=None):
     state = state or _state(user)
     counters = state.get('counters') or {}
@@ -790,9 +1402,18 @@ def _facts(user, state=None):
     conquer_battles = _conquer_battle_count(user_id)
     conquered_lands = _conquer_lands_count(user_id)
     production_collections = int(counters.get('kingdom_production_collections') or 0)
+    skipped_steps = set(state.get('lesson_skipped_steps') or [])
     completed = set(state.get('completed_steps') or [])
+    completed.update(skipped_steps & ONBOARDING_STEP_IDS)
     if duel_finishes >= 1:
         completed.add('finish_first_duel')
+    if (
+            'finish_first_duel' in completed
+            and 'duel_tutorial_start_window'
+            in set(state.get('menu_hints_seen') or [])
+            and set(DUEL_BASICS_REQUIRED_HINT_IDS).issubset(
+                set(state.get('duel_hints_seen') or []))):
+        completed.add('finish_duel_basics_lesson')
     # Win-based: the first-conquest tutorial beat is only "done" once a land is
     # actually conquered. A lost first battle is a no-penalty retry, so the
     # player stays in the conquest phase until they win.
@@ -802,6 +1423,63 @@ def _facts(user, state=None):
         completed.add('collect_first_kingdom_production')
     if _saved_defence_count(user_id) >= 1:
         completed.add('save_first_defence_config')
+    if conquer_battles >= 2:
+        completed.add('finish_second_conquer_battle')
+    menu_hints_seen = set(state.get('menu_hints_seen') or [])
+    menu_hints_seen.update(skipped_steps & set(MENU_HINT_IDS))
+    if (
+            {
+                'collection_growth_intro',
+                'collection_growth_recap',
+            }.issubset(menu_hints_seen)
+            and {
+                'open_first_main_booster',
+                'open_first_side_booster',
+                'sell_first_card',
+                'trade_first_card',
+            }.issubset(completed)):
+        completed.add('finish_collection_lesson')
+    if (
+            'finish_second_conquer_battle' in completed
+            and {
+                'build_attack_intro_window',
+                'conquer_build_yourself',
+                'conquer_build_yourself_tactics',
+                'conquer_build_yourself_prelude',
+            }.issubset(menu_hints_seen)):
+        completed.add('finish_build_attack_lesson')
+    if (
+            {
+                'kingdom_management_intro',
+                'kingdom_config_essentials',
+                'kingdom_collect_production',
+                'kingdom_config_shields_style',
+            }.issubset(menu_hints_seen)):
+        if 'buy_first_cosmetic' in completed:
+            completed.add('finish_run_kingdom_lesson')
+    if (
+            state.get('active_lesson') == 'defend_land'
+            and 'save_first_defence_config' in (
+                set(state.get('lesson_session_steps') or [])
+                | skipped_steps)
+            and {
+                'defend_land_intro_window',
+                'defence_intro',
+                'defence_battle_plan',
+                'defence_final_response',
+            }.issubset(menu_hints_seen)):
+        completed.add('finish_defend_land_lesson')
+
+    replaying_lesson = state.get('replaying_lesson')
+    replay_lesson = FOLLOW_UP_LESSON_BY_ID.get(replaying_lesson)
+    if replay_lesson and not _lesson_replay_complete(
+            replaying_lesson,
+            state,
+            menu_hints_seen=menu_hints_seen,
+            duel_finishes=duel_finishes,
+            conquer_battles=conquer_battles):
+        completed.discard(replay_lesson.get('completion_step'))
+
     early_completed = set()
     if duel_wins >= 1:
         early_completed.add('win_first_duel')
@@ -1046,6 +1724,87 @@ def _step_payload(step, completed, claimed):
     return payload
 
 
+def _lesson_substep_complete(substep, facts, state, lesson_id=None):
+    source = substep.get('source')
+    step_id = substep.get('id')
+    if step_id in set(state.get('lesson_skipped_steps') or []):
+        return True
+    if source == 'menu_hint':
+        return step_id in set(state.get('menu_hints_seen') or [])
+    if source == 'duel_hint':
+        return step_id in set(state.get('duel_hints_seen') or [])
+    if (
+            lesson_id == 'defend_land'
+            and state.get('active_lesson') == lesson_id
+            and step_id == 'save_first_defence_config'):
+        return step_id in set(
+            state.get('lesson_session_steps') or [])
+    if (
+            state.get('replaying_lesson') == lesson_id
+            and step_id in set(
+                REPLAY_STEP_IDS_BY_LESSON.get(lesson_id) or ())):
+        if lesson_id == 'build_attack':
+            baseline = state.get('lesson_replay_baseline') or {}
+            return _nonnegative_int(facts.get('conquer_battles')) > (
+                _nonnegative_int(baseline.get('conquer_battles')))
+        if lesson_id == 'duel_basics':
+            baseline = state.get('lesson_replay_baseline') or {}
+            return _nonnegative_int(facts.get('duel_finishes')) > (
+                _nonnegative_int(baseline.get('duel_finishes')))
+        return step_id in set(state.get('lesson_replay_steps') or [])
+    return step_id in set(facts.get('completed_steps') or [])
+
+
+def _follow_up_lesson_payloads(state, facts, claimed_core):
+    """Serialize the optional curriculum from one central lesson registry."""
+    core_by_id = {step['id']: step for step in CORE_STEPS}
+    first_journey_complete = 'finish_tutorial' in set(
+        facts.get('completed_steps') or [])
+    active_lesson = state.get('active_lesson')
+    dismissed = set(state.get('lessons_dismissed') or [])
+    payloads = []
+    for lesson in FOLLOW_UP_LESSONS:
+        completion_step = lesson.get('completion_step')
+        completed = completion_step in set(facts.get('completed_steps') or [])
+        substeps = []
+        progress = 0
+        for substep in lesson.get('substeps') or []:
+            item = dict(substep)
+            item['completed'] = _lesson_substep_complete(
+                substep, facts, state, lesson['id'])
+            progress += int(item['completed'])
+            substeps.append(item)
+        reward_source = core_by_id.get(completion_step) or {}
+        reward = dict(reward_source.get('reward') or {})
+        claimed = completion_step in claimed_core
+        is_active = active_lesson == lesson['id'] and not completed
+        started = bool(is_active or progress)
+        locked = not first_journey_complete
+        payloads.append({
+            **{key: value for key, value in lesson.items()
+               if key != 'substeps'},
+            'lesson': True,
+            'substeps': substeps,
+            'progress': progress,
+            'total_steps': len(substeps),
+            'progress_label': f'{progress}/{len(substeps)}',
+            'completed': completed,
+            'claimed': claimed,
+            'claimable': bool(
+                completed and not claimed and reward and not locked),
+            'reward': reward,
+            'reward_id': completion_step,
+            'reward_label': _reward_label(reward),
+            'active': is_active,
+            'started': started,
+            'dismissed': lesson['id'] in dismissed,
+            'replaying': state.get('replaying_lesson') == lesson['id'],
+            'locked': locked,
+            'action_label': 'Continue' if started else 'Start',
+        })
+    return payloads
+
+
 def _journey_metadata(completed_steps, menu_hints_seen=None):
     """First-session guided path.
 
@@ -1113,22 +1872,57 @@ def serialize_onboarding_state(user):
         return {}
     state = _state(user)
     facts = _facts(user, state)
+    active_lesson = FOLLOW_UP_LESSON_BY_ID.get(state.get('active_lesson'))
+    if (
+            active_lesson
+            and active_lesson.get('completion_step')
+            in facts.get('completed_steps', set())):
+        replay_finished = (
+            state.get('replaying_lesson') == active_lesson.get('id'))
+        completion_step = active_lesson.get('completion_step')
+        completed_steps = set(state.get('completed_steps') or [])
+        if state.get('lesson_skipped_steps'):
+            completed_steps.update(
+                set(state.get('lesson_skipped_steps') or [])
+                & ONBOARDING_STEP_IDS)
+        # Persist the computed lesson finish itself.  Otherwise a completion
+        # that depends on session-scoped actions would disappear as soon as
+        # those temporary markers are cleared below.
+        completed_steps.add(completion_step)
+        state['completed_steps'] = sorted(completed_steps)
+        if replay_finished:
+            state['replay_completion_pending'] = active_lesson.get('id')
+            _clear_lesson_replay(state, restore_hints=True)
+        state['active_lesson'] = None
+        state['lesson_session_steps'] = []
+        state['lesson_skipped_steps'] = []
+        # Completion state must persist so a refresh cannot restart a replay
+        # or a first-time lesson that was completed by skipping a blocked step.
+        _save_state(user, state, commit=False)
     claimed_core = set(state.get('claimed_rewards') or [])
     claimed_early = set(state.get('early_goals_claimed') or [])
     core_steps = [
         _step_payload(step, step['id'] in facts['completed_steps'], step['id'] in claimed_core)
         for step in CORE_STEPS
     ]
+    first_journey_complete = 'finish_tutorial' in facts['completed_steps']
+    if not first_journey_complete:
+        for step in core_steps:
+            if step.get('group') == 'first_journey':
+                continue
+            step['locked'] = True
+            step['claimable'] = False
     early_goals = [
         _step_payload(goal, goal['id'] in facts['early_completed'], goal['id'] in claimed_early)
         for goal in EARLY_GOALS
     ]
-    goals_unlocked = 'finish_tutorial' in facts['completed_steps']
+    goals_unlocked = first_journey_complete
     if not goals_unlocked:
         for goal in early_goals:
             goal['locked'] = True
             goal['claimable'] = False
     daily_quest = _daily_quest_payload(user, state, facts)
+    lessons = _follow_up_lesson_payloads(state, facts, claimed_core)
     facts_payload = dict(facts)
     facts_payload['completed_steps'] = sorted(facts['completed_steps'])
     facts_payload['early_completed'] = sorted(facts['early_completed'])
@@ -1149,11 +1943,21 @@ def serialize_onboarding_state(user):
         'starter_suits': dict(state.get('starter_suits') or {}),
         'starter_set_granted': bool(state.get('starter_set_granted')),
         'onboarding_skipped': bool(state.get('onboarding_skipped')),
+        'active_lesson': state.get('active_lesson'),
+        'lessons_dismissed': list(state.get('lessons_dismissed') or []),
+        'replaying_lesson': state.get('replaying_lesson'),
+        'lesson_replay_steps': list(
+            state.get('lesson_replay_steps') or []),
+        'lesson_skipped_steps': list(
+            state.get('lesson_skipped_steps') or []),
+        'replay_completion_pending': state.get(
+            'replay_completion_pending'),
         'counters': dict(state.get('counters') or {}),
         'daily_quests_claimed_count': _nonnegative_int(
             state.get('daily_quests_claimed_count')),
         'facts': facts_payload,
         'core_steps': core_steps,
+        'lessons': lessons,
         'early_goals': early_goals,
         'daily_quest': daily_quest,
         'starter_present': _starter_present_payload(user),
@@ -1241,8 +2045,14 @@ def claim_reward(user, reward_id, *, commit=False):
     early_by_id = {goal['id']: goal for goal in EARLY_GOALS}
     if reward_id in core_by_id:
         claimed_key = 'claimed_rewards'
-        eligible = reward_id in facts['completed_steps']
         source = core_by_id[reward_id]
+        eligible = (
+            reward_id in facts['completed_steps']
+            and (
+                source.get('group') == 'first_journey'
+                or 'finish_tutorial' in facts['completed_steps']
+            )
+        )
     elif reward_id in early_by_id:
         claimed_key = 'early_goals_claimed'
         eligible = (

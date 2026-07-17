@@ -1553,11 +1553,11 @@ class DefenceScreen(MenuScreenMixin, Screen):
         """Light first-time guidance for the defence config (mixin coach)."""
         if not self._menu_coach_allowed_common():
             return None
-        # Defence is no longer part of the first-session tutorial: a conquered
-        # land already gets a complete auto-built defence, so this coaching is
-        # deferred until the conquer tutorial is finished and only appears
-        # on-demand the first time the player opens a defence config later.
-        if 'finish_tutorial' not in self._onboarding_completed_steps():
+        # Defence is an explicit follow-up lesson, not an interruption on every
+        # first visit to this screen.
+        if self._active_onboarding_lesson_id() != 'defend_land':
+            return None
+        if 'finish_defend_land_lesson' in self._onboarding_completed_steps():
             return None
         if (self._loading or self._error or not self._config or not self._layout_built
                 or self._active_subscreen or self._figure_detail_box
@@ -1754,6 +1754,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
         self._draw_menu_coach(self._current_defence_coach_step())
         self._draw_menu_overlay()
         draw_loot_risk_tutorial(self)
+        self._draw_tutorial_complete_dialogue()
 
     def _field_slot_background(self, field_name, rect):
         slot_path = settings.SLOT_ICON_IMG_PATH_DICT.get(field_name)
@@ -2970,8 +2971,11 @@ class DefenceScreen(MenuScreenMixin, Screen):
         # Update figure icon hover states
         for icon in self._figure_icons.values():
             icon.update()
+        self._maybe_show_tutorial_completion()
 
     def handle_events(self, events):
+        if self._handle_tutorial_completion_events(events):
+            return
         super().handle_events(events)
 
         # Handle prelude / counter spell confirmation dialogue responses

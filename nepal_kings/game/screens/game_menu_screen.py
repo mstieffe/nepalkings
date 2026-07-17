@@ -526,7 +526,7 @@ class GameMenuScreen(MenuScreenMixin, Screen):
                     'id': 'open_starter_cards',
                     'rect': self.button_collection.rect,
                     'title': 'Visit Your Collection',
-                    'body': 'This is the main menu. Let us visit your collection first.',
+                    'body': 'This is the main menu. Let us visit your collection first, where all your personal cards are stored. YOu add cards to your collection by opening booster packs or by conquering/defending lands',
                     'action': 'click',
                     'mark_on_click': True,
                     'max_lines': 4,
@@ -558,10 +558,8 @@ class GameMenuScreen(MenuScreenMixin, Screen):
                     'max_lines': 4,
                 }
             return None
-        # Tutorial finished. The duel tutorial is optional and is NOT pushed
-        # from here — the "Conquer Tutorial Complete!" box tells the player they
-        # can start it from the Duel menu whenever they like. Going to Duel ->
-        # New Game still gives the guided beginner-duel setup on opt-in.
+        # Follow-up lessons are started explicitly from Guide, so the main menu
+        # stays free of unrelated coach cards after the First Journey.
         return None
 
     def _current_area_coach_step(self):
@@ -578,7 +576,7 @@ class GameMenuScreen(MenuScreenMixin, Screen):
         return self._current_journey_coach_step()
 
     def _after_menu_coach_next(self, step_id):
-        if step_id == 'guide_first_duel_reward':
+        if step_id == 'guide_rewards_track':
             self._onboarding_guide_open = False
 
     # ── Welcome present reveal ─────────────────────────────────────

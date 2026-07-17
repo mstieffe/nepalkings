@@ -464,13 +464,193 @@ def test_kingdom_and_offdef_diagrams_build():
                td.kingdom_journey_diagram, td.battle_flow_diagram,
                td.kingdom_map_diagram, td.suit_roulette_diagram,
                td.conquer_start_image, td.duel_start_image,
+               td.collection_growth_start_image,
+               td.build_attack_start_image,
+               td.run_kingdom_start_image,
+               td.defend_land_start_image,
                td.duel_shared_card_pool_image, td.duel_loop_diagram,
                td.duel_build_battle_diagram, td.shared_card_pool_diagram,
                td.battle_matchup_diagram, td.starter_tactics_diagram,
-               td.tactics_actions_diagram, td.loot_risk_diagram):
+               td.tactics_actions_diagram, td.loot_risk_diagram,
+               td.two_pack_jobs_diagram, td.key_number_cards_diagram,
+               td.collection_capacity_diagram):
         surf = fn()
         assert isinstance(surf, pygame.Surface)
         assert fn() is surf  # cached
+
+
+def test_battle_flow_stacks_two_objects_in_each_phase(monkeypatch):
+    _display()
+    from game.components import tutorial_diagrams as td
+
+    calls = []
+    real_matchup_card = td._vertical_matchup_card
+
+    def record_matchup(title, own_art, rival_art, card_w, card_h, accent):
+        calls.append((title, own_art, rival_art))
+        return real_matchup_card(
+            title, own_art, rival_art, card_w, card_h, accent)
+
+    monkeypatch.setattr(td, '_vertical_matchup_card', record_matchup)
+    td.clear_cache()
+    diagram = td.battle_flow_diagram(220)
+
+    assert isinstance(diagram, pygame.Surface)
+    assert [title for title, _, _ in calls] == [
+        'Prelude Spell',
+        'Battle Figure',
+        'Tactic I',
+        'Tactic II',
+        'Tactic III',
+    ]
+    assert all(
+        isinstance(own, pygame.Surface) and isinstance(rival, pygame.Surface)
+        for _, own, rival in calls
+    )
+
+    own = pygame.Surface((28, 36), pygame.SRCALPHA)
+    own.fill((250, 10, 20, 255))
+    rival = pygame.Surface((28, 36), pygame.SRCALPHA)
+    rival.fill((10, 30, 250, 255))
+    card = real_matchup_card('Tactic I', own, rival, 116, 220)
+
+    def color_bounds(color):
+        points = [
+            (x, y)
+            for y in range(card.get_height())
+            for x in range(card.get_width())
+            if card.get_at((x, y))[:3] == color
+        ]
+        xs = [x for x, _ in points]
+        ys = [y for _, y in points]
+        return min(xs), min(ys), max(xs), max(ys)
+
+    own_bounds = color_bounds((250, 10, 20))
+    rival_bounds = color_bounds((10, 30, 250))
+    own_center_x = (own_bounds[0] + own_bounds[2]) / 2
+    rival_center_x = (rival_bounds[0] + rival_bounds[2]) / 2
+    assert abs(own_center_x - rival_center_x) <= 1
+    assert own_bounds[3] < rival_bounds[1]
+
+
+def test_run_kingdom_uses_original_start_art(monkeypatch):
+    from game.components import tutorial_diagrams as td
+
+    requested = []
+    marker = object()
+    monkeypatch.setattr(
+        td,
+        '_tutorial_banner',
+        lambda name: requested.append(name) or marker,
+    )
+
+    assert td.run_kingdom_start_image() is marker
+    assert requested == ['run_kingdom_start.png']
+
+
+def test_follow_up_lessons_begin_with_framed_generated_art():
+    _display()
+    from game import tutorial_content
+
+    for pages_fn in (
+            tutorial_content.collection_growth_pages,
+            tutorial_content.build_attack_intro_pages,
+            tutorial_content.kingdom_management_pages,
+            tutorial_content.defend_land_intro_pages):
+        first = pages_fn()[0]
+        image = first['image']()
+        assert first['layout'] == 'image_top'
+        assert first['image_frame'] is False
+        assert isinstance(image, pygame.Surface)
+        assert image.get_width() >= 600
+        assert pages_fn()[-1]['button_label'] == 'Begin Lesson'
+
+
+def test_collection_growth_explains_pack_pools_and_card_roles_then_recaps_capacity():
+    _display()
+    from game import tutorial_content
+    from game.components import tutorial_diagrams as td
+
+    pages = tutorial_content.collection_growth_pages()
+    role_page = pages[1]
+    pack_page = pages[2]
+    rarity_page = pages[3]
+    recap_page = tutorial_content.collection_growth_recap_pages()[0]
+
+    assert role_page['title'] == 'Key cards and number cards'
+    assert pack_page['title'] == 'Two packs, two jobs'
+    assert rarity_page['title'] == 'Card borders show rarity'
+    assert pack_page.get('button_label') is None
+    assert rarity_page['button_label'] == 'Begin Lesson'
+
+    pack_text = ' '.join(pack_page['lines'])
+    assert '7–Ace' in pack_text
+    assert '2–6' in pack_text
+    assert isinstance(pack_page['image'](), pygame.Surface)
+    assert pack_page['image']() is td.two_pack_jobs_diagram()
+
+    role_text = ' '.join(role_page['lines'])
+    assert 'Key cards have jewels' in role_text
+    assert 'fixed core of every figure' in role_text
+    assert 'Number cards are the variable part' in role_text
+    assert 'resource cost and production' in role_text
+    assert role_page['image']() is td.key_number_cards_diagram()
+
+    rarity_text = ' '.join(rarity_page['lines'])
+    assert 'border color' in rarity_text
+    assert 'chances of drawing a card from a booster pack' in rarity_text
+    assert 'value of the card in trade' in rarity_text
+    assert rarity_page['image']() is td.card_rarity_code_diagram()
+
+    recap_text = ' '.join(recap_page['lines'])
+    assert recap_page['title'] == 'Your cards build the kingdom'
+    assert 'defence figures' in recap_text
+    assert 'lock your active cards' in recap_text
+    assert 'More copies' in recap_text
+    assert 'expand your kingdom' in recap_text
+    assert recap_page['image_max_height_ratio'] == 0.30
+    assert recap_page['button_label'] == 'Complete Lesson'
+    assert 'image_caption' not in recap_page
+    assert recap_page['image']() is td.collection_capacity_diagram()
+
+
+def test_two_pack_jobs_uses_named_main_and_side_examples(monkeypatch):
+    _display()
+    from game.components import tutorial_diagrams as td
+
+    figure_names = []
+    spell_names = []
+    labels_by_panel = {}
+    marker = pygame.Surface((12, 12), pygame.SRCALPHA)
+
+    monkeypatch.setattr(
+        td,
+        'field_figure_icon',
+        lambda family, *args, **kwargs: (
+            figure_names.append(family) or marker),
+    )
+    monkeypatch.setattr(
+        td,
+        '_spell_chip',
+        lambda name, box: spell_names.append(name) or marker,
+    )
+
+    def fake_panel(**kwargs):
+        labels_by_panel[kwargs['title']] = [
+            label for _, label in kwargs['outcomes'](20)]
+        return pygame.Surface((80, 60), pygame.SRCALPHA)
+
+    monkeypatch.setattr(td, '_pack_job_panel', fake_panel)
+    td.clear_cache()
+    td.two_pack_jobs_diagram(target_h=60)
+
+    assert labels_by_panel['MAIN CARDS  ·  7–ACE'] == [
+        'King', 'Farm', 'Blitzkrieg']
+    assert labels_by_panel['SIDE CARDS  ·  2–6'] == [
+        'Archer', 'Wall', 'Poison']
+    assert figure_names == [
+        'Djungle King', 'Small Rice Farm', 'Himalya Archer', 'Wall']
+    assert spell_names == ['Blitzkrieg', 'Poison']
 
 
 def test_starter_roulette_keeps_four_suit_presentation_contract():

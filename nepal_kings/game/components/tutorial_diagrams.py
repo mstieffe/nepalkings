@@ -498,6 +498,7 @@ _SPELL_ICON_FILES = {
     'Draw 2 MainCards': 'draw_two_main.png',
     'Health Boost': 'health_portion.png',
     'All Seeing Eye': 'eye.png',
+    'Explosion': 'bomb.png',
 }
 
 
@@ -719,6 +720,90 @@ def card_recipe_examples(target_h=None):
          'ref': None, 'label': 'Block (tactic)'},
     ]
     return _recipe_diagram(('recipe_examples', int(target_h or 0)), entries, target_h)
+
+
+def _card_family_panel(title, subtitle, main_cards, side_cards, accent,
+                       panel_w, panel_h):
+    """Teach one card role with its main- and side-pack ranks."""
+    panel = pygame.Surface((panel_w, panel_h), pygame.SRCALPHA)
+    rect = panel.get_rect()
+    pygame.draw.rect(panel, (24, 21, 17, 232), rect, border_radius=12)
+    pygame.draw.rect(panel, accent, rect, 3, border_radius=12)
+
+    title_font = settings.get_font(
+        getattr(settings, 'FS_SMALL', 18), bold=True)
+    text_font = settings.get_font(getattr(settings, 'FS_TINY', 16))
+    title_surf = title_font.render(title, True, (255, 244, 210))
+    subtitle_surf = text_font.render(subtitle, True, (235, 222, 190))
+    top = max(7, int(panel_h * 0.045))
+    panel.blit(
+        title_surf, title_surf.get_rect(midtop=(panel_w // 2, top)))
+    panel.blit(
+        subtitle_surf,
+        subtitle_surf.get_rect(
+            midtop=(panel_w // 2, top + title_surf.get_height())),
+    )
+
+    label_w = int(panel_w * 0.16)
+    card_area_w = panel_w - label_w - int(panel_w * 0.08)
+    card_h = int(panel_h * 0.34)
+    rows = (
+        ('MAIN', main_cards, int(panel_h * 0.43)),
+        ('SIDE', side_cards, int(panel_h * 0.75)),
+    )
+    for label, cards, center_y in rows:
+        label_surf = text_font.render(label, True, accent)
+        panel.blit(
+            label_surf,
+            label_surf.get_rect(center=(int(panel_w * 0.10), center_y)),
+        )
+        fan = _card_fan(cards, card_h)
+        fan = _fit_surface_to_box(fan, card_area_w, int(panel_h * 0.35))
+        panel.blit(
+            fan,
+            fan.get_rect(center=(label_w + card_area_w // 2, center_y)),
+        )
+    return panel
+
+
+def key_number_cards_diagram(target_h=None):
+    """Separate key and number ranks for both main and side card pools."""
+    _SH = settings.SCREEN_HEIGHT
+    diagram_h = int(target_h or 0.22 * _SH)
+    key = ('key_number_cards', diagram_h)
+    if key in _CACHE:
+        return _CACHE[key]
+
+    panel_w = int(diagram_h * 1.65)
+    gap = max(14, int(0.02 * settings.SCREEN_WIDTH))
+    key_panel = _card_family_panel(
+        'KEY CARDS',
+        'choose the figure family',
+        [('K', 'Diamonds'), ('A', 'Spades'),
+         ('Q', 'Clubs'), ('J', 'Hearts')],
+        [('5', 'Diamonds'), ('4', 'Clubs'), ('2', 'Hearts')],
+        (224, 182, 82),
+        panel_w,
+        diagram_h,
+    )
+    number_panel = _card_family_panel(
+        'NUMBER CARDS',
+        'choose the figure variant',
+        [('10', 'Spades'), ('9', 'Diamonds'),
+         ('8', 'Clubs'), ('7', 'Hearts')],
+        [('6', 'Clubs'), ('3', 'Hearts')],
+        (130, 178, 224),
+        panel_w,
+        diagram_h,
+    )
+    surf = pygame.Surface(
+        (key_panel.get_width() + gap + number_panel.get_width(), diagram_h),
+        pygame.SRCALPHA,
+    )
+    surf.blit(key_panel, (0, 0))
+    surf.blit(number_panel, (key_panel.get_width() + gap, 0))
+    _CACHE[key] = surf
+    return surf
 
 
 def card_rarity_code_diagram(target_h=None):
@@ -1055,6 +1140,345 @@ def _hex_cluster(size, icon_file='gold.png',
     return surf
 
 
+def _pack_job_panel(*, title, accent, pack_file, fallback_pack_file,
+                    cards_spec, outcomes, panel_w, panel_h):
+    """One half of the two-pack lesson: pack, card pool, and recipe outputs."""
+    panel = pygame.Surface((panel_w, panel_h), pygame.SRCALPHA)
+    rect = panel.get_rect()
+    pygame.draw.rect(panel, (24, 21, 17, 232), rect, border_radius=12)
+    pygame.draw.rect(panel, accent, rect, 3, border_radius=12)
+
+    header_h = max(25, int(panel_h * 0.14))
+    header_rect = pygame.Rect(3, 3, panel_w - 6, header_h)
+    pygame.draw.rect(panel, (*accent, 42), header_rect,
+                     border_top_left_radius=9, border_top_right_radius=9)
+    font = settings.get_font(getattr(settings, 'FS_TINY', 16), bold=True)
+    header = font.render(title, True, (255, 244, 210))
+    panel.blit(header, header.get_rect(center=header_rect.center))
+
+    pack_src = _load(_asset('img', 'tutorial', pack_file))
+    if pack_src is None:
+        pack_src = _load(_asset('img', 'dialogue_box', 'icons',
+                                fallback_pack_file))
+    pack = _scaled(pack_src, int(panel_h * 0.55))
+    pack_x = max(8, int(panel_w * 0.035))
+    pack_y = header_h + max(7, int(panel_h * 0.035))
+    if pack:
+        panel.blit(pack, (pack_x, pack_y))
+
+    card_h = int(panel_h * 0.40)
+    pool = _card_fan(cards_spec, card_h)
+    pool_x = int(panel_w * 0.34)
+    pool_y = header_h + max(9, int(panel_h * 0.05))
+    max_pool_w = panel_w - pool_x - max(8, int(panel_w * 0.03))
+    pool = _fit_surface_to_box(pool, max_pool_w, int(panel_h * 0.48))
+    panel.blit(pool, (pool_x + (max_pool_w - pool.get_width()) // 2, pool_y))
+
+    outcome_box = int(panel_h * 0.24)
+    outcome_gap = max(5, int(panel_w * 0.014))
+    result_cells = []
+    for surface, label in outcomes(outcome_box):
+        result_cells.append(_label_below(surface, label, bold=True))
+    result_row = _row_surface(result_cells, gap=outcome_gap)
+    max_result_w = panel_w - pool_x - max(8, int(panel_w * 0.03))
+    result_row = _fit_surface_to_box(
+        result_row, max_result_w, int(panel_h * 0.37))
+    result_y = panel_h - result_row.get_height() - max(7, int(panel_h * 0.035))
+
+    # These outputs deliberately overlap the lower edge of the card pool:
+    # the visual reads as figures/spells/tactics emerging from those cards.
+    badge_rect = pygame.Rect(
+        pool_x - max(4, int(panel_w * 0.01)),
+        result_y - max(3, int(panel_h * 0.018)),
+        max_result_w + max(8, int(panel_w * 0.02)),
+        result_row.get_height() + max(6, int(panel_h * 0.036)),
+    )
+    pygame.draw.rect(panel, (15, 14, 12, 205), badge_rect, border_radius=9)
+    pygame.draw.rect(panel, (*accent, 155), badge_rect, 2, border_radius=9)
+    panel.blit(
+        result_row,
+        (pool_x + (max_result_w - result_row.get_width()) // 2, result_y),
+    )
+    return panel
+
+
+def two_pack_jobs_diagram(target_h=None):
+    """Main and side packs, their separate card pools, and example outputs."""
+    _SH = settings.SCREEN_HEIGHT
+    diagram_h = int(target_h or 0.25 * _SH)
+    key = ('two_pack_jobs', diagram_h)
+    if key in _CACHE:
+        return _CACHE[key]
+
+    panel_h = diagram_h
+    panel_w = int(panel_h * 1.78)
+    gap = max(14, int(0.018 * settings.SCREEN_WIDTH))
+
+    def main_outcomes(box):
+        return [
+            (field_figure_icon('Djungle King', 'castle_red.png',
+                               label='', target_h=box), 'King'),
+            (field_figure_icon('Small Rice Farm', 'rice_farm1.png',
+                               label='', target_h=box), 'Farm'),
+            (_spell_chip('Blitzkrieg', box), 'Blitzkrieg'),
+        ]
+
+    def side_outcomes(box):
+        return [
+            (field_figure_icon('Himalya Archer', 'archers_black.png',
+                               label='', target_h=box), 'Archer'),
+            (field_figure_icon('Wall', 'wall.png',
+                               label='', target_h=box), 'Wall'),
+            (_spell_chip('Poison', box), 'Poison'),
+        ]
+
+    main = _pack_job_panel(
+        title='MAIN CARDS  ·  7–ACE',
+        accent=(112, 184, 88),
+        pack_file='main_booster_hd.png',
+        fallback_pack_file='booster_pack.png',
+        cards_spec=[
+            ('7', 'Clubs'), ('9', 'Hearts'), ('J', 'Diamonds'),
+            ('Q', 'Spades'), ('K', 'Hearts'), ('A', 'Clubs'),
+        ],
+        outcomes=main_outcomes,
+        panel_w=panel_w,
+        panel_h=panel_h,
+    )
+    side = _pack_job_panel(
+        title='SIDE CARDS  ·  2–6',
+        accent=(204, 92, 86),
+        pack_file='side_booster_hd.png',
+        fallback_pack_file='booster_pack_side.png',
+        cards_spec=[
+            ('2', 'Hearts'), ('3', 'Clubs'), ('4', 'Diamonds'),
+            ('5', 'Spades'), ('6', 'Hearts'),
+        ],
+        outcomes=side_outcomes,
+        panel_w=panel_w,
+        panel_h=panel_h,
+    )
+
+    surf = pygame.Surface(
+        (main.get_width() + gap + side.get_width(), diagram_h),
+        pygame.SRCALPHA,
+    )
+    surf.blit(main, (0, 0))
+    surf.blit(side, (main.get_width() + gap, 0))
+    _CACHE[key] = surf
+    return surf
+
+
+def _figure_recipe_marker(family, fallback, cards_spec, marker_h):
+    """A figure icon with its recipe cards inset at the lower-left."""
+    figure = field_figure_icon(
+        family, fallback, label='', target_h=max(18, marker_h))
+    figure = _fit_surface_to_box(
+        figure, marker_h, marker_h)
+    marker = figure.copy()
+
+    card_h = max(10, int(figure.get_height() * 0.38))
+    cards = _card_fan(cards_spec, card_h)
+    cards = _fit_surface_to_box(
+        cards,
+        int(figure.get_width() * 0.58),
+        int(figure.get_height() * 0.46),
+    )
+    inset = max(2, int(figure.get_height() * 0.035))
+    card_rect = cards.get_rect(
+        bottomleft=(inset, figure.get_height() - inset))
+    shadow_rect = card_rect.inflate(
+        max(2, int(marker_h * 0.05)),
+        max(2, int(marker_h * 0.05)),
+    )
+    pygame.draw.rect(
+        marker, (12, 10, 8, 190), shadow_rect, border_radius=4)
+    marker.blit(cards, card_rect)
+    return marker
+
+
+def _land_figure_group(marker_specs, marker_h):
+    markers = [
+        _figure_recipe_marker(
+            spec['family'],
+            spec.get('fallback'),
+            spec['cards'],
+            marker_h,
+        )
+        for spec in marker_specs
+    ]
+    return _row_surface(markers, gap=max(1, int(marker_h * 0.01)))
+
+
+def _capacity_expansion_panel(title, accent, width, height):
+    panel = pygame.Surface((width, height), pygame.SRCALPHA)
+    pygame.draw.rect(panel, (24, 21, 17, 232), panel.get_rect(),
+                     border_radius=12)
+    pygame.draw.rect(panel, accent, panel.get_rect(), 3, border_radius=12)
+
+    title_font = settings.get_font(
+        getattr(settings, 'FS_TINY', 16), bold=True)
+    title_surf = title_font.render(title, True, (255, 244, 210))
+    panel.blit(title_surf, title_surf.get_rect(
+        midtop=(width // 2, max(6, int(height * 0.04)))))
+
+    # Three occupied lands form one compact, neighbouring kingdom. The
+    # highlighted empty land touches that kingdom and is the next expansion.
+    radius = int(height * 0.18)
+    hex_h = math.sqrt(3) * radius
+    origin_x = int(width * 0.45)
+    origin_y = int(height * 0.50)
+    cells = [
+        (0, 0),
+        (1, -1), (1, 0),
+        (2, -1), (2, 0),
+        (3, -2), (3, -1),
+    ]
+    centers = {
+        cell: (
+            origin_x + 1.5 * radius * cell[0],
+            origin_y + hex_h * (cell[1] + cell[0] / 2.0),
+        )
+        for cell in cells
+    }
+    occupied = {
+        (1, -1): [
+            {
+                'family': 'Djungle King',
+                'fallback': 'castle_red.png',
+                'cards': [('K', 'Hearts')],
+            },
+            {
+                'family': 'Small Rice Farm',
+                'fallback': 'rice_farm1.png',
+                'cards': [('J', 'Hearts'), ('10', 'Hearts')],
+            },
+        ],
+        (1, 0): [
+            {
+                'family': 'Gorkha Warriors',
+                'fallback': 'army1.png',
+                'cards': [('A', 'Diamonds'), ('9', 'Diamonds')],
+            },
+            {
+                'family': 'Djungle Temple',
+                'fallback': 'shrine_red.png',
+                'cards': [('Q', 'Diamonds'), ('Q', 'Diamonds')],
+            },
+        ],
+        (2, -1): [
+            {
+                'family': 'Himalaya King',
+                'fallback': 'castle_black.png',
+                'cards': [('K', 'Clubs')],
+            },
+            {
+                'family': 'Wooden Fortress',
+                'fallback': 'fortress1.png',
+                'cards': [('A', 'Clubs'), ('8', 'Clubs')],
+            },
+        ],
+    }
+    target = (0, 0)
+
+    # Paint the whole patch first so shared borders remain readable.
+    for cell in cells:
+        cx, cy = centers[cell]
+        if cell in occupied:
+            fill = (72, 111, 176)
+            rim = (238, 212, 130)
+        elif cell == target:
+            fill = (70, 120, 70)
+            rim = (255, 224, 120)
+            pygame.draw.polygon(
+                panel,
+                (255, 214, 110, 60),
+                _hex_points(cx, cy, int(radius * 1.12)),
+            )
+        else:
+            fill = (55, 82, 57)
+            rim = (130, 154, 116)
+        pygame.draw.polygon(panel, fill, _hex_points(cx, cy, radius))
+        pygame.draw.polygon(
+            panel, rim, _hex_points(cx, cy, radius),
+            max(2, int(radius * 0.07)))
+
+    marker_h = int(radius * 1.55)
+    group_offsets = {
+        (1, -1): (-int(radius * 0.20), -int(radius * 0.15)),
+        (1, 0): (-int(radius * 0.20), int(radius * 0.15)),
+        (2, -1): (int(radius * 0.20), 0),
+    }
+    for cell, marker_specs in occupied.items():
+        group = _land_figure_group(marker_specs, marker_h)
+        group = _fit_surface_to_box(
+            group, int(radius * 2.25), int(radius * 1.45))
+        cx, cy = centers[cell]
+        dx, dy = group_offsets[cell]
+        panel.blit(group, group.get_rect(center=(cx + dx, cy + dy)))
+
+    # A fourth set still outside the kingdom patch, ready for the highlighted
+    # empty land. The arrow starts at this card-and-figure group.
+    incoming_specs = [
+        {
+            'family': 'Small Yack Farm',
+            'fallback': 'yack_farm1.png',
+            'cards': [('J', 'Spades'), ('10', 'Spades')],
+        },
+        {
+            'family': 'Himalya Archer',
+            'fallback': 'archers_black.png',
+            'cards': [('4', 'Spades'), ('3', 'Spades')],
+        },
+    ]
+    incoming = _land_figure_group(
+        incoming_specs, int(radius * 1.90))
+    incoming = _fit_surface_to_box(
+        incoming, int(width * 0.30), int(height * 0.48))
+    incoming_center = (int(width * 0.14), int(height * 0.56))
+    panel.blit(incoming, incoming.get_rect(center=incoming_center))
+
+    target_cx, target_cy = centers[target]
+    start = (
+        incoming_center[0] + incoming.get_width() // 2 + 5,
+        incoming_center[1],
+    )
+    end = (target_cx - int(radius * 0.72), target_cy)
+    _draw_arrow(
+        panel, start, end, color=(255, 224, 120),
+        width=max(3, int(radius * 0.07)),
+        head=max(8, int(radius * 0.20)))
+
+    font = settings.get_font(max(10, int(height * 0.06)), bold=True)
+    ready = font.render('NEXT BUILD', True, (255, 232, 148))
+    panel.blit(
+        ready,
+        ready.get_rect(
+            center=(incoming_center[0], int(height * 0.91))),
+    )
+
+    return panel
+
+
+def collection_capacity_diagram(target_h=None):
+    """Occupied lands reserve figure cards; spare sets equip the next land."""
+    _SH = settings.SCREEN_HEIGHT
+    diagram_h = int(target_h or 0.28 * _SH)
+    key = ('collection_capacity', diagram_h)
+    if key in _CACHE:
+        return _CACHE[key]
+
+    surf = _capacity_expansion_panel(
+        'MORE COPIES  ·  MORE BUILDS',
+        (112, 184, 88),
+        int(diagram_h * 2.00),
+        diagram_h,
+    )
+
+    _CACHE[key] = surf
+    return surf
+
+
 def kingdom_journey_diagram(target_h=None):
     """Big-picture opener: collection -> figures -> a kingdom of lands -> crown.
 
@@ -1122,6 +1546,26 @@ def duel_start_image(target_h=None):
 def conquer_start_image(target_h=None):
     """Welcome intro: banner for the conquer tutorial start (own frame)."""
     return _tutorial_banner('conquer_start.png')
+
+
+def collection_growth_start_image(target_h=None):
+    """Collection lesson intro banner (own frame)."""
+    return _tutorial_banner('collection_growth_start.png')
+
+
+def build_attack_start_image(target_h=None):
+    """Build-an-attack lesson intro banner (own frame)."""
+    return _tutorial_banner('build_attack_start.png')
+
+
+def run_kingdom_start_image(target_h=None):
+    """Kingdom-management lesson intro banner (own frame)."""
+    return _tutorial_banner('run_kingdom_start.png')
+
+
+def defend_land_start_image(target_h=None):
+    """Defence lesson intro banner (own frame)."""
+    return _tutorial_banner('defend_land_start.png')
 
 
 def duel_shared_card_pool_image(target_h=None):
@@ -1225,15 +1669,97 @@ def _numbered_tactic_chip(icon_file, number, box, accent=(224, 182, 82)):
     return chip
 
 
-def _battle_figure_pair(box):
-    icon_h = int(box * 0.98)
-    you = field_figure_icon('Gorkha Warriors', 'army1.png', label='', target_h=icon_h)
-    foe = field_figure_icon('Small Yack Farm', 'yack_farm1.png', label='', target_h=icon_h)
-    you = _fit_surface_to_box(you, int(box * 0.72), icon_h)
-    foe = _fit_surface_to_box(foe, int(box * 0.72), icon_h)
-    font = settings.get_font(max(11, int(box * 0.20)), bold=True)
-    vs = font.render('vs', True, (235, 222, 190))
-    return _row_surface([you, vs, foe], gap=max(3, int(box * 0.04)))
+def _vertical_matchup_card(title, own_art, rival_art, card_w, card_h,
+                           accent=(224, 182, 82)):
+    """One battle phase with the two opposing objects stacked vertically."""
+    surf = pygame.Surface((card_w, card_h), pygame.SRCALPHA)
+    rect = surf.get_rect()
+    pygame.draw.rect(surf, (27, 22, 16, 238), rect, border_radius=8)
+    pygame.draw.rect(surf, accent, rect, 2, border_radius=8)
+
+    pad_x = max(5, int(card_w * 0.055))
+    pad_y = max(5, int(card_h * 0.028))
+    title_font = settings.get_font(
+        max(12, getattr(settings, 'FS_TINY', 16)), bold=True)
+    vs_font = settings.get_font(
+        max(11, int(getattr(settings, 'FS_TINY', 16) * 0.82)), bold=True)
+    title_surf = title_font.render(title, True, (255, 240, 202))
+    title_surf = _fit_surface_to_box(
+        title_surf, card_w - pad_x * 2, title_font.get_height())
+    surf.blit(
+        title_surf,
+        title_surf.get_rect(midtop=(card_w // 2, pad_y)),
+    )
+
+    vs_surf = vs_font.render('VS', True, (255, 226, 146))
+    content_top = pad_y + title_surf.get_height() + max(3, int(card_h * 0.025))
+    content_bottom = card_h - pad_y
+    pair_h = max(1, content_bottom - content_top)
+    vs_gap = max(2, int(card_h * 0.012))
+    object_h = max(
+        1,
+        (pair_h - vs_surf.get_height() - vs_gap * 2) // 2,
+    )
+    object_w = card_w - pad_x * 2
+
+    own_art = _fit_surface_to_box(own_art, object_w, object_h)
+    rival_art = _fit_surface_to_box(rival_art, object_w, object_h)
+    own_center_y = content_top + object_h // 2
+    vs_center_y = content_top + object_h + vs_gap + vs_surf.get_height() // 2
+    rival_center_y = content_top + object_h + vs_gap * 2 + \
+        vs_surf.get_height() + object_h // 2
+
+    if own_art is not None:
+        surf.blit(
+            own_art,
+            own_art.get_rect(center=(card_w // 2, own_center_y)),
+        )
+    surf.blit(
+        vs_surf,
+        vs_surf.get_rect(center=(card_w // 2, vs_center_y)),
+    )
+    if rival_art is not None:
+        surf.blit(
+            rival_art,
+            rival_art.get_rect(center=(card_w // 2, rival_center_y)),
+        )
+    return surf
+
+
+def _battle_total_card(card_w, card_h):
+    """The single result node fed by all five battle matchups."""
+    accent = (236, 194, 86)
+    surf = pygame.Surface((card_w, card_h), pygame.SRCALPHA)
+    rect = surf.get_rect()
+    pygame.draw.rect(surf, (31, 24, 14, 242), rect, border_radius=10)
+    pygame.draw.rect(surf, accent, rect, 3, border_radius=10)
+
+    title_font = settings.get_font(
+        max(13, getattr(settings, 'FS_TINY', 16)), bold=True)
+    title = title_font.render('Battle Total', True, (255, 240, 202))
+    title = _fit_surface_to_box(
+        title, card_w - max(10, int(card_w * 0.12)),
+        title_font.get_height())
+    title_y = max(8, int(card_h * 0.09))
+    surf.blit(title, title.get_rect(midtop=(card_w // 2, title_y)))
+
+    score_box = min(
+        card_w - max(14, int(card_w * 0.18)),
+        int(card_h * 0.45),
+    )
+    score = _score_chip('23', score_box, accent=accent)
+    score_y = title_y + title.get_height() + max(8, int(card_h * 0.07))
+    surf.blit(score, score.get_rect(midtop=(card_w // 2, score_y)))
+
+    caption_font = settings.get_font(
+        max(10, int(getattr(settings, 'FS_TINY', 16) * 0.76)))
+    caption = caption_font.render('final score', True, (214, 204, 174))
+    caption_y = min(
+        card_h - caption.get_height() - max(6, int(card_h * 0.04)),
+        score_y + score.get_height() + max(5, int(card_h * 0.04)),
+    )
+    surf.blit(caption, caption.get_rect(midtop=(card_w // 2, caption_y)))
+    return surf
 
 
 def _phase_card(title, subtitle, art, card_w, card_h, accent=(224, 182, 82)):
@@ -1398,69 +1924,89 @@ def shared_card_pool_diagram(target_h=None):
 
 
 def battle_flow_diagram(target_h=None):
-    """Battle intro: prelude, figure clash, then the three tactic rounds."""
+    """Five vertical player-vs-rival matchups feeding the battle total."""
     _SH = settings.SCREEN_HEIGHT
-    diagram_h = int(target_h or 0.19 * _SH)
+    diagram_h = int(target_h or 0.30 * _SH)
     key = ('battleflow', diagram_h)
     if key in _CACHE:
         return _CACHE[key]
-    card_w = max(104, int(diagram_h * 0.78))
+
+    card_w = max(108, int(diagram_h * 0.52))
     card_h = diagram_h
-    art_box = int(diagram_h * 0.45)
+    art_box = max(34, int(diagram_h * 0.40))
+    own_accent = (224, 182, 82)
+    rival_accent = (188, 104, 94)
     cells = [
-        _phase_card(
-            'Prelude',
-            'spells resolve first',
+        _vertical_matchup_card(
+            'Prelude Spell',
             _spell_chip('Health Boost', art_box),
+            _spell_chip('Poison', art_box),
             card_w,
             card_h,
             accent=(174, 126, 216),
         ),
-        _phase_card(
-            'Figures',
-            'attacker vs defender',
-            _battle_figure_pair(int(art_box * 1.22)),
+        _vertical_matchup_card(
+            'Battle Figure',
+            field_figure_icon(
+                'Gorkha Warriors', 'army1.png', label='',
+                target_h=art_box),
+            field_figure_icon(
+                'Small Yack Farm', 'yack_farm1.png', label='',
+                target_h=art_box),
             card_w,
             card_h,
-            accent=(224, 182, 82),
+            accent=own_accent,
         ),
-        _phase_card(
-            'Round 1',
-            'first tactic',
-            _numbered_tactic_chip('castle.png', 1, art_box),
+        _vertical_matchup_card(
+            'Tactic I',
+            _battle_move_chip('castle.png', art_box, accent=own_accent),
+            _battle_move_chip('dagger.png', art_box, accent=rival_accent),
             card_w,
             card_h,
-            accent=(224, 182, 82),
+            accent=own_accent,
         ),
-        _phase_card(
-            'Round 2',
-            'second tactic',
-            _numbered_tactic_chip('dagger.png', 2, art_box, accent=(210, 170, 120)),
+        _vertical_matchup_card(
+            'Tactic II',
+            _battle_move_chip('dagger.png', art_box, accent=own_accent),
+            _battle_move_chip('block.png', art_box, accent=rival_accent),
             card_w,
             card_h,
             accent=(210, 170, 120),
         ),
-        _phase_card(
-            'Round 3',
-            'final tactic',
-            _numbered_tactic_chip('block.png', 3, art_box, accent=(130, 178, 224)),
+        _vertical_matchup_card(
+            'Tactic III',
+            _battle_move_chip('block.png', art_box, accent=own_accent),
+            _battle_move_chip('castle.png', art_box, accent=rival_accent),
             card_w,
             card_h,
             accent=(130, 178, 224),
         ),
     ]
-    arrow_w = max(24, int(0.025 * settings.SCREEN_WIDTH))
+    cell_gap = max(6, int(0.006 * settings.SCREEN_WIDTH))
+    arrow_w = max(34, int(0.032 * settings.SCREEN_WIDTH))
+    result_w = max(96, int(card_w * 0.86))
+    result = _battle_total_card(result_w, card_h)
     cy = card_h // 2
-    total_w = sum(c.get_width() for c in cells) + arrow_w * (len(cells) - 1)
-    h = max(c.get_height() for c in cells)
+    phase_w = sum(c.get_width() for c in cells) + \
+        cell_gap * (len(cells) - 1)
+    total_w = phase_w + arrow_w + result.get_width()
+    h = max(card_h, result.get_height())
     surf = pygame.Surface((total_w, h), pygame.SRCALPHA)
     x = 0
     for i, c in enumerate(cells):
         surf.blit(c, (x, 0))
         x += c.get_width()
         if i < len(cells) - 1:
-            _draw_arrow(surf, (x + 3, cy), (x + arrow_w - 3, cy))
-            x += arrow_w
+            x += cell_gap
+    _draw_arrow(
+        surf,
+        (x + max(3, int(arrow_w * 0.12)), cy),
+        (x + arrow_w - max(5, int(arrow_w * 0.16)), cy),
+        width=max(3, int(card_h * 0.018)),
+        head=max(9, int(card_h * 0.055)),
+    )
+    x += arrow_w
+    surf.blit(result, (x, 0))
     _CACHE[key] = surf
     return surf
 

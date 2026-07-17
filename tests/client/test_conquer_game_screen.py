@@ -460,9 +460,7 @@ def test_conquer_battle_coach_hidden_when_tutorial_paused():
 
 
 def test_conquer_battle_coach_shows_tactics_after_timeline():
-    ConquerGameScreen, screen = _battle_coach_screen(
-        menu_seen={'conquer_battle_timeline_intro',
-                   'conquer_battle_figure_power'})
+    ConquerGameScreen, screen = _battle_coach_screen()
     screen.active_conquer_timeline_step = lambda: SimpleNamespace(kind='attacker')
     screen._tactics_rail._action_button_rects = {
         'play': pygame.Rect(24, 370, 72, 28),
@@ -496,12 +494,12 @@ def test_conquer_battle_coach_next_marks_seen_without_advancing_timeline():
     seen = []
     advanced = []
     screen._conquer_battle_coach_step = {
-        'id': 'conquer_battle_timeline_intro',
+        'id': 'conquer_battle_tactics',
         'rect': pygame.Rect(10, 10, 300, 80),
         'action': 'next',
     }
     screen._conquer_battle_coach_buttons = [
-        (pygame.Rect(600, 40, 80, 32), ('next', 'conquer_battle_timeline_intro')),
+        (pygame.Rect(600, 40, 80, 32), ('next', 'conquer_battle_tactics')),
     ]
     screen._mark_conquer_battle_coach_seen = seen.append
     screen._advance_active_timeline_step = lambda: advanced.append(True)
@@ -513,7 +511,7 @@ def test_conquer_battle_coach_next_marks_seen_without_advancing_timeline():
     handled = ConquerGameScreen._handle_conquer_battle_coach_events(screen, [up]) or handled
 
     assert handled is True
-    assert seen == ['conquer_battle_timeline_intro']
+    assert seen == ['conquer_battle_tactics']
     assert advanced == []
 
 
@@ -538,10 +536,7 @@ def test_conquer_battle_coach_click_step_marks_seen_and_passes_click_through():
 
 
 def test_conquer_battle_tactics_step_follows_timeline():
-    ConquerGameScreen, screen = _battle_coach_screen(menu_seen=[
-        'conquer_battle_timeline_intro',
-        'conquer_battle_figure_power',
-    ])
+    ConquerGameScreen, screen = _battle_coach_screen()
     screen.active_conquer_timeline_step = lambda: SimpleNamespace(kind='overview')
 
     step = ConquerGameScreen._current_conquer_battle_coach_step(screen)
@@ -561,10 +556,7 @@ def test_conquer_battle_coach_ends_after_tactics_pointer():
 
 
 def test_conquer_battle_tactics_step_independent_of_timeline_kind():
-    ConquerGameScreen, screen = _battle_coach_screen(menu_seen=[
-        'conquer_battle_timeline_intro',
-        'conquer_battle_figure_power',
-    ])
+    ConquerGameScreen, screen = _battle_coach_screen()
     screen.active_conquer_timeline_step = lambda: SimpleNamespace(kind='overview')
 
     step = ConquerGameScreen._current_conquer_battle_coach_step(screen)
@@ -643,13 +635,13 @@ def test_conquer_battle_coach_skip_button_pauses_tutorial():
     ConquerGameScreen, screen = _battle_coach_screen()
     paused = []
     screen._conquer_battle_coach_step = {
-        'id': 'conquer_battle_timeline_intro',
+        'id': 'conquer_battle_tactics',
         'rect': pygame.Rect(10, 10, 300, 80),
         'action': 'next',
     }
     skip_rect = pygame.Rect(600, 40, 120, 32)
     screen._conquer_battle_coach_buttons = [
-        (skip_rect, ('skip_tutorial', 'conquer_battle_timeline_intro')),
+        (skip_rect, ('skip_tutorial', 'conquer_battle_tactics')),
     ]
     screen._pause_onboarding_tutorial = lambda: paused.append(True)
 

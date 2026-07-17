@@ -12,6 +12,7 @@ from game.screens._menu_base import (
 )
 from game.components.floating_text import FloatingText, FloatingTextLayer
 from game.components.cards.card_img import CardImg
+from game.components.card_workshop_dialogue import CardWorkshopDialogue
 from game.components.dialogue_box import DialogueBox
 from config import settings
 from utils.utils import Button
@@ -32,7 +33,8 @@ _BOX_BOTTOM = int(0.92 * _SH)
 _BOX_H      = _BOX_BOTTOM - _BOX_Y
 
 # Sell price helpers (mirror server logic so we can preview locally)
-_KEY_RANKS = ['J', 'Q', 'K', 'A']
+_KEY_RANKS = frozenset(
+    settings.MAIN_KEY_CARD_RANKS + settings.SIDE_KEY_CARD_RANKS)
 _KEY_MULTIPLIER = 10
 def _sell_price(rank, quantity=1):
     # Maharaja cards are crafted, never sellable.
@@ -72,23 +74,36 @@ def _tier_label(rank, pack_type=None):
 def _collection_sort_key(rank, pack_type):
     """Sort key for the collection grid.
 
-    Order: tier desc → key cards before number cards → higher card value first.
+    Order: key cards before number cards, then higher card value first.
+    Rarity is communicated by the card treatment, not by moving ranks around.
     The crafted Maharaja always sorts leftmost.
     """
     if rank == settings.RANK_MAHARAJA:
-        return (-99, 0, 0)
-    tier = _card_tier(rank, pack_type)
-    is_number = 1 if rank in settings.NUMBER_CARDS else 0  # key (0) before number (1)
+        return (-1, 0)
+    key_ranks = (
+        settings.SIDE_KEY_CARD_RANKS
+        if pack_type == 'side'
+        else settings.MAIN_KEY_CARD_RANKS
+    )
+    role = 0 if rank in key_ranks else 1
     value = settings.RANK_TO_VALUE.get(rank, 0)
-    return (-tier, is_number, -value)
+    return (role, -value)
 
 
 def _ordered_main_ranks():
     """Main-card columns for the grid: the crafted Maharaja slot leads, then the
-    regular ranks sorted tier → key → value."""
+    regular ranks sorted role → value."""
     return [settings.RANK_MAHARAJA] + sorted(
         settings.RANKS_MAIN_CARDS,
         key=lambda r: _collection_sort_key(r, 'main'),
+    )
+
+
+def _ordered_side_ranks():
+    """Side-card columns sorted role → value."""
+    return sorted(
+        settings.RANKS_SIDE_CARDS,
+        key=lambda r: _collection_sort_key(r, 'side'),
     )
 
 
@@ -241,13 +256,10 @@ class CollectionScreen(MenuScreenMixin, Screen):
         )
 
         # ── Card ranks ──────────────────────────────────────────────
-        # Sort: tier desc → key cards before number cards → value desc.
+        # Sort: key cards before number cards → value desc.
         # The crafted Maharaja ('MK') slot leads the Main Cards section.
         self._main_ranks = _ordered_main_ranks()
-        self._side_ranks = sorted(
-            settings.RANKS_SIDE_CARDS,
-            key=lambda r: _collection_sort_key(r, 'side'),
-        )
+        self._side_ranks = _ordered_side_ranks()
 
         # ── Card data from server ───────────────────────────────────
         self._cards = {}       # {(suit,rank): quantity}
@@ -416,6 +428,9 @@ class CollectionScreen(MenuScreenMixin, Screen):
         self._recent_gains_started_at = None
         # First-visit Collection lesson, followed by the starter-suit roulette.
         self._collection_basics_dialogue = None
+        # First follow-up lesson after the First Journey reward.
+        self._collection_growth_dialogue = None
+        self._collection_growth_recap_dialogue = None
         # Starter cards are granted only when this roulette settles.
         self._starter_reveal_dialogue = None
         self._starter_reveal_prepare_attempted = False
@@ -458,6 +473,8 @@ class CollectionScreen(MenuScreenMixin, Screen):
         self._craft_dialogue = None
         self._craft_suit = None
         self._starter_reveal_prepare_attempted = False
+        self._collection_growth_dialogue = None
+        self._collection_growth_recap_dialogue = None
         self._fetch_collection()
 
     # ── data fetching ───────────────────────────────────────────────
@@ -615,19 +632,6 @@ class CollectionScreen(MenuScreenMixin, Screen):
             self._trade_dialogue.draw()
             self._draw_trade_overlay()
 
-        # Profile dialogue
-        if self._profile_dialogue:
-            self._profile_dialogue.draw()
-            # Tooltip for hovered figure/spell/move icon
-            _tt = self._profile_dialogue.get_tooltip(pygame.mouse.get_pos())
-            if _tt:
-                self._draw_profile_tooltip(_tt)
-            elif self._profile_pinned_tooltip:
-                self._draw_profile_tooltip(
-                    self._profile_pinned_tooltip,
-                    anchor=self._profile_pinned_tooltip_pos,
-                )
-
         # Craft dialogue (Maharaja)
         if self._craft_dialogue:
             self._craft_dialogue.draw()
@@ -646,11 +650,30 @@ class CollectionScreen(MenuScreenMixin, Screen):
 
         # Icon buttons + messages overlay
         self._draw_menu_overlay()
+
+        # The unified card workshop is a true modal and must sit above the
+        # persistent menu rail as well as the collection content.
+        if self._profile_dialogue:
+            self._profile_dialogue.draw()
+            _tt = self._profile_dialogue.get_tooltip(pygame.mouse.get_pos())
+            if _tt:
+                self._draw_profile_tooltip(_tt)
+            elif self._profile_pinned_tooltip:
+                self._draw_profile_tooltip(
+                    self._profile_pinned_tooltip,
+                    anchor=self._profile_pinned_tooltip_pos,
+                )
+
         self._draw_menu_coach(self._current_collection_coach_step())
         if getattr(self, '_collection_basics_dialogue', None):
             self._collection_basics_dialogue.draw()
+        if getattr(self, '_collection_growth_dialogue', None):
+            self._collection_growth_dialogue.draw()
+        if getattr(self, '_collection_growth_recap_dialogue', None):
+            self._collection_growth_recap_dialogue.draw()
         if getattr(self, '_starter_reveal_dialogue', None):
             self._starter_reveal_dialogue.draw()
+        self._draw_tutorial_complete_dialogue()
 
     def _draw_collection_stats(self):
         """Draw a compact, player-facing stock summary strip."""
@@ -1363,8 +1386,8 @@ class CollectionScreen(MenuScreenMixin, Screen):
 
     # ── card profile dialogue (default click) ──────────────────────
 
-    def _open_profile_dialogue(self, suit, rank):
-        """Show a profile dialogue with all uses of (suit, rank)."""
+    def _open_profile_dialogue(self, suit, rank, start_view='details'):
+        """Open the unified card workshop for *suit* / *rank*."""
         # Maharaja cards are crafted, never sold or traded — every click on an
         # MK cell routes to the dedicated craft dialogue instead.
         if rank == settings.RANK_MAHARAJA:
@@ -1381,15 +1404,13 @@ class CollectionScreen(MenuScreenMixin, Screen):
         tier_label = _tier_label(rank, section)
 
         # Card category shown beside the pack family in the profile overview.
-        # Side cards are further split into side-key (2,4,5) and side-number (3,6)
-        # based on which figure slot they typically fill.
-        _SIDE_KEY_RANKS = {'2', '4', '5'}
-        _SIDE_NUM_RANKS = {'3', '6'}
-        if rank in settings.NUMBER_CARDS:
+        # Both pack families use the same key/number vocabulary taught by the
+        # collection lesson.
+        if rank in settings.MAIN_NUMBER_CARD_RANKS:
             category_label = 'Number Card'
-        elif rank in _SIDE_KEY_RANKS:
+        elif rank in settings.SIDE_KEY_CARD_RANKS:
             category_label = 'Side Key Card'
-        elif rank in _SIDE_NUM_RANKS:
+        elif rank in settings.SIDE_NUMBER_CARD_RANKS:
             category_label = 'Side Number Card'
         else:
             category_label = 'Key Card'
@@ -1400,107 +1421,50 @@ class CollectionScreen(MenuScreenMixin, Screen):
             logger.warning(f'Card uses lookup failed: {e}')
             uses = {'figures': [], 'spells': [], 'battle_moves': []}
 
-        max_items = settings.COLLECTION_PROFILE_GROUP_MAX_ITEMS
-
-        def _group(title, entries, note='', icon=None):
-            """Build a raw image-group dict for the profile dialogue."""
-            # entries are (name, icon, description) triples
-            pairs = [(name, icon, desc)
-                     for name, icon, desc in entries[:max_items]
-                     if icon is not None]
-            icons = [icon for _n, icon, _d in pairs]
-            tooltips = [f'{name}\n{desc}' if desc else name
-                        for name, _icon, desc in pairs]
-            return {
-                'title': title,
-                'items': icons,
-                'item_tooltips': tooltips,
-                'item_unit': 'option',
-                'count': len(entries),
-                'show_when_empty': True,
-                'icon': icon,
-                'badge_icon': None,
-                'description': note or (
-                    ', '.join(name for name, _, _ in entries[:max_items])
-                    if entries else 'No uses'
-                ),
-            }
-
-        groups = [
-            _group('Figures', uses['figures'],
-                   note=', '.join(n for n, _, _ in uses['figures'][:max_items])
-                        if uses['figures'] else 'No figure recipes',
-                   icon='figure'),
-            _group('Spells', uses['spells'], icon='magic'),
-            _group('Tactics', uses['battle_moves'], icon='dices'),
-        ]
-
-        card_img = self._card_imgs.get((suit, rank))
-        if qty > 0:
-            msg = (f'{tier_label} {section.title()} Card  ·  {category_label}\n'
-                   f'{qty} owned  ·  {free} free  ·  {locked} in use  ·  '
-                   f'{unit_price}g each')
-        else:
-            msg = (f'{tier_label} {section.title()} Card  ·  {category_label}\n'
-                   'Not currently owned')
+        card_surfaces = {
+            target_suit: self._card_imgs[(target_suit, rank)].front_img_source
+            for target_suit in settings.SUITS
+            if (target_suit, rank) in self._card_imgs
+        }
+        stock_by_suit = {
+            target_suit: (
+                self._cards.get((target_suit, rank), 0),
+                self._locked.get((target_suit, rank), 0),
+            )
+            for target_suit in settings.SUITS
+        }
+        tier = _card_tier(rank, section)
+        tier_color = settings.COLLECTION_TIER_BORDER_COLORS.get(
+            tier, settings.COLLECTION_STATS_VALUE_CLR)
         self._profile_card = (suit, rank)
         self._profile_pinned_tooltip = None
         self._profile_pinned_tooltip_pos = None
-        self._profile_dialogue = DialogueBox(
-            self.window, msg, actions=['Sell copies', 'Convert', 'Close'],
-            images=[card_img.front_img] if card_img else [],
-            image_groups=groups,
-            title=f'{suit} {rank}',
+        self._profile_dialogue = CardWorkshopDialogue(
+            self.window,
+            suit=suit,
+            rank=rank,
+            card_surfaces=card_surfaces,
+            uses=uses,
+            qty=qty,
+            locked=locked,
+            unit_price=unit_price,
+            tier_label=tier_label,
+            pack_label=section.title(),
+            category_label=category_label,
+            stock_by_suit=stock_by_suit,
+            same_color_ratio=settings.COLLECTION_CONVERT_RATIO_SAME_COLOR,
+            different_color_ratio=settings.COLLECTION_CONVERT_RATIO_DIFF_COLOR,
+            red_suits=settings.COLLECTION_RED_SUITS,
+            black_suits=settings.COLLECTION_BLACK_SUITS,
+            start_view=start_view,
+            tier_color=tier_color,
         )
-        for button in self._profile_dialogue.buttons:
-            action = button.text.lower()
-            if action == 'sell copies':
-                button.disabled = free <= 0
-            elif action == 'convert':
-                button.disabled = free < settings.COLLECTION_CONVERT_RATIO_SAME_COLOR
 
     # ── trade dialogue ──────────────────────────────────────────────
 
     def _open_trade_dialogue(self, suit, rank):
-        """Open the convert/trade dialogue for a card."""
-        qty = self._cards.get((suit, rank), 0)
-        locked = self._locked.get((suit, rank), 0)
-        free = max(0, qty - locked)
-        if free < settings.COLLECTION_CONVERT_RATIO_SAME_COLOR:
-            self._trade_card = None
-            self._trade_target_suit = None
-            self._trade_dialogue = DialogueBox(
-                self.window,
-                (f'You need at least '
-                 f'{settings.COLLECTION_CONVERT_RATIO_SAME_COLOR} free copies '
-                 f'of {suit} {rank} to convert.\n'
-                 f'Owned: {qty}  ·  Free: {free}  ·  Locked: {locked}'),
-                actions=['ok'], title='Cannot trade',
-            )
-            return
-        # Default target: first other suit (preferring same-colour for cheapest ratio)
-        same_colour = self._other_suits_same_colour(suit)
-        diff_colour = self._other_suits_diff_colour(suit)
-        default_target = same_colour[0] if same_colour else diff_colour[0]
-
-        self._trade_card = (suit, rank)
-        self._trade_target_suit = default_target
-        self._trade_qty = 1
-        self._trade_max = self._compute_trade_max(suit, rank, default_target)
-        self._trade_qty_rects = {}
-        self._trade_target_rects = {}
-
-        card_img = self._card_imgs.get((suit, rank))
-        msg = (f'Convert {suit} {rank}\n'
-               f'Owned: {qty}  ·  Free: {free}  ·  Locked: {locked}\n'
-               f'Same colour: {settings.COLLECTION_CONVERT_RATIO_SAME_COLOR}:1  ·  '
-               f'Different colour: {settings.COLLECTION_CONVERT_RATIO_DIFF_COLOR}:1')
-        after_msg = self._trade_after_text()
-        self._trade_dialogue = DialogueBox(
-            self.window, msg, actions=['trade', 'cancel'],
-            images=[card_img] if card_img else [],
-            title='Trade Card',
-            message_after_images=after_msg)
+        """Open the workshop directly on its suit-conversion view."""
+        self._open_profile_dialogue(suit, rank, start_view='convert')
 
     def _other_suits_same_colour(self, suit):
         if suit in settings.COLLECTION_RED_SUITS:
@@ -1753,6 +1717,8 @@ class CollectionScreen(MenuScreenMixin, Screen):
             old_tgt = self._cards.get((target, rank), 0)
             self._cards[(suit, rank)] = max(0, old_src - consumed)
             self._cards[(target, rank)] = old_tgt + produced
+            if result.get('onboarding') is not None:
+                self._apply_onboarding_payload(result)
             from utils import sound
             sound.play('coin')
             self.state.set_msg(
@@ -1765,6 +1731,9 @@ class CollectionScreen(MenuScreenMixin, Screen):
         self._trade_dialogue = None
         self._trade_qty_rects = {}
         self._trade_target_rects = {}
+        self._profile_dialogue = None
+        self._profile_card = None
+        self._profile_pinned_tooltip = None
 
     # ── maharaja craft dialogue ─────────────────────────────────────
 
@@ -2022,36 +1991,8 @@ class CollectionScreen(MenuScreenMixin, Screen):
     # ── sell dialogue ───────────────────────────────────────────────
 
     def _open_sell_dialogue(self, suit, rank):
-        """Open the sell dialogue for a card."""
-        qty = self._cards.get((suit, rank), 0)
-        locked = self._locked.get((suit, rank), 0)
-        free = max(0, qty - locked)
-        if free <= 0:
-            # All copies are locked — surface a clear reason instead of
-            # silently doing nothing.
-            self._sell_card = None
-            self._sell_qty_rects = {}
-            self._sell_dialogue = DialogueBox(
-                self.window,
-                f'All {qty} {suit} {rank} card(s) are currently locked '
-                f'in a conquer/defence configuration.',
-                actions=['ok'], title='Cannot sell',
-            )
-            return
-        self._sell_card = (suit, rank)
-        self._sell_qty = 1
-        self._sell_max = free
-        self._sell_qty_rects = {}
-        unit_price = _sell_price(rank, 1)
-        card_img = self._card_imgs.get((suit, rank))
-        images = [card_img] if card_img else []
-        msg = (f'Sell {suit} {rank}?\n'
-               f'Owned: {qty}  ·  Free: {free}  ·  Locked: {locked}')
-        after_msg = self._sell_after_text(unit_price, qty, free, locked)
-        self._sell_dialogue = DialogueBox(
-            self.window, msg, actions=['sell', 'cancel'],
-            images=images, title='Sell Card',
-            message_after_images=after_msg)
+        """Open the workshop directly on its sell-copies view."""
+        self._open_profile_dialogue(suit, rank, start_view='sell')
 
     def _update_sell_after_text(self):
         """Rebuild the after-images text when quantity changes."""
@@ -2161,6 +2102,8 @@ class CollectionScreen(MenuScreenMixin, Screen):
             self._cards[(suit, rank)] = max(0, old_qty - self._sell_qty)
             if self.state.user_dict:
                 self.state.user_dict['gold'] = self._gold
+            if result.get('onboarding') is not None:
+                self._apply_onboarding_payload(result)
             from utils import sound
             sound.play('coin')
             self.state.set_msg(f'Sold {self._sell_qty} {suit} {rank} for {earned} gold')
@@ -2170,6 +2113,9 @@ class CollectionScreen(MenuScreenMixin, Screen):
         self._sell_card = None
         self._sell_dialogue = None
         self._sell_qty_rects = {}
+        self._profile_dialogue = None
+        self._profile_card = None
+        self._profile_pinned_tooltip = None
 
     # ── booster flows ───────────────────────────────────────────────
 
@@ -2314,6 +2260,87 @@ class CollectionScreen(MenuScreenMixin, Screen):
             wait_for_grant=True,
         )
 
+    def _maybe_show_collection_growth_intro(self):
+        """Open the optional post-reward Collection lesson on demand."""
+        if getattr(self, '_collection_growth_dialogue', None):
+            return
+        if self._active_onboarding_lesson_id() != 'grow_collection':
+            return
+        if not getattr(self, '_data_loaded', False):
+            return
+        if 'collection_growth_intro' in self._menu_coach_seen():
+            return
+        if (self._collection_basics_dialogue or self._starter_reveal_dialogue
+                or self._reveal_overlay or self._booster_poller
+                or self._sell_dialogue or self._trade_dialogue
+                or self._profile_dialogue or self.dialogue_box):
+            return
+        from game.components.tutorial_window import TutorialWindowDialogue
+        from game.tutorial_content import collection_growth_pages
+        self._collection_growth_dialogue = TutorialWindowDialogue(
+            self.window,
+            collection_growth_pages(),
+            title='Grow Your Collection',
+        )
+
+    def _handle_collection_growth_events(self, events):
+        win = getattr(self, '_collection_growth_dialogue', None)
+        if win is None:
+            return False
+        from pygame import QUIT
+        if any(getattr(event, 'type', None) == QUIT for event in events):
+            return False
+        if win.update(events) == 'done':
+            self._collection_growth_dialogue = None
+            self._mark_menu_coach_seen('collection_growth_intro')
+        return True
+
+    def _maybe_show_collection_growth_recap(self):
+        """Recap collection capacity after the player sells and converts."""
+        if getattr(self, '_collection_growth_recap_dialogue', None):
+            return
+        if self._active_onboarding_lesson_id() != 'grow_collection':
+            return
+        if not getattr(self, '_data_loaded', False):
+            return
+        seen = self._menu_coach_seen()
+        if ('collection_growth_intro' not in seen
+                or 'collection_growth_recap' in seen):
+            return
+        completed = self._onboarding_completed_steps()
+        if not {
+                'open_first_main_booster',
+                'open_first_side_booster',
+                'sell_first_card',
+                'trade_first_card',
+        }.issubset(completed):
+            return
+        if (self._collection_basics_dialogue or self._starter_reveal_dialogue
+                or self._collection_growth_dialogue
+                or self._reveal_overlay or self._booster_poller
+                or self._sell_dialogue or self._trade_dialogue
+                or self._profile_dialogue or self.dialogue_box):
+            return
+        from game.components.tutorial_window import TutorialWindowDialogue
+        from game.tutorial_content import collection_growth_recap_pages
+        self._collection_growth_recap_dialogue = TutorialWindowDialogue(
+            self.window,
+            collection_growth_recap_pages(),
+            title='Grow Your Collection',
+        )
+
+    def _handle_collection_growth_recap_events(self, events):
+        win = getattr(self, '_collection_growth_recap_dialogue', None)
+        if win is None:
+            return False
+        from pygame import QUIT
+        if any(getattr(event, 'type', None) == QUIT for event in events):
+            return False
+        if win.update(events) == 'done':
+            self._collection_growth_recap_dialogue = None
+            self._mark_menu_coach_seen('collection_growth_recap')
+        return True
+
     def _complete_starter_reveal(self):
         """Persist and display the cards at the moment the roulette settles."""
         try:
@@ -2356,10 +2383,75 @@ class CollectionScreen(MenuScreenMixin, Screen):
             return None
         if getattr(self, '_collection_basics_dialogue', None):
             return None
+        if getattr(self, '_collection_growth_dialogue', None):
+            return None
+        if getattr(self, '_collection_growth_recap_dialogue', None):
+            return None
         if (self._booster_poller or self._reveal_overlay or self._sell_dialogue
                 or self._trade_dialogue or self._profile_dialogue):
             return None
-        # The roulette button routes directly to Kingdom, so no coach card is
+        if self._active_onboarding_lesson_id() == 'grow_collection':
+            completed = self._onboarding_completed_steps()
+            seen = self._menu_coach_seen()
+            if ('collection_growth_intro' in seen
+                    and 'open_first_main_booster' not in completed):
+                return {
+                    'id': 'collection_growth_main',
+                    'rect': self._btn_open_main_rect,
+                    'title': 'Open A Main Booster',
+                    'body': 'Main cards provide the core recipes and extra copies your figures, spells, and tactics need.',
+                    'action': 'click',
+                    'mark_on_click': False,
+                    'max_lines': 4,
+                }
+            if ('open_first_main_booster' in completed
+                    and 'open_first_side_booster' not in completed):
+                return {
+                    'id': 'collection_growth_side',
+                    'rect': self._btn_open_side_rect,
+                    'title': 'Open A Side Booster',
+                    'body': 'Side cards unlock advanced recipes and special effects. Open one, then we will put spare copies to work.',
+                    'action': 'click',
+                    'mark_on_click': False,
+                    'max_lines': 4,
+                }
+            if {
+                    'open_first_main_booster',
+                    'open_first_side_booster',
+            }.issubset(completed):
+                selling = 'sell_first_card' not in completed
+                trading = (
+                    not selling and 'trade_first_card' not in completed)
+                if selling or trading:
+                    needed = 1 if selling else 2
+                    eligible_rects = [
+                        card_rect for card_rect, suit, rank, _section
+                        in self._card_rects
+                        if rank != settings.RANK_MAHARAJA and (
+                            int(self._cards.get((suit, rank), 0) or 0)
+                            - int(self._locked.get((suit, rank), 0) or 0)
+                        ) >= needed
+                    ]
+                    target_rects = eligible_rects or [self._panel_rect]
+                    return {
+                        'id': (
+                            'collection_sell_spare'
+                            if selling else 'collection_trade_spare'),
+                        'rects': target_rects,
+                        'click_through_rects': target_rects,
+                        'title': (
+                            'Choose A Card To Sell'
+                            if selling else 'Choose A Card To Convert'),
+                        'body': (
+                            'Choose any highlighted card with a free copy, then select Sell Copies in its details.'
+                            if selling else
+                            'Choose any highlighted card with enough free copies, select Convert, then choose its new suit.'
+                        ),
+                        'action': 'click',
+                        'mark_on_click': False,
+                        'max_lines': 4,
+                    }
+        # The starter roulette routes directly to Kingdom, so no coach card is
         # attached to the unrelated global Home icon.
         return None
 
@@ -2522,6 +2614,8 @@ class CollectionScreen(MenuScreenMixin, Screen):
         self._update_icon_buttons()
         self._maybe_show_collection_basics()
         self._maybe_show_starter_reveal()
+        self._maybe_show_collection_growth_intro()
+        self._maybe_show_collection_growth_recap()
 
         # Re-fetch if data never loaded (e.g. screen was created before login)
         if not self._data_loaded and not self._poller and not self._load_error:
@@ -2571,8 +2665,11 @@ class CollectionScreen(MenuScreenMixin, Screen):
         if self._craft_dialogue:
             for btn in self._craft_dialogue.buttons:
                 btn.update()
+        self._maybe_show_tutorial_completion()
 
     def handle_events(self, events):
+        if self._handle_tutorial_completion_events(events):
+            return
         super().handle_events(events)
 
         # Handle open/buy dialogue response
@@ -2626,6 +2723,12 @@ class CollectionScreen(MenuScreenMixin, Screen):
         # The starter-suit reveal owns its own timed reel animation; updating
         # it here lets the roulette settle and captures the final acknowledgement.
         if self._handle_starter_reveal_events(events):
+            return
+
+        if self._handle_collection_growth_events(events):
+            return
+
+        if self._handle_collection_growth_recap_events(events):
             return
 
         coach_step = self._current_collection_coach_step()
@@ -2737,17 +2840,29 @@ class CollectionScreen(MenuScreenMixin, Screen):
                     self._profile_pinned_tooltip = None
                     response = self._profile_dialogue.update([event])
                     profile_card = self._profile_card
-                    if response == 'sell copies' and profile_card:
-                        self._profile_dialogue = None
-                        self._profile_card = None
-                        self._open_sell_dialogue(*profile_card)
+                    if response == 'sell' and profile_card:
+                        workshop = self._profile_dialogue
+                        self._sell_card = profile_card
+                        self._sell_qty = workshop.sell_qty
+                        self._sell_max = workshop.free
+                        self._perform_sell()
                     elif response == 'convert' and profile_card:
-                        self._profile_dialogue = None
-                        self._profile_card = None
-                        self._open_trade_dialogue(*profile_card)
+                        workshop = self._profile_dialogue
+                        self._trade_card = profile_card
+                        self._trade_target_suit = workshop.target_suit
+                        self._trade_qty = workshop.convert_qty
+                        self._trade_max = workshop.convert_max
+                        self._perform_trade()
                     elif response in ('close', 'ok', 'cancel'):
                         self._profile_dialogue = None
                         self._profile_card = None
+                        self._profile_pinned_tooltip = None
+                elif event.type == KEYDOWN:
+                    response = self._profile_dialogue.update([event])
+                    if response == 'close':
+                        self._profile_dialogue = None
+                        self._profile_card = None
+                        self._profile_pinned_tooltip = None
                 continue
 
             if self._handle_icon_events(event):

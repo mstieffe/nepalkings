@@ -183,7 +183,11 @@ def sell_card():
     for card in free_cards:
         db.session.delete(card)
     user.gold += gold_earned
-    from onboarding_service import mark_step, record_gold_earned
+    from onboarding_service import (
+        mark_step,
+        record_gold_earned,
+        serialize_onboarding_state,
+    )
     mark_step(user, 'sell_first_card')
     record_gold_earned(user, gold_earned)
     db.session.commit()
@@ -192,6 +196,7 @@ def sell_card():
         'success': True,
         'gold_earned': gold_earned,
         'gold': user.gold,
+        'onboarding': serialize_onboarding_state(user),
     })
 
 
@@ -286,7 +291,8 @@ def open_booster():
                         config.BOOSTER_TIER_RANKS)
 
     _add_drawn_cards(user, drawn)
-    from onboarding_service import serialize_onboarding_state
+    from onboarding_service import mark_step, serialize_onboarding_state
+    mark_step(user, 'open_first_main_booster')
     track('booster_opened', user_id=user.id, kind='main',
           quantity=quantity if quantity > 1 else None)
     db.session.commit()
@@ -329,7 +335,7 @@ def open_booster_side():
                         config.BOOSTER_SIDE_TIER_RANKS)
 
     _add_drawn_cards(user, drawn)
-    from onboarding_service import mark_step
+    from onboarding_service import mark_step, serialize_onboarding_state
     mark_step(user, 'open_first_side_booster')
     track('booster_opened', user_id=user.id, kind='side',
           quantity=quantity if quantity > 1 else None)
@@ -340,6 +346,7 @@ def open_booster_side():
         'cards': drawn,
         'opened_boosters': quantity,
         'booster_packs_side': user.booster_packs_side,
+        'onboarding': serialize_onboarding_state(user),
     })
 
 
@@ -399,7 +406,7 @@ def convert_card():
     for _ in range(quantity):
         db.session.add(CollectionCard(
             user_id=user.id, suit=target_suit, rank=rank, value=value))
-    from onboarding_service import mark_step
+    from onboarding_service import mark_step, serialize_onboarding_state
     mark_step(user, 'trade_first_card')
     db.session.commit()
 
@@ -409,6 +416,7 @@ def convert_card():
         'produced': quantity,
         'ratio': ratio,
         'gold': user.gold,
+        'onboarding': serialize_onboarding_state(user),
     })
 
 

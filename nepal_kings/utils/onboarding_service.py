@@ -75,6 +75,46 @@ def complete_step(step_id):
     return response.json()
 
 
+def start_lesson(lesson_id):
+    response = requests.post(
+        f'{settings.SERVER_URL}/onboarding/lesson/start',
+        json={'lesson_id': lesson_id},
+        timeout=6,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def dismiss_lesson(lesson_id):
+    response = requests.post(
+        f'{settings.SERVER_URL}/onboarding/lesson/dismiss',
+        json={'lesson_id': lesson_id},
+        timeout=6,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def skip_lesson_step(lesson_id, step_id):
+    response = requests.post(
+        f'{settings.SERVER_URL}/onboarding/lesson/skip_step',
+        json={'lesson_id': lesson_id, 'step_id': step_id},
+        timeout=6,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def acknowledge_replay_completion(lesson_id):
+    response = requests.post(
+        f'{settings.SERVER_URL}/onboarding/lesson/replay/acknowledge',
+        json={'lesson_id': lesson_id},
+        timeout=6,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
 def skip_onboarding():
     response = requests.post(f'{settings.SERVER_URL}/onboarding/skip', timeout=6)
     response.raise_for_status()

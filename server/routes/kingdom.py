@@ -258,13 +258,22 @@ def collect_kingdom_production_route(kingdom_id):
     except Exception:
         logger.exception("Failed to update production onboarding progress")
     db.session.commit()
+    try:
+        from onboarding_service import serialize_onboarding_state
+        onboarding_payload = serialize_onboarding_state(user)
+    except Exception:
+        logger.exception("Failed to serialize production onboarding progress")
+        onboarding_payload = None
 
-    return jsonify({
+    payload = {
         'success': True,
         'kingdom_id': kingdom_row.id,
         **result,
         'kingdom': summarize_user_kingdom(user.id, None),
-    })
+    }
+    if onboarding_payload is not None:
+        payload['onboarding'] = onboarding_payload
+    return jsonify(payload)
 
 
 @kingdom.route('/collect_gold_all', methods=['POST'])
@@ -328,8 +337,14 @@ def collect_production_all_route():
     except Exception:
         logger.exception("Failed to update production-all onboarding progress")
     db.session.commit()
+    try:
+        from onboarding_service import serialize_onboarding_state
+        onboarding_payload = serialize_onboarding_state(user)
+    except Exception:
+        logger.exception("Failed to serialize production-all onboarding progress")
+        onboarding_payload = None
 
-    return jsonify({
+    payload = {
         'success': True,
         'collected_total': total_gold,
         'collected_gold_total': total_gold,
@@ -346,7 +361,10 @@ def collect_production_all_route():
         'kingdoms': breakdown,
         'regions': region_breakdown,
         'kingdom': summarize_user_kingdom(user.id, None),
-    })
+    }
+    if onboarding_payload is not None:
+        payload['onboarding'] = onboarding_payload
+    return jsonify(payload)
 
 
 # ── GET /kingdom/rankings ──────────────────────────────────────────────────
@@ -747,13 +765,22 @@ def kingdom_config_cosmetic_purchase(kingdom_id):
         setattr(kingdom_row, style_field, cosmetic_key)
     kingdom_row.updated_at = _utcnow()
     db.session.commit()
+    try:
+        from onboarding_service import serialize_onboarding_state
+        onboarding_payload = serialize_onboarding_state(user)
+    except Exception:
+        logger.exception("Failed to serialize cosmetic onboarding progress")
+        onboarding_payload = None
 
-    return jsonify({
+    payload = {
         'success': True,
         'cosmetic_key': cosmetic_key,
         'kingdom': serialize_kingdom_config(kingdom_row),
         'gold': user.gold,
-    })
+    }
+    if onboarding_payload is not None:
+        payload['onboarding'] = onboarding_payload
+    return jsonify(payload)
 
 
 @kingdom.route('/config/<int:kingdom_id>/cosmetics/equip', methods=['POST'])

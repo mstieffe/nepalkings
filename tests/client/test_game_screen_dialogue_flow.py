@@ -213,6 +213,7 @@ class TestGameScreenDialogueFlow:
             game=game,
             subscreen='battle_shop',
             user_dict={'onboarding': {
+                'active_lesson': 'duel_basics',
                 'duel_hints_seen': [
                     'field', 'build', 'cast_spell', 'change_cards',
                     'game_status', 'resource_panel',
@@ -268,6 +269,7 @@ class TestGameScreenDialogueFlow:
             game=game,
             subscreen='field',
             user_dict={'onboarding': {
+                'active_lesson': 'duel_basics',
                 'duel_hints_seen': ['field', 'build'],
                 'completed_steps': [],
             }},
@@ -340,6 +342,7 @@ class TestGameScreenDialogueFlow:
             game=game,
             subscreen='battle',
             user_dict={'onboarding': {
+                'active_lesson': 'duel_basics',
                 'duel_hints_seen': list(seen_before_battle),
                 'completed_steps': [],
             }},
@@ -402,23 +405,86 @@ class TestGameScreenDialogueFlow:
         assert marked == ['battle_move_panel']
         assert opened == [None]
 
-    def test_duel_skip_is_local_and_does_not_pause_global_guidance(self):
+    def test_duel_step_skip_is_local_and_does_not_pause_global_guidance(self):
         import pygame
 
         GameScreen = _game_screen_class()
         screen = GameScreen.__new__(GameScreen)
         skipped = []
-        screen._duel_coach_step = {'id': 'field'}
+        screen._duel_coach_step = {'id': 'build'}
         screen._duel_coach_buttons = [
-            (pygame.Rect(10, 10, 150, 32), ('skip_tutorial', 'field'))]
-        screen._skip_duel_coach = lambda: skipped.append('duel')
+            (pygame.Rect(10, 10, 150, 32), ('skip_step', 'build'))]
+        screen._skip_duel_coach_step = (
+            lambda step_id: skipped.append(step_id))
         screen._pause_onboarding_tutorial = lambda: skipped.append('global')
 
         down = pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=(20, 20))
         up = pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=(20, 20))
         assert GameScreen._handle_duel_coach_events(screen, [down]) is True
         assert GameScreen._handle_duel_coach_events(screen, [up]) is True
-        assert skipped == ['duel']
+        assert skipped == ['build']
+
+    def test_duel_pause_remains_available_beside_step_skip(self):
+        import pygame
+
+        GameScreen = _game_screen_class()
+        screen = GameScreen.__new__(GameScreen)
+        actions = []
+        screen._duel_coach_step = {'id': 'build'}
+        screen._duel_coach_buttons = [
+            (pygame.Rect(10, 10, 150, 32), ('skip_tutorial', 'build'))]
+        screen._pause_onboarding_tutorial = (
+            lambda: actions.append('pause'))
+
+        down = pygame.event.Event(
+            pygame.MOUSEBUTTONDOWN, button=1, pos=(20, 20))
+        up = pygame.event.Event(
+            pygame.MOUSEBUTTONUP, button=1, pos=(20, 20))
+
+        assert GameScreen._handle_duel_coach_events(
+            screen, [down]) is True
+        assert GameScreen._handle_duel_coach_events(screen, [up]) is True
+        assert actions == ['pause']
+
+    def test_skipping_duel_step_keeps_lesson_active_and_advances_tip_progress(
+            self, monkeypatch):
+        from game.screens import game_screen as module
+
+        GameScreen = _game_screen_class()
+        screen = GameScreen.__new__(GameScreen)
+        messages = []
+        screen.state = SimpleNamespace(
+            user_dict={'onboarding': {
+                'active_lesson': 'duel_basics',
+                'duel_hints_seen': ['field'],
+            }},
+            set_msg=messages.append,
+        )
+        screen._duel_coach_step = {
+            'id': 'build',
+        }
+        screen._duel_coach_pressed_button_action = None
+        monkeypatch.setattr(
+            module.onboarding_service,
+            'skip_lesson_step',
+            lambda lesson_id, step_id: {
+                'onboarding': {
+                    'active_lesson': lesson_id,
+                    'lessons_dismissed': [],
+                    'duel_hints_seen': ['field', 'build'],
+                    'lesson_skipped_steps': ['build'],
+                },
+            },
+        )
+
+        GameScreen._skip_duel_coach_step(screen, 'build')
+
+        onboarding = screen.state.user_dict['onboarding']
+        assert onboarding['active_lesson'] == 'duel_basics'
+        assert onboarding['lessons_dismissed'] == []
+        assert onboarding['duel_hints_seen'] == ['field', 'build']
+        assert messages == [
+            'Step skipped. Continue with the next Duel Basics step.']
 
     def test_action_duel_coach_passes_target_click_through(self):
         import pygame
@@ -484,7 +550,12 @@ class TestGameScreenDialogueFlow:
         GameScreen._draw_duel_coach(screen)
 
         assert ('Build', ('open_subscreen', 'build_figure'), False) in captured
-        assert any(label == 'Skip Duel lesson' for label, _action, _muted in captured)
+        assert (
+            'Skip this step', ('skip_step', 'build'), True
+        ) in captured
+        assert (
+            'Pause guidance', ('skip_tutorial', 'build'), True
+        ) in captured
 
     def test_build_duel_coach_cta_opens_builder_without_completing_step(self):
         import pygame
@@ -558,7 +629,11 @@ class TestGameScreenDialogueFlow:
         game_screen.state = SimpleNamespace(
             game=game,
             subscreen='field',
-            user_dict={'onboarding': {'duel_hints_seen': [], 'completed_steps': []}},
+            user_dict={'onboarding': {
+                'active_lesson': 'duel_basics',
+                'duel_hints_seen': [],
+                'completed_steps': [],
+            }},
         )
         game_screen.dialogue_box = None
         game_screen.pending_notifications = []
@@ -607,6 +682,7 @@ class TestGameScreenDialogueFlow:
             game=game,
             subscreen='field',
             user_dict={'onboarding': {
+                'active_lesson': 'duel_basics',
                 'duel_hints_seen': [
                     'field', 'build', 'cast_spell', 'change_cards', 'game_status',
                 ],

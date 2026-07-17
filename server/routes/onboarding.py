@@ -10,9 +10,11 @@ from routes.auth import require_token
 from onboarding_service import (
     DUEL_HINT_IDS,
     MENU_HINT_IDS,
+    acknowledge_replay_completion,
     claim_reward,
     complete_starter_suit_reveal,
     complete_tutorial,
+    dismiss_lesson,
     mark_duel_hints,
     mark_menu_hints,
     mark_welcome_seen,
@@ -20,7 +22,9 @@ from onboarding_service import (
     reset_onboarding,
     resume_onboarding,
     serialize_onboarding_state,
+    skip_lesson_step,
     skip_onboarding,
+    start_lesson,
 )
 
 
@@ -213,6 +217,94 @@ def complete_onboarding_step():
     return jsonify({
         'success': True,
         'already_completed': not changed,
+        'onboarding': onboarding_payload,
+    })
+
+
+@onboarding.route('/lesson/start', methods=['POST'])
+@require_token
+def start_onboarding_lesson():
+    user = _current_user()
+    data = request.get_json(silent=True) or {}
+    lesson_id = data.get('lesson_id')
+    lesson, error = start_lesson(user, lesson_id, commit=False)
+    if error:
+        return jsonify({'success': False, 'message': error}), 400
+    onboarding_payload = serialize_onboarding_state(user)
+    track('tutorial_lesson_started', user_id=user.id,
+          lesson_id=lesson_id,
+          coach_version=onboarding_payload.get('coach_version'))
+    db.session.commit()
+    return jsonify({
+        'success': True,
+        'lesson_id': lesson_id,
+        'screen': lesson.get('entry_screen'),
+        'label': lesson.get('entry_label'),
+        'onboarding': onboarding_payload,
+    })
+
+
+@onboarding.route('/lesson/dismiss', methods=['POST'])
+@require_token
+def dismiss_onboarding_lesson():
+    user = _current_user()
+    data = request.get_json(silent=True) or {}
+    lesson_id = data.get('lesson_id')
+    if not dismiss_lesson(user, lesson_id, commit=False):
+        return jsonify({'success': False, 'message': 'Unknown lesson'}), 400
+    onboarding_payload = serialize_onboarding_state(user)
+    track('tutorial_lesson_dismissed', user_id=user.id,
+          lesson_id=lesson_id,
+          coach_version=onboarding_payload.get('coach_version'))
+    db.session.commit()
+    return jsonify({
+        'success': True,
+        'lesson_id': lesson_id,
+        'onboarding': onboarding_payload,
+    })
+
+
+@onboarding.route('/lesson/skip_step', methods=['POST'])
+@require_token
+def skip_onboarding_lesson_step():
+    user = _current_user()
+    data = request.get_json(silent=True) or {}
+    lesson_id = data.get('lesson_id')
+    step_id = data.get('step_id')
+    changed, error = skip_lesson_step(
+        user, lesson_id, step_id, commit=False)
+    if error:
+        return jsonify({'success': False, 'message': error}), 400
+    onboarding_payload = serialize_onboarding_state(user)
+    if changed:
+        track('tutorial_lesson_step_skipped', user_id=user.id,
+              lesson_id=lesson_id, step_id=step_id,
+              coach_version=onboarding_payload.get('coach_version'))
+    db.session.commit()
+    return jsonify({
+        'success': True,
+        'lesson_id': lesson_id,
+        'step_id': step_id,
+        'onboarding': onboarding_payload,
+    })
+
+
+@onboarding.route('/lesson/replay/acknowledge', methods=['POST'])
+@require_token
+def acknowledge_onboarding_lesson_replay():
+    user = _current_user()
+    if not user:
+        return jsonify({'success': False, 'message': 'User not found'}), 404
+    data = request.get_json(silent=True) or {}
+    lesson_id = data.get('lesson_id')
+    changed = acknowledge_replay_completion(
+        user, lesson_id, commit=False)
+    onboarding_payload = serialize_onboarding_state(user)
+    db.session.commit()
+    return jsonify({
+        'success': True,
+        'already_acknowledged': not changed,
+        'lesson_id': lesson_id,
         'onboarding': onboarding_payload,
     })
 

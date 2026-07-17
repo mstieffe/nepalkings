@@ -116,6 +116,24 @@ class TestSellCard:
         assert data['gold_earned'] == 3  # face value
         assert data['gold'] == 13
 
+    def test_sell_side_key_card_uses_key_multiplier(
+            self, client, db, two_users, auth_headers_user1):
+        u1, _ = two_users
+        _add_cards(db, u1.id, 'Clubs', '5', 5, count=2)
+        u1.gold = 0
+        db.session.commit()
+
+        rv = client.post(
+            '/collection/sell_card',
+            headers=auth_headers_user1,
+            json={'suit': 'Clubs', 'rank': '5', 'quantity': 1},
+        )
+        data = rv.get_json()
+
+        assert data['success'] is True
+        assert data['gold_earned'] == 50
+        assert data['gold'] == 50
+
     def test_sell_not_enough_free(self, client, db, two_users, auth_headers_user1):
         u1, _ = two_users
         _add_cards(db, u1.id, 'Hearts', 'Q', 2, count=1)

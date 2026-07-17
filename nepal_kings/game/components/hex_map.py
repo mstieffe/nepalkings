@@ -4,6 +4,8 @@
 
 import math
 import os
+from collections import deque
+
 import pygame
 from config import settings
 from game.components import hex_cosmetics, badge_cosmetics, sigil_cosmetics
@@ -1119,9 +1121,66 @@ class HexMap:
             return 0.0
         return 1.0 - (self.zoom - full) / max(0.01, end - full)
 
+    def _region_main_suit_factor(self):
+        """Return opacity for the overview's one-suit-per-region marks."""
+        start = float(getattr(
+            settings, 'REGION_CLUSTER_ICON_START_ZOOM', 0.82))
+        full = float(getattr(
+            settings, 'REGION_CLUSTER_ICON_FULL_ZOOM', 1.00))
+        if self.zoom <= start:
+            return 1.0
+        if self.zoom >= full:
+            return 0.0
+        return 1.0 - (self.zoom - start) / max(0.01, full - start)
+
+    def _suit_cluster_icon_factor(self):
+        """Return opacity for the intermediate one-icon-per-cluster view."""
+        start = float(getattr(
+            settings, 'REGION_CLUSTER_ICON_START_ZOOM', 0.82))
+        full = float(getattr(
+            settings, 'REGION_CLUSTER_ICON_FULL_ZOOM', 1.00))
+        if self.zoom < start:
+            return 0.0
+        if self.zoom >= settings.HEX_MAP_LAND_NUMBERS_MIN_ZOOM:
+            return 0.0
+        return min(1.0, max(0.0, (self.zoom - start) /
+                            max(0.01, full - start)))
+
     def _region_style(self, region_key):
         return (getattr(settings, 'KINGDOM_REGIONS', {}) or {}).get(
             region_key, {})
+
+    def _draw_region_main_suit_icon(
+            self, meta, style, label_rect, font_px, presentation_factor):
+        """Draw a region's dominant suit icon directly below its name."""
+        phase_factor = self._region_main_suit_factor()
+        opacity = max(0.0, min(
+            1.0, float(presentation_factor) * phase_factor))
+        if opacity <= 0.0:
+            return None
+
+        if 'dominant_suit' in meta:
+            suit = meta.get('dominant_suit')
+        else:
+            suit = style.get('dominant_suit')
+        raw = self._suit_icon_raw.get(suit) if suit else None
+        if raw is None:
+            return None
+
+        icon_sz = max(12, min(24, int(font_px * 0.95)))
+        icon = self._get_scaled_icon(
+            ('region-main-suit', suit), raw, icon_sz)
+        if icon is None:
+            return None
+
+        icon = icon.copy()
+        icon.set_alpha(max(1, int(225 * opacity)))
+
+        gap = max(3, font_px // 5)
+        icon_rect = icon.get_rect(
+            midtop=(label_rect.centerx, label_rect.bottom + gap))
+        self.window.blit(icon, icon_rect)
+        return icon_rect
 
     def _region_geometry(self):
         """Cached centres/bounds used by labels and landmarks."""
@@ -1158,37 +1217,60 @@ class HexMap:
         return result
 
     def _terrain_landmarks(self):
-        """Return 13 stable, low-density procedural landmark anchors."""
+        """Return one scaled terrain mark per larger outer-region suit cluster.
+
+        Kathmandu deliberately keeps its single valley mark at the historic
+        region centre. Outer-region marks instead follow the actual suit
+        geography, using a central member tile so symbols stay inside even
+        irregularly shaped clusters.
+        """
         if self._terrain_landmarks_cache is not None:
             return self._terrain_landmarks_cache
         landmarks = []
+        min_tiles = max(2, int(getattr(
+            settings, 'REGION_SCENERY_CLUSTER_MIN_TILES', 20)))
+        reference_tiles = max(1.0, float(getattr(
+            settings, 'REGION_SCENERY_CLUSTER_REFERENCE_TILES', 80)))
+        min_scale = max(0.1, float(getattr(
+            settings, 'REGION_SCENERY_CLUSTER_SCALE_MIN', 0.65)))
+        max_scale = max(min_scale, float(getattr(
+            settings, 'REGION_SCENERY_CLUSTER_SCALE_MAX', 1.45)))
+        region_order = {
+            key: idx for idx, key in enumerate(
+                (getattr(settings, 'KINGDOM_REGIONS', {}) or {}).keys())
+        }
+        clusters = [
+            cluster for cluster in self._suit_clusters()
+            if cluster['suit'] != 'Neutral'
+            and cluster.get('region')
+            and cluster.get('region') != 'kathmandu'
+            and cluster['suit'] == self._region_style(
+                cluster['region']).get('dominant_suit')
+            and cluster['tile_count'] >= min_tiles
+        ]
+        clusters.sort(key=lambda cluster: (
+            region_order.get(cluster['region'], 99),
+            cluster['anchor_y'],
+            cluster['anchor_x'],
+            cluster['suit'],
+        ))
+        for idx, cluster in enumerate(clusters):
+            scale = math.sqrt(cluster['tile_count'] / reference_tiles)
+            scale = max(min_scale, min(max_scale, scale))
+            landmarks.append((
+                cluster['region'],
+                cluster['anchor_x'],
+                cluster['anchor_y'],
+                idx,
+                scale,
+            ))
+
         geometry = self._region_geometry()
-        for key in ('karnali', 'kirat', 'lumbini', 'mithila'):
-            geo = geometry.get(key)
-            if not geo:
-                continue
-            tiles = geo['tiles']
-            min_x, min_y, max_x, max_y = geo['bounds']
-            for idx, fraction in enumerate((0.22, 0.50, 0.78)):
-                tx = min_x + (max_x - min_x) * fraction
-                # Northern forms hug the upper band; southern forms occupy
-                # the lower half, leaving labels and central play uncluttered.
-                ty_fraction = (0.27 + 0.05 * (idx % 2)
-                               if key in ('karnali', 'kirat')
-                               else 0.72 - 0.05 * (idx % 2))
-                ty = min_y + (max_y - min_y) * ty_fraction
-                anchor = min(
-                    tiles,
-                    key=lambda t: ((t.cx - tx) ** 2 + (t.cy - ty) ** 2,
-                                   t.land_id),
-                )
-                landmarks.append((key, anchor.cx, anchor.cy, idx))
         kathmandu = geometry.get('kathmandu')
         if kathmandu:
             cx, cy = kathmandu['center']
-            landmarks.append(('kathmandu', cx, cy, 0))
-        cap = int(getattr(settings, 'REGION_SCENERY_GROUPS', 13))
-        self._terrain_landmarks_cache = landmarks[:cap]
+            landmarks.append(('kathmandu', cx, cy, 0, 1.0))
+        self._terrain_landmarks_cache = landmarks
         return self._terrain_landmarks_cache
 
     def _draw_terrain_landmarks(self):
@@ -1200,13 +1282,14 @@ class HexMap:
         alpha = int(getattr(settings, 'REGION_SCENERY_ALPHA', 52) * factor)
         if alpha <= 0:
             return
-        unit = max(11, int(self._size * self.zoom * 3.7))
+        base_unit = max(11, int(self._size * self.zoom * 3.7))
 
         def local(wx, wy):
             sx, sy = self.world_to_screen(wx, wy)
             return int(sx - vp.x), int(sy - vp.y)
 
-        for key, wx, wy, variant in self._terrain_landmarks():
+        for key, wx, wy, variant, cluster_scale in self._terrain_landmarks():
+            unit = max(7, int(base_unit * cluster_scale))
             x, y = local(wx, wy)
             if x < -unit * 3 or x > vp.w + unit * 3:
                 continue
@@ -1335,6 +1418,8 @@ class HexMap:
             rect = label.get_rect(center=(int(sx), int(sy)))
             self.window.blit(shadow, rect.move(1, 2))
             self.window.blit(label, rect)
+            self._draw_region_main_suit_icon(
+                meta, style, rect, font_px, factor)
             if meta.get('champions') or meta.get('champion'):
                 crown_w = max(8, int(font_px * 0.72))
                 cx, cy = rect.centerx, rect.top - max(5, crown_w // 2)
@@ -2005,12 +2090,134 @@ class HexMap:
 
     # ── Suit clusters ──────────────────────────────────────────────
 
-    def _suit_clusters(self):
-        """Return one descriptor per connected component of same-suit tiles.
+    def _split_suit_component_at_peaks(self, members):
+        """Split touching same-suit terrain around separate peak plateaus.
 
-        Connectivity uses the same odd-q flat-top hex neighbour layout as
-        the kingdom-component logic. Tiles without a suit bonus are
-        skipped entirely.
+        The map generator deliberately allows neighbouring seed clusters of
+        the same suit to touch. Their original seed IDs are not persisted in
+        the land payload. Usually each generated cluster retains a tier-six
+        plateau, but neutral seams can remove an apex and leave a lower local
+        maximum. A deterministic multi-source flood from every local-maximum
+        plateau recovers one visual cluster per peak without altering map
+        data.
+        """
+        if len(members) < 2:
+            return [members]
+
+        member_by_coord = {(tile.col, tile.row): tile for tile in members}
+        plateau_coords = []
+        visited = set()
+        for start in sorted(
+                member_by_coord,
+                key=lambda coord: (
+                    -int(getattr(
+                        member_by_coord[coord], 'tier', 0) or 0),
+                    member_by_coord[coord].land_id,
+                )):
+            if start in visited:
+                continue
+            tier = int(getattr(member_by_coord[start], 'tier', 0) or 0)
+            stack = [start]
+            visited.add(start)
+            plateau = []
+            touches_higher = False
+            while stack:
+                coord = stack.pop()
+                plateau.append(coord)
+                for neighbour in _edge_neighbour_coords(*coord):
+                    neighbour_tile = member_by_coord.get(neighbour)
+                    if neighbour_tile is None:
+                        continue
+                    neighbour_tier = int(
+                        getattr(neighbour_tile, 'tier', 0) or 0)
+                    if neighbour_tier > tier:
+                        touches_higher = True
+                    elif neighbour_tier == tier and neighbour not in visited:
+                        visited.add(neighbour)
+                        stack.append(neighbour)
+            if not touches_higher:
+                plateau_coords.append(plateau)
+
+        if len(plateau_coords) <= 1:
+            return [members]
+
+        plateau_coords.sort(key=lambda plateau: min(
+            member_by_coord[coord].land_id for coord in plateau))
+        assignment = {}
+        queue = deque()
+        for plateau_idx, plateau in enumerate(plateau_coords):
+            for coord in sorted(
+                    plateau,
+                    key=lambda item: member_by_coord[item].land_id):
+                assignment[coord] = (0, plateau_idx)
+                queue.append(coord)
+
+        while queue:
+            coord = queue.popleft()
+            distance, plateau_idx = assignment[coord]
+            candidate = (distance + 1, plateau_idx)
+            for neighbour in _edge_neighbour_coords(*coord):
+                if neighbour not in member_by_coord:
+                    continue
+                current = assignment.get(neighbour)
+                if current is None or candidate < current:
+                    assignment[neighbour] = candidate
+                    queue.append(neighbour)
+
+        groups = [[] for _ in plateau_coords]
+        for coord, tile in member_by_coord.items():
+            _distance, plateau_idx = assignment[coord]
+            groups[plateau_idx].append(tile)
+        return [group for group in groups if group]
+
+    @staticmethod
+    def _suit_cluster_descriptor(members, suit):
+        """Build the cached rendering descriptor for one visual cluster."""
+        cx = sum(tile.cx for tile in members) / len(members)
+        cy = sum(tile.cy for tile in members) / len(members)
+        region_counts = {}
+        for tile in members:
+            if tile.region:
+                region_counts[tile.region] = (
+                    region_counts.get(tile.region, 0) + 1)
+        primary_region = (
+            min(
+                region_counts,
+                key=lambda region: (
+                    -region_counts[region],
+                    region,
+                ),
+            )
+            if region_counts else None
+        )
+        anchor_candidates = [
+            tile for tile in members
+            if primary_region is None or tile.region == primary_region
+        ]
+        anchor = min(
+            anchor_candidates,
+            key=lambda tile: (
+                (tile.cx - cx) ** 2 + (tile.cy - cy) ** 2,
+                tile.land_id,
+            ),
+        )
+        return {
+            'suit': suit,
+            'center_x': cx,
+            'center_y': cy,
+            'anchor_x': anchor.cx,
+            'anchor_y': anchor.cy,
+            'anchor_land_id': anchor.land_id,
+            'region': primary_region,
+            'tile_count': len(members),
+        }
+
+    def _suit_clusters(self):
+        """Return one descriptor per peak-defined same-suit cluster.
+
+        First collect connected same-suit terrain, then split touching seed
+        clusters around their separate highest-tier plateaus. Tiles without a
+        suit bonus are skipped entirely.
 
         The result depends only on tile data (suit + neighbours), so it is
         cached and only recomputed when _build_tiles/update_data fires.
@@ -2025,7 +2232,7 @@ class HexMap:
             if start.land_id in visited:
                 continue
             suit = getattr(start, 'suit_bonus_suit', None)
-            if not suit:
+            if not suit or suit == 'Neutral':
                 visited.add(start.land_id)
                 continue
             stack = [start]
@@ -2046,14 +2253,10 @@ class HexMap:
                         stack.append(nb)
             if not members:
                 continue
-            cx = sum(t.cx for t in members) / len(members)
-            cy = sum(t.cy for t in members) / len(members)
-            clusters.append({
-                'suit': suit,
-                'center_x': cx,
-                'center_y': cy,
-                'tile_count': len(members),
-            })
+            for cluster_members in self._split_suit_component_at_peaks(
+                    members):
+                clusters.append(self._suit_cluster_descriptor(
+                    cluster_members, suit))
         self._suit_clusters_cache = clusters
         return clusters
 
@@ -2170,20 +2373,13 @@ class HexMap:
 
     def _draw_suit_cluster_icons(self, sz):
         """Draw one large suit icon at the centre of every connected
-        same-suit region. Only visible when zoomed out (per-tile suit
-        icons are hidden); suppressed at high zoom."""
+        same-suit region. This is the middle resolution between the
+        overview's regional main suit and the per-land suit display."""
         if sz <= 8:
             return
-        start_zoom = float(getattr(
-            settings, 'REGION_CLUSTER_ICON_START_ZOOM', 0.82))
-        full_zoom = float(getattr(
-            settings, 'REGION_CLUSTER_ICON_FULL_ZOOM', 1.00))
-        if self.zoom < start_zoom:
+        fade = self._suit_cluster_icon_factor()
+        if fade <= 0.0:
             return
-        if self.zoom >= settings.HEX_MAP_LAND_NUMBERS_MIN_ZOOM:
-            return
-        fade = min(1.0, max(0.0, (self.zoom - start_zoom) /
-                            max(0.01, full_zoom - start_zoom)))
         vp = self.viewport_rect
         icon_sz = max(20, int(sz * 1.05))
         for cluster in self._suit_clusters():

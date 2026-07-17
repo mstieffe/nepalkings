@@ -585,7 +585,15 @@ REGION_BOUNDARY_SHADOW_CLR = (42, 31, 20, 145)
 REGION_BOUNDARY_ANALYTIC_CLR = (232, 222, 205, 105)
 REGION_LABEL_SHADOW_CLR = (10, 8, 6, 185)
 REGION_SCENERY_ALPHA = 92
-REGION_SCENERY_GROUPS = 13
+# Outer-region scenery follows the larger connected suit clusters. Symbol
+# area scales with cluster area; Kathmandu retains its one fixed valley mark.
+REGION_SCENERY_CLUSTER_MIN_TILES = 20
+REGION_SCENERY_CLUSTER_REFERENCE_TILES = 80
+REGION_SCENERY_CLUSTER_SCALE_MIN = 0.65
+REGION_SCENERY_CLUSTER_SCALE_MAX = 1.45
+# Crossfade from one dominant suit icon per historic region to one icon per
+# connected suit cluster. Per-land suit icons take over at
+# HEX_MAP_LAND_NUMBERS_MIN_ZOOM.
 REGION_CLUSTER_ICON_START_ZOOM = 0.82
 REGION_CLUSTER_ICON_FULL_ZOOM = 1.00
 

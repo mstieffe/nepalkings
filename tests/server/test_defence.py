@@ -1145,6 +1145,59 @@ class TestDefenceDraftLifecycle:
         land_refreshed = db.session.get(Land, land.id)
         assert land_refreshed.defence_config_id == saved['id']
 
+    def test_draft_save_finishes_active_defence_lesson_with_existing_defence(
+            self, client, db, two_users, auth_headers_user1):
+        from onboarding_service import default_onboarding_state
+
+        u1, _ = two_users
+        land = _add_land(db, owner_id=u1.id)
+        _create_complete_active_defence(
+            client, db, u1.id, auth_headers_user1, land)
+
+        state = default_onboarding_state()
+        state['completed_steps'] = ['finish_tutorial']
+        u1.onboarding_state = state
+        db.session.commit()
+
+        started = client.post(
+            '/onboarding/lesson/start',
+            headers=auth_headers_user1,
+            json={'lesson_id': 'defend_land'},
+        )
+        assert started.status_code == 200
+        taught = client.post(
+            '/onboarding/mark_tip',
+            headers=auth_headers_user1,
+            json={'tip_keys': [
+                'menu:defend_land_intro_window',
+                'menu:defence_intro',
+                'menu:defence_battle_plan',
+                'menu:defence_final_response',
+            ]},
+        )
+        assert taught.get_json()['onboarding']['active_lesson'] == 'defend_land'
+
+        client.post(
+            '/kingdom/defence/draft/open',
+            headers=auth_headers_user1,
+            json={'land_id': land.id},
+        )
+        saved = client.post(
+            '/kingdom/defence/draft/save',
+            headers=auth_headers_user1,
+            json={'land_id': land.id},
+        )
+
+        assert saved.status_code == 200
+        onboarding = saved.get_json()['onboarding']
+        assert onboarding['active_lesson'] is None
+        assert 'finish_defend_land_lesson' in onboarding['completed_steps']
+        lesson = next(
+            item for item in onboarding['lessons']
+            if item['id'] == 'defend_land')
+        assert lesson['completed'] is True
+        assert lesson['progress_label'] == '5/5'
+
     def test_prelude_health_boost_target_survives_reopen_and_save(
             self, client, db, two_users, auth_headers_user1):
         u1, _ = two_users

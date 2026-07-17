@@ -5471,7 +5471,12 @@ class GameScreen(Screen):
             return False
         if onboarding.get('onboarding_skipped'):
             return False
-        if 'finish_first_duel' in set(onboarding.get('completed_steps') or []):
+        if onboarding.get('active_lesson') != 'duel_basics':
+            return False
+        if (
+                'finish_duel_basics_lesson' in set(
+                    onboarding.get('completed_steps') or [])
+                and onboarding.get('replaying_lesson') != 'duel_basics'):
             return False
         if self.dialogue_box or self.pending_notifications:
             return False
@@ -5517,7 +5522,7 @@ class GameScreen(Screen):
             {'id': 'field', 'button': self.field_button, 'subscreen': 'field',
              'title': 'Your setup turns',
              'completes': ('field', 'game_status', 'resource_panel'),
-             'body': 'Each round gives you 6 setup turns. Build on the board, watch your resources and score, then prepare for battle.'},
+             'body': 'Each round gives you 6 setup turns. Build, cast, or change cards; then choose Ceasefire to keep preparing or Advance to push toward battle.'},
             {'id': 'build', 'button': self.build_button, 'subscreen': 'field',
              'title': 'Build your first figure', 'action': 'click',
              'button_label': 'Build', 'coach_subscreen': 'build_figure',
@@ -5527,7 +5532,7 @@ class GameScreen(Screen):
              'subscreen': 'field', 'title': 'Other setup options',
              'completes': ('cast_spell', 'change_cards'),
              'separate_highlights': True,
-             'body': 'Cast Spell spends a turn on a one-time effect. The round-arrow controls exchange selected cards when your hand needs help.'},
+             'body': 'Cast Spell spends a turn on a one-time effect. Some spells can be countered before they resolve. The round arrows exchange selected cards.'},
             {'id': 'battle_shop_select_moves', 'rects': self._duel_battle_shop_family_rects(), 'subscreen': 'battle_shop', 'title': 'Choose battle moves',
              'action': 'click',
              'body': 'Pick a move family, choose a matching card, and buy a move. The lesson advances after a purchase succeeds.'},
@@ -5823,15 +5828,32 @@ class GameScreen(Screen):
         if subscreen and subscreen in self.subscreens:
             self.state.subscreen = subscreen
 
-    def _skip_duel_coach(self):
-        self._mark_duel_coaches_seen((
-            'field', 'build', 'cast_spell', 'change_cards', 'game_status',
-            'resource_panel', 'battle_shop_select_moves', 'battle_shop_ready',
-            'battle_move_panel', 'battle_move_actions', 'battle_score',
-        ), event='lesson_dismissed')
+    def _skip_duel_coach_step(self, step_id):
+        try:
+            data = onboarding_service.skip_lesson_step(
+                'duel_basics', step_id)
+            self._apply_game_onboarding_payload(data)
+        except Exception as exc:
+            logger.debug(
+                'Failed to skip Duel Basics step %s: %s', step_id, exc)
+            ud = getattr(self.state, 'user_dict', None)
+            if ud is not None:
+                onboarding = dict(ud.get('onboarding') or {})
+                completes = (
+                    (self._duel_coach_step or {}).get('completes')
+                    or (step_id,))
+                seen = set(onboarding.get('duel_hints_seen') or [])
+                seen.update(completes)
+                onboarding['duel_hints_seen'] = list(seen)
+                skipped = set(
+                    onboarding.get('lesson_skipped_steps') or [])
+                skipped.update(completes)
+                onboarding['lesson_skipped_steps'] = sorted(skipped)
+                ud['onboarding'] = onboarding
         self._duel_coach_pressed_button_action = None
         if getattr(self.state, 'set_msg', None):
-            self.state.set_msg('Duel lesson skipped. Other guidance stays active.')
+            self.state.set_msg(
+                'Step skipped. Continue with the next Duel Basics step.')
 
     def _wrap_duel_coach_lines(self, text, max_width, max_lines=5):
         words = str(text or '').split()
@@ -5854,6 +5876,14 @@ class GameScreen(Screen):
             self.window, rect, label, self._duel_coach_font, muted=muted)
         self._duel_coach_buttons.append((rect.copy(), action))
 
+    _SKIPPABLE_DUEL_COACH_STEPS = {
+        'build',
+        'battle_shop_select_moves',
+        'battle_shop_ready',
+        'battle_move_panel',
+        'battle_move_actions',
+    }
+
     def _draw_duel_coach(self):
         step = self._current_duel_coach_step()
         self._duel_coach_buttons = []
@@ -5873,8 +5903,12 @@ class GameScreen(Screen):
             body_font=self._duel_coach_font,
             ticks=pygame.time.get_ticks(),
             width_ratio=0.31,
-            min_width=330,
-            max_width=390,
+            min_width=(
+                390
+                if step['id'] in self._SKIPPABLE_DUEL_COACH_STEPS
+                else 330
+            ),
+            max_width=420,
             min_height=136,
             max_lines=5,
             has_button_row=True,
@@ -5891,12 +5925,25 @@ class GameScreen(Screen):
             action = (('open_subscreen', coach_subscreen) if coach_subscreen
                       else ('next', step['id']))
             self._draw_duel_coach_button(next_rect, button_label, action)
-        skip_label = 'Skip Duel lesson'
-        skip_w = max(112, self._duel_coach_font.size(skip_label)[0] + 24)
-        skip_rect = pygame.Rect(card.x + 14, card.bottom - button_h - 12,
-                                skip_w, button_h)
+        left_x = card.x + 14
+        if step['id'] in self._SKIPPABLE_DUEL_COACH_STEPS:
+            skip_label = 'Skip this step'
+            skip_w = max(
+                112, self._duel_coach_font.size(skip_label)[0] + 24)
+            skip_rect = pygame.Rect(
+                left_x, card.bottom - button_h - 12, skip_w, button_h)
+            self._draw_duel_coach_button(
+                skip_rect, skip_label, ('skip_step', step['id']),
+                muted=True)
+            left_x = skip_rect.right + 8
+        pause_label = 'Pause guidance'
+        pause_w = max(
+            72, self._duel_coach_font.size(pause_label)[0] + 20)
+        pause_rect = pygame.Rect(
+            left_x, card.bottom - button_h - 12, pause_w, button_h)
         self._draw_duel_coach_button(
-            skip_rect, skip_label, ('skip_tutorial', step['id']), muted=True)
+            pause_rect, pause_label, ('skip_tutorial', step['id']),
+            muted=True)
 
     @staticmethod
     def _duel_coach_blocking_event_types():
@@ -5948,8 +5995,10 @@ class GameScreen(Screen):
                         # confirms that a figure was actually created.
                         if step_id in self.subscreens:
                             self.state.subscreen = step_id
+                    elif kind == 'skip_step':
+                        self._skip_duel_coach_step(step_id)
                     elif kind == 'skip_tutorial':
-                        self._skip_duel_coach()
+                        self._pause_onboarding_tutorial()
                     return True
                 if click_through and any(rect.collidepoint(pos) for rect in target_rects):
                     coach_subscreen = self._duel_coach_step.get('coach_subscreen')

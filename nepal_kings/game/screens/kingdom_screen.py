@@ -153,6 +153,8 @@ class KingdomScreen(MenuScreenMixin, Screen):
         # ── State ───────────────────────────────────────────────────
         self._hex_map = None          # built on first enter
         self._kingdom_overview_dialogue = None  # first-open teaching window
+        self._kingdom_management_dialogue = None
+        self._kingdom_management_intro_step_id = None
         self._detail_box = None       # LandDetailBox (modal)
         self._map_data = None         # raw server response
         self._cooldown = 0            # conquer cooldown seconds
@@ -350,6 +352,8 @@ class KingdomScreen(MenuScreenMixin, Screen):
         """
         self._last_load_tick = pygame.time.get_ticks()
         self._floating_text_last_tick = pygame.time.get_ticks()
+        self._kingdom_management_dialogue = None
+        self._kingdom_management_intro_step_id = None
         if getattr(self, '_fx', None):
             self._fx.clear()
         # Until the first conquest is complete, returning to Kingdom should
@@ -888,6 +892,8 @@ class KingdomScreen(MenuScreenMixin, Screen):
         self._draw_menu_coach(self._current_kingdom_coach_step())
         if getattr(self, '_kingdom_overview_dialogue', None):
             self._kingdom_overview_dialogue.draw()
+        if getattr(self, '_kingdom_management_dialogue', None):
+            self._kingdom_management_dialogue.draw()
         # Topmost modal: the conquer-tutorial completion celebration, shown
         # right after the final task completes on this screen.
         self._draw_tutorial_complete_dialogue()
@@ -941,6 +947,68 @@ class KingdomScreen(MenuScreenMixin, Screen):
             title='Your Kingdom',
             presentation=('map_sidecar' if self._mobile_ui else 'modal'),
         )
+
+    def _maybe_show_kingdom_management_intro(self):
+        """Open the illustrated introduction for Kingdom-based lessons."""
+        if getattr(self, '_kingdom_management_dialogue', None):
+            return
+        lesson_id = self._active_onboarding_lesson_id()
+        specs = {
+            'build_attack': (
+                'build_attack_intro_window',
+                'Build Your Own Attack',
+                'build_attack_intro_pages',
+            ),
+            'run_kingdom': (
+                'kingdom_management_intro',
+                'Run Your Kingdom',
+                'kingdom_management_pages',
+            ),
+            'defend_land': (
+                'defend_land_intro_window',
+                'Defend Your Land',
+                'defend_land_intro_pages',
+            ),
+        }
+        spec = specs.get(lesson_id)
+        if not spec:
+            return
+        step_id, title, pages_name = spec
+        if step_id in self._menu_coach_seen():
+            return
+        if not self._hex_map or self._loading or self._error:
+            return
+        if (self._detail_box or self._thread or self._new_msg_picker
+                or getattr(self, '_kingdom_overview_dialogue', None)):
+            return
+        if (getattr(self, 'dialogue_box', None)
+                or getattr(self, '_onboarding_guide_open', False)):
+            return
+        from game.components.tutorial_window import TutorialWindowDialogue
+        from game import tutorial_content
+        pages = getattr(tutorial_content, pages_name)()
+        self._kingdom_management_intro_step_id = step_id
+        self._kingdom_management_dialogue = TutorialWindowDialogue(
+            self.window,
+            pages,
+            title=title,
+        )
+
+    def _handle_kingdom_management_events(self, events):
+        dialogue = getattr(self, '_kingdom_management_dialogue', None)
+        if not dialogue:
+            return False
+        from pygame import QUIT
+        if any(getattr(event, 'type', None) == QUIT for event in events):
+            return False
+        if dialogue.update(events) == 'done':
+            self._kingdom_management_dialogue = None
+            step_id = getattr(
+                self, '_kingdom_management_intro_step_id', None)
+            self._kingdom_management_intro_step_id = None
+            if step_id:
+                self._mark_menu_coach_seen(step_id)
+        return True
 
     def _handle_kingdom_overview_events(self, events):
         dialogue = getattr(self, '_kingdom_overview_dialogue', None)
@@ -1018,18 +1086,22 @@ class KingdomScreen(MenuScreenMixin, Screen):
 
     def _kingdom_coach_ready(self):
         # The first-open overview window teaches concepts before coach pointers.
-        if getattr(self, '_kingdom_overview_dialogue', None):
+        if (getattr(self, '_kingdom_overview_dialogue', None)
+                or getattr(self, '_kingdom_management_dialogue', None)):
             return False
         return 'kingdom_overview_window' in self._menu_coach_seen()
 
-    def _detail_conquer_button_rect(self):
+    def _detail_action_button_rect(self, wanted_action):
         detail_box = getattr(self, '_detail_box', None)
         if not detail_box:
             return None
         for action, btn in getattr(detail_box, '_buttons', []) or []:
-            if action == 'conquer' and not getattr(btn, 'disabled', False):
+            if action == wanted_action and not getattr(btn, 'disabled', False):
                 return getattr(btn, 'rect', None)
         return None
+
+    def _detail_conquer_button_rect(self):
+        return self._detail_action_button_rect('conquer')
 
     def _first_conquest_attempted(self):
         """True once the player has finished at least one conquer battle.
@@ -1129,6 +1201,33 @@ class KingdomScreen(MenuScreenMixin, Screen):
                 'mark_on_click': True,
                 'max_lines': 4,
             }
+        active_lesson = self._active_onboarding_lesson_id()
+        first_journey_finished = 'finish_tutorial' in completed
+        if first_journey_finished and self._detail_box:
+            if active_lesson == 'build_attack':
+                attack_rect = self._detail_action_button_rect('conquer')
+                if attack_rect and 'conquer_open_next_attack' not in seen:
+                    return {
+                        'id': 'conquer_open_next_attack',
+                        'rect': attack_rect,
+                        'title': 'Open Attack Setup',
+                        'body': 'Choose Conquer. This time you will build the figures, tactics, and optional prelude yourself.',
+                        'action': 'click',
+                        'mark_on_click': True,
+                        'max_lines': 4,
+                    }
+            elif active_lesson == 'defend_land':
+                defence_rect = self._detail_action_button_rect('defence')
+                if defence_rect and 'defence_open_config' not in seen:
+                    return {
+                        'id': 'defence_open_config',
+                        'rect': defence_rect,
+                        'title': 'Open Defence Setup',
+                        'body': 'Choose Defence to replace the automatic starter defence with a plan you build yourself.',
+                        'action': 'click',
+                        'mark_on_click': True,
+                        'max_lines': 4,
+                    }
         if self._detail_box:
             return None
         if not self._hex_map or self._loading or self._error:
@@ -1191,14 +1290,79 @@ class KingdomScreen(MenuScreenMixin, Screen):
                 'finish_tutorial_button': True,
                 'max_lines': 5,
             }
+
+        if active_lesson == 'build_attack':
+            if 'conquer_choose_next_land' not in seen:
+                return {
+                    'id': 'conquer_choose_next_land',
+                    'rect': self._map_viewport_rect,
+                    'click_through_rects': [self._map_viewport_rect],
+                    'title': 'Choose Your Next Target',
+                    'body': 'Tap a neighbouring land you do not own, inspect it, then choose Conquer.',
+                    'action': 'click',
+                    'mark_on_click': False,
+                    'max_lines': 4,
+                    'coach_placement': (
+                        'inside_top' if self._mobile_ui else None),
+                }
+            return None
+
+        if active_lesson == 'defend_land':
+            if 'defence_choose_land' not in seen:
+                return {
+                    'id': 'defence_choose_land',
+                    'rect': self._map_viewport_rect,
+                    'click_through_rects': [self._map_viewport_rect],
+                    'title': 'Choose One Of Your Lands',
+                    'body': 'Tap a land you own, inspect it, then open its Defence setup.',
+                    'action': 'click',
+                    'mark_on_click': False,
+                    'max_lines': 4,
+                    'coach_placement': (
+                        'inside_top' if self._mobile_ui else None),
+                }
+            return None
+
+        if active_lesson == 'run_kingdom':
+            if ('kingdom_collect_production' not in seen
+                    and self._collect_all_rect):
+                collect_ready = bool(self._collect_all_enabled)
+                return {
+                    'id': 'kingdom_collect_production',
+                    'rect': self._collect_all_rect,
+                    'title': (
+                        'Collect Ready Production'
+                        if collect_ready else 'Production Appears Here'),
+                    'body': (
+                        'Tap here to collect the gold, packs, or maps your kingdoms have produced.'
+                        if collect_ready else
+                        'Gold, packs, and maps accumulate here over time. Nothing is ready yet, but this is where you collect it later.'
+                    ),
+                    'action': 'click' if collect_ready else 'next',
+                    'mark_on_click': True,
+                    'button_label': (
+                        None if collect_ready else 'Got it'),
+                    'max_lines': 4,
+                }
+            if ('kingdom_open_management' not in seen
+                    and self._kingdom_chip_gear_rect):
+                return {
+                    'id': 'kingdom_open_management',
+                    'rect': self._kingdom_chip_gear_rect,
+                    'title': 'Open Kingdom Management',
+                    'body': 'Next, use this edit button to review production, skills, the Loot Inbox, shields, and kingdom appearance.',
+                    'action': 'click',
+                    'mark_on_click': True,
+                    'max_lines': 4,
+                }
+            return None
+
         return None
 
     def _finish_menu_coach_tutorial(self, step_id):
         if step_id == 'kingdom_after_conquer_map':
             if self._complete_onboarding_step('finish_tutorial'):
                 self._mark_menu_coach_seen(step_id)
-        elif step_id == 'kingdom_production_intro':
-            self._collect_all_gold()
         else:
             self._mark_menu_coach_seen(step_id)
 
@@ -2517,6 +2681,7 @@ class KingdomScreen(MenuScreenMixin, Screen):
             self._detail_box.update()
 
         self._maybe_show_kingdom_overview()
+        self._maybe_show_kingdom_management_intro()
         self._maybe_show_tutorial_completion()
 
     def handle_events(self, events):
@@ -2527,6 +2692,8 @@ class KingdomScreen(MenuScreenMixin, Screen):
             return
         # The first-open teaching window is modal — it captures all input.
         if self._handle_kingdom_overview_events(events):
+            return
+        if self._handle_kingdom_management_events(events):
             return
 
         super().handle_events(events)
@@ -2890,6 +3057,9 @@ class KingdomScreen(MenuScreenMixin, Screen):
             logger.error(f'collect_production_all error: {exc}')
             return
 
+        if data.get('onboarding') is not None:
+            self._apply_onboarding_payload(data)
+
         gold_after = data.get('gold', data.get('total_gold'))
         total_collected = int(round(float(
             data.get('collected_gold_total', data.get('collected_total', data.get('collected') or 0))
@@ -2897,16 +3067,6 @@ class KingdomScreen(MenuScreenMixin, Screen):
         main_collected = int(data.get('collected_main_boosters_total', 0) or 0)
         side_collected = int(data.get('collected_side_boosters_total', 0) or 0)
         maps_collected = int(data.get('collected_maps_total', 0) or 0)
-        if (total_collected > 0 or main_collected > 0 or side_collected > 0
-                or maps_collected > 0):
-            # Optimistically mark the production step so the tutorial coach
-            # advances immediately instead of waiting for the next state poll.
-            onboarding = (getattr(self.state, 'user_dict', None) or {}).get('onboarding')
-            if isinstance(onboarding, dict):
-                steps = list(onboarding.get('completed_steps') or [])
-                if 'collect_first_kingdom_production' not in steps:
-                    steps.append('collect_first_kingdom_production')
-                    onboarding['completed_steps'] = steps
         if total_collected > 0 and hasattr(self, '_suppress_next_gold_floater'):
             # Keep collect feedback anchored to the clicked Collect-All button
             # instead of duplicating it at the top-left HUD gold widget.
@@ -3621,6 +3781,13 @@ class KingdomScreen(MenuScreenMixin, Screen):
         self._keep_selected_hex_visible(tile)
         if self._kingdom_coach_ready() and self._detail_conquer_button_rect():
             self._mark_menu_coach_seen('kingdom_pick_land')
+        active_lesson = self._active_onboarding_lesson_id()
+        if (active_lesson == 'build_attack'
+                and self._detail_action_button_rect('conquer')):
+            self._mark_menu_coach_seen('conquer_choose_next_land')
+        elif (active_lesson == 'defend_land'
+              and self._detail_action_button_rect('defence')):
+            self._mark_menu_coach_seen('defence_choose_land')
 
     def _keep_selected_hex_visible(self, tile):
         """Pan the map so the inspected hex stays visible above the sheet.

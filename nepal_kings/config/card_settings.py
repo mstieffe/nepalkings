@@ -37,6 +37,14 @@ RANKS_ZK = ['3', '6', '7', '8', '9', '10']
 RANKS_MAIN_CARDS = ['7', '8', '9', '10', 'J', 'Q', 'K', 'A']
 RANKS_SIDE_CARDS = ['2', '3', '4', '5', '6']
 
+# Recipe roles. Keep these separate from ``NUMBER_CARDS``: that legacy list is
+# the set of main-card number variants used by figure generation, while these
+# constants describe how both pack families are taught and grouped.
+MAIN_KEY_CARD_RANKS = ('J', 'Q', 'A', 'K')
+MAIN_NUMBER_CARD_RANKS = ('7', '8', '9', '10')
+SIDE_KEY_CARD_RANKS = ('2', '4', '5')
+SIDE_NUMBER_CARD_RANKS = ('3', '6')
+
 # Maharaja: a crafted king-flavour card. Not part of the regular rank pools
 # (no booster drops, no sell/convert); crafted in the collection by trading
 # one copy of every rank of a suit. Builds Maharaja castle figures in

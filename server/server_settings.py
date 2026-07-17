@@ -206,30 +206,31 @@ DUEL_REWARD_POOL_PROBABILITIES = {          # Must sum to 1.0
 }
 
 BOOSTER_TIER_PROBABILITIES = {              # Probability of drawing each tier (main)
-    1: 0.50,   # common
-    2: 0.30,   # uncommon
-    3: 0.20,   # rare
+    1: 0.44,   # common: 18% per rank
+    2: 0.36,   # uncommon
+    3: 0.20,   # rare: 8% per rank
 }
 BOOSTER_TIER_RANKS = {                      # Card ranks per tier (main)
     1: ['7', '8', '9'],
-    2: ['J', '10', 'A'],
-    3: ['K', 'Q'],
+    2: ['J', 'Q', '10'],
+    3: ['K', 'A'],
 }
 
 BOOSTER_SIDE_TIER_PROBABILITIES = {         # Probability of drawing each tier (side)
-    1: 0.50,   # common
-    2: 0.30,   # uncommon
-    3: 0.20,   # rare
+    1: 0.46,   # common: 46% for the sole common rank
+    2: 0.36,   # uncommon: 18% per rank
+    3: 0.18,   # rare: 9% per rank
 }
 BOOSTER_SIDE_TIER_RANKS = {                 # Card ranks per tier (side)
-    1: ['2', '3'],
-    2: ['4', '5'],
-    3: ['6'],
+    1: ['3'],
+    2: ['2', '6'],
+    3: ['4', '5'],
 }
 
-# Selling prices — key cards = value × multiplier, number cards = face value
-KEY_CARD_RANKS = ['J', 'Q', 'K', 'A']
-CARD_SELL_KEY_MULTIPLIER = 10               # J→10, Q→20, K→40, A→30
+# Selling prices — main and side key cards = value × multiplier; number cards
+# remain at face value.
+KEY_CARD_RANKS = ['J', 'Q', 'K', 'A', '2', '4', '5']
+CARD_SELL_KEY_MULTIPLIER = 10
 
 # ── v2.0: Kingdom ──
 KINGDOM_MAP_COLS = 96

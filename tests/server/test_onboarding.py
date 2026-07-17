@@ -67,7 +67,7 @@ def test_register_sets_welcome_present_pending(client):
     data = resp.get_json()
     assert resp.status_code == 200
     onboarding = data['user']['onboarding']
-    assert onboarding['coach_version'] == 'first_session_v6'
+    assert onboarding['coach_version'] == 'first_session_v7'
     assert onboarding['journey_phase'] == 'reveal_starter_cards'
     assert onboarding['next_action'] == {
         'screen': 'collection',
@@ -197,7 +197,8 @@ def test_existing_user_has_no_pending_welcome(client, two_users):
     assert onboarding['welcome_seen'] is False
 
 
-def test_open_booster_is_not_a_first_journey_reward(client, db, two_users, auth_headers_user1):
+def test_open_booster_is_a_lesson_milestone_not_a_reward(
+        client, db, two_users, auth_headers_user1):
     u1, _ = two_users
     u1.booster_packs = 1
     db.session.commit()
@@ -208,7 +209,7 @@ def test_open_booster_is_not_a_first_journey_reward(client, db, two_users, auth_
 
     opened = client.post('/collection/open_booster', headers=auth_headers_user1)
     assert opened.status_code == 200
-    assert 'open_first_main_booster' not in (
+    assert 'open_first_main_booster' in (
         opened.get_json()['onboarding']['completed_steps'])
 
     claimed = client.post('/onboarding/claim_reward', headers=auth_headers_user1,
@@ -359,9 +360,10 @@ def test_earn_10000_gold_goal_is_claimable(client, db, two_users, auth_headers_u
 def test_skip_and_reset_do_not_clear_claimed_rewards(client, db, two_users, auth_headers_user1):
     u1, _ = two_users
     from onboarding_service import mark_step
-    mark_step(u1, 'finish_first_duel', commit=True)
+    mark_step(u1, 'finish_tutorial')
+    mark_step(u1, 'finish_duel_basics_lesson', commit=True)
     client.post('/onboarding/claim_reward', headers=auth_headers_user1,
-                json={'reward_id': 'finish_first_duel'})
+                json={'reward_id': 'finish_duel_basics_lesson'})
     balances_before_pause = (
         u1.gold, u1.booster_packs, u1.booster_packs_side, u1.maps)
 
@@ -374,12 +376,12 @@ def test_skip_and_reset_do_not_clear_claimed_rewards(client, db, two_users, auth
 
     resumed = client.post('/onboarding/resume', headers=auth_headers_user1).get_json()['onboarding']
     assert resumed['onboarding_skipped'] is False
-    assert 'finish_first_duel' in resumed['claimed_rewards']
+    assert 'finish_duel_basics_lesson' in resumed['claimed_rewards']
 
     reset = client.post('/onboarding/reset', headers=auth_headers_user1).get_json()['onboarding']
     assert reset['onboarding_skipped'] is False
     assert reset['welcome_pending'] is True
-    assert 'finish_first_duel' in reset['claimed_rewards']
+    assert 'finish_duel_basics_lesson' in reset['claimed_rewards']
 
 
 def test_menu_hint_marks_are_persisted(client, auth_headers_user1):
@@ -390,17 +392,17 @@ def test_menu_hint_marks_are_persisted(client, auth_headers_user1):
     assert data['onboarding']['menu_hints_seen'] == ['duel']
 
     marked = client.post('/onboarding/mark_tip', headers=auth_headers_user1,
-                         json={'tip_key': 'menu:guide_first_duel_reward'})
+                         json={'tip_key': 'menu:guide_rewards_track'})
     data = marked.get_json()
     assert marked.status_code == 200
-    assert data['onboarding']['menu_hints_seen'] == ['duel', 'guide_first_duel_reward']
+    assert data['onboarding']['menu_hints_seen'] == ['duel', 'guide_rewards_track']
 
     post_duel = client.post('/onboarding/mark_tip', headers=auth_headers_user1,
-                            json={'tip_key': 'menu:collection_open_main_booster'})
+                            json={'tip_key': 'menu:collection_growth_intro'})
     assert post_duel.status_code == 200
     data = post_duel.get_json()
     assert data['onboarding']['menu_hints_seen'] == [
-        'duel', 'guide_first_duel_reward', 'collection_open_main_booster'
+        'duel', 'guide_rewards_track', 'collection_growth_intro'
     ]
 
     # Hints always come back sorted by MENU_HINT_IDS order, not mark order.
@@ -409,7 +411,7 @@ def test_menu_hint_marks_are_persisted(client, auth_headers_user1):
     assert newest.status_code == 200
 
     earlier_new = client.post('/onboarding/mark_tip', headers=auth_headers_user1,
-                              json={'tip_key': 'menu:conquer_battle_timeline_intro'})
+                              json={'tip_key': 'menu:conquer_build_yourself'})
     assert earlier_new.status_code == 200
 
     middle_new = client.post('/onboarding/mark_tip', headers=auth_headers_user1,
@@ -418,9 +420,9 @@ def test_menu_hint_marks_are_persisted(client, auth_headers_user1):
     data = middle_new.get_json()
     assert data['onboarding']['menu_hints_seen'] == [
         'duel',
-        'guide_first_duel_reward',
-        'collection_open_main_booster',
-        'conquer_battle_timeline_intro',
+        'guide_rewards_track',
+        'collection_growth_intro',
+        'conquer_build_yourself',
         'kingdom_after_conquer_map',
         'kingdom_config_shields_style',
     ]
@@ -529,12 +531,718 @@ def test_finish_tutorial_completion_is_gated_by_real_conquest(
     assert 'Conquer your first land' in response.get_json()['message']
 
 
+def test_follow_up_lesson_can_be_started_and_dismissed_independently(
+        client, db, two_users, auth_headers_user1):
+    user, _ = two_users
+    _add_conquer_win(db, user)
+    completed = client.post(
+        '/onboarding/complete_step',
+        headers=auth_headers_user1,
+        json={'step_id': 'finish_tutorial'},
+    )
+    assert completed.status_code == 200
+
+    started = client.post(
+        '/onboarding/lesson/start',
+        headers=auth_headers_user1,
+        json={'lesson_id': 'grow_collection'},
+    )
+    data = started.get_json()
+    assert started.status_code == 200
+    assert data['screen'] == 'collection'
+    assert data['onboarding']['active_lesson'] == 'grow_collection'
+    lesson = next(
+        item for item in data['onboarding']['lessons']
+        if item['id'] == 'grow_collection')
+    assert lesson['active'] is True
+    assert lesson['progress_label'] == '0/6'
+
+    dismissed = client.post(
+        '/onboarding/lesson/dismiss',
+        headers=auth_headers_user1,
+        json={'lesson_id': 'grow_collection'},
+    )
+    assert dismissed.status_code == 200
+    state = dismissed.get_json()['onboarding']
+    assert state['active_lesson'] is None
+    assert 'grow_collection' in state['lessons_dismissed']
+    # Dismiss is intentionally idempotent.
+    assert client.post(
+        '/onboarding/lesson/dismiss',
+        headers=auth_headers_user1,
+        json={'lesson_id': 'grow_collection'},
+    ).status_code == 200
+
+
+def test_completed_lesson_replays_without_reopening_its_reward(
+        client, db, two_users, auth_headers_user1):
+    from onboarding_service import mark_step, mark_menu_hints
+
+    user, _ = two_users
+    state = dict(user.onboarding_state or {})
+    state.update({
+        'welcome_seen': True,
+        'completed_steps': [
+            'finish_tutorial',
+            'open_first_main_booster',
+            'open_first_side_booster',
+            'sell_first_card',
+            'trade_first_card',
+        ],
+        'claimed_rewards': ['finish_collection_lesson'],
+        'menu_hints_seen': [
+            'collection_growth_intro',
+            'collection_growth_recap',
+        ],
+    })
+    user.onboarding_state = state
+    user.gold = 700
+    user.booster_packs = 4
+    user.booster_packs_side = 2
+    db.session.commit()
+
+    started = client.post(
+        '/onboarding/lesson/start',
+        headers=auth_headers_user1,
+        json={'lesson_id': 'grow_collection'},
+    )
+    assert started.status_code == 200
+    onboarding = started.get_json()['onboarding']
+    assert onboarding['active_lesson'] == 'grow_collection'
+    assert onboarding['replaying_lesson'] == 'grow_collection'
+    lesson = next(
+        item for item in onboarding['lessons']
+        if item['id'] == 'grow_collection')
+    assert lesson['completed'] is False
+    assert lesson['claimed'] is True
+    assert lesson['claimable'] is False
+    assert lesson['replaying'] is True
+    assert lesson['progress_label'] == '0/6'
+
+    for step_id in (
+            'open_first_main_booster',
+            'open_first_side_booster',
+            'sell_first_card',
+            'trade_first_card'):
+        assert mark_step(user, step_id, commit=False) is True
+    mark_menu_hints(user, [
+        'collection_growth_intro',
+        'collection_growth_recap',
+    ], commit=False)
+    db.session.commit()
+
+    finished = client.get(
+        '/onboarding/state', headers=auth_headers_user1)
+    assert finished.status_code == 200
+    onboarding = finished.get_json()['onboarding']
+    assert onboarding['active_lesson'] is None
+    assert onboarding['replaying_lesson'] is None
+    assert onboarding['replay_completion_pending'] == 'grow_collection'
+    lesson = next(
+        item for item in onboarding['lessons']
+        if item['id'] == 'grow_collection')
+    assert lesson['completed'] is True
+    assert lesson['claimed'] is True
+    assert lesson['claimable'] is False
+
+    persisted = client.get(
+        '/onboarding/state', headers=auth_headers_user1)
+    assert persisted.get_json()['onboarding'][
+        'replay_completion_pending'] == 'grow_collection'
+
+    blocked_start = client.post(
+        '/onboarding/lesson/start',
+        headers=auth_headers_user1,
+        json={'lesson_id': 'build_attack'},
+    )
+    assert blocked_start.status_code == 400
+
+    acknowledged = client.post(
+        '/onboarding/lesson/replay/acknowledge',
+        headers=auth_headers_user1,
+        json={'lesson_id': 'grow_collection'},
+    )
+    assert acknowledged.status_code == 200
+    assert acknowledged.get_json()['onboarding'][
+        'replay_completion_pending'] is None
+
+    claimed_again = client.post(
+        '/onboarding/claim_reward',
+        headers=auth_headers_user1,
+        json={'reward_id': 'finish_collection_lesson'},
+    )
+    assert claimed_again.status_code == 200
+    payload = claimed_again.get_json()
+    assert payload['already_claimed'] is True
+    assert payload['reward'] == {}
+    assert payload['balances']['gold'] == 700
+    assert payload['balances']['booster_packs'] == 4
+    assert payload['balances']['booster_packs_side'] == 2
+
+
+def test_blocked_collection_actions_can_be_skipped_one_step_at_a_time(
+        client, db, two_users, auth_headers_user1):
+    user, _ = two_users
+    state = dict(user.onboarding_state or {})
+    state.update({
+        'welcome_seen': True,
+        'completed_steps': ['finish_tutorial'],
+        'menu_hints_seen': [],
+    })
+    user.onboarding_state = state
+    user.booster_packs = 0
+    user.booster_packs_side = 0
+    db.session.commit()
+
+    started = client.post(
+        '/onboarding/lesson/start',
+        headers=auth_headers_user1,
+        json={'lesson_id': 'grow_collection'},
+    )
+    assert started.status_code == 200
+    client.post(
+        '/onboarding/mark_tip',
+        headers=auth_headers_user1,
+        json={'tip_key': 'menu:collection_growth_intro'},
+    )
+
+    steps = (
+        'collection_growth_main',
+        'collection_growth_side',
+        'collection_sell_spare',
+        'collection_trade_spare',
+    )
+    for index, step_id in enumerate(steps):
+        response = client.post(
+            '/onboarding/lesson/skip_step',
+            headers=auth_headers_user1,
+            json={
+                'lesson_id': 'grow_collection',
+                'step_id': step_id,
+            },
+        )
+        assert response.status_code == 200
+        onboarding = response.get_json()['onboarding']
+        if step_id == 'collection_growth_main':
+            assert 'open_first_main_booster' in onboarding[
+                'completed_steps']
+        if index < len(steps) - 1:
+            assert onboarding['active_lesson'] == 'grow_collection'
+
+    assert onboarding['active_lesson'] == 'grow_collection'
+    assert 'finish_collection_lesson' not in onboarding['completed_steps']
+
+    recap = client.post(
+        '/onboarding/mark_tip',
+        headers=auth_headers_user1,
+        json={'tip_key': 'menu:collection_growth_recap'},
+    )
+    assert recap.status_code == 200
+    onboarding = recap.get_json()['onboarding']
+    assert onboarding['active_lesson'] is None
+    assert onboarding['lesson_skipped_steps'] == []
+    assert 'finish_collection_lesson' in onboarding['completed_steps']
+    lesson = next(
+        item for item in onboarding['lessons']
+        if item['id'] == 'grow_collection')
+    assert lesson['completed'] is True
+    assert lesson['progress_label'] == '6/6'
+    assert lesson['claimable'] is True
+
+    refreshed = client.get(
+        '/onboarding/state',
+        headers=auth_headers_user1,
+    ).get_json()['onboarding']
+    refreshed_lesson = next(
+        item for item in refreshed['lessons']
+        if item['id'] == 'grow_collection')
+    assert refreshed_lesson['completed'] is True
+    assert refreshed_lesson['progress_label'] == '6/6'
+
+
+def test_lesson_step_skip_rejects_inactive_or_unknown_steps(
+        client, db, two_users, auth_headers_user1):
+    user, _ = two_users
+    state = dict(user.onboarding_state or {})
+    state['completed_steps'] = ['finish_tutorial']
+    user.onboarding_state = state
+    db.session.commit()
+
+    inactive = client.post(
+        '/onboarding/lesson/skip_step',
+        headers=auth_headers_user1,
+        json={
+            'lesson_id': 'grow_collection',
+            'step_id': 'collection_growth_main',
+        },
+    )
+    assert inactive.status_code == 400
+
+    client.post(
+        '/onboarding/lesson/start',
+        headers=auth_headers_user1,
+        json={'lesson_id': 'grow_collection'},
+    )
+    unknown = client.post(
+        '/onboarding/lesson/skip_step',
+        headers=auth_headers_user1,
+        json={
+            'lesson_id': 'grow_collection',
+            'step_id': 'collection_growth_intro',
+        },
+    )
+    assert unknown.status_code == 400
+
+
+def test_skipping_blocked_attack_build_and_battle_can_finish_lesson(
+        client, db, two_users, auth_headers_user1):
+    user, _ = two_users
+    state = dict(user.onboarding_state or {})
+    state.update({
+        'completed_steps': [
+            'finish_tutorial',
+            'finish_first_conquer_battle',
+        ],
+        'menu_hints_seen': [],
+    })
+    user.onboarding_state = state
+    db.session.commit()
+
+    started = client.post(
+        '/onboarding/lesson/start',
+        headers=auth_headers_user1,
+        json={'lesson_id': 'build_attack'},
+    )
+    assert started.status_code == 200
+    taught = client.post(
+        '/onboarding/mark_tip',
+        headers=auth_headers_user1,
+        json={'tip_keys': [
+            'menu:build_attack_intro_window',
+            'menu:conquer_build_yourself_prelude',
+        ]},
+    )
+    assert taught.status_code == 200
+
+    for step_id in (
+            'conquer_build_yourself',
+            'conquer_build_yourself_tactics',
+            'conquer_build_yourself_battle'):
+        skipped = client.post(
+            '/onboarding/lesson/skip_step',
+            headers=auth_headers_user1,
+            json={
+                'lesson_id': 'build_attack',
+                'step_id': step_id,
+            },
+        )
+        assert skipped.status_code == 200
+
+    onboarding = skipped.get_json()['onboarding']
+    assert onboarding['active_lesson'] is None
+    assert 'finish_second_conquer_battle' in onboarding[
+        'completed_steps']
+    assert 'finish_build_attack_lesson' in onboarding[
+        'completed_steps']
+    lesson = next(
+        item for item in onboarding['lessons']
+        if item['id'] == 'build_attack')
+    assert lesson['completed'] is True
+    assert lesson['claimable'] is True
+
+
+def test_run_kingdom_can_skip_unavailable_cosmetic_and_finish(
+        client, db, two_users, auth_headers_user1):
+    user, _ = two_users
+    state = dict(user.onboarding_state or {})
+    state.update({
+        'completed_steps': [
+            'finish_tutorial',
+            'finish_first_conquer_battle',
+        ],
+        'menu_hints_seen': [],
+    })
+    user.onboarding_state = state
+    db.session.commit()
+
+    started = client.post(
+        '/onboarding/lesson/start',
+        headers=auth_headers_user1,
+        json={'lesson_id': 'run_kingdom'},
+    )
+    assert started.status_code == 200
+    taught = client.post(
+        '/onboarding/mark_tip',
+        headers=auth_headers_user1,
+        json={'tip_keys': [
+            'menu:kingdom_management_intro',
+            'menu:kingdom_collect_production',
+            'menu:kingdom_open_management',
+            'menu:kingdom_config_essentials',
+            'menu:kingdom_config_shields_style',
+        ]},
+    )
+    assert taught.status_code == 200
+
+    skipped = client.post(
+        '/onboarding/lesson/skip_step',
+        headers=auth_headers_user1,
+        json={
+            'lesson_id': 'run_kingdom',
+            'step_id': 'kingdom_buy_cosmetic',
+        },
+    )
+
+    assert skipped.status_code == 200
+    onboarding = skipped.get_json()['onboarding']
+    assert onboarding['active_lesson'] is None
+    assert 'buy_first_cosmetic' in onboarding['completed_steps']
+    assert 'finish_run_kingdom_lesson' in onboarding['completed_steps']
+    lesson = next(
+        item for item in onboarding['lessons']
+        if item['id'] == 'run_kingdom')
+    assert lesson['completed'] is True
+    assert lesson['claimable'] is True
+
+
+def test_dismissing_replay_restores_historical_completion(
+        client, db, two_users, auth_headers_user1):
+    user, _ = two_users
+    original_hints = [
+        'kingdom_management_intro',
+        'kingdom_open_management',
+        'kingdom_collect_production',
+        'kingdom_config_essentials',
+        'kingdom_config_shields_style',
+    ]
+    state = dict(user.onboarding_state or {})
+    state.update({
+        'completed_steps': [
+            'finish_tutorial',
+            'buy_first_cosmetic',
+        ],
+        'claimed_rewards': ['finish_run_kingdom_lesson'],
+        'menu_hints_seen': original_hints,
+    })
+    user.onboarding_state = state
+    db.session.commit()
+
+    started = client.post(
+        '/onboarding/lesson/start',
+        headers=auth_headers_user1,
+        json={'lesson_id': 'run_kingdom'},
+    ).get_json()['onboarding']
+    assert started['replaying_lesson'] == 'run_kingdom'
+    assert not set(original_hints).intersection(
+        started['menu_hints_seen'])
+
+    dismissed = client.post(
+        '/onboarding/lesson/dismiss',
+        headers=auth_headers_user1,
+        json={'lesson_id': 'run_kingdom'},
+    )
+    assert dismissed.status_code == 200
+    onboarding = dismissed.get_json()['onboarding']
+    assert onboarding['active_lesson'] is None
+    assert onboarding['replaying_lesson'] is None
+    assert set(original_hints).issubset(onboarding['menu_hints_seen'])
+    lesson = next(
+        item for item in onboarding['lessons']
+        if item['id'] == 'run_kingdom')
+    assert lesson['completed'] is True
+    assert lesson['claimed'] is True
+
+
+def test_grow_collection_requires_packs_sell_and_convert(
+        client, db, two_users, auth_headers_user1):
+    from onboarding_service import mark_step
+
+    user, _ = two_users
+    _add_conquer_win(db, user)
+    client.post(
+        '/onboarding/complete_step',
+        headers=auth_headers_user1,
+        json={'step_id': 'finish_tutorial'},
+    )
+    user.booster_packs = 1
+    user.booster_packs_side = 1
+    db.session.commit()
+
+    main = client.post(
+        '/collection/open_booster', headers=auth_headers_user1)
+    side = client.post(
+        '/collection/open_booster_side', headers=auth_headers_user1)
+    assert main.status_code == 200
+    assert side.status_code == 200
+    before_intro = side.get_json()['onboarding']
+    assert 'finish_collection_lesson' not in before_intro['completed_steps']
+
+    intro = client.post(
+        '/onboarding/mark_tip',
+        headers=auth_headers_user1,
+        json={'tip_key': 'menu:collection_growth_intro'},
+    )
+    onboarding = intro.get_json()['onboarding']
+    assert 'finish_collection_lesson' not in onboarding['completed_steps']
+
+    mark_step(user, 'sell_first_card')
+    mark_step(user, 'trade_first_card', commit=True)
+    onboarding = client.get(
+        '/onboarding/state',
+        headers=auth_headers_user1,
+    ).get_json()['onboarding']
+    assert 'finish_collection_lesson' not in onboarding['completed_steps']
+
+    recap = client.post(
+        '/onboarding/mark_tip',
+        headers=auth_headers_user1,
+        json={'tip_key': 'menu:collection_growth_recap'},
+    )
+    assert recap.status_code == 200
+    onboarding = recap.get_json()['onboarding']
+    assert 'finish_collection_lesson' in onboarding['completed_steps']
+    lesson = next(
+        item for item in onboarding['lessons']
+        if item['id'] == 'grow_collection')
+    assert lesson['completed'] is True
+    assert lesson['claimable'] is True
+    assert lesson['reward_id'] == 'finish_collection_lesson'
+
+
+def test_follow_up_completion_facts_require_their_visible_teaching_steps(
+        db, two_users, monkeypatch):
+    import onboarding_service
+
+    user, _ = two_users
+    monkeypatch.setattr(
+        onboarding_service, '_duel_result_count', lambda _user_id: 1)
+    monkeypatch.setattr(
+        onboarding_service, '_duel_win_count', lambda _user_id: 0)
+    monkeypatch.setattr(
+        onboarding_service, '_duel_loss_count', lambda _user_id: 1)
+    monkeypatch.setattr(
+        onboarding_service, '_conquer_battle_count', lambda _user_id: 2)
+    monkeypatch.setattr(
+        onboarding_service, '_conquer_lands_count', lambda _user_id: 1)
+    monkeypatch.setattr(
+        onboarding_service, '_saved_defence_count', lambda _user_id: 1)
+
+    state = onboarding_service.default_onboarding_state()
+    state['completed_steps'] = [
+        'open_first_main_booster',
+        'open_first_side_booster',
+        'sell_first_card',
+        'trade_first_card',
+        'buy_first_cosmetic',
+    ]
+    raw_facts = onboarding_service._facts(user, state)
+    assert not {
+        'finish_collection_lesson',
+        'finish_build_attack_lesson',
+        'finish_run_kingdom_lesson',
+        'finish_defend_land_lesson',
+        'finish_duel_basics_lesson',
+    }.intersection(raw_facts['completed_steps'])
+
+    state['menu_hints_seen'] = [
+        'collection_growth_intro',
+        'collection_growth_recap',
+        'build_attack_intro_window',
+        'conquer_build_yourself',
+        'conquer_build_yourself_tactics',
+        'conquer_build_yourself_prelude',
+        'kingdom_management_intro',
+        'kingdom_config_essentials',
+        'kingdom_collect_production',
+        'kingdom_config_shields_style',
+        'defend_land_intro_window',
+        'defence_intro',
+        'defence_battle_plan',
+        'defence_final_response',
+        'duel_tutorial_start_window',
+    ]
+    state['active_lesson'] = 'defend_land'
+    state['lesson_session_steps'] = ['save_first_defence_config']
+    state['duel_hints_seen'] = list(
+        onboarding_service.DUEL_BASICS_REQUIRED_HINT_IDS)
+    taught_facts = onboarding_service._facts(user, state)
+    assert {
+        'finish_collection_lesson',
+        'finish_build_attack_lesson',
+        'finish_run_kingdom_lesson',
+        'finish_defend_land_lesson',
+        'finish_duel_basics_lesson',
+    }.issubset(taught_facts['completed_steps'])
+    assert taught_facts['kingdom_production_collections'] == 0
+
+
+def test_defend_land_requires_a_save_during_the_active_lesson(
+        client, db, two_users, auth_headers_user1, monkeypatch):
+    import onboarding_service
+
+    user, _ = two_users
+    state = onboarding_service.default_onboarding_state()
+    state['completed_steps'] = ['finish_tutorial']
+    user.onboarding_state = state
+    db.session.commit()
+
+    # A conquered land already has an active defence because its attack config
+    # is converted after victory.  That historical defence must not satisfy
+    # the hands-on save requested by this lesson.
+    monkeypatch.setattr(
+        onboarding_service, '_saved_defence_count', lambda _user_id: 1)
+
+    started = client.post(
+        '/onboarding/lesson/start',
+        headers=auth_headers_user1,
+        json={'lesson_id': 'defend_land'},
+    )
+    assert started.status_code == 200
+    lesson = next(
+        item for item in started.get_json()['onboarding']['lessons']
+        if item['id'] == 'defend_land')
+    assert lesson['progress_label'] == '0/5'
+
+    taught = client.post(
+        '/onboarding/mark_tip',
+        headers=auth_headers_user1,
+        json={'tip_keys': [
+            'menu:defend_land_intro_window',
+            'menu:defence_intro',
+            'menu:defence_battle_plan',
+            'menu:defence_final_response',
+        ]},
+    )
+    onboarding = taught.get_json()['onboarding']
+    assert onboarding['active_lesson'] == 'defend_land'
+    assert 'finish_defend_land_lesson' not in onboarding['completed_steps']
+    lesson = next(
+        item for item in onboarding['lessons']
+        if item['id'] == 'defend_land')
+    assert lesson['progress_label'] == '4/5'
+
+    assert onboarding_service.mark_step(
+        user, 'save_first_defence_config', commit=True) is True
+
+    finished = client.get(
+        '/onboarding/state',
+        headers=auth_headers_user1,
+    ).get_json()['onboarding']
+    assert finished['active_lesson'] is None
+    assert 'finish_defend_land_lesson' in finished['completed_steps']
+    lesson = next(
+        item for item in finished['lessons']
+        if item['id'] == 'defend_land')
+    assert lesson['completed'] is True
+    assert lesson['progress_label'] == '5/5'
+
+    # The completed state stays closed after the temporary lesson-session
+    # marker has been cleared.
+    refreshed = client.get(
+        '/onboarding/state',
+        headers=auth_headers_user1,
+    ).get_json()['onboarding']
+    assert 'finish_defend_land_lesson' in refreshed['completed_steps']
+    assert next(
+        item for item in refreshed['lessons']
+        if item['id'] == 'defend_land')['completed'] is True
+
+
+def test_defend_land_save_step_can_still_be_skipped(
+        client, db, two_users, auth_headers_user1):
+    import onboarding_service
+
+    user, _ = two_users
+    state = onboarding_service.default_onboarding_state()
+    state['completed_steps'] = ['finish_tutorial']
+    user.onboarding_state = state
+    db.session.commit()
+
+    assert client.post(
+        '/onboarding/lesson/start',
+        headers=auth_headers_user1,
+        json={'lesson_id': 'defend_land'},
+    ).status_code == 200
+    assert client.post(
+        '/onboarding/mark_tip',
+        headers=auth_headers_user1,
+        json={'tip_keys': [
+            'menu:defend_land_intro_window',
+            'menu:defence_intro',
+            'menu:defence_battle_plan',
+            'menu:defence_final_response',
+        ]},
+    ).status_code == 200
+
+    skipped = client.post(
+        '/onboarding/lesson/skip_step',
+        headers=auth_headers_user1,
+        json={
+            'lesson_id': 'defend_land',
+            'step_id': 'defence_save',
+        },
+    )
+
+    assert skipped.status_code == 200
+    onboarding = skipped.get_json()['onboarding']
+    assert onboarding['active_lesson'] is None
+    assert 'finish_defend_land_lesson' in onboarding['completed_steps']
+    lesson = next(
+        item for item in onboarding['lessons']
+        if item['id'] == 'defend_land')
+    assert lesson['completed'] is True
+    assert lesson['progress_label'] == '5/5'
+
+
+def test_follow_up_curriculum_has_no_explore_bucket_and_stronger_rewards():
+    import onboarding_service
+
+    assert [lesson['id'] for lesson in onboarding_service.FOLLOW_UP_LESSONS] == [
+        'grow_collection',
+        'build_attack',
+        'run_kingdom',
+        'defend_land',
+        'duel_basics',
+    ]
+    assert {
+        lesson['group'] for lesson in onboarding_service.FOLLOW_UP_LESSONS
+    } == {'lessons'}
+
+    rewards = {
+        step['id']: step['reward']
+        for step in onboarding_service.CORE_STEPS
+    }
+    assert rewards['finish_collection_lesson'] == {
+        'gold': 250,
+        'booster_packs': 2,
+        'booster_packs_side': 1,
+    }
+    assert rewards['finish_build_attack_lesson'] == {
+        'gold': 250,
+        'maps': 2,
+    }
+    assert rewards['finish_run_kingdom_lesson'] == {
+        'gold': 500,
+        'maps': 1,
+    }
+    assert rewards['finish_defend_land_lesson'] == {
+        'gold': 250,
+        'booster_packs': 2,
+        'booster_packs_side': 1,
+    }
+    assert rewards['finish_duel_basics_lesson'] == {
+        'gold': 500,
+        'booster_packs': 3,
+        'booster_packs_side': 2,
+    }
+
+
 def test_mark_tip_batch_is_atomic_and_persists_missing_client_ids(
         client, auth_headers_user1):
     response = client.post(
         '/onboarding/mark_tip', headers=auth_headers_user1,
         json={'tip_keys': [
-            'menu:open_starter_pack',
+            'menu:collection_growth_intro',
             'menu:collection_basics_window',
             'menu:loot_risk_intro',
             'duel:field',
@@ -543,7 +1251,11 @@ def test_mark_tip_batch_is_atomic_and_persists_missing_client_ids(
     )
     assert response.status_code == 200
     onboarding = response.get_json()['onboarding']
-    assert {'open_starter_pack', 'collection_basics_window', 'loot_risk_intro'}.issubset(
+    assert {
+        'collection_growth_intro',
+        'collection_basics_window',
+        'loot_risk_intro',
+    }.issubset(
         onboarding['menu_hints_seen'])
     assert onboarding['duel_hints_seen'] == ['field', 'game_status']
 
@@ -588,6 +1300,12 @@ def test_early_goals_stay_locked_until_first_journey_finishes(
     assert state['early_goals']
     assert all(goal.get('locked') is True for goal in state['early_goals'])
     assert all(goal['claimable'] is False for goal in state['early_goals'])
+    follow_ups = [
+        step for step in state['core_steps']
+        if step.get('group') != 'first_journey']
+    assert follow_ups
+    assert all(step.get('locked') is True for step in follow_ups)
+    assert all(step['claimable'] is False for step in follow_ups)
 
 
 def test_daily_quest_pool_eases_new_players_and_gates_duel_quests():
@@ -755,7 +1473,8 @@ def test_daily_quest_action_after_rollover_before_guide_is_counted(db, two_users
     assert quest['claimable'] is True
 
 
-def test_v1_state_only_preserves_tutorial_finish_after_final_card(db, two_users):
+def test_resettable_development_state_does_not_migrate_legacy_tutorial_flags(
+        db, two_users):
     import onboarding_service
 
     user, _ = two_users
@@ -771,5 +1490,5 @@ def test_v1_state_only_preserves_tutorial_finish_after_final_card(db, two_users)
         'menu_hints_seen': ['kingdom_after_conquer_map'],
     }
     state = onboarding_service._state(user)
-    assert 'finish_tutorial' in state['completed_steps']
-    assert state['schema_version'] == 2
+    assert 'finish_tutorial' not in state['completed_steps']
+    assert state['schema_version'] == 5

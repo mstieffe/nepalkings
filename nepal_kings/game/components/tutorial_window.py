@@ -370,7 +370,11 @@ class TutorialWindowDialogue:
 
         mobile = getattr(settings, 'TOUCH_TARGET_MIN', 0) > 0
         max_w = self.rect.w - int((0.06 if mobile else 0.14) * _SW)
-        max_h = int((0.30 if hero else 0.22) * _SH)
+        max_h_ratio = page.get(
+            'image_max_height_ratio',
+            0.30 if hero else 0.22,
+        )
+        max_h = int(max_h_ratio * _SH)
         if img.get_width() > max_w or img.get_height() > max_h:
             ratio = min(max_w / img.get_width(), max_h / img.get_height())
             img = pygame.transform.smoothscale(
