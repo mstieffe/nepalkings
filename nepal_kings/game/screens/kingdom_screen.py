@@ -2698,15 +2698,18 @@ class KingdomScreen(MenuScreenMixin, Screen):
         if self._handle_kingdom_management_events(events):
             return
 
-        super().handle_events(events)
+        if super().handle_events(events):
+            events = ()
 
         coach_step = self._current_kingdom_coach_step()
         if self._handle_menu_coach_events(events, coach_step):
             return
 
         for event in events:
-            # Icon buttons (settings, home, logout) — highest priority
-            if self._handle_icon_events(event):
+            # Full-screen menu overlays remain the highest-priority owner.
+            if ((getattr(self, '_onboarding_guide_open', False)
+                    or getattr(self, '_logout_dialogue', None))
+                    and self._handle_icon_events(event)):
                 continue
 
             # Recipient picker captures input first when open.
@@ -2717,6 +2720,29 @@ class KingdomScreen(MenuScreenMixin, Screen):
             # Thread modal captures normal kingdom input.
             if self._thread:
                 self._handle_thread_event(event)
+                continue
+
+            # The anchored land inspector is intentionally non-modal outside
+            # its panel, but every pointer event *inside* the panel belongs to
+            # it before icon chrome, map controls, or the map underneath.
+            if self._detail_box:
+                on_panel = (
+                    event.type in (MOUSEBUTTONUP, MOUSEBUTTONDOWN)
+                    and event.button == 1
+                    and self._detail_box.contains_point(event.pos)
+                )
+                if on_panel:
+                    map_drag_release = (
+                        event.type == MOUSEBUTTONUP
+                        and self._hex_map
+                        and self._hex_map.is_drag_release(event)
+                    )
+                    if not map_drag_release:
+                        self._detail_box.handle_event(event)
+                        continue
+
+            # Normal icon buttons are below open panels and modal pickers.
+            if self._handle_icon_events(event):
                 continue
 
             if (event.type == MOUSEBUTTONUP and event.button == 1
@@ -2776,26 +2802,6 @@ class KingdomScreen(MenuScreenMixin, Screen):
                     and not self._box_rect.collidepoint(event.pos)):
                 self.state.screen = 'game_menu'
                 return
-
-            # Anchored land inspector: consume only clicks that land on the
-            # panel itself (buttons / close).  Every other event falls through
-            # so the map stays pannable/zoomable and clicking another hex
-            # re-targets the panel (handled in the hex-map block below).
-            if self._detail_box:
-                on_panel = (
-                    event.type in (MOUSEBUTTONUP, MOUSEBUTTONDOWN)
-                    and event.button == 1
-                    and self._detail_box.contains_point(event.pos)
-                )
-                if on_panel:
-                    map_drag_release = (
-                        event.type == MOUSEBUTTONUP
-                        and self._hex_map
-                        and self._hex_map.is_drag_release(event)
-                    )
-                    if not map_drag_release:
-                        self._detail_box.handle_event(event)
-                        continue
 
             if (event.type == MOUSEBUTTONDOWN and event.button == 1
                     and self._begin_map_control_press(event.pos)):

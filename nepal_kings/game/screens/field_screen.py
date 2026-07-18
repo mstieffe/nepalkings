@@ -1548,23 +1548,6 @@ class FieldScreen(SubScreen):
             self._handle_tactics_hand_battle_inspection(events)
             return
         
-        # If in target selection mode, only allow figure selection
-        pending_spell_cast = hasattr(self.state, 'pending_spell_cast') and self.state.pending_spell_cast
-        pending_prelude_target = getattr(self.state, 'pending_conquer_prelude_target', None)
-        if pending_spell_cast or pending_prelude_target:
-            self._handle_target_selection(events)
-            return
-        
-        # If in defender selection mode, only allow selecting own figures as defender
-        if self.defender_selection_mode:
-            self._handle_defender_selection(events)
-            return
-
-        # If in conquer own-defender mode, original conquerer picks their OWN figure to defend
-        if self.conquer_own_defender_mode:
-            self._handle_conquer_own_defender_selection(events)
-            return
-        
         # Handle figure detail box events first (if open)
         if self.figure_detail_box:
             response = self.figure_detail_box.handle_events(events)
@@ -1775,6 +1758,27 @@ class FieldScreen(SubScreen):
             # If response is 'close', we already handled it above
             # For other actions, keep the box open unless user clicks close/outside
             return  # Don't process other events when detail box is open
+
+        # Selection modes are intentionally below the detail overlay.  A
+        # figure can remain the pending target while its detail box is open;
+        # taps inside that box must never select a covered field figure.
+        pending_spell_cast = (
+            hasattr(self.state, 'pending_spell_cast')
+            and self.state.pending_spell_cast
+        )
+        pending_prelude_target = getattr(
+            self.state, 'pending_conquer_prelude_target', None)
+        if pending_spell_cast or pending_prelude_target:
+            self._handle_target_selection(events)
+            return
+
+        if self.defender_selection_mode:
+            self._handle_defender_selection(events)
+            return
+
+        if self.conquer_own_defender_mode:
+            self._handle_conquer_own_defender_selection(events)
+            return
         
         for event in events:
             if event.type == MOUSEBUTTONDOWN:

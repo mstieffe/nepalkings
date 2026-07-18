@@ -779,7 +779,15 @@ function show_infobox() {
             fields[label] = record;
             layer.appendChild(input);
 
-            input.addEventListener('pointerdown', resumeAudio);
+            input.addEventListener('pointerdown', function(){
+                // Treat every tap as a fresh edit intent. In particular, iOS
+                // may retain the DOM focus element after the keyboard closes,
+                // so a second tap is not guaranteed to emit another `focus`.
+                record.active = true;
+                record.done = false;
+                record.dirty = true;
+                resumeAudio();
+            });
             input.addEventListener('focus', function(){
                 record.active = true;
                 record.done = false;
@@ -829,7 +837,10 @@ function show_infobox() {
 
         window.nk_keyboard_poll = function(label){
             var record = fields[String(label)];
-            if (!record || (!record.dirty && !record.active)) return null;
+            // Publish transitions and edits only. Returning the unchanged
+            // active value every animation frame made canvas-side fields look
+            // as though they were continuously being refreshed.
+            if (!record || !record.dirty) return null;
             var snapshot = {
                 value: record.input.value,
                 active: record.active,
@@ -838,6 +849,17 @@ function show_infobox() {
             record.dirty = false;
             record.done = false;
             return snapshot;
+        };
+
+        window.nk_keyboard_set_value = function(label, value){
+            var record = fields[String(label)];
+            if (!record) return false;
+            value = String(value == null ? '' : value);
+            if (record.input.value !== value) {
+                record.input.value = value;
+                record.dirty = true;
+            }
+            return true;
         };
 
         window.nk_keyboard_set_enabled = function(value){

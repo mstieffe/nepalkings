@@ -449,6 +449,15 @@ class NewGameScreen(MenuScreenMixin, Screen):
         clear_inputs()
         self._web_inputs_enabled = None
 
+    def _sync_mobile_web_field(self, field, *, focus=False):
+        """Mirror canvas-side changes into the registered native input."""
+        if not getattr(self, '_mobile_ui', False):
+            return
+        from utils.web_keyboard import set_input_value
+        set_input_value(field.name, field.content)
+        if focus:
+            field.activate()
+
     @staticmethod
     def _bg_fetch_challenges(username):
         """Thread-safe fetch of users + user data."""
@@ -687,6 +696,15 @@ class NewGameScreen(MenuScreenMixin, Screen):
         left = field.rect.x + int(0.012 * _SW)
         self.window.blit(
             surf, (left, field.rect.centery - surf.get_height() // 2))
+        if field.active and (pygame.time.get_ticks() // 500) % 2 == 0:
+            cursor_x = min(
+                field.rect.right - int(0.012 * _SW),
+                left + surf.get_width() + 2)
+            cursor_h = max(12, int(surf.get_height() * 0.85))
+            pygame.draw.line(
+                self.window, _SEARCH_TEXT,
+                (cursor_x, field.rect.centery - cursor_h // 2),
+                (cursor_x, field.rect.centery + cursor_h // 2), 2)
 
         self._search_clear_rect = pygame.Rect(0, 0, 0, 0)
         if field.content:
@@ -901,6 +919,7 @@ class NewGameScreen(MenuScreenMixin, Screen):
                 self.game_limit_field.content = str(points)
                 self.game_limit_field.cursor_pos = len(self.game_limit_field.content)
                 self._game_limit_synced = False
+                self._sync_mobile_web_field(self.game_limit_field)
                 from utils import sound
                 sound.play('ui_click')
                 return True
@@ -1069,7 +1088,8 @@ class NewGameScreen(MenuScreenMixin, Screen):
         if self._handle_menu_coach_events(events, coach_step):
             return
 
-        super().handle_events(events)
+        if super().handle_events(events):
+            events = ()
 
         for event in events:
             if self._handle_icon_events(event):
@@ -1135,6 +1155,8 @@ class NewGameScreen(MenuScreenMixin, Screen):
                 if (self._mobile_tab == 'players'
                         and self._search_clear_rect.collidepoint(event.pos)):
                     self.player_search_field.empty()
+                    self._sync_mobile_web_field(
+                        self.player_search_field, focus=True)
                     self._scroll_col1 = 0
                     self._rebuild_challenge_buttons()
                     continue
@@ -1415,6 +1437,7 @@ class NewGameScreen(MenuScreenMixin, Screen):
     def _set_game_limit_content(self, content):
         self.game_limit_field.content = str(content)[:self.game_limit_field.max_length]
         self.game_limit_field.cursor_pos = len(self.game_limit_field.content)
+        self._sync_mobile_web_field(self.game_limit_field)
 
     # ── Accepted-challenge notification ─────────────────────────
 

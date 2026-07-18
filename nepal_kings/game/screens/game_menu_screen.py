@@ -438,7 +438,8 @@ class GameMenuScreen(MenuScreenMixin, Screen):
         if self._handle_menu_coach_events(events, coach_step):
             return
 
-        super().handle_events(events)
+        if super().handle_events(events):
+            events = ()
 
         if (self.state.action["task"] == "onboarding_welcome"
                 and self.state.action["status"] != "open"):

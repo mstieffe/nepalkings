@@ -223,7 +223,9 @@ def test_web_uses_native_audio_manager_and_publishes_direct_assets():
     assert 'window.nk_keyboard_register' in index_html
     assert 'window.nk_keyboard_focus' in index_html
     assert 'window.nk_keyboard_poll' in index_html
+    assert 'window.nk_keyboard_set_value' in index_html
     assert 'window.nk_keyboard_set_enabled' in index_html
+    assert 'if (!record || !record.dirty) return null;' in index_html
     assert 'id="nk-keyboard-layer"' in index_html
     assert 'id="nk-keyboard-overlay"' not in index_html
     assert 'id="nk-keyboard-done"' not in index_html

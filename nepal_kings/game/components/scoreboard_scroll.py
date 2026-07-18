@@ -172,6 +172,19 @@ class ScoreboardScroll:
                                        self._cross_alpha)
             return
 
+        # The narrow mobile gutter works better as three full-width rows than
+        # as four half-width cells.  In particular, this leaves enough room
+        # for the opponent name instead of reducing both labels to ellipses.
+        if _IS_MOBILE:
+            rows = self._mobile_duel_row_rects()
+            for row in rows[:-1]:
+                line_y = row.bottom - self.y
+                self.draw_transparent_line(
+                    (0, line_y), (self.width, line_y),
+                    self._cross_color, settings.SCOREBOARD_CROSS_WIDTH,
+                    self._cross_alpha)
+            return
+
         # Horizontal line — shifted down to match bottom-row offset
         h_y = self.height // 2 + settings.SCOREBOARD_BOTTOM_ROW_EXTRA_Y // 2
         horizontal_line_start = (0, h_y)
@@ -355,6 +368,121 @@ class ScoreboardScroll:
         """Check if we're in conquer mode."""
         return self.game and getattr(self.game, 'mode', 'duel') == 'conquer'
 
+    def _mobile_duel_row_rects(self):
+        """Return bounded rows for the mobile duel scoreboard.
+
+        The two score rows receive any remainder pixels, while the final
+        metadata row is kept large enough for the shared mobile text floor.
+        """
+        inset = max(1, settings.SCOREBOARD_PANEL_BORDER_WIDTH)
+        inner = pygame.Rect(
+            self.x + inset,
+            self.y + inset,
+            max(1, self.width - (2 * inset)),
+            max(3, self.height - (2 * inset)),
+        )
+        meta_h = min(
+            inner.h - 2,
+            max(self.font_subtitle.get_height() + 2, inner.h // 3),
+        )
+        score_h = inner.h - meta_h
+        your_h = score_h // 2
+        return (
+            pygame.Rect(inner.x, inner.y, inner.w, your_h),
+            pygame.Rect(inner.x, inner.y + your_h, inner.w, score_h - your_h),
+            pygame.Rect(inner.x, inner.bottom - meta_h, inner.w, meta_h),
+        )
+
+    def _draw_mobile_score_row(self, rect, label, value, value_color):
+        """Draw one readable label/value line and return its drawn bounds."""
+        pad_x = max(3, int(0.004 * settings.SCREEN_WIDTH))
+        gap = max(2, int(0.002 * settings.SCREEN_WIDTH))
+
+        value_obj = self.font_number.render(str(value), True, value_color)
+        value_rect = value_obj.get_rect(
+            midright=(rect.right - pad_x, rect.centery))
+
+        label_left = rect.x + pad_x
+        max_label_w = max(1, value_rect.left - gap - label_left)
+        fitted_label = self._ellipsize(
+            label, self.font_subtitle, max_label_w)
+        label_obj = self.font_subtitle.render(
+            fitted_label, True, self._text_color)
+        label_rect = label_obj.get_rect(
+            midleft=(label_left, rect.centery))
+
+        self.window.blit(label_obj, label_rect)
+        self.window.blit(value_obj, value_rect)
+        return label_rect, value_rect
+
+    def _mobile_duel_meta_tokens(self, in_battle, max_width):
+        """Build turn, round, and target tokens that fit the metadata row."""
+        turns = (
+            getattr(self.game, 'battle_turns_left', 0)
+            if in_battle
+            else self.text_dict.get('turns_left', 0)
+        )
+        round_number = self.text_dict.get('round', 0)
+        target = self.text_dict.get('game_limit', '')
+        phase_color = (220, 60, 60) if in_battle else self._text_color
+
+        phase_word = 'Battle' if in_battle else 'Turns'
+        tokens = [
+            (f'{phase_word} {turns}', phase_color),
+            (f'R{round_number}', self._value_color),
+            (f'/{target}', (250, 221, 0)),
+        ]
+        gap = max(1, int(0.0015 * settings.SCREEN_WIDTH))
+        total_w = (
+            sum(self.font_subtitle.size(text)[0] for text, _ in tokens)
+            + gap * (len(tokens) - 1)
+        )
+        if total_w > max_width:
+            phase_letter = 'B' if in_battle else 'T'
+            tokens[0] = (f'{phase_letter}{turns}', phase_color)
+        return tokens
+
+    def _draw_mobile_duel_meta(self, rect, in_battle):
+        """Draw the compact turn / round / target footer."""
+        pad_x = max(2, int(0.002 * settings.SCREEN_WIDTH))
+        gap = max(1, int(0.0015 * settings.SCREEN_WIDTH))
+        tokens = self._mobile_duel_meta_tokens(
+            in_battle, rect.w - (2 * pad_x))
+        rendered = [
+            (self.font_subtitle.render(text, True, color), text)
+            for text, color in tokens
+        ]
+        total_w = (
+            sum(surface.get_width() for surface, _ in rendered)
+            + gap * (len(rendered) - 1)
+        )
+        cursor_x = rect.centerx - total_w // 2
+        drawn = []
+        for surface, text in rendered:
+            token_rect = surface.get_rect(
+                midleft=(cursor_x, rect.centery))
+            self.window.blit(surface, token_rect)
+            drawn.append((text, token_rect))
+            cursor_x = token_rect.right + gap
+        return drawn
+
+    def _draw_mobile_duel_msg(self, in_battle):
+        """Render the duel scoreboard as three scan-friendly mobile rows."""
+        your_row, opponent_row, meta_row = self._mobile_duel_row_rects()
+        self._draw_mobile_score_row(
+            your_row,
+            'You',
+            self.text_dict.get('your_score', ''),
+            settings.COLOR_GREEN,
+        )
+        self._draw_mobile_score_row(
+            opponent_row,
+            self.text_dict.get('opponent', 'Opponent'),
+            self.text_dict.get('opponent_score', ''),
+            settings.COLOR_RED,
+        )
+        self._draw_mobile_duel_meta(meta_row, in_battle)
+
     def draw_msg(self):
         """Render the scoreboard content."""
         if self._is_conquer():
@@ -411,17 +539,19 @@ class ScoreboardScroll:
             in_battle = (getattr(self.game, 'in_battle_phase', False) or
                          (getattr(self.game, 'battle_confirmed', False) and
                           getattr(self.game, 'battle_turn_player_id', None) is not None))
-        # On mobile, skip the subtitle to save space
-        _mobile = _IS_MOBILE
+        if _IS_MOBILE:
+            self._draw_mobile_duel_msg(in_battle)
+            return
+
         if in_battle:
             battle_turns = getattr(self.game, 'battle_turns_left', 0)
             self.draw_cell("Turns Left", battle_turns, self.x, self.y,
-                           subtitle=None if _mobile else "(battle)",
+                           subtitle="(battle)",
                            subtitle_color=(220, 60, 60),
                            y_offset=top_offset, text_spacing=top_spacing)
         else:
             self.draw_cell("Turns Left", self.text_dict.get("turns_left", ""), self.x, self.y,
-                           subtitle=None if _mobile else "(build-up)",
+                           subtitle="(build-up)",
                            subtitle_color=(90, 115, 150),
                            y_offset=top_offset, text_spacing=top_spacing)
         self.draw_cell("Round", self.text_dict.get("round", ""), self.x + self.cell_width, self.y,

@@ -404,6 +404,9 @@ class Hand:
                         self.deselect_all_cards()
                 elif response in ['cancel', 'ok']:
                     self.dialogue_box = None
+            # The dialogue owned this event batch even if it just closed.
+            # Never let the same touch/click toggle a card underneath.
+            return
         else:
             # Check for button clicks (only in normal mode)
             if not self.discard_mode:
@@ -442,6 +445,11 @@ class Hand:
                                     )
                                 else:
                                     self.handle_button_click()
+
+        # Opening a dialogue from a hand control also consumes the event that
+        # opened it; that press must not select an overlapping card.
+        if self.dialogue_box:
+            return
 
         # Handle slot events - only for the topmost card under the mouse
         # This prevents multiple overlapping cards from being selected

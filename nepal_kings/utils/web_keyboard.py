@@ -76,6 +76,13 @@ def clear_inputs():
     return _js_call('nk_keyboard_clear')
 
 
+def set_input_value(label='', value=''):
+    """Keep a registered native input aligned with a canvas-side edit."""
+    return _js_call(
+        'nk_keyboard_set_value', str(label), str(value),
+    )
+
+
 def open_input(
         label='', current='', is_password=False, max_length=64,
         input_mode='text'):

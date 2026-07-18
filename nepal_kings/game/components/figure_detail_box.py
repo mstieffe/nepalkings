@@ -1144,18 +1144,19 @@ class FigureDetailBox:
 
         for event in events:
             if event.type == pygame.MOUSEBUTTONDOWN:
+                event_pos = getattr(event, 'pos', mouse_pos)
                 
                 # Check if X button was clicked
-                if self.close_button_rect.collidepoint(mouse_pos):
+                if self.close_button_rect.collidepoint(event_pos):
                     return 'close'
                 
                 # Check if clicked outside the box
-                if not self.border_rect.collidepoint(mouse_pos):
+                if not self.border_rect.collidepoint(event_pos):
                     return 'close'
                 
                 # Check if any action button was clicked
                 for button in self.buttons:
-                    if button.collide():
+                    if button.collide(event_pos):
                         # Check if button is disabled
                         if hasattr(button, 'disabled') and button.disabled:
                             # Return a special code to indicate disabled button click

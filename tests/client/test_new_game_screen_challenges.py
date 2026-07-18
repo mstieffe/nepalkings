@@ -171,3 +171,25 @@ def test_on_enter_requests_roster_immediately():
 
     screen._register_mobile_web_inputs.assert_called_once_with()
     screen._request_matchmaking_refresh.assert_called_once_with(manual=True)
+
+
+def test_mobile_search_clear_syncs_native_value_and_refocuses(monkeypatch):
+    from game.screens.new_game_screen import NewGameScreen
+    from utils import web_keyboard
+
+    synced = []
+    monkeypatch.setattr(
+        web_keyboard, 'set_input_value',
+        lambda label, value: synced.append((label, value)) or True)
+    field = SimpleNamespace(
+        name='player_search',
+        content='',
+        activate=MagicMock(),
+    )
+    screen = NewGameScreen.__new__(NewGameScreen)
+    screen._mobile_ui = True
+
+    screen._sync_mobile_web_field(field, focus=True)
+
+    assert synced == [('player_search', '')]
+    field.activate.assert_called_once_with()

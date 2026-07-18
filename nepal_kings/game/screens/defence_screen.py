@@ -2989,7 +2989,8 @@ class DefenceScreen(MenuScreenMixin, Screen):
     def handle_events(self, events):
         if self._handle_tutorial_completion_events(events):
             return
-        super().handle_events(events)
+        if super().handle_events(events):
+            events = ()
 
         # Handle prelude / counter spell confirmation dialogue responses
         response = self.state.action.get('status')

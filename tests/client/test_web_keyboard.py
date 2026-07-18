@@ -24,6 +24,7 @@ def test_web_keyboard_bridge_opens_and_polls_native_input(monkeypatch):
     assert web_keyboard.register_input(
         'username', 'Mal', False, 30, rect) is True
     assert web_keyboard.open_input('username', 'Mal', False, 30) is True
+    assert web_keyboard.set_input_value('username', 'Malla') is True
     assert web_keyboard.poll_input('username') == {
         'value': 'Malla',
         'active': True,
@@ -34,6 +35,8 @@ def test_web_keyboard_bridge_opens_and_polls_native_input(monkeypatch):
         '"username","Mal",false,30,100,120,240,48,"text")',
         'window.nk_keyboard_focus&&window.nk_keyboard_focus('
         '"username","Mal",false,30,"text")',
+        'window.nk_keyboard_set_value&&window.nk_keyboard_set_value('
+        '"username","Malla")',
         'JSON.stringify(window.nk_keyboard_poll&&'
         'window.nk_keyboard_poll("username"))',
     ]
@@ -47,6 +50,7 @@ def test_input_field_syncs_non_blocking_mobile_overlay(monkeypatch):
     states = iter([
         {'value': 'Malla', 'active': True, 'done': False},
         {'value': 'MallaKing', 'active': False, 'done': True},
+        {'value': 'Malla', 'active': True, 'done': False},
     ])
     monkeypatch.setattr(utils_module.sys, 'platform', 'emscripten')
     monkeypatch.setattr(web_keyboard, 'is_mobile', lambda: True)
@@ -87,6 +91,12 @@ def test_input_field_syncs_non_blocking_mobile_overlay(monkeypatch):
     assert field.cursor_pos == len('MallaKing')
     assert field.active is False
     assert field._web_input_pending is False
+
+    # A later DOM refocus/edit must resume synchronization after blur.
+    assert field.sync_web_input() is True
+    assert field.content == 'Malla'
+    assert field.active is True
+    assert field._web_input_pending is True
 
 
 def test_blurred_mobile_input_keeps_completed_value(monkeypatch):

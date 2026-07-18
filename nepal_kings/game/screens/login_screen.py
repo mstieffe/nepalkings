@@ -941,7 +941,8 @@ class LoginScreen(Screen):
         self._web_inputs_enabled = None
 
     def handle_events(self, events):
-        super().handle_events(events)
+        if super().handle_events(events):
+            events = ()
 
         # While a legal document is open, it captures all input.
         if self._handle_legal_doc_events(events):

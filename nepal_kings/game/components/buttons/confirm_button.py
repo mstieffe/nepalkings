@@ -67,10 +67,11 @@ class ConfirmButton:
             g = pygame.image.load(settings.CONFIRM_BUTTON_GLOW_DIR + colour + '.png').convert_alpha()
             self.glow_images[colour] = pygame.transform.smoothscale(g, (glow_w, glow_h))
 
-    def collide(self):
+    def collide(self, pos=None):
         pad = self.hit_pad
         hit = self.rect.inflate(2 * pad, 2 * pad) if pad else self.rect
-        return hit.collidepoint(pygame.mouse.get_pos())
+        return hit.collidepoint(
+            pygame.mouse.get_pos() if pos is None else pos)
 
     def draw(self):
         # ---- Disabled state: greyscale, no glow ----

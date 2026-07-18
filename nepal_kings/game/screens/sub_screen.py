@@ -295,6 +295,16 @@ class SubScreen:
 
     def handle_events(self, events):
         """Handle events like mouse clicks and quit."""
+        # Derived subscreens own the response semantics for their overlays,
+        # but the shared scroll/close controls sit underneath them.  Do not
+        # let the same pointer event reach those covered controls first.
+        if any(getattr(self, name, None) for name in (
+                'dialogue_box',
+                'figure_detail_box',
+                'battle_move_detail_box',
+                '_figure_detail_box',
+                '_move_detail_box')):
+            return
         if self.scroll_text_list_shifter:
             self.scroll_text_list_shifter.handle_events(events)
         for event in events:
@@ -362,6 +372,13 @@ class SubScreen:
     def update(self, game):
         """Update control buttons and game/menu buttons."""
         self.game = game
+        if any(getattr(self, name, None) for name in (
+                'dialogue_box',
+                'figure_detail_box',
+                'battle_move_detail_box',
+                '_figure_detail_box',
+                '_move_detail_box')):
+            return
         for button in self.buttons:
             button.update()
         if self.scroll_text_list_shifter:

@@ -3,7 +3,9 @@
 from config.screen_settings import SCREEN_WIDTH, SCREEN_HEIGHT, _FS, _UI_SCALE, _IS_MOBILE
 from config.font_settings import FS_TITLE, FS_HEADING, FS_SMALL, FS_TINY, FS_FLOOR
 
-INFO_SCROLL_WIDTH = int(0.105 * SCREEN_WIDTH)
+# Mobile fonts are deliberately enlarged for legibility.  Use the full duel
+# side gutter without crossing under the playing-board frame at 12.4% width.
+INFO_SCROLL_WIDTH = int((0.112 if _IS_MOBILE else 0.105) * SCREEN_WIDTH)
 INFO_SCROLL_X = int(0.011 * SCREEN_WIDTH)   
 INFO_SCROLL_Y = int(0.36 * SCREEN_HEIGHT)
 
@@ -18,12 +20,12 @@ INFO_SCROLL_LINE_SPACING = int(0.035 * SCREEN_HEIGHT)
 INFO_SCROLL_TEXT_COLOR = (220, 215, 200)        # warm off-white for body text
 INFO_SCROLL_TITLE_COLOR = (250, 221, 0)         # gold for title
 INFO_SCROLL_SCORE_COLOR = (200, 200, 200)
-INFO_SCROLL_TEXT_MARGIN = int(0.005 * SCREEN_WIDTH)
+INFO_SCROLL_TEXT_MARGIN = int((0.003 if _IS_MOBILE else 0.005) * SCREEN_WIDTH)
 INFO_SCROLL_TEXT_PADDING = int(0.002 * SCREEN_WIDTH)
 
 INFO_SCROLL_ICON_SIZE = int(0.019 * SCREEN_WIDTH)
-INFO_SCROLL_ICON_MARGIN = int(0.006 * SCREEN_WIDTH)
-INFO_SCROLL_ICON_SPACING = int(0.004 * SCREEN_WIDTH)
+INFO_SCROLL_ICON_MARGIN = int((0.004 if _IS_MOBILE else 0.006) * SCREEN_WIDTH)
+INFO_SCROLL_ICON_SPACING = int((0.003 if _IS_MOBILE else 0.004) * SCREEN_WIDTH)
 
 # Dark-theme panel for info scroll
 INFO_SCROLL_BG_CLR = (35, 30, 25, 200)          # warm dark semi-transparent

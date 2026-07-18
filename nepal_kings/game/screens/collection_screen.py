@@ -2673,7 +2673,8 @@ class CollectionScreen(MenuScreenMixin, Screen):
     def handle_events(self, events):
         if self._handle_tutorial_completion_events(events):
             return
-        super().handle_events(events)
+        if super().handle_events(events):
+            events = ()
 
         # Handle open/buy dialogue response
         if self.state.action['status'] == 'open':
@@ -2738,6 +2739,13 @@ class CollectionScreen(MenuScreenMixin, Screen):
         if self._handle_menu_coach_events(events, coach_step):
             return
 
+        overlay_batch_captured = bool(
+            self._reveal_overlay
+            or self._sell_dialogue
+            or self._trade_dialogue
+            or self._craft_dialogue
+            or self._profile_dialogue
+        )
         for event in events:
             # Reveal overlay captures all input when active
             if self._reveal_overlay:
@@ -2866,6 +2874,11 @@ class CollectionScreen(MenuScreenMixin, Screen):
                         self._profile_dialogue = None
                         self._profile_card = None
                         self._profile_pinned_tooltip = None
+                continue
+
+            # An overlay that was open at the start owns the complete event
+            # batch, even if an earlier event in it closed the overlay.
+            if overlay_batch_captured:
                 continue
 
             if self._handle_icon_events(event):

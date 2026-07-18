@@ -97,7 +97,12 @@ class Screen:
         }
 
     def handle_events(self, events):
-        """Handle events like mouse clicks and quit."""
+        """Handle shared events and report whether a dialogue captured input.
+
+        A visible dialogue is modal: it receives the whole frame's event
+        batch before any screen controls, and callers must not route that
+        same batch to covered UI afterward.
+        """
         legacy_controls_enabled = (
             self.state.screen not in ("login", "game")
             and bool(getattr(self, 'control_buttons', []))
@@ -107,7 +112,19 @@ class Screen:
             if event.type == QUIT:
                 pygame.quit()
                 sys.exit()
-            elif event.type == MOUSEBUTTONDOWN and legacy_controls_enabled:
+
+        # Dialogue input must win over every covered screen control.  Return
+        # True even when an action closes the dialogue so its release event
+        # cannot activate something underneath in the same frame.
+        if self.dialogue_box:
+            response = self.dialogue_box.update(events)
+            if response:
+                self.state.action["status"] = response
+                self.dialogue_box = None
+            return True
+
+        for event in events:
+            if event.type == MOUSEBUTTONDOWN and legacy_controls_enabled:
                 # Handle legacy top-level logout/home controls only when enabled.
                 if (
                     hasattr(self, 'logout_button')
@@ -131,12 +148,7 @@ class Screen:
                 ):
                     self.state.screen = "game_menu"
 
-        # Handle events for dialogue box
-        if self.dialogue_box:
-            response = self.dialogue_box.update(events)
-            if response:
-                self.state.action["status"] = response  # "yes" or "no" from dialogue box
-                self.dialogue_box = None  # Close the dialogue box once action is taken
+        return False
 
     def render(self):
         """Render buttons, messages, and the dialogue box."""
@@ -167,6 +179,11 @@ class Screen:
 
     def update(self):
         """Update control buttons and game/menu buttons."""
+        # Some gameplay/menu buttons act directly from the held pointer state
+        # in update(), without waiting for an event handler.  Keep them inert
+        # behind a modal dialogue as well as shielding the event batch above.
+        if self.dialogue_box:
+            return
         for button in self.control_buttons:
             button.update()
         for button in self.game_buttons:

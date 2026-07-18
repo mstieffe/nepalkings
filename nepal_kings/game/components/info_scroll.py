@@ -33,9 +33,6 @@ class InfoScroll:
 
         self.rect = pygame.Rect(self.x, self.y, self.width, self.height)
 
-        # Fixed pill width so values stay aligned regardless of digit count
-        self._pill_min_w = self.font_text.size("00/00")[0] + 2 * settings.INFO_SCROLL_TEXT_PADDING
-
         # Build the dark semi-transparent background panel
         self._build_panel()
         self.preloaded_icons = self._preload_icons()
@@ -76,23 +73,57 @@ class InfoScroll:
                          (0, 0, self.width, self.height),
                          width=settings.INFO_SCROLL_BORDER_WIDTH, border_radius=r)
 
-    def _draw_text_with_background(self, text, color, x, y, has_deficit=False):
-        """Render text with a fixed-width colored background pill, text centred."""
-        text_color = (255, 255, 255)
-        text_obj = self.font_text.render(text, True, text_color)
-        text_h = text_obj.get_height()
+    def _resource_row_rects(self, starting_y_position):
+        """Return the icon and two value cells for one resource row.
 
-        # Use a fixed minimum pill width so all rows stay aligned
-        natural_w = text_obj.get_width() + 2 * settings.INFO_SCROLL_TEXT_PADDING
-        pill_w = max(natural_w, self._pill_min_w)
-        pill_h = text_h + 2 * settings.INFO_SCROLL_TEXT_PADDING
-
-        bg_rect = pygame.Rect(
-            x - settings.INFO_SCROLL_TEXT_PADDING,
-            y - text_h // 2 - settings.INFO_SCROLL_TEXT_PADDING,
-            pill_w,
-            pill_h
+        Deriving both pill widths from the panel's inner bounds keeps the
+        mobile legibility font from pushing the black value past the border.
+        """
+        icon_rect = pygame.Rect(
+            self.x + settings.INFO_SCROLL_ICON_MARGIN,
+            starting_y_position,
+            settings.INFO_SCROLL_ICON_SIZE,
+            settings.INFO_SCROLL_ICON_SIZE,
         )
+        pill_x = icon_rect.right + settings.INFO_SCROLL_TEXT_MARGIN
+        content_right = self.rect.right - settings.INFO_SCROLL_ICON_MARGIN
+        gap = settings.INFO_SCROLL_ICON_SPACING
+        available = max(2, content_right - pill_x - gap)
+        red_w = available // 2
+        black_w = available - red_w
+        pill_h = (
+            self.font_text.get_height()
+            + 2 * settings.INFO_SCROLL_TEXT_PADDING
+        )
+        pill_y = icon_rect.centery - pill_h // 2
+        red_rect = pygame.Rect(pill_x, pill_y, red_w, pill_h)
+        black_rect = pygame.Rect(red_rect.right + gap, pill_y, black_w, pill_h)
+        return icon_rect, red_rect, black_rect
+
+    def _font_for_pill(self, text, width):
+        """Use the normal resource font, shrinking only unusually wide values."""
+        max_text_w = max(
+            1, width - 2 * settings.INFO_SCROLL_TEXT_PADDING)
+        font = self.font_text
+        if font.size(text)[0] <= max_text_w:
+            return font
+
+        size = settings.INFO_SCROLL_FONT_SIZE
+        minimum = max(10, int(size * 0.70))
+        while size > minimum:
+            size -= 1
+            font = settings.get_font(size, allow_small=True)
+            if font.size(text)[0] <= max_text_w:
+                break
+        return font
+
+    def _draw_text_with_background(
+            self, text, color, rect, has_deficit=False):
+        """Render text centred inside a bounded colored value pill."""
+        text_color = (255, 255, 255)
+        text_obj = self._font_for_pill(text, rect.w).render(
+            text, True, text_color)
+        bg_rect = pygame.Rect(rect)
 
         # Draw pill background with rounded corners
         pill_surface = pygame.Surface((bg_rect.width, bg_rect.height), pygame.SRCALPHA)
@@ -119,12 +150,14 @@ class InfoScroll:
 
         # Draw rows with preloaded icons
         for row in self.text_data:
-            icon_x = self.x + settings.INFO_SCROLL_ICON_MARGIN
-            text_y = starting_y_position + (settings.INFO_SCROLL_ICON_SIZE // 2)
+            icon_rect, red_rect, black_rect = self._resource_row_rects(
+                starting_y_position)
 
             if 'icon_img_red' in row and 'icon_img_black' in row:
                 # Scenario: resources_df with two icons
-                self.window.blit(self.preloaded_icons[row['icon_img_red']], (icon_x, starting_y_position))
+                self.window.blit(
+                    self.preloaded_icons[row['icon_img_red']],
+                    icon_rect.topleft)
 
                 # Draw corresponding text with green/blue, use red for deficit
                 red_text = str(row['red'])
@@ -137,28 +170,22 @@ class InfoScroll:
                 # Muted pill colours for dark theme
                 red_color = settings.INFO_SCROLL_RED_PILL_CLR
                 black_color = settings.INFO_SCROLL_BLACK_PILL_CLR
-                
-                # Fixed column positions for consistent alignment
-                red_text_x = icon_x + settings.INFO_SCROLL_ICON_SIZE + settings.INFO_SCROLL_TEXT_MARGIN
-                black_text_x = red_text_x + self._pill_min_w + settings.INFO_SCROLL_ICON_SPACING
-                
+
                 self._draw_text_with_background(
-                    red_text, red_color,
-                    red_text_x,
-                    text_y,
+                    red_text, red_color, red_rect,
                     has_deficit=red_deficit
                 )
                 self._draw_text_with_background(
-                    black_text, black_color,
-                    black_text_x,
-                    text_y,
+                    black_text, black_color, black_rect,
                     has_deficit=black_deficit
                 )
 
             elif 'icon_img' in row:
                 # Scenario: slots_df with one icon
-                self.window.blit(self.preloaded_icons[row['icon_img']], (icon_x, starting_y_position))
-                
+                self.window.blit(
+                    self.preloaded_icons[row['icon_img']],
+                    icon_rect.topleft)
+
                 # Draw corresponding text with green/blue, use red for deficit
                 red_text = str(row['red'])
                 black_text = str(row['black'])
@@ -170,21 +197,13 @@ class InfoScroll:
                 # Muted pill colours for dark theme
                 red_color = settings.INFO_SCROLL_RED_PILL_CLR
                 black_color = settings.INFO_SCROLL_BLACK_PILL_CLR
-                
-                # Fixed column positions for consistent alignment
-                red_text_x = icon_x + settings.INFO_SCROLL_ICON_SIZE + settings.INFO_SCROLL_TEXT_MARGIN
-                black_text_x = red_text_x + self._pill_min_w + settings.INFO_SCROLL_TEXT_MARGIN
-                
+
                 self._draw_text_with_background(
-                    red_text, red_color,
-                    red_text_x,
-                    text_y,
+                    red_text, red_color, red_rect,
                     has_deficit=red_deficit
                 )
                 self._draw_text_with_background(
-                    black_text, black_color,
-                    black_text_x,
-                    text_y,
+                    black_text, black_color, black_rect,
                     has_deficit=black_deficit
                 )
 

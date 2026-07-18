@@ -611,7 +611,8 @@ class RankingScreen(MenuScreenMixin, Screen):
     # ── Events ────────────────────────────────────────────────────
 
     def handle_events(self, events):
-        super().handle_events(events)
+        if super().handle_events(events):
+            events = ()
 
         _box_rect = pygame.Rect(_BOX_X, _BOX_Y, _BOX_W, _BOX_H)
 

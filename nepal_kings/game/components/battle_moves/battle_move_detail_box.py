@@ -928,15 +928,16 @@ class BattleMoveDetailBox:
 
         for event in events:
             if event.type == pygame.MOUSEBUTTONDOWN:
-                if self.close_button_rect.collidepoint(mouse_pos):
+                event_pos = getattr(event, 'pos', mouse_pos)
+                if self.close_button_rect.collidepoint(event_pos):
                     return 'close'
-                if not self.border_rect.collidepoint(mouse_pos):
+                if not self.border_rect.collidepoint(event_pos):
                     return 'close'
 
                 if self.is_battle_context:
                     # Check action buttons
                     for action_id, btn in self.action_buttons:
-                        if btn.collide() and not btn.disabled:
+                        if btn.collide(event_pos) and not btn.disabled:
                             selected = self.get_selected_figure() if self.is_call_move else None
                             selected_dagger = self.get_selected_dagger() if action_id == 'combine' else None
                             return {
@@ -946,9 +947,9 @@ class BattleMoveDetailBox:
                                 'selected_dagger': selected_dagger,
                             }
                 else:
-                    if self.return_button and self.return_button.collide():
+                    if self.return_button and self.return_button.collide(event_pos):
                         return 'return'
-                    if self.replace_button and self.replace_button.collide():
+                    if self.replace_button and self.replace_button.collide(event_pos):
                         return 'replace'
         return None
 

@@ -991,7 +991,8 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
             return
         if self._handle_pending_purchase_dialogue(events):
             return
-        super().handle_events(events)
+        if super().handle_events(events):
+            events = ()
         if self.dialogue_box:
             return
         coach_step = self._current_kingdom_config_coach_step()

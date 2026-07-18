@@ -9495,8 +9495,13 @@ class ConquerGameScreen(GameScreen):
         self._normalize_conquer_subscreen()
         self._refresh_conquer_tab_locks()
 
-        for button in self._conquer_nav_buttons():
-            button.update(self.state)
+        overlay_blocks_button_updates = (
+            self._gameplay_input_overlay_open()
+            or self._is_conquer_timeline_overlay_open()
+        )
+        if not overlay_blocks_button_updates:
+            for button in self._conquer_nav_buttons():
+                button.update(self.state)
 
         self._normalize_conquer_subscreen()
 
@@ -9604,6 +9609,9 @@ class ConquerGameScreen(GameScreen):
                 self.dialogue_box = None
                 self.show_next_queued_notification()
                 return
+            # Keep non-action clicks inside the modal from reaching the
+            # tactics rail, ledger, header, or active subscreen below it.
+            return
 
         # While the battle-start countdown plays, any click skips straight
         # to GO (and never leaks into the UI below).
@@ -9640,6 +9648,13 @@ class ConquerGameScreen(GameScreen):
             return
 
         if self._handle_conquer_battle_coach_events(events):
+            return
+
+        # A detail/dialogue overlay owned by the active subscreen sits above
+        # the command bar, collapsed header, ledger, and tactics rail.
+        overlay_owner = self._gameplay_input_overlay_owner()
+        if overlay_owner is not None:
+            overlay_owner.handle_events(events)
             return
 
         if self._handle_conquer_command_events(events):

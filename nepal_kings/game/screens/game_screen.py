@@ -6217,8 +6217,34 @@ class GameScreen(Screen):
         """Disable floating notifications on the game screen."""
         pass
 
+    def _gameplay_input_overlay_open(self):
+        """Return whether held-pointer button updates must stay inert."""
+        if (getattr(self, 'dialogue_box', None)
+                or getattr(self, 'counter_spell_selector', None)):
+            return True
+        return self._gameplay_input_overlay_owner() is not None
 
-
+    def _gameplay_input_overlay_owner(self):
+        """Return the hand/subscreen that owns input above gameplay chrome."""
+        for hand_name in ('main_hand', 'side_hand'):
+            hand = getattr(self, hand_name, None)
+            if getattr(hand, 'dialogue_box', None):
+                return hand
+        subscreens = getattr(self, 'subscreens', {})
+        active_name = getattr(getattr(self, 'state', None), 'subscreen', None)
+        subscreen = subscreens.get(active_name)
+        if not subscreen:
+            return None
+        if any(getattr(subscreen, name, None) for name in (
+            'dialogue_box',
+            'figure_detail_box',
+            'battle_move_detail_box',
+            '_figure_detail_box',
+            '_move_detail_box',
+            '_card_picker_active',
+        )):
+            return subscreen
+        return None
 
     def update(self, events):
         """Update the game screen and all relevant components."""
@@ -6244,8 +6270,9 @@ class GameScreen(Screen):
 
         coach_step = self._current_duel_coach_step()
         coach_blocks_button_updates = self._duel_coach_blocks_updates(coach_step)
+        overlay_blocks_button_updates = self._gameplay_input_overlay_open()
 
-        if not coach_blocks_button_updates:
+        if not coach_blocks_button_updates and not overlay_blocks_button_updates:
             super().update()
         
         if block_subscreen_change:
@@ -6256,7 +6283,10 @@ class GameScreen(Screen):
             return
 
         # Handle click on locked battle button
-        if not coach_blocks_button_updates and self.battle_button.locked and self.battle_button.locked_clicked:
+        if (not coach_blocks_button_updates
+                and not overlay_blocks_button_updates
+                and self.battle_button.locked
+                and self.battle_button.locked_clicked):
             self.battle_button.locked_clicked = False
             if not self.dialogue_box:
                 self.queue_or_show_notification({
@@ -6271,7 +6301,7 @@ class GameScreen(Screen):
             self.last_update_time = current_time
             self.update_game()
 
-        if coach_blocks_button_updates:
+        if coach_blocks_button_updates or overlay_blocks_button_updates:
             return
 
         # Lightweight per-frame hover detection for card hands
@@ -6367,8 +6397,20 @@ class GameScreen(Screen):
                 # Show next queued notification if any
                 self.show_next_queued_notification()
                 return  # Don't process other events while dialogue is open
+            # A modal dialogue owns input even when the event did not activate
+            # one of its buttons.  In particular, its MOUSEBUTTONDOWN must not
+            # reach hands, tabs, or the active subscreen underneath.
+            return
 
         if self._handle_duel_coach_events(events):
+            return
+
+        # Hand confirmations and active-subscreen detail/dialogue overlays
+        # are drawn above the gameplay chrome. Route the complete batch to
+        # that owner before tabs, hands, or any other covered controls.
+        overlay_owner = self._gameplay_input_overlay_owner()
+        if overlay_owner is not None:
+            overlay_owner.handle_events(events)
             return
         
         # Check for ESC during Infinite Hammer mode (works across all subscreens)

@@ -2398,7 +2398,8 @@ class ConquerScreen(MenuScreenMixin, Screen):
             icon.update()
 
     def handle_events(self, events):
-        super().handle_events(events)
+        if super().handle_events(events):
+            events = ()
 
         # Handle cooldown / info dialogue response
         response = self.state.action.get('status')

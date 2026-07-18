@@ -680,6 +680,23 @@ class TestKingdomDragRelease:
         assert screen._hex_map.events == []
         assert screen._hex_map.zoomed_in == 1
 
+    def test_land_detail_panel_click_wins_over_covered_icon_and_map(self):
+        KingdomScreen, screen = self._screen()
+        detail = SimpleNamespace(
+            contains_point=lambda _pos: True,
+            handle_event=MagicMock(),
+        )
+        screen._detail_box = detail
+        screen._handle_icon_events = MagicMock(return_value=True)
+        event = SimpleNamespace(
+            type=pygame.MOUSEBUTTONUP, button=1, pos=(130, 130))
+
+        KingdomScreen.handle_events(screen, [event])
+
+        detail.handle_event.assert_called_once_with(event)
+        screen._handle_icon_events.assert_not_called()
+        assert screen._hex_map.events == []
+
     def test_zoom_button_press_release_elsewhere_does_not_select_map(self):
         KingdomScreen, screen = self._screen()
         screen._nav_rects = {'zoom_in': pygame.Rect(120, 120, 40, 40)}

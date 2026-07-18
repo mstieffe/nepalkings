@@ -353,7 +353,8 @@ class SettingsScreen(MenuScreenMixin, Screen):
         self._update_icon_buttons()
 
     def handle_events(self, events):
-        super().handle_events(events)
+        if super().handle_events(events):
+            events = ()
         _box_rect = pygame.Rect(_BOX_X, _BOX_Y, _BOX_W, _BOX_H)
         for event in events:
             if self._handle_icon_events(event):
