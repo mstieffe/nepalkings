@@ -87,6 +87,12 @@ def create_challenge(challenger_username, opponent_username, stake=45, game_limi
         if turn_time_limit is not None:
             data['turn_time_limit'] = turn_time_limit
         response = requests.post(f'{settings.SERVER_URL}/challenges/create_challenge', data=data, timeout=10)
+        if response.status_code >= 400:
+            return {
+                'success': False,
+                'message': _response_message(
+                    response, 'Failed to create challenge'),
+            }
         response.raise_for_status()
         return response.json()
     except requests.RequestException as e:

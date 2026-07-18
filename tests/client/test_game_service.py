@@ -33,3 +33,23 @@ def test_create_game_preserves_server_error_message(monkeypatch):
         'success': False,
         'message': 'player2 does not have enough gold (5/10)',
     }
+
+
+def test_create_challenge_preserves_server_error_message(monkeypatch):
+    from utils import game_service
+
+    def fake_post(*_args, **_kwargs):
+        return _Response(400, {
+            'success': False,
+            'message': 'Opponent is no longer available',
+        })
+
+    monkeypatch.setattr(game_service.requests, 'post', fake_post)
+
+    response = game_service.create_challenge(
+        'CurrentPlayer', 'MissingPlayer', stake=10, game_limit=7)
+
+    assert response == {
+        'success': False,
+        'message': 'Opponent is no longer available',
+    }

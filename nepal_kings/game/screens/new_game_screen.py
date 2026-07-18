@@ -22,6 +22,7 @@ logger = logging.getLogger('nk.screens.new_game')
 
 
 _SW, _SH = settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT
+_MOBILE_UI = bool(getattr(settings, 'TOUCH_TARGET_MIN', 0))
 
 DEFAULT_STAKE = 45
 DEFAULT_GAME_LIMIT = 21          # points to win; presets are shortcuts
@@ -76,6 +77,30 @@ _SCROLLBAR_CLR = (100, 95, 85, 180)
 _THUMB_CLR     = (200, 185, 150, 220)
 _THUMB_HOVER   = (240, 220, 170, 255)
 
+# Matchmaking controls
+_SEARCH_BG = (28, 27, 28)
+_SEARCH_BORDER = (125, 112, 86)
+_SEARCH_BORDER_ACTIVE = (230, 204, 118)
+_SEARCH_TEXT = (238, 231, 215)
+_SEARCH_HINT = (145, 139, 128)
+_TAB_BG = (42, 38, 32, 210)
+_TAB_ACTIVE_BG = (92, 72, 38, 230)
+_TAB_BORDER = (126, 109, 77)
+_TAB_ACTIVE_BORDER = (242, 210, 91)
+
+
+def _opponent_sort_key(user):
+    """Keep discoverable humans ahead of practice AI accounts."""
+    is_ai = bool(user.get('is_ai'))
+    is_online = bool(user.get('is_online'))
+    if is_ai:
+        group = 2
+    elif is_online:
+        group = 0
+    else:
+        group = 1
+    return group, str(user.get('username', '')).casefold()
+
 
 def _draw_panel(window, rect, corner_r=None):
     r = corner_r or settings.SUB_SCREEN_PANEL_CORNER_R
@@ -123,14 +148,24 @@ class NewGameScreen(MenuScreenMixin, Screen):
         self.open_challenges = []
         self.open_opponents = {}
         self.possible_opponents = []
+        self.visible_opponents = []
+        self._displayed_open_challenges = []
 
         self.challenge_buttons = []
         self.open_challenge_buttons = []
         self._selected_opponent = None
+        self._mobile_ui = _MOBILE_UI
+        self._mobile_tab = 'players'
+        self._challenge_poller = None
+        self._loading_matchmaking = True
+        self._last_search_query = ''
+        self._web_inputs_enabled = None
 
         # Fonts
         self._title_font = settings.get_font(settings.SUB_SCREEN_TITLE_FONT_SIZE, bold=True)
-        self._title_surf = self._title_font.render('New Game', True, settings.SUB_SCREEN_TITLE_CLR)
+        self._title_surf = self._title_font.render(
+            'Find a Duel' if self._mobile_ui else 'New Game',
+            True, settings.SUB_SCREEN_TITLE_CLR)
 
         self._header_font = settings.get_font(settings.SUB_SCREEN_HEADER_FONT_SIZE)
         self._panel_font = settings.get_font(settings.LIST_BTN_FONT_SIZE)
@@ -143,12 +178,60 @@ class NewGameScreen(MenuScreenMixin, Screen):
         self._reward_title_font = settings.get_font(settings.mobile_font_size(
             int(0.018 * _SH), settings.FS_BODY), bold=True)
 
-        # Layout positions inside box
-        self._title_y = _BOX_Y + _BOX_PAD
+        # Responsive layout. Mobile uses one list at a time and moves challenge
+        # configuration into its own step instead of shrinking the desktop
+        # two-column panel.
+        self._box_rect = pygame.Rect(_BOX_X, _BOX_Y, _BOX_W, _BOX_H)
+        self._box_pad_x = max(12, int(0.020 * _SW))
+        self._col1_x = _COL1_X
+        self._col2_x = _COL2_X
+        self._col_w = _COL_W
+        self._config_y = _CONFIG_Y
+        self._list_button_h = settings.LIST_BTN_H
+        self._list_gap = int(0.008 * _SH)
+
+        self._title_y = self._box_rect.y + _BOX_PAD
         title_bottom = self._title_y + self._title_surf.get_height() + int(0.010 * _SH)
         self._hdr_y = title_bottom
-        self._list_top = self._hdr_y + self._header_font.get_height() + int(0.010 * _SH)
-        self._list_bottom = _LIST_BOTTOM
+
+        if self._mobile_ui:
+            self._col1_x = self._box_rect.x + self._box_pad_x
+            self._col2_x = self._col1_x
+            self._col_w = self._box_rect.w - 2 * self._box_pad_x
+            tab_y = title_bottom
+            tab_h = max(settings.TOUCH_TARGET_MIN, int(0.075 * _SH))
+            tab_gap = max(6, int(0.010 * _SW))
+            tab_w = (self._col_w - tab_gap) // 2
+            self._players_tab_rect = pygame.Rect(
+                self._col1_x, tab_y, tab_w, tab_h)
+            self._challenges_tab_rect = pygame.Rect(
+                self._players_tab_rect.right + tab_gap, tab_y, tab_w, tab_h)
+            search_y = self._players_tab_rect.bottom + int(0.018 * _SH)
+            search_h = max(settings.TOUCH_TARGET_MIN, int(0.078 * _SH))
+            refresh_w = max(int(0.15 * _SW), 112)
+            control_gap = max(8, int(0.012 * _SW))
+            search_w = self._col_w - refresh_w - control_gap
+            self._refresh_rect = pygame.Rect(
+                self._col1_x + search_w + control_gap,
+                search_y, refresh_w, search_h)
+            self._list_top = search_y + search_h + int(0.018 * _SH)
+            self._list_bottom = self._box_rect.bottom - int(0.022 * _SH)
+            self._list_button_h = max(
+                settings.LIST_BTN_H, settings.TOUCH_TARGET_MIN)
+            self._config_y = self._list_top
+        else:
+            search_h = int(0.038 * _SH)
+            search_y = self._hdr_y + self._header_font.get_height() + int(0.010 * _SH)
+            refresh_w = int(0.075 * _SW)
+            control_gap = int(0.008 * _SW)
+            search_w = self._col_w - refresh_w - control_gap
+            self._refresh_rect = pygame.Rect(
+                self._col1_x + search_w + control_gap,
+                search_y, refresh_w, search_h)
+            self._list_top = search_y + search_h + int(0.014 * _SH)
+            self._list_bottom = _LIST_BOTTOM
+            self._players_tab_rect = pygame.Rect(0, 0, 0, 0)
+            self._challenges_tab_rect = pygame.Rect(0, 0, 0, 0)
 
         # Scroll state (one per column)
         self._scroll_col1 = 0
@@ -157,31 +240,62 @@ class NewGameScreen(MenuScreenMixin, Screen):
         self._max_scroll_col2 = 0
         self._dragging_thumb = None  # 'col1' | 'col2' | None
         self._drag_offset = 0
+        self._touch_scrolling = None
+        self._touch_scroll_moved = 0
 
         # ── X close button (top-right of box) ───────────────────────
-        _xsz = int(0.028 * _SH)
+        _xsz = max(int(0.028 * _SH), settings.TOUCH_ICON_MIN)
         _xmargin = int(0.012 * _SW)
         self._btn_close_rect = pygame.Rect(
-            _BOX_X + _BOX_W - _xsz - _xmargin,
-            _BOX_Y + _xmargin,
+            self._box_rect.right - _xsz - _xmargin,
+            self._box_rect.y + _xmargin,
             _xsz, _xsz)
+        self._btn_close_hit_rect = self._btn_close_rect.inflate(
+            2 * settings.TOUCH_HIT_PAD, 2 * settings.TOUCH_HIT_PAD)
+
+        # Player search is local and instant; no server round-trip is needed
+        # for each character because the screen already refreshes the roster.
+        search_x = self._col1_x
+        search_w = self._refresh_rect.x - search_x - (
+            max(8, int(0.012 * _SW)) if self._mobile_ui else int(0.008 * _SW))
+        self.player_search_field = InputField(
+            self.window, search_x, self._refresh_rect.y,
+            "player_search", "", False, False,
+            max_length=32, width=search_w, height=self._refresh_rect.h,
+            web_overlay=self._mobile_ui)
+        self.player_search_field.font = self._panel_font
+        self.player_search_field.web_input_mode = 'search'
+        self._search_clear_rect = pygame.Rect(0, 0, 0, 0)
 
         # ── Config panel widgets ────────────────────────────────────
-        field_x = _BOX_X + int(0.20 * _SW)
-        field_w = int(0.06 * _SW)
-        field_h = int(0.032 * _SH)
-        cfg_row1 = _CONFIG_Y + int(0.050 * _SH)
-        cfg_row2 = cfg_row1 + field_h + int(0.035 * _SH)
+        if self._mobile_ui:
+            field_x = self._col1_x
+            field_w = max(100, int(0.14 * _SW))
+            field_h = max(settings.TOUCH_TARGET_MIN, int(0.090 * _SH))
+            cfg_row1 = self._box_rect.y + int(0.285 * _SH)
+            cfg_row2 = cfg_row1
+            limit_x = field_x + field_w + int(0.030 * _SW)
+        else:
+            field_x = self._box_rect.x + int(0.20 * _SW)
+            field_w = int(0.06 * _SW)
+            field_h = int(0.032 * _SH)
+            cfg_row1 = self._config_y + int(0.050 * _SH)
+            cfg_row2 = cfg_row1 + field_h + int(0.035 * _SH)
+            limit_x = field_x
 
         self.stake_field = InputField(
             self.window, field_x, cfg_row1,
             "Stake (gold)", str(DEFAULT_STAKE), False, False,
-            max_length=6, width=field_w, height=field_h)
+            max_length=6, width=field_w, height=field_h,
+            web_overlay=self._mobile_ui)
 
         self.game_limit_field = InputField(
-            self.window, field_x, cfg_row2,
-            "Game Limit (points)", str(DEFAULT_GAME_LIMIT), False, False,
-            max_length=3, width=field_w, height=field_h)
+            self.window, limit_x, cfg_row2,
+            "First to (points)", str(DEFAULT_GAME_LIMIT), False, False,
+            max_length=3, width=field_w, height=field_h,
+            web_overlay=self._mobile_ui)
+        self.stake_field.web_input_mode = 'numeric'
+        self.game_limit_field.web_input_mode = 'numeric'
         self._game_limit_synced = False
         self._preset_rects = []  # (rect, points) for the game-length presets
 
@@ -193,13 +307,26 @@ class NewGameScreen(MenuScreenMixin, Screen):
             fld.font_title = settings.get_font(_cfg_title_sz)
 
         # ── Send button (menu-button style) ─────────────────────────
-        _send_w = int(0.18 * _SW)
-        _send_h = int(0.055 * _SH)
-        _send_x = _BOX_X + int(0.66 * _SW)
-        _send_y = _CONFIG_Y + int(0.075 * _SH)
+        if self._mobile_ui:
+            _send_w = max(int(0.34 * _SW), 250)
+            _send_h = max(settings.TOUCH_TARGET_MIN, int(0.10 * _SH))
+            _send_x = self._box_rect.centerx - _send_w // 2
+            _send_y = self._box_rect.bottom - _send_h - int(0.025 * _SH)
+        else:
+            _send_w = int(0.18 * _SW)
+            _send_h = int(0.055 * _SH)
+            _send_x = self._box_rect.x + int(0.66 * _SW)
+            _send_y = self._config_y + int(0.075 * _SH)
         self.send_button = Button(
             self.window, _send_x, _send_y,
             "Send Challenge", width=_send_w, height=_send_h)
+
+        back_w = max(112, int(0.14 * _SW))
+        back_h = max(settings.TOUCH_TARGET_MIN, int(0.070 * _SH))
+        self._config_back_rect = pygame.Rect(
+            self._col1_x,
+            title_bottom,
+            back_w, back_h)
 
         # Apply menu button image
         raw_btn = pygame.image.load(settings.GAME_MENU_BTN_IMG_PATH).convert_alpha()
@@ -220,19 +347,107 @@ class NewGameScreen(MenuScreenMixin, Screen):
 
     def update_all_challenge_buttons(self):
         try:
-            self.users = fetch_users(self.state.user_dict['username'])
-            self.user = fetch_user(self.state.user_dict['username'])
+            data = {
+                'users': fetch_users(self.state.user_dict['username']),
+                'user': fetch_user(self.state.user_dict['username']),
+            }
         except Exception as e:
             self.state.set_msg(f"Error fetching users or user data: {str(e)}")
             return
+        self._apply_matchmaking_data(data)
 
-        all_challenges = self.user['challenges_issued'] + self.user['challenges_received']
+    def _apply_matchmaking_data(self, data):
+        self.users = list(data.get('users') or [])
+        self.user = dict(data.get('user') or {})
+        all_challenges = (
+            self.user.get('challenges_issued', [])
+            + self.user.get('challenges_received', [])
+        )
         self.open_challenges = [ch for ch in all_challenges if ch.get('status') == 'open']
+        self.open_challenges.sort(
+            key=lambda ch: ch.get('challenger_id') == self.user.get('id'))
         self.open_opponents = {}
         for ch in self.open_challenges:
             opp_id = ch['challenger_id'] if ch['challenger_id'] != self.user['id'] else ch['challenged_id']
-            opp = next(u for u in self.users if u['id'] == opp_id)
-            self.open_opponents[ch['id']] = opp
+            opp = next((u for u in self.users if u['id'] == opp_id), None)
+            if opp:
+                self.open_opponents[ch['id']] = opp
+        self._loading_matchmaking = False
+        self._rebuild_challenge_buttons()
+
+    def _build_challenge_poller(self):
+        if self._challenge_poller is not None:
+            return self._challenge_poller
+        username = self.state.user_dict.get('username', '')
+        base = settings.SERVER_URL
+        self._challenge_poller = BackgroundPoller(
+            self._bg_fetch_challenges, args=(username,),
+            async_requests=[
+                {'key': 'users',
+                 'url': f'{base}/auth/get_users',
+                 'params': {'username': 0}},
+                {'key': 'user',
+                 'url': f'{base}/auth/get_user',
+                 'params': {'username': 0}},
+            ],
+            async_transform=self._parse_challenge_responses)
+        return self._challenge_poller
+
+    def _request_matchmaking_refresh(self, *, manual=False):
+        poller = self._build_challenge_poller()
+        if poller.busy:
+            return False
+        if manual:
+            poller.invalidate_cache()
+        username = self.state.user_dict.get('username', '')
+        poller.poll(args=(username,))
+        self.last_update_time = pygame.time.get_ticks()
+        self._loading_matchmaking = not bool(self.users)
+        return True
+
+    def on_enter(self):
+        """Show the latest roster immediately instead of waiting five seconds."""
+        self._register_mobile_web_inputs()
+        self._request_matchmaking_refresh(manual=True)
+
+    def _register_mobile_web_inputs(self):
+        if not self._mobile_ui:
+            return
+        from utils.web_keyboard import clear_inputs, register_input
+        clear_inputs()
+        if self._selected_opponent:
+            fields = (self.stake_field, self.game_limit_field)
+        elif self._mobile_tab == 'players':
+            fields = (self.player_search_field,)
+        else:
+            fields = ()
+        for field in fields:
+            rect = field.rect
+            if field is self.player_search_field:
+                rect = field.rect.copy()
+                rect.w = max(
+                    1, rect.w - max(28, settings.TOUCH_COMPACT_MIN))
+            register_input(
+                field.name, field.content, field.pwd,
+                field.max_length, rect, field.web_input_mode)
+        self._web_inputs_enabled = None
+
+    def _set_mobile_web_inputs_enabled(self, enabled):
+        if not self._mobile_ui:
+            return
+        enabled = bool(enabled)
+        if self._web_inputs_enabled == enabled:
+            return
+        from utils.web_keyboard import set_inputs_enabled
+        set_inputs_enabled(enabled)
+        self._web_inputs_enabled = enabled
+
+    def _clear_mobile_web_inputs(self):
+        if not self._mobile_ui:
+            return
+        from utils.web_keyboard import clear_inputs
+        clear_inputs()
+        self._web_inputs_enabled = None
 
     @staticmethod
     def _bg_fetch_challenges(username):
@@ -252,30 +467,49 @@ class NewGameScreen(MenuScreenMixin, Screen):
         """Rebuild challenge / opponent button lists from self.users / self.open_opponents."""
         self.possible_opponents = [u for u in self.users if u not in self.open_opponents.values()]
 
-        # Sort: online first, then alphabetical
-        self.possible_opponents.sort(key=lambda u: (not u.get('is_online', False), u['username'].lower()))
+        # Real online players are the best matchmaking candidates. Practice AI
+        # remains available, but no longer crowds humans out of the first rows.
+        self.possible_opponents.sort(key=_opponent_sort_key)
+        query = self.player_search_field.content.strip().casefold()
+        self.visible_opponents = [
+            u for u in self.possible_opponents
+            if not query or query in str(u.get('username', '')).casefold()
+        ]
+        self._last_search_query = query
 
-        btn_w = _COL_W - _SCROLLBAR_W - int(0.008 * _SW)
-        btn_h = settings.LIST_BTN_H
-        gap = int(0.008 * _SH)
+        btn_w = self._col_w - _SCROLLBAR_W - int(0.008 * _SW)
+        btn_h = self._list_button_h
+        gap = self._list_gap
 
         self.challenge_buttons = []
-        for i, u in enumerate(self.possible_opponents):
+        for i, u in enumerate(self.visible_opponents):
             y = self._list_top + i * (btn_h + gap)
-            btn = ListButton(self.window, _COL1_X, y, u['username'], width=btn_w, height=btn_h)
+            btn = ListButton(
+                self.window, self._col1_x, y, u['username'],
+                width=btn_w, height=btn_h)
             btn.is_online = u.get('is_online', False)
+            btn.is_ai = u.get('is_ai', False)
+            btn.user = u
             self.challenge_buttons.append(btn)
 
         self.open_challenge_buttons = []
-        for i, (ch_id, opp) in enumerate(self.open_opponents.items()):
+        self._displayed_open_challenges = []
+        for ch in self.open_challenges:
+            ch_id = ch.get('id')
+            opp = self.open_opponents.get(ch_id)
+            if not opp:
+                continue
+            i = len(self.open_challenge_buttons)
             y = self._list_top + i * (btn_h + gap)
-            btn = ListButton(self.window, _COL2_X, y, opp['username'], width=btn_w, height=btn_h)
+            btn = ListButton(
+                self.window, self._col2_x, y, opp['username'],
+                width=btn_w, height=btn_h)
             btn.is_online = opp.get('is_online', False)
             btn.challenge_id = ch_id  # Store for NEW tag lookup
-            # Determine if this challenge was sent by us or received
-            ch = next((c for c in self.open_challenges if c['id'] == ch_id), None)
-            btn.is_sent = ch is not None and ch.get('challenger_id') == self.user.get('id')
+            btn.challenge = ch
+            btn.is_sent = ch.get('challenger_id') == self.user.get('id')
             self.open_challenge_buttons.append(btn)
+            self._displayed_open_challenges.append(ch)
 
         # Scroll limits
         viewport_h = self._list_bottom - self._list_top
@@ -303,8 +537,8 @@ class NewGameScreen(MenuScreenMixin, Screen):
         vp = self._viewport_h()
         if max_s <= 0 or content <= 0:
             return pygame.Rect(0, 0, 0, 0)
-        col_x = _COL1_X if col == 'col1' else _COL2_X
-        btn_w = _COL_W - _SCROLLBAR_W - int(0.008 * _SW)
+        col_x = self._col1_x if col == 'col1' else self._col2_x
+        btn_w = self._col_w - _SCROLLBAR_W - int(0.008 * _SW)
         track_x = col_x + btn_w + int(0.004 * _SW)
         thumb_h = max(int(0.03 * _SH), int(vp * (vp / content)))
         travel = vp - thumb_h
@@ -313,8 +547,8 @@ class NewGameScreen(MenuScreenMixin, Screen):
         return pygame.Rect(track_x, thumb_y, _SCROLLBAR_W, thumb_h)
 
     def _track_rect(self, col):
-        col_x = _COL1_X if col == 'col1' else _COL2_X
-        btn_w = _COL_W - _SCROLLBAR_W - int(0.008 * _SW)
+        col_x = self._col1_x if col == 'col1' else self._col2_x
+        btn_w = self._col_w - _SCROLLBAR_W - int(0.008 * _SW)
         track_x = col_x + btn_w + int(0.004 * _SW)
         return pygame.Rect(track_x, self._list_top, _SCROLLBAR_W, self._viewport_h())
 
@@ -328,38 +562,189 @@ class NewGameScreen(MenuScreenMixin, Screen):
         self._draw_menu_chrome()
 
         # Outer box
-        box_rect = pygame.Rect(_BOX_X, _BOX_Y, _BOX_W, _BOX_H)
-        _draw_panel(self.window, box_rect)
+        _draw_panel(self.window, self._box_rect)
 
         # Title (centred inside box)
-        tx = _BOX_X + (_BOX_W - self._title_surf.get_width()) // 2
+        tx = self._box_rect.centerx - self._title_surf.get_width() // 2
         self.window.blit(self._title_surf, (tx, self._title_y))
 
-        # Column headers
-        hdr1 = self._header_font.render('Possible Opponents', True, settings.SUB_SCREEN_HEADER_CLR)
-        hdr2 = self._header_font.render('Open Challenges', True, settings.SUB_SCREEN_HEADER_CLR)
-        self.window.blit(hdr1, (_COL1_X, self._hdr_y))
-        self.window.blit(hdr2, (_COL2_X, self._hdr_y))
-
-        # Column 1 list
-        self._draw_scrollable_list(self.challenge_buttons, _COL1_X, self._scroll_col1, 'col1')
-        # Column 2 list
-        self._draw_scrollable_list(self.open_challenge_buttons, _COL2_X, self._scroll_col2, 'col2')
-
-        # Config panel separator + content
-        self._draw_config_panel()
+        if self._mobile_ui:
+            if self._selected_opponent:
+                self._draw_mobile_config()
+            else:
+                self._draw_mobile_matchmaking()
+        else:
+            online_count = sum(
+                1 for user in self.possible_opponents
+                if user.get('is_online') and not user.get('is_ai'))
+            hdr1 = self._header_font.render(
+                f'Find Players · {online_count} online',
+                True, settings.SUB_SCREEN_HEADER_CLR)
+            hdr2 = self._header_font.render(
+                f'Open Challenges · {len(self.open_challenge_buttons)}',
+                True, settings.SUB_SCREEN_HEADER_CLR)
+            self.window.blit(hdr1, (self._col1_x, self._hdr_y))
+            self.window.blit(hdr2, (self._col2_x, self._hdr_y))
+            self._draw_search_field()
+            self._draw_refresh_button()
+            self._draw_scrollable_list(
+                self.challenge_buttons, self._col1_x,
+                self._scroll_col1, 'col1')
+            self._draw_scrollable_list(
+                self.open_challenge_buttons, self._col2_x,
+                self._scroll_col2, 'col2')
+            self._draw_list_empty_state('col1')
+            self._draw_list_empty_state('col2')
+            self._draw_config_panel()
 
         self._draw_close_x_button()
         self._draw_menu_overlay()
         self._draw_menu_coach(self._current_beginner_duel_coach_step())
 
+    def _draw_mobile_matchmaking(self):
+        online_count = sum(
+            1 for user in self.possible_opponents
+            if user.get('is_online') and not user.get('is_ai'))
+        self._draw_tab(
+            self._players_tab_rect,
+            f'Players · {online_count} online',
+            self._mobile_tab == 'players')
+        self._draw_tab(
+            self._challenges_tab_rect,
+            f'Challenges · {len(self.open_challenge_buttons)}',
+            self._mobile_tab == 'challenges')
+        self._draw_refresh_button()
+        if self._mobile_tab == 'players':
+            self._draw_search_field()
+            self._draw_scrollable_list(
+                self.challenge_buttons, self._col1_x,
+                self._scroll_col1, 'col1')
+            self._draw_list_empty_state('col1')
+        else:
+            hint = self._panel_font_small.render(
+                'Received challenges can be accepted here',
+                True, (176, 168, 150))
+            self.window.blit(
+                hint,
+                (self._col1_x,
+                 self._refresh_rect.centery - hint.get_height() // 2))
+            self._draw_scrollable_list(
+                self.open_challenge_buttons, self._col2_x,
+                self._scroll_col2, 'col2')
+            self._draw_list_empty_state('col2')
+
+    def _draw_mobile_config(self):
+        self._draw_rect_button(
+            self._config_back_rect, 'Back',
+            active=False, font=self._panel_font_small)
+        opponent_name = str(self._selected_opponent.get('username', 'Opponent'))
+        label = self._header_font.render(
+            f'Challenge {opponent_name}', True, settings.SUB_SCREEN_HEADER_CLR)
+        label_x = self._config_back_rect.right + int(0.020 * _SW)
+        label_y = self._config_back_rect.centery - label.get_height() // 2
+        self.window.blit(label, (label_x, label_y))
+
+        self.stake_field.draw()
+        self.game_limit_field.draw()
+        self._draw_game_limit_presets()
+        self._draw_expected_rewards()
+        self._draw_send_button()
+
+    def _draw_tab(self, rect, text, active):
+        self._draw_rect_button(rect, text, active=active, font=self._panel_font_small)
+
+    def _draw_rect_button(self, rect, text, *, active=False, font=None):
+        hovered = rect.collidepoint(pygame.mouse.get_pos())
+        bg = _TAB_ACTIVE_BG if active else _TAB_BG
+        border = _TAB_ACTIVE_BORDER if active else _TAB_BORDER
+        if hovered and not active:
+            bg = (62, 54, 42, 225)
+            border = (185, 164, 118)
+        panel = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
+        pygame.draw.rect(panel, bg, panel.get_rect(), border_radius=8)
+        self.window.blit(panel, rect.topleft)
+        pygame.draw.rect(self.window, border, rect, 1, border_radius=8)
+        font = font or self._panel_font
+        surf = font.render(
+            text, True,
+            settings.SUB_SCREEN_TITLE_CLR if active else (218, 208, 188))
+        self.window.blit(surf, surf.get_rect(center=rect.center))
+
+    def _draw_search_field(self):
+        field = self.player_search_field
+        border = (
+            _SEARCH_BORDER_ACTIVE if field.active
+            else _SEARCH_BORDER)
+        pygame.draw.rect(
+            self.window, _SEARCH_BG, field.rect,
+            border_radius=max(4, int(0.008 * _SH)))
+        pygame.draw.rect(
+            self.window, border, field.rect, 2 if field.active else 1,
+            border_radius=max(4, int(0.008 * _SH)))
+        text = field.content or 'Search exact username or part of a name'
+        color = _SEARCH_TEXT if field.content else _SEARCH_HINT
+        surf = field.font.render(text, True, color)
+        left = field.rect.x + int(0.012 * _SW)
+        self.window.blit(
+            surf, (left, field.rect.centery - surf.get_height() // 2))
+
+        self._search_clear_rect = pygame.Rect(0, 0, 0, 0)
+        if field.content:
+            size = max(24, min(field.rect.h, settings.TOUCH_COMPACT_MIN or field.rect.h))
+            self._search_clear_rect = pygame.Rect(
+                field.rect.right - size - int(0.006 * _SW),
+                field.rect.centery - size // 2, size, size)
+            clear = self._panel_font.render('\u00d7', True, (205, 190, 165))
+            self.window.blit(clear, clear.get_rect(center=self._search_clear_rect.center))
+
+    def _draw_refresh_button(self):
+        label = 'Refreshing\u2026' if (
+            self._challenge_poller and self._challenge_poller.busy
+        ) else 'Refresh'
+        self._draw_rect_button(
+            self._refresh_rect, label, active=False,
+            font=self._panel_font_small)
+
+    def _draw_list_empty_state(self, col_key):
+        buttons = (
+            self.challenge_buttons if col_key == 'col1'
+            else self.open_challenge_buttons)
+        if buttons:
+            return
+        if col_key == 'col1':
+            query = self.player_search_field.content.strip()
+            if self._loading_matchmaking:
+                lines = ('Finding players\u2026', 'The roster appears as soon as it loads.')
+            elif query:
+                lines = (f'No player matches "{query}"', 'Check the spelling or clear the search.')
+            else:
+                lines = ('No players found', 'Refresh the roster or try a practice AI later.')
+        else:
+            lines = (
+                'No open challenges',
+                'Challenges you send or receive will appear here.')
+        center_x = (
+            self._col1_x + self._col_w // 2
+            if self._mobile_ui
+            else (self._col1_x if col_key == 'col1' else self._col2_x)
+                 + self._col_w // 2)
+        y = self._list_top + int(0.045 * _SH)
+        for index, text in enumerate(lines):
+            font = self._panel_font if index == 0 else self._panel_font_small
+            color = (190, 181, 162) if index == 0 else (145, 139, 128)
+            surf = font.render(text, True, color)
+            self.window.blit(
+                surf, surf.get_rect(
+                    centerx=center_x,
+                    y=y + index * (font.get_height() + int(0.010 * _SH))))
+
     def _draw_scrollable_list(self, buttons, col_x, scroll, col_key):
         if not buttons:
             return
 
-        btn_h = settings.LIST_BTN_H
-        gap = int(0.008 * _SH)
-        clip = pygame.Rect(col_x, self._list_top, _COL_W, self._viewport_h())
+        btn_h = self._list_button_h
+        gap = self._list_gap
+        clip = pygame.Rect(col_x, self._list_top, self._col_w, self._viewport_h())
         self.window.set_clip(clip)
 
         for i, btn in enumerate(buttons):
@@ -390,10 +775,30 @@ class NewGameScreen(MenuScreenMixin, Screen):
                     pygame.draw.rect(sr_bg, tag_bg_clr, sr_bg.get_rect(), border_radius=4)
                     self.window.blit(sr_bg, sr_rect.topleft)
                     self.window.blit(sr_surf, (sr_rect.x + sr_pad_x, sr_rect.y + sr_pad_y))
+                elif getattr(btn, 'is_ai', False):
+                    ai_surf = self._tag_font.render(
+                        'PRACTICE', True, (190, 181, 150))
+                    ai_pad_x = int(0.006 * _SW)
+                    ai_rect = pygame.Rect(
+                        btn.rect.right - ai_surf.get_width() - 2 * ai_pad_x
+                        - int(0.008 * _SW),
+                        btn.rect.centery - (ai_surf.get_height() + 6) // 2,
+                        ai_surf.get_width() + 2 * ai_pad_x,
+                        ai_surf.get_height() + 6)
+                    pygame.draw.rect(
+                        self.window, (63, 57, 43), ai_rect, border_radius=4)
+                    pygame.draw.rect(
+                        self.window, (118, 104, 72), ai_rect, 1,
+                        border_radius=4)
+                    self.window.blit(
+                        ai_surf,
+                        (ai_rect.x + ai_pad_x,
+                         ai_rect.centery - ai_surf.get_height() // 2))
 
                 # NEW tag (only for open challenges with a stored challenge_id)
                 ch_id = getattr(btn, 'challenge_id', None)
-                if ch_id is not None and ch_id in self.state._new_challenge_ids:
+                if (ch_id is not None
+                        and ch_id in getattr(self.state, '_new_challenge_ids', set())):
                     tag_surf = self._tag_font.render('NEW', True, _NEW_TAG_TXT)
                     tw, th = tag_surf.get_size()
                     pad_x, pad_y = int(0.005 * _SW), int(0.002 * _SH)
@@ -425,8 +830,8 @@ class NewGameScreen(MenuScreenMixin, Screen):
     def _draw_config_panel(self):
         # Separator
         pygame.draw.line(self.window, settings.SUB_SCREEN_PANEL_BORDER_CLR,
-                         (_BOX_X + int(0.01 * _SW), _CONFIG_Y),
-                         (_BOX_X + _BOX_W - int(0.01 * _SW), _CONFIG_Y), 1)
+                         (self._box_rect.x + int(0.01 * _SW), self._config_y),
+                         (self._box_rect.right - int(0.01 * _SW), self._config_y), 1)
 
         self._ensure_beginner_duel_defaults()
 
@@ -434,7 +839,9 @@ class NewGameScreen(MenuScreenMixin, Screen):
             header = self._panel_font.render(
                 f"Challenge: {self._selected_opponent['username']}",
                 True, (220, 200, 100))
-            self.window.blit(header, (_COL1_X, _CONFIG_Y + int(0.025 * _SH)))
+            self.window.blit(
+                header,
+                (self._col1_x, self._config_y + int(0.025 * _SH)))
 
             self.stake_field.draw()
             self.game_limit_field.draw()
@@ -444,25 +851,34 @@ class NewGameScreen(MenuScreenMixin, Screen):
         else:
             hint_text = "Preparing beginner AI duel..." if self._first_duel_incomplete() else "Select an opponent to configure a challenge"
             hint = self._panel_font.render(hint_text, True, (140, 140, 140))
-            self.window.blit(hint, (_COL1_X, _CONFIG_Y + int(0.038 * _SH)))
+            self.window.blit(
+                hint,
+                (self._col1_x, self._config_y + int(0.038 * _SH)))
 
     def _draw_game_limit_presets(self):
         """Quick / Standard / Epic chips that set the game-limit field."""
         self._preset_rects = []
         fld = self.game_limit_field
-        chip_h = int(0.030 * _SH)
-        chip_gap = int(0.006 * _SW)
+        chip_h = fld.height if self._mobile_ui else int(0.030 * _SH)
+        chip_gap = max(6, int(0.006 * _SW))
         x = fld.x + fld.width + int(0.015 * _SW)
         y = fld.y + max(0, (fld.height - chip_h) // 2)
+        if self._mobile_ui:
+            available = self._box_rect.right - self._box_pad_x - x
+            mobile_chip_w = max(
+                1, (available - chip_gap * (len(GAME_LIMIT_PRESETS) - 1))
+                // len(GAME_LIMIT_PRESETS))
         mx, my = pygame.mouse.get_pos()
         try:
             current = int(self.game_limit_field.content)
         except (TypeError, ValueError):
             current = None
         for label, points in GAME_LIMIT_PRESETS:
-            text = f'{label} {points}'
+            text = f'{label} \u00b7 {points}' if self._mobile_ui else f'{label} {points}'
             surf = self._panel_font_small.render(text, True, (235, 225, 208))
-            chip_w = surf.get_width() + int(0.014 * _SW)
+            chip_w = (
+                mobile_chip_w if self._mobile_ui
+                else surf.get_width() + int(0.014 * _SW))
             rect = pygame.Rect(x, y, chip_w, chip_h)
             selected = current == points
             hovered = rect.collidepoint(mx, my)
@@ -542,10 +958,30 @@ class NewGameScreen(MenuScreenMixin, Screen):
             return
 
         counts = _duel_reward_draw_counts(game_limit)
+        if self._mobile_ui:
+            x = self._col1_x
+            y = self.stake_field.rect.bottom + int(0.050 * _SH)
+            line_h = self._reward_font.get_height() + int(0.008 * _SH)
+            title = self._reward_title_font.render(
+                'Duel rewards', True, (220, 200, 100))
+            self.window.blit(title, (x, y))
+            rows = [
+                (f"Winner: {counts['winner']} reward draws   \u00b7   "
+                 f"Loser: {counts['loser']} reward draws"),
+                (f"Each draw gives a main booster, side booster, map, "
+                 f"or {DUEL_REWARD_GOLD_AMOUNT} gold"),
+            ]
+            for idx, text in enumerate(rows):
+                surf = self._reward_font.render(
+                    text, True,
+                    (205, 201, 191) if idx == 0 else (165, 159, 147))
+                self.window.blit(surf, (x, y + (idx + 1) * line_h))
+            return
+
         winner = _duel_reward_expectation(counts['winner'])
         loser = _duel_reward_expectation(counts['loser'])
-        x = _BOX_X + int(0.34 * _SW)
-        y = _CONFIG_Y + int(0.046 * _SH)
+        x = self._box_rect.x + int(0.34 * _SW)
+        y = self._config_y + int(0.046 * _SH)
         line_h = self._reward_font.get_height() + int(0.006 * _SH)
         title = self._reward_title_font.render('Expected rewards', True, (220, 200, 100))
         self.window.blit(title, (x, y))
@@ -571,54 +1007,50 @@ class NewGameScreen(MenuScreenMixin, Screen):
         super().update()
         self._update_icon_buttons()
 
-        # ── Non-blocking challenge polling (every 5s) ─────────
-        if not hasattr(self, '_challenge_poller'):
-            self._challenge_poller = None
+        # Non-blocking challenge polling. on_enter() performs the first request,
+        # then this keeps online presence and challenge state fresh.
         current_time = pygame.time.get_ticks()
         if current_time - self.last_update_time >= 5000:
-            self.last_update_time = current_time
-            username = self.state.user_dict.get('username', '')
-            if self._challenge_poller is None:
-                base = settings.SERVER_URL
-                self._challenge_poller = BackgroundPoller(
-                    self._bg_fetch_challenges, args=(username,),
-                    async_requests=[
-                        {'key': 'users',
-                         'url': f'{base}/auth/get_users',
-                         'params': {'username': 0}},
-                        {'key': 'user',
-                         'url': f'{base}/auth/get_user',
-                         'params': {'username': 0}},
-                    ],
-                    async_transform=self._parse_challenge_responses)
-            if not self._challenge_poller.busy:
-                self._challenge_poller.poll(args=(username,))
-        # Apply result if ready
-        if hasattr(self, '_challenge_poller') and self._challenge_poller and self._challenge_poller.has_result():
+            self._request_matchmaking_refresh()
+        if self._challenge_poller and self._challenge_poller.has_result():
             data = self._challenge_poller.result
             if data:
-                self.users = data['users']
-                self.user = data['user']
+                self._apply_matchmaking_data(data)
                 # Check for accepted challenges (notify challenger)
                 try:
                     self._check_accepted_challenges()
                 except Exception as e:
                     logger.error(f"[new_game] _check_accepted_challenges error: {e}")
-                all_challenges = self.user['challenges_issued'] + self.user['challenges_received']
-                self.open_challenges = [ch for ch in all_challenges if ch.get('status') == 'open']
-                self.open_opponents = {}
-                for ch in self.open_challenges:
-                    opp_id = ch['challenger_id'] if ch['challenger_id'] != self.user['id'] else ch['challenged_id']
-                    opp = next((u for u in self.users if u['id'] == opp_id), None)
-                    if opp:
-                        self.open_opponents[ch['id']] = opp
-                self._rebuild_challenge_buttons()
-        # ──────────────────────────────────────────────────────
 
-            self._ensure_beginner_duel_defaults()
+        if self._mobile_ui:
+            inputs_available = not (
+                self.dialogue_box
+                or getattr(self, '_onboarding_guide_open', False)
+                or getattr(self, '_logout_dialogue', None)
+            )
+            self._set_mobile_web_inputs_enabled(inputs_available)
+            active_fields = (
+                (self.stake_field, self.game_limit_field)
+                if self._selected_opponent
+                else (self.player_search_field,)
+            )
+            for field in active_fields:
+                field.sync_web_input()
 
-        # Only update hover/click for visible buttons
-        for btn in self.challenge_buttons + self.open_challenge_buttons:
+        query = self.player_search_field.content.strip().casefold()
+        if query != self._last_search_query:
+            self._scroll_col1 = 0
+            self._rebuild_challenge_buttons()
+
+        if self._selected_opponent:
+            active_buttons = []
+        elif self._mobile_ui and self._mobile_tab == 'challenges':
+            active_buttons = self.open_challenge_buttons
+        elif self._mobile_ui:
+            active_buttons = self.challenge_buttons
+        else:
+            active_buttons = self.challenge_buttons + self.open_challenge_buttons
+        for btn in active_buttons:
             if btn.rect.bottom >= self._list_top and btn.rect.top <= self._list_bottom:
                 btn.update()
             else:
@@ -639,38 +1071,91 @@ class NewGameScreen(MenuScreenMixin, Screen):
 
         super().handle_events(events)
 
-        _box_rect = pygame.Rect(_BOX_X, _BOX_Y, _BOX_W, _BOX_H)
-
         for event in events:
             if self._handle_icon_events(event):
+                if self.state.screen != 'new_game':
+                    self._clear_mobile_web_inputs()
                 continue
 
             # X close button
             if (event.type == MOUSEBUTTONUP and event.button == 1
-                    and self._btn_close_rect.collidepoint(event.pos)):
+                    and self._btn_close_hit_rect.collidepoint(event.pos)):
+                self._clear_mobile_web_inputs()
                 self.state.screen = 'duel_menu'
                 return
 
             # Click outside content box → back to duel menu
             if (event.type == MOUSEBUTTONUP and event.button == 1
                     and not self.dialogue_box
-                    and not _box_rect.collidepoint(event.pos)):
+                    and not self._box_rect.collidepoint(event.pos)):
+                self._clear_mobile_web_inputs()
                 self.state.screen = 'duel_menu'
                 return
 
             if self._selected_opponent:
+                if (self._mobile_ui
+                        and event.type == MOUSEBUTTONUP
+                        and event.button == 1
+                        and self._config_back_rect.collidepoint(event.pos)):
+                    self._selected_opponent = None
+                    self.stake_field.deactivate()
+                    self.game_limit_field.deactivate()
+                    self._register_mobile_web_inputs()
+                    continue
                 if (event.type == MOUSEBUTTONUP and event.button == 1
                         and self._handle_preset_click(event.pos)):
                     continue
                 self._handle_config_field_event(event)
+            elif self._mobile_tab == 'players' or not self._mobile_ui:
+                clear_press = (
+                    event.type in (MOUSEBUTTONDOWN, MOUSEBUTTONUP)
+                    and self._search_clear_rect.collidepoint(event.pos))
+                search_response = (
+                    None if clear_press
+                    else self.player_search_field.handle_event(event))
+                if search_response == 'submit':
+                    if len(self.visible_opponents) == 1:
+                        self._select_opponent(self.visible_opponents[0])
+                    self.player_search_field.deactivate()
+
+            if (not self._selected_opponent
+                    and event.type == MOUSEBUTTONUP
+                    and event.button == 1):
+                if (self._mobile_ui
+                        and self._players_tab_rect.collidepoint(event.pos)):
+                    self._mobile_tab = 'players'
+                    self._register_mobile_web_inputs()
+                    continue
+                if (self._mobile_ui
+                        and self._challenges_tab_rect.collidepoint(event.pos)):
+                    self._mobile_tab = 'challenges'
+                    self.player_search_field.deactivate()
+                    self._register_mobile_web_inputs()
+                    continue
+                if (self._mobile_tab == 'players'
+                        and self._search_clear_rect.collidepoint(event.pos)):
+                    self.player_search_field.empty()
+                    self._scroll_col1 = 0
+                    self._rebuild_challenge_buttons()
+                    continue
+                if self._refresh_rect.collidepoint(event.pos):
+                    self._request_matchmaking_refresh(manual=True)
+                    continue
 
             # Scroll wheel
-            if event.type == MOUSEWHEEL:
+            if not self._selected_opponent and event.type == MOUSEWHEEL:
                 mx, my = pygame.mouse.get_pos()
                 scroll_step = int(0.04 * _SH)
-                # Which column?
-                col1_clip = pygame.Rect(_COL1_X, self._list_top, _COL_W, self._viewport_h())
-                col2_clip = pygame.Rect(_COL2_X, self._list_top, _COL_W, self._viewport_h())
+                col1_clip = pygame.Rect(
+                    self._col1_x, self._list_top,
+                    self._col_w, self._viewport_h())
+                col2_clip = pygame.Rect(
+                    self._col2_x, self._list_top,
+                    self._col_w, self._viewport_h())
+                if self._mobile_ui and self._mobile_tab == 'challenges':
+                    col1_clip = pygame.Rect(0, 0, 0, 0)
+                elif self._mobile_ui:
+                    col2_clip = pygame.Rect(0, 0, 0, 0)
                 if col1_clip.collidepoint(mx, my):
                     self._scroll_col1 = max(0, min(self._max_scroll_col1,
                                                    self._scroll_col1 - event.y * scroll_step))
@@ -679,9 +1164,13 @@ class NewGameScreen(MenuScreenMixin, Screen):
                                                    self._scroll_col2 - event.y * scroll_step))
 
             # Thumb dragging
-            if event.type == MOUSEBUTTONDOWN and event.button == 1:
+            if (not self._selected_opponent
+                    and event.type == MOUSEBUTTONDOWN and event.button == 1):
                 _started_thumb = False
-                for col_key in ('col1', 'col2'):
+                active_cols = (
+                    (self._mobile_tab == 'players' and ('col1',) or ('col2',))
+                    if self._mobile_ui else ('col1', 'col2'))
+                for col_key in active_cols:
                     thumb = self._thumb_rect(col_key)
                     if thumb.w and thumb.collidepoint(event.pos):
                         self._dragging_thumb = col_key
@@ -690,18 +1179,33 @@ class NewGameScreen(MenuScreenMixin, Screen):
                         break
                 if not _started_thumb:
                     # Touch-drag scroll in the content columns
-                    col1_clip = pygame.Rect(_COL1_X, self._list_top, _COL_W, self._viewport_h())
-                    col2_clip = pygame.Rect(_COL2_X, self._list_top, _COL_W, self._viewport_h())
+                    col1_clip = pygame.Rect(
+                        self._col1_x, self._list_top,
+                        self._col_w, self._viewport_h())
+                    col2_clip = pygame.Rect(
+                        self._col2_x, self._list_top,
+                        self._col_w, self._viewport_h())
+                    if self._mobile_ui and self._mobile_tab == 'challenges':
+                        col1_clip = pygame.Rect(0, 0, 0, 0)
+                    elif self._mobile_ui:
+                        col2_clip = pygame.Rect(0, 0, 0, 0)
                     if col1_clip.collidepoint(event.pos):
                         self._touch_scrolling = 'col1'
                         self._touch_last_y = event.pos[1]
+                        self._touch_scroll_moved = 0
                     elif col2_clip.collidepoint(event.pos):
                         self._touch_scrolling = 'col2'
                         self._touch_last_y = event.pos[1]
+                        self._touch_scroll_moved = 0
 
+            release_was_drag = False
             if event.type == MOUSEBUTTONUP and event.button == 1:
+                release_was_drag = (
+                    self._dragging_thumb is not None
+                    or self._touch_scroll_moved > max(6, settings.TOUCH_HIT_PAD // 2))
                 self._dragging_thumb = None
                 self._touch_scrolling = None
+                self._touch_scroll_moved = 0
 
             if event.type == MOUSEMOTION:
                 if self._dragging_thumb:
@@ -721,6 +1225,7 @@ class NewGameScreen(MenuScreenMixin, Screen):
                 elif getattr(self, '_touch_scrolling', None):
                     dy = event.pos[1] - self._touch_last_y
                     self._touch_last_y = event.pos[1]
+                    self._touch_scroll_moved += abs(dy)
                     col_key = self._touch_scrolling
                     max_s = self._max_scroll_col1 if col_key == 'col1' else self._max_scroll_col2
                     if col_key == 'col1':
@@ -730,7 +1235,7 @@ class NewGameScreen(MenuScreenMixin, Screen):
 
             # Clicks
             if not self.dialogue_box and event.type == MOUSEBUTTONUP and event.button == 1:
-                if not self._dragging_thumb:
+                if not release_was_drag:
                     self._handle_clicks()
 
         # Dialogue actions
@@ -760,6 +1265,7 @@ class NewGameScreen(MenuScreenMixin, Screen):
                         self.state._notified_accepted_challenges.discard(challenge_id)
                         self.state._pending_accepted_challenge = None
                         self.reset_action()
+                        self._clear_mobile_web_inputs()
                         self.state.screen = gameplay_screen_for(self.state.game)
                         return
                     else:
@@ -777,37 +1283,57 @@ class NewGameScreen(MenuScreenMixin, Screen):
             return
 
         # Opponent selection (only visible buttons)
-        for btn, user in zip(self.challenge_buttons, self.possible_opponents):
-            if (btn.rect.top >= self._list_top and btn.rect.bottom <= self._list_bottom
-                    and btn.collide()):
-                self._selected_opponent = user
-                self.stake_field.content = str(DEFAULT_STAKE)
-                self.stake_field.cursor_pos = len(self.stake_field.content)
-                self.game_limit_field.content = str(DEFAULT_GAME_LIMIT)
-                self.game_limit_field.cursor_pos = len(self.game_limit_field.content)
-                self._game_limit_synced = True
-                self.stake_field.activate()
-                self.game_limit_field.deactivate()
-                return
+        mobile_ui = getattr(self, '_mobile_ui', False)
+        mobile_tab = getattr(self, '_mobile_tab', 'players')
+        if not mobile_ui or mobile_tab == 'players':
+            visible_opponents = getattr(
+                self, 'visible_opponents', self.possible_opponents)
+            for btn, user in zip(self.challenge_buttons, visible_opponents):
+                if (btn.rect.top >= self._list_top and btn.rect.bottom <= self._list_bottom
+                        and btn.collide()):
+                    self._select_opponent(user)
+                    return
 
         # Open challenges (only visible buttons)
-        for btn, ch in zip(self.open_challenge_buttons, self.open_challenges):
-            if (btn.rect.top >= self._list_top and btn.rect.bottom <= self._list_bottom
-                    and btn.collide()):
-                stake = ch.get('stake', 45)
-                game_limit = ch.get('game_limit') or stake
-                if ch in self.user['challenges_issued']:
-                    self.make_dialogue_box(
-                        f'You have challenged {btn.text} at {ch["date"]}\n\n'
-                        f'Stake: {stake} gold\nGame Limit: {game_limit} points',
-                        actions=['ok'], title="Challenge Pending")
-                else:
-                    self.set_action("accept_game_challenge", ch, "open")
-                    self.make_dialogue_box(
-                        f'Do you want to accept a game with {btn.text}?\n\n'
-                        f'Stake: {stake} gold\nGame Limit: {game_limit} points',
-                        actions=["accept", "reject"], title="Accept Challenge")
-                return
+        if not mobile_ui or mobile_tab == 'challenges':
+            displayed_challenges = getattr(
+                self, '_displayed_open_challenges', self.open_challenges)
+            for btn, ch in zip(
+                    self.open_challenge_buttons,
+                    displayed_challenges):
+                if (btn.rect.top >= self._list_top and btn.rect.bottom <= self._list_bottom
+                        and btn.collide()):
+                    stake = ch.get('stake', 45)
+                    game_limit = ch.get('game_limit') or stake
+                    if ch in self.user.get('challenges_issued', []):
+                        sent_at = ch.get('date', 'an earlier time')
+                        self.make_dialogue_box(
+                            f'You challenged {btn.text} at {sent_at}\n\n'
+                            f'Stake: {stake} gold\nFirst to: {game_limit} points',
+                            actions=['ok'], title="Challenge Pending")
+                    else:
+                        self.set_action("accept_game_challenge", ch, "open")
+                        self.make_dialogue_box(
+                            f'Accept the duel challenge from {btn.text}?\n\n'
+                            f'Stake: {stake} gold\nFirst to: {game_limit} points',
+                            actions=["accept", "reject"], title="Accept Challenge")
+                    return
+
+    def _select_opponent(self, user):
+        self._selected_opponent = user
+        self.stake_field.content = str(DEFAULT_STAKE)
+        self.stake_field.cursor_pos = len(self.stake_field.content)
+        self.game_limit_field.content = str(DEFAULT_GAME_LIMIT)
+        self.game_limit_field.cursor_pos = len(self.game_limit_field.content)
+        self._game_limit_synced = True
+        if getattr(self, '_mobile_ui', False):
+            self.player_search_field.deactivate()
+            self.stake_field.deactivate()
+            self.game_limit_field.deactivate()
+            self._register_mobile_web_inputs()
+        else:
+            self.stake_field.activate()
+            self.game_limit_field.deactivate()
 
     def _first_duel_incomplete(self):
         onboarding = (getattr(self.state, 'user_dict', None) or {}).get('onboarding') or {}
@@ -853,6 +1379,8 @@ class NewGameScreen(MenuScreenMixin, Screen):
         self._game_limit_synced = False
         self.stake_field.deactivate()
         self.game_limit_field.deactivate()
+        if self._mobile_ui:
+            self._register_mobile_web_inputs()
 
     def _current_beginner_duel_coach_step(self):
         if (not self._menu_coach_allowed_common()
@@ -984,8 +1512,16 @@ class NewGameScreen(MenuScreenMixin, Screen):
                         remove_challenge(challenge_id)
                     except Exception:
                         pass
+                self._clear_mobile_web_inputs()
                 self.state.game = Game(game_dict, self.state.user_dict)
                 self.state.screen = gameplay_screen_for(self.state.game)
+            else:
+                # Make the pending challenge visible as soon as the server
+                # returns instead of leaving the user on an empty config step.
+                if self._mobile_ui:
+                    self._mobile_tab = 'challenges'
+                    self._register_mobile_web_inputs()
+                self._request_matchmaking_refresh(manual=True)
 
     # ── Actions ───────────────────────────────────────────────────
 
@@ -1007,6 +1543,7 @@ class NewGameScreen(MenuScreenMixin, Screen):
     def handle_create_game(self, challenge):
         response = create_game(challenge['id'])
         if response['success'] and 'game' in response:
+            self._clear_mobile_web_inputs()
             self.state.game = Game(response['game'], self.state.user_dict)
             self.state.screen = gameplay_screen_for(self.state.game)
         else:

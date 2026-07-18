@@ -719,11 +719,14 @@ function show_infobox() {
             catch (error) { canvas.focus(); }
         }
 
-        function configureInput(record, current, isPassword, maxLength){
+        function configureInput(
+                record, current, isPassword, maxLength, inputMode){
             var input = record.input;
+            inputMode = String(inputMode || 'text');
             input.type = isPassword ? 'password' : 'text';
-            input.autocomplete = isPassword ? 'current-password' : 'username';
-            input.inputMode = 'text';
+            input.autocomplete = isPassword ? 'current-password' :
+                (record.label === 'username' ? 'username' : 'off');
+            input.inputMode = inputMode;
             input.autocapitalize = 'none';
             input.spellcheck = false;
             input.maxLength = Math.max(1, Number(maxLength) || 64);
@@ -750,7 +753,8 @@ function show_infobox() {
         }
 
         window.nk_keyboard_register = function(
-                label, current, isPassword, maxLength, x, y, width, height){
+                label, current, isPassword, maxLength, x, y, width, height,
+                inputMode){
             if (!layer) return false;
             label = String(label || 'text');
             if (fields[label]) fields[label].input.remove();
@@ -770,7 +774,8 @@ function show_infobox() {
                 done: false,
                 dirty: false
             };
-            configureInput(record, current, isPassword, maxLength);
+            configureInput(
+                record, current, isPassword, maxLength, inputMode);
             fields[label] = record;
             layer.appendChild(input);
 
@@ -806,10 +811,12 @@ function show_infobox() {
             return true;
         };
 
-        window.nk_keyboard_focus = function(label, current, isPassword, maxLength){
+        window.nk_keyboard_focus = function(
+                label, current, isPassword, maxLength, inputMode){
             var record = fields[String(label)];
             if (!record || !enabled) return false;
-            configureInput(record, current, isPassword, maxLength);
+            configureInput(
+                record, current, isPassword, maxLength, inputMode);
             resumeAudio();
             try { record.input.focus({preventScroll: true}); }
             catch (error) { record.input.focus(); }

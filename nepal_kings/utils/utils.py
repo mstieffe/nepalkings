@@ -626,6 +626,7 @@ class InputField:
         self.active = active  # Track if the field is currently active
         self.max_length = max_length
         self.web_overlay = bool(web_overlay)
+        self.web_input_mode = 'text'
         self._web_input_pending = False
 
         self.color_rect = settings.INPUTFIELD_COLOR_PASSIVE
@@ -696,7 +697,8 @@ class InputField:
             if is_mobile():
                 if self.web_overlay:
                     if open_input(
-                            self.name, self.content, self.pwd, self.max_length):
+                            self.name, self.content, self.pwd, self.max_length,
+                            getattr(self, 'web_input_mode', 'text')):
                         self._web_input_pending = True
                     return
                 result = prompt(self.name, self.content, self.pwd)

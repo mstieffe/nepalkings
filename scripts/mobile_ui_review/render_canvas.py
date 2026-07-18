@@ -97,6 +97,13 @@ COLLECTION_SCREEN_ALIASES = {
     "collection_error": "error",
 }
 
+NEW_GAME_ALIASES = {
+    "new_game": "players",
+    "new_game_search": "search",
+    "new_game_challenges": "challenges",
+    "new_game_selected": "selected",
+}
+
 MAIN_RANKS = {"7", "8", "9", "10", "J", "Q", "K", "A"}
 RANK_VALUE = {
     "7": 7,
@@ -1295,6 +1302,8 @@ def canonical_screen_name(screen_name: str) -> str:
         return "game"
     if screen_name in CONQUER_GAME_ALIASES:
         return "conquer_game"
+    if screen_name in NEW_GAME_ALIASES:
+        return "new_game"
     return screen_name
 
 
@@ -1307,6 +1316,7 @@ def uses_fixture(screen_name: str) -> bool:
         or screen_name in CONQUER_GAME_ALIASES
         or screen_name in BOOSTER_REVEAL_ALIASES
         or screen_name in COLLECTION_SCREEN_ALIASES
+        or screen_name in NEW_GAME_ALIASES
         or screen_name in {"conquer", "defence"}
     )
 
@@ -1393,6 +1403,54 @@ def populate_collection_booster_reveal(screen, variant: str):
     return SimpleNamespace(render=render)
 
 
+def populate_new_game_screen(screen, variant: str) -> None:
+    """Exercise discovery, challenge inbox, and configuration states."""
+    users = [
+        {"id": 2, "username": "RiverKing", "is_online": True, "is_ai": False},
+        {"id": 3, "username": "HimalayaHero", "is_online": True, "is_ai": False},
+        {"id": 4, "username": "KathmanduKing", "is_online": False, "is_ai": False},
+        {"id": 5, "username": "[AI] Strategos", "is_online": True, "is_ai": True},
+        {"id": 6, "username": "OldFriend", "is_online": False, "is_ai": False},
+    ]
+    received = {
+        "id": 71,
+        "challenger_id": 4,
+        "challenged_id": 1,
+        "challenger_name": "KathmanduKing",
+        "challenged_name": "MobileUser",
+        "stake": 18,
+        "game_limit": 21,
+        "status": "open",
+        "date": "2026-07-18",
+    }
+    sent = {
+        "id": 72,
+        "challenger_id": 1,
+        "challenged_id": 6,
+        "challenger_name": "MobileUser",
+        "challenged_name": "OldFriend",
+        "stake": 10,
+        "game_limit": 7,
+        "status": "open",
+        "date": "2026-07-18",
+    }
+    user = {
+        **DEFAULT_USER,
+        "challenges_issued": [sent],
+        "challenges_received": [received],
+    }
+    screen._apply_matchmaking_data({"users": users, "user": user})
+    screen._loading_matchmaking = False
+    if variant == "search":
+        screen.player_search_field.content = "hima"
+        screen.player_search_field.cursor_pos = 4
+        screen._rebuild_challenge_buttons()
+    elif variant == "challenges":
+        screen._mobile_tab = "challenges"
+    elif variant == "selected":
+        screen._select_opponent(users[0])
+
+
 def prepare_screen(client, screen_name: str):
     if screen_name in CONFIG_PICKER_ALIASES:
         base_name, opener_name = CONFIG_PICKER_ALIASES[screen_name]
@@ -1417,6 +1475,11 @@ def prepare_screen(client, screen_name: str):
         picker = screen._subscreen_obj
         if picker is not None and screen._game_proxy is not None:
             picker.update(screen._game_proxy)
+        return screen
+
+    if screen_name in NEW_GAME_ALIASES:
+        screen = client.screens["new_game"]
+        populate_new_game_screen(screen, NEW_GAME_ALIASES[screen_name])
         return screen
 
     if screen_name in COLLECTION_SCREEN_ALIASES:
@@ -1506,6 +1569,7 @@ def render_screens(width: int, height: int, ui_scale: str,
             *CONFIG_PICKER_ALIASES.keys(),
             *BOOSTER_REVEAL_ALIASES.keys(),
             *COLLECTION_SCREEN_ALIASES.keys(),
+            *NEW_GAME_ALIASES.keys(),
         )
         if screen_name not in known_names:
             print(f"skip {screen_name}: screen not loaded")

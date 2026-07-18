@@ -54,12 +54,15 @@ def _js_call(function_name, *values):
         return False
 
 
-def register_input(label, current, is_password, max_length, rect):
+def register_input(
+        label, current, is_password, max_length, rect,
+        input_mode='text'):
     """Place an invisible native input directly over a canvas field."""
     return _js_call(
         'nk_keyboard_register',
         str(label), str(current), bool(is_password), int(max_length),
         int(rect.x), int(rect.y), int(rect.w), int(rect.h),
+        str(input_mode or 'text'),
     )
 
 
@@ -73,11 +76,14 @@ def clear_inputs():
     return _js_call('nk_keyboard_clear')
 
 
-def open_input(label='', current='', is_password=False, max_length=64):
+def open_input(
+        label='', current='', is_password=False, max_length=64,
+        input_mode='text'):
     """Focus a registered canvas-aligned native input."""
     return _js_call(
         'nk_keyboard_focus',
         str(label), str(current), bool(is_password), int(max_length),
+        str(input_mode or 'text'),
     )
 
 

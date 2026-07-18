@@ -31,9 +31,9 @@ def test_web_keyboard_bridge_opens_and_polls_native_input(monkeypatch):
     }
     assert calls == [
         'window.nk_keyboard_register&&window.nk_keyboard_register('
-        '"username","Mal",false,30,100,120,240,48)',
+        '"username","Mal",false,30,100,120,240,48,"text")',
         'window.nk_keyboard_focus&&window.nk_keyboard_focus('
-        '"username","Mal",false,30)',
+        '"username","Mal",false,30,"text")',
         'JSON.stringify(window.nk_keyboard_poll&&'
         'window.nk_keyboard_poll("username"))',
     ]
@@ -74,7 +74,7 @@ def test_input_field_syncs_non_blocking_mobile_overlay(monkeypatch):
     field._web_input_pending = False
 
     field.activate()
-    assert opened == [('username', 'Mal', False, 30)]
+    assert opened == [('username', 'Mal', False, 30, 'text')]
     assert field.active is True
     assert field._web_input_pending is True
 
