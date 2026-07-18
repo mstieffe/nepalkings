@@ -298,6 +298,16 @@ _CONQUER_PRELUDE_SPELLS = frozenset({
     'Royal Decree', 'Copy Figure', 'Landslide', 'Draw 4 MainCards',
 })
 
+# Conquer preludes that remain legal when a winning attack config becomes the
+# new defence config.  Blitzkrieg and Invader Swap are attack-only; the legacy
+# Fill up to 10 entry above is retained only for old battle-state replay.
+_TRANSFERABLE_DEFENCE_PRELUDE_SPELLS = frozenset({
+    'Draw 2 MainCards', 'Dump Cards', 'Forced Deal',
+    'Poison', 'Health Boost', 'All Seeing Eye', 'Explosion',
+    'Peasant War', 'Civil War',
+    'Royal Decree', 'Copy Figure', 'Landslide', 'Draw 4 MainCards',
+})
+
 _TARGETED_PRELUDE_SPELLS = frozenset({'Poison', 'Health Boost', 'Explosion',
                                       'Copy Figure'})
 
@@ -7632,16 +7642,25 @@ def _return_config_attack_only_cards(cfg):
     """Unlock and clear the attack-only cards from a surviving config.
 
     Used when a winning attacker's conquer config becomes the new defence: its
-    figures AND its battle-move tactics carry over to the defence (so the
-    conquered land is defended automatically), while the attack-only prelude
-    spell, battle modifier, in-battle spell and counter spell are unlocked and
-    returned to the collection.
+    figures, battle-move tactics, and defence-compatible prelude carry over to
+    the defence (so the conquered land is defended automatically), while the
+    battle modifier, in-battle spell, counter spell, and any conquer-only
+    prelude are unlocked and returned to the collection.
     """
     from models import CollectionCard
 
+    keep_prelude = (
+        cfg.prelude_spell_name in _TRANSFERABLE_DEFENCE_PRELUDE_SPELLS
+    )
     card_ids = []
-    for arr in (cfg.modifier_card_ids, cfg.spell_card_ids,
-                cfg.prelude_spell_card_ids, cfg.counter_spell_card_ids):
+    returned_card_arrays = [
+        cfg.modifier_card_ids,
+        cfg.spell_card_ids,
+        cfg.counter_spell_card_ids,
+    ]
+    if not keep_prelude:
+        returned_card_arrays.append(cfg.prelude_spell_card_ids)
+    for arr in returned_card_arrays:
         if arr:
             card_ids.extend(arr)
     if card_ids:
@@ -7657,9 +7676,10 @@ def _return_config_attack_only_cards(cfg):
     cfg.spell_name = None
     cfg.spell_target_figure_id = None
     cfg.spell_card_ids = []
-    cfg.prelude_spell_name = None
-    cfg.prelude_spell_data = None
-    cfg.prelude_spell_card_ids = []
+    if not keep_prelude:
+        cfg.prelude_spell_name = None
+        cfg.prelude_spell_data = None
+        cfg.prelude_spell_card_ids = []
     cfg.counter_spell_name = None
     cfg.counter_spell_data = None
     cfg.counter_spell_card_ids = []
@@ -7828,10 +7848,10 @@ def _resolve_conquer_battle(game, winner, requesting_player):
             else:
                 land.conquer_cooldown_until = None
 
-        # Convert attacker's conquer config to defence config.  Figures and
-        # battle-move tactics carry over so the conquered land is defended
-        # automatically; attack-only modifier, prelude, and spell cards return
-        # instead of being consumed.
+        # Convert attacker's conquer config to defence config. Figures,
+        # battle-move tactics, and a defence-compatible prelude carry over so
+        # the conquered land is defended automatically; attack-only cards
+        # return instead of being consumed.
         if game.conquer_config_id:
             atk_cfg = db.session.get(LandConfig, game.conquer_config_id)
             if atk_cfg:
@@ -8554,9 +8574,8 @@ def _rekey_config_lock_types(cfg, new_config_type):
         'conquer_counter':  f'{new_config_type}_counter',
     }
 
-    # Gather every card id still locked by this cfg: figure cards and the
-    # battle-move (tactic) cards that now carry over into the defence. The
-    # attack-only modifier/prelude/spell cards were already returned.
+    # Gather every card id still locked by this cfg. Attack-only cards have
+    # already been returned, while a defence-compatible prelude remains.
     card_ids = []
     for fig in cfg.figures:
         if fig.card_ids:
@@ -8564,6 +8583,10 @@ def _rekey_config_lock_types(cfg, new_config_type):
     for move in cfg.battle_moves:
         if move.card_id:
             card_ids.append(move.card_id)
+    for arr in (cfg.modifier_card_ids, cfg.spell_card_ids,
+                cfg.prelude_spell_card_ids, cfg.counter_spell_card_ids):
+        if arr:
+            card_ids.extend(arr)
     if not card_ids:
         return
 

@@ -6,6 +6,7 @@ Covers the helpers added in the card-lock cleanup pass:
 - ``_consume_config_battle_cards`` consumes battle/modifier/spell cards
 - ``_destroy_land_config`` deletes every remaining card on attacker loss
 - ``_rekey_config_lock_types`` re-keys conquer_* → defence_* on attacker win
+- defence-compatible preludes remain committed after an attacker win
 - ``_wipe_land_config`` unlocks (does not delete) every referenced card
 """
 import pytest
@@ -168,11 +169,35 @@ class TestRekeyConfigLockTypes:
 
         assert db.session.get(CollectionCard, move_card.id).lock_type == 'defence_move'
 
+    def test_rekeys_transferred_prelude_cards(self, app, db, two_users):
+        from routes.games import _rekey_config_lock_types
+        from models import CollectionCard
+        u, _ = two_users
+        cfg = _mk_config(db, u.id)
+        prelude = _mk_card(
+            db,
+            u.id,
+            rank='8',
+            lock_type='conquer_prelude',
+            lock_ref_id=cfg.id,
+        )
+        cfg.prelude_spell_name = 'Draw 2 MainCards'
+        cfg.prelude_spell_card_ids = [prelude.id]
+        db.session.commit()
+
+        _rekey_config_lock_types(cfg, 'defence')
+        db.session.commit()
+
+        kept = db.session.get(CollectionCard, prelude.id)
+        assert kept.locked is True
+        assert kept.lock_type == 'defence_prelude'
+        assert kept.lock_ref_id == cfg.id
+
 
 class TestReturnConfigAttackOnlyCards:
     def test_keeps_battle_moves_and_returns_attack_only_cards(self, app, db, two_users):
         # The winning attack becomes the new defence: figures + tactics stay
-        # committed; only the attack-only prelude/spell/modifier cards return.
+        # committed; conquer-only preludes and other attack-only cards return.
         from routes.games import _return_config_attack_only_cards
         from models import CollectionCard, LandConfigBattleMove
         u, _ = two_users
@@ -182,10 +207,10 @@ class TestReturnConfigAttackOnlyCards:
         db.session.add(LandConfigBattleMove(
             config_id=cfg.id, family_name='Dagger', card_id=move_card.id,
             suit='spades', rank='8', value=8, round_index=0))
-        prelude = _mk_card(db, u.id, rank='Q', lock_type='conquer_prelude',
+        prelude = _mk_card(db, u.id, rank='A', lock_type='conquer_prelude',
                            lock_ref_id=cfg.id)
         cfg.prelude_spell_card_ids = [prelude.id]
-        cfg.prelude_spell_name = 'spy'
+        cfg.prelude_spell_name = 'Invader Swap'
         db.session.commit()
         move_card_id, prelude_id = move_card.id, prelude.id
 
@@ -200,6 +225,33 @@ class TestReturnConfigAttackOnlyCards:
         assert returned.locked is False and returned.lock_type is None
         assert (cfg.prelude_spell_card_ids or []) == []
         assert cfg.prelude_spell_name is None
+
+    def test_keeps_defence_compatible_prelude(self, app, db, two_users):
+        from routes.games import _return_config_attack_only_cards
+        from models import CollectionCard
+        u, _ = two_users
+        cfg = _mk_config(db, u.id)
+        prelude = _mk_card(
+            db,
+            u.id,
+            rank='8',
+            lock_type='conquer_prelude',
+            lock_ref_id=cfg.id,
+        )
+        cfg.prelude_spell_name = 'Draw 2 MainCards'
+        cfg.prelude_spell_data = {'note': 'keep'}
+        cfg.prelude_spell_card_ids = [prelude.id]
+        db.session.commit()
+
+        _return_config_attack_only_cards(cfg)
+        db.session.commit()
+
+        kept = db.session.get(CollectionCard, prelude.id)
+        assert kept.locked is True
+        assert kept.lock_type == 'conquer_prelude'
+        assert cfg.prelude_spell_name == 'Draw 2 MainCards'
+        assert cfg.prelude_spell_data == {'note': 'keep'}
+        assert cfg.prelude_spell_card_ids == [prelude.id]
 
 
 class TestOrphanLockSweep:

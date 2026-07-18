@@ -3335,6 +3335,64 @@ class TestAITemplateCardRewards:
             db.session.refresh(land)
             assert land.defence_config_id == cfg.id
 
+    def test_attacker_wins_transfers_prelude_to_defence(self, app, db):
+        """A compatible conquer prelude stays in the automatic new defence."""
+        with app.app_context():
+            from routes.games import _resolve_conquer_battle
+
+            user = _make_user(db, username='prelude_transfer')
+            land = _make_land(db, tier=1)
+            cfg = _make_conquer_config(db, user, land)
+            prelude_card = CollectionCard(
+                user_id=user.id,
+                suit='Hearts',
+                rank='8',
+                value=8,
+                locked=True,
+                lock_type='conquer_prelude',
+                lock_ref_id=cfg.id,
+            )
+            db.session.add(prelude_card)
+            db.session.flush()
+            prelude_card_id = prelude_card.id
+            cfg.prelude_spell_name = 'Draw 2 MainCards'
+            cfg.prelude_spell_data = {'note': 'preserved'}
+            cfg.prelude_spell_card_ids = [prelude_card_id]
+            db.session.commit()
+
+            client = app.test_client()
+            resp = client.post(
+                '/kingdom/conquer/start_battle',
+                json={'land_id': land.id},
+                headers=_auth_headers(app, user),
+            )
+            assert resp.status_code == 200
+            game = db.session.get(Game, resp.get_json()['game_id'])
+            attacker = db.session.get(Player, game.invader_player_id)
+
+            result = _resolve_conquer_battle(game, attacker, attacker)
+            db.session.commit()
+
+            assert result['conquer_result'] == 'attacker_won'
+            db.session.refresh(cfg)
+            assert cfg.config_type == 'defence'
+            assert cfg.prelude_spell_name == 'Draw 2 MainCards'
+            assert cfg.prelude_spell_data == {'note': 'preserved'}
+            assert cfg.prelude_spell_card_ids == [prelude_card_id]
+            kept_card = db.session.get(CollectionCard, prelude_card_id)
+            assert kept_card.locked is True
+            assert kept_card.lock_type == 'defence_prelude'
+            assert kept_card.lock_ref_id == cfg.id
+
+            defence_resp = client.get(
+                f'/kingdom/defence/config?land_id={land.id}',
+                headers=_auth_headers(app, user),
+            )
+            assert defence_resp.status_code == 200
+            defence_cfg = defence_resp.get_json()['config']
+            assert defence_cfg['prelude_spell_name'] == 'Draw 2 MainCards'
+            assert defence_cfg['prelude_spell_card_ids'] == [prelude_card_id]
+
     def test_attacker_wins_live_payload_includes_victory_review_fields(self, app, db):
         """Regression: the live conquer resolve payload must surface victory_review_*.
 
