@@ -1293,9 +1293,9 @@ class ConquerTacticsRail:
         pygame.draw.rect(self.window, accent, panel, 2, border_radius=10)
         inner = panel.inflate(-16, -14)
 
-        title_font = settings.get_font(max(10, int(settings.FS_TINY * 0.95)), bold=True)
-        sub_font = settings.get_font(max(9, int(settings.FS_TINY * 0.8)))
-        label_font = settings.get_font(max(9, int(settings.FS_TINY * 0.78)), bold=True)
+        title_font = settings.get_font(max(settings.FS_CONQUER_LABEL, int(settings.FS_TINY * 0.95)), bold=True)
+        sub_font = settings.get_font(max(settings.FS_CONQUER_META, int(settings.FS_TINY * 0.8)))
+        label_font = settings.get_font(max(settings.FS_CONQUER_META, int(settings.FS_TINY * 0.78)), bold=True)
 
         # ── Header: eye glyph + title + subtitle ────────────────────
         y = inner.y
@@ -1366,14 +1366,14 @@ class ConquerTacticsRail:
         Returns the natural fit; ``draw()`` decides whether/how to grow
         the strip into the hand list.
         """
-        font = settings.get_font(max(11, int(settings.FS_SMALL * 0.95)), bold=True)
-        sub = settings.get_font(max(10, int(settings.FS_TINY * 0.95)))
+        font = settings.get_font(max(settings.FS_CONQUER_LABEL, int(settings.FS_SMALL * 0.95)), bold=True)
+        sub = settings.get_font(max(settings.FS_CONQUER_LABEL, int(settings.FS_TINY * 0.95)))
         avail = max(1, width - 16)
         if self._result_banner:
             text = self._result_banner.get('text', '')
             lines = self._wrap_text(text, font, avail)
             hint_h = settings.get_font(
-                max(9, int(settings.FS_TINY * 0.8))).get_height()
+                max(settings.FS_CONQUER_META, int(settings.FS_TINY * 0.8))).get_height()
             return 4 + len(lines) * (font.get_height() + 1) + hint_h + 7
         game = getattr(self._parent.state, 'game', None)
         hand_count = len(self._hand_moves())
@@ -1400,8 +1400,8 @@ class ConquerTacticsRail:
         game = getattr(self._parent.state, 'game', None)
         gamble_text, gamble_state = self._gamble_status_for_strip(game)
         line2 = gamble_text
-        font = settings.get_font(max(11, int(settings.FS_SMALL * 0.95)), bold=True)
-        sub = settings.get_font(max(10, int(settings.FS_TINY * 0.95)))
+        font = settings.get_font(max(settings.FS_CONQUER_LABEL, int(settings.FS_SMALL * 0.95)), bold=True)
+        sub = settings.get_font(max(settings.FS_CONQUER_LABEL, int(settings.FS_TINY * 0.95)))
         avail = max(1, rect.width - 16)
         y = rect.y + 4
         for line in self._wrap_text(line1, font, avail):
@@ -1549,10 +1549,10 @@ class ConquerTacticsRail:
         bg.fill((58, 44, 28, 232))
         self.window.blit(bg, rect.topleft)
         pygame.draw.rect(self.window, color, rect, 2, border_radius=4)
-        sub = settings.get_font(max(9, int(settings.FS_TINY * 0.8)))
+        sub = settings.get_font(max(settings.FS_CONQUER_META, int(settings.FS_TINY * 0.8)))
         avail = max(1, rect.width - 16)
-        base_size = max(11, int(settings.FS_SMALL * 0.95))
-        min_size = max(8, int(settings.FS_TINY * 0.72))
+        base_size = max(settings.FS_CONQUER_LABEL, int(settings.FS_SMALL * 0.95))
+        min_size = max(settings.FS_CONQUER_META, int(settings.FS_TINY * 0.72))
         font = settings.get_font(base_size, bold=True)
         lines = self._wrap_text(text, font, avail)
         for size in range(base_size, min_size - 1, -1):
@@ -1584,7 +1584,7 @@ class ConquerTacticsRail:
         pygame.draw.line(self.window, _BORDER_RGBA,
                          (rect.left + 2, rect.bottom - 1),
                          (rect.right - 2, rect.bottom - 1), 1)
-        font = settings.get_font(max(9, int(settings.FS_TINY * 0.85)), bold=True)
+        font = settings.get_font(max(settings.FS_CONQUER_META, int(settings.FS_TINY * 0.85)), bold=True)
         s = font.render(label, True, _TEXT_SECONDARY)
         self.window.blit(s, (rect.left + 6, rect.top + 1))
 
@@ -1600,7 +1600,7 @@ class ConquerTacticsRail:
         self._cell_group_toggle_rects = []
         self._hovered_id = None
         if not items:
-            empty_font = settings.get_font(max(11, int(settings.FS_SMALL * 0.9)))
+            empty_font = settings.get_font(max(settings.FS_CONQUER_LABEL, int(settings.FS_SMALL * 0.9)))
             t = empty_font.render('— hand empty —', True, _TEXT_MUTED)
             self.window.blit(t, t.get_rect(center=rect.center))
             self.window.set_clip(previous_clip)
@@ -1625,8 +1625,8 @@ class ConquerTacticsRail:
         else:
             self._scroll_down_rect = None
 
-        font = settings.get_font(max(11, int(settings.FS_SMALL * 0.95)), bold=True)
-        chip_font = settings.get_font(max(9, int(settings.FS_TINY * 0.85)), bold=True)
+        font = settings.get_font(max(settings.FS_CONQUER_LABEL, int(settings.FS_SMALL * 0.95)), bold=True)
+        chip_font = settings.get_font(max(settings.FS_CONQUER_META, int(settings.FS_TINY * 0.85)), bold=True)
         mouse_pos = pygame.mouse.get_pos()
         y = rect.top
         # Spell-removed ghost cells (#round4).
@@ -1721,7 +1721,7 @@ class ConquerTacticsRail:
         # marking this row as expandable.
         previous_clip = self.window.get_clip()
         self.window.set_clip(rect)
-        pill_font = settings.get_font(max(9, int(settings.FS_TINY * 0.85)), bold=True)
+        pill_font = settings.get_font(max(settings.FS_CONQUER_META, int(settings.FS_TINY * 0.85)), bold=True)
         pill_text = f'×{count}'
         pill_surf = pill_font.render(pill_text, True, (24, 18, 12))
         pill_w = pill_surf.get_width() + 10
@@ -1872,7 +1872,7 @@ class ConquerTacticsRail:
                              border_radius=4)
             self.window.blit(glow_surf, rect.topleft)
             # NEW ribbon top-right.
-            ribbon_font = settings.get_font(max(8, int(settings.FS_TINY * 0.7)), bold=True)
+            ribbon_font = settings.get_font(max(settings.FS_CONQUER_META, int(settings.FS_TINY * 0.7)), bold=True)
             ribbon_surf = ribbon_font.render('NEW', True, (24, 18, 12))
             ribbon_rect = ribbon_surf.get_rect()
             ribbon_rect.inflate_ip(8, 4)
@@ -1980,7 +1980,7 @@ class ConquerTacticsRail:
         # Strongest-move badge (#8d) — small star/spark glyph on the
         # currently highest-power move.
         if mid == self._strongest_move_id():
-            badge_font = settings.get_font(max(10, int(settings.FS_TINY * 0.9)), bold=True)
+            badge_font = settings.get_font(max(settings.FS_CONQUER_LABEL, int(settings.FS_TINY * 0.9)), bold=True)
             badge_surf = badge_font.render('★', True, (250, 220, 110))
             self.window.blit(badge_surf, (rect.left + 4, rect.top + 2))
 
@@ -1996,7 +1996,7 @@ class ConquerTacticsRail:
                 slot_label = '2/2'
             if slot_label:
                 slot_font = settings.get_font(
-                    max(9, int(settings.FS_TINY * 0.85)), bold=True)
+                    max(settings.FS_CONQUER_META, int(settings.FS_TINY * 0.85)), bold=True)
                 slot_surf = slot_font.render(slot_label, True, (130, 200, 250))
                 pad_x, pad_y = 4, 1
                 box = pygame.Rect(
@@ -2033,7 +2033,7 @@ class ConquerTacticsRail:
                 pass
             try:
                 glyph_font = settings.get_font(
-                    max(10, int(settings.FS_TINY * 1.1)), bold=True)
+                    max(settings.FS_CONQUER_LABEL, int(settings.FS_TINY * 1.1)), bold=True)
                 glyph = glyph_font.render('✺', True, (170, 200, 240))
                 self.window.blit(
                     glyph,
@@ -2049,8 +2049,8 @@ class ConquerTacticsRail:
         pygame.draw.rect(self.window, (24, 18, 14), rect, 0, border_radius=4)
         pygame.draw.rect(self.window, _BORDER_RGBA, rect, 1, border_radius=4)
         sel = self._selected_move()
-        title_font = settings.get_font(max(12, int(settings.FS_SMALL * 1.0)), bold=True)
-        body_font = settings.get_font(max(10, int(settings.FS_TINY * 0.95)))
+        title_font = settings.get_font(max(settings.FS_CONQUER_LABEL, int(settings.FS_SMALL * 1.0)), bold=True)
+        body_font = settings.get_font(max(settings.FS_CONQUER_LABEL, int(settings.FS_TINY * 0.95)))
         if sel is None:
             t = body_font.render('Select a tactic', True, _TEXT_MUTED)
             self.window.blit(t, (rect.left + 8, rect.top + 6))
@@ -2273,7 +2273,7 @@ class ConquerTacticsRail:
             sel = self._selected_move()
             hint = ('Pick a tactic to act' if sel is None
                     else "Wait for your battle turn")
-            font = settings.get_font(max(10, int(settings.FS_TINY * 0.9)))
+            font = settings.get_font(max(settings.FS_CONQUER_LABEL, int(settings.FS_TINY * 0.9)))
             surf = font.render(hint, True, _TEXT_MUTED)
             self.window.blit(surf, surf.get_rect(center=rect.center))
             return
@@ -2392,7 +2392,9 @@ class ConquerTacticsRail:
             label_rect = pygame.Rect(draw_rect.left + 2, label_top,
                                      draw_rect.width - 4, draw_rect.bottom - label_top - 1)
             font, fitted = self._fit_action_label(
-                key, label, label_rect.width, max(8, int(settings.FS_TINY * 0.72)), 7)
+                key, label, label_rect.width,
+                max(settings.FS_CONQUER_META, int(settings.FS_TINY * 0.72)),
+                settings.FS_CONQUER_META if settings.TOUCH_TARGET_MIN > 0 else 7)
             text = font.render(fitted, True, fg)
             self.window.blit(text, text.get_rect(center=label_rect.center))
             return
@@ -2404,15 +2406,18 @@ class ConquerTacticsRail:
         label_rect = pygame.Rect(icon_rect.right + 5, draw_rect.top,
                                  draw_rect.right - icon_rect.right - 12,
                                  draw_rect.height)
-        base_size = max(10, int(settings.FS_TINY * (1.02 if role == 'primary' else 0.88)))
-        font, fitted = self._fit_action_label(key, label, label_rect.width, base_size, 8)
+        base_size = max(settings.FS_CONQUER_LABEL,
+                        int(settings.FS_TINY * (1.02 if role == 'primary' else 0.88)))
+        font, fitted = self._fit_action_label(
+            key, label, label_rect.width, base_size,
+            settings.FS_CONQUER_META if settings.TOUCH_TARGET_MIN > 0 else 8)
         text = font.render(fitted, True, fg)
         self.window.blit(text, text.get_rect(center=label_rect.center))
 
     def _draw_action_tooltip(self, anchor_rect: pygame.Rect, text: str) -> None:
         if not text:
             return
-        font = settings.get_font(max(9, int(settings.FS_TINY * 0.85)))
+        font = settings.get_font(max(settings.FS_CONQUER_META, int(settings.FS_TINY * 0.85)))
         surf = font.render(text, True, (245, 230, 195))
         pad_x, pad_y = 8, 4
         box = pygame.Rect(0, 0, surf.get_width() + pad_x * 2,

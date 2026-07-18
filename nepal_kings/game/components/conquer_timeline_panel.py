@@ -83,17 +83,19 @@ class ConquerTimelinePanel:
         self.window = window
         self.title_font = settings.get_font(settings.FS_HEADING, bold=True)
         self.bubble_title_font = settings.get_font(
-            max(11, int(settings.FS_TINY * 0.85)), bold=True)
+            max(settings.FS_CONQUER_LABEL, int(settings.FS_TINY * 0.85)),
+            bold=True)
         self.owner_font = settings.get_font(
-            max(10, int(settings.FS_TINY * 0.72)), bold=True)
+            max(settings.FS_CONQUER_META, int(settings.FS_TINY * 0.72)),
+            bold=True)
         self.sidenote_font = settings.get_font(
-            max(10, int(settings.FS_TINY * 0.72)))
+            max(settings.FS_CONQUER_META, int(settings.FS_TINY * 0.72)))
         self.info_headline_font = settings.get_font(
             settings.FS_HEADING, bold=True)
         self.info_body_font = settings.get_font(
-            max(13, int(settings.FS_SMALL * 0.95)))
+            max(settings.FS_CONQUER_LABEL, int(settings.FS_SMALL * 0.95)))
         self.button_font = settings.get_font(
-            max(13, int(settings.FS_TINY)), bold=True)
+            max(settings.FS_CONQUER_LABEL, int(settings.FS_TINY)), bold=True)
         self.tooltip_font = settings.get_font(settings.TOOLTIP_FONT_SIZE)
         # active-step hover state
         self._step_hover = None

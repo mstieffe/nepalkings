@@ -759,12 +759,31 @@ class ConquerRoundLedger:
             return
         self.window.blit(squashed, squashed.get_rect(center=clipped.center))
 
+    @staticmethod
+    def _diff_pill_rect(rect: pygame.Rect) -> pygame.Rect:
+        """Pill background for the round-diff number.
+
+        Full-height cards shave a third; the compact mobile band shaves far
+        less so the number inside keeps a legible size.
+        """
+        v_shrink = rect.height // 3 if rect.height >= 48 else max(4, rect.height // 6)
+        return rect.inflate(-rect.width // 4, -v_shrink)
+
+    @staticmethod
+    def _diff_pill_font(pill: pygame.Rect):
+        """Round-diff number font: as large as the pill affords, tier-bounded."""
+        size = max(settings.FS_CONQUER_LABEL,
+                   min(settings.FS_CONQUER_SECONDARY, pill.height - 6))
+        return settings.get_font(size, bold=True)
+
     def _draw_diff_pill_revealing(self, rect: pygame.Rect, you, opp, reveal_stage):
         """Diff pill during the staged reveal: 'vs' → count-up → final."""
         stage = reveal_stage.get('stage')
         if stage in (STAGE_HOLD, STAGE_FLIP) or opp is None or you is None:
             self._tally_last_shown = None
-            font = settings.get_font(max(13, int(settings.FS_SMALL * 1.0)), bold=True)
+            font = settings.get_font(
+                max(settings.FS_CONQUER_LABEL, int(settings.FS_SMALL * 1.0)),
+                bold=True)
             ts = font.render('vs', True, _TEXT_MUTED)
             self.window.blit(ts, ts.get_rect(center=rect.center))
             return
@@ -788,10 +807,10 @@ class ConquerRoundLedger:
             direction, col = 'down', _LOSE_RED
         else:
             direction, col = 'eq', _TIE_GREY
-        pill = rect.inflate(-rect.width // 4, -rect.height // 3)
+        pill = self._diff_pill_rect(rect)
         pygame.draw.rect(self.window, (10, 8, 6), pill, 0, border_radius=8)
         pygame.draw.rect(self.window, col, pill, 2, border_radius=8)
-        font = settings.get_font(max(13, int(settings.FS_SMALL * 1.0)), bold=True)
+        font = self._diff_pill_font(pill)
         num_surf = font.render(f'{abs(shown)}', True, col)
         glyph_size = max(6, min(pill.height - 6, font.get_height() - 2))
         gap = 2
@@ -842,20 +861,28 @@ class ConquerRoundLedger:
             pygame.draw.rect(self.window, (20, 14, 10), rect, 0, border_radius=4)
             pygame.draw.rect(self.window, _BORDER_RGBA, rect, 1, border_radius=4)
         if move is None:
-            ph_font = settings.get_font(max(11, int(settings.FS_SMALL * 0.95)), bold=True)
+            ph_font = settings.get_font(
+                max(settings.FS_CONQUER_LABEL, int(settings.FS_SMALL * 0.95)),
+                bold=True)
             label = '—' if is_player_self else '?'
             ts = ph_font.render(label, True, _TEXT_MUTED)
             self.window.blit(ts, ts.get_rect(center=rect.center))
             return
         if move.get('_skipped') or move.get('family_name') == 'Skip':
-            ph_font = settings.get_font(max(10, int(settings.FS_TINY * 0.95)), bold=True)
+            ph_font = settings.get_font(
+                max(settings.FS_CONQUER_LABEL, int(settings.FS_TINY * 0.95)),
+                bold=True)
             ts = ph_font.render('Skip', True, _TEXT_MUTED)
             self.window.blit(ts, ts.get_rect(center=rect.center))
             return
         # Family + power
         name = self._move_label(move)
-        name_font = settings.get_font(max(9, int(settings.FS_TINY * 0.9)), bold=True)
-        pwr_font = settings.get_font(max(13, int(settings.FS_SMALL * 1.1)), bold=True)
+        name_font = settings.get_font(
+            max(settings.FS_CONQUER_LABEL, int(settings.FS_TINY * 0.9)),
+            bold=True)
+        pwr_font = settings.get_font(
+            max(settings.FS_CONQUER_SECONDARY, int(settings.FS_SMALL * 1.1)),
+            bold=True)
         text_col = _GHOST_BLUE if ghost else _TEXT_SECONDARY
         power_col = _GHOST_BLUE if ghost else _TEXT_PRIMARY
         icon_size = max(min(28, max(12, rect.height - 4)),
@@ -918,7 +945,9 @@ class ConquerRoundLedger:
             if ghost_move is not None:
                 self._draw_ghost_diff_pill(rect, ghost_move, opp)
                 return
-            font = settings.get_font(max(13, int(settings.FS_SMALL * 1.0)), bold=True)
+            font = settings.get_font(
+                max(settings.FS_CONQUER_LABEL, int(settings.FS_SMALL * 1.0)),
+                bold=True)
             ts = font.render('vs', True, _TEXT_MUTED)
             self.window.blit(ts, ts.get_rect(center=rect.center))
             return
@@ -929,10 +958,10 @@ class ConquerRoundLedger:
             direction, col = 'down', _LOSE_RED
         else:
             direction, col = 'eq', _TIE_GREY
-        pill = rect.inflate(-rect.width // 4, -rect.height // 3)
+        pill = self._diff_pill_rect(rect)
         pygame.draw.rect(self.window, (10, 8, 6), pill, 0, border_radius=8)
         pygame.draw.rect(self.window, col, pill, 2, border_radius=8)
-        font = settings.get_font(max(13, int(settings.FS_SMALL * 1.0)), bold=True)
+        font = self._diff_pill_font(pill)
         num_surf = font.render(f'{abs(diff)}', True, col)
         glyph_size = max(6, min(pill.height - 6, font.get_height() - 2))
         gap = 2
@@ -950,12 +979,12 @@ class ConquerRoundLedger:
             direction = 'down'
         else:
             direction = 'eq'
-        pill = rect.inflate(-rect.width // 4, -rect.height // 3)
+        pill = self._diff_pill_rect(rect)
         overlay = pygame.Surface(pill.size, pygame.SRCALPHA)
         overlay.fill(_GHOST_RGBA)
         self.window.blit(overlay, pill.topleft)
         pygame.draw.rect(self.window, _GHOST_BLUE, pill, 2, border_radius=8)
-        font = settings.get_font(max(13, int(settings.FS_SMALL * 1.0)), bold=True)
+        font = self._diff_pill_font(pill)
         num_surf = font.render(f'{abs(diff)}', True, _GHOST_BLUE)
         glyph_size = max(6, min(pill.height - 6, font.get_height() - 2))
         gap = 2
@@ -1055,7 +1084,8 @@ class ConquerRoundLedger:
             trend_col = _WIN_GREEN if reveal_adjust < 0 else _LOSE_RED
             pygame.draw.circle(self.window, trend_col, (cx, cy),
                                max(1, radius - 6), 2)
-        value_size = max(14, min(int(radius * 1.05), int(settings.FS_SMALL * 1.55)))
+        value_size = max(settings.FS_CONQUER_LABEL,
+                         min(int(radius * 1.15), int(settings.FS_SMALL * 1.75)))
         font = settings.get_font(value_size, bold=True)
         ts = font.render(label, True, col)
         self.window.blit(ts, ts.get_rect(center=(cx, cy)))
@@ -1112,7 +1142,9 @@ class ConquerRoundLedger:
         else:
             glyph, col = '=', _TIE_GREY
 
-        title_font = settings.get_font(max(10, int(settings.FS_SMALL * 0.90)), bold=True)
+        title_font = settings.get_font(
+            max(settings.FS_CONQUER_LABEL, int(settings.FS_SMALL * 0.90)),
+            bold=True)
         body_font = settings.get_font(settings.FS_CONQUER_LABEL, bold=True)
         title = title_font.render(f'Round {idx + 1} recap', True, _TEXT_PRIMARY)
         self.window.blit(title, (rect.left + 10, rect.top + 7))

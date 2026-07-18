@@ -91,9 +91,13 @@ _OPP_HAND_STRIP_GAP_PCT = 0.006
 _RAIL_INNER_PAD_X_PCT = 0.00833
 _RAIL_INNER_PAD_Y_PCT = 0.015
 _RAIL_TOP_STRIP_H_PCT = 0.059
-_RAIL_DETAIL_H_PCT = 0.070 if _IS_MOBILE else 0.065
-_RAIL_ACTION_TRAY_H_PCT = 0.075 if _IS_MOBILE else 0.063
-_RAIL_CELL_H_PCT = 0.090 if _IS_MOBILE else 0.085
+# Mobile rows run taller than the raw percentage scaling suggests: the
+# legibility-floored fonts (FS_CONQUER_* tiers) need the extra height, and
+# fewer visible-but-readable cells beat more unreadable ones (the list
+# scrolls).
+_RAIL_DETAIL_H_PCT = 0.076 if _IS_MOBILE else 0.065
+_RAIL_ACTION_TRAY_H_PCT = 0.082 if _IS_MOBILE else 0.063
+_RAIL_CELL_H_PCT = 0.100 if _IS_MOBILE else 0.085
 _RAIL_CELLS_VISIBLE = 5
 
 # Ledger inner layout

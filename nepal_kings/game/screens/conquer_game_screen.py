@@ -214,7 +214,8 @@ class ConquerGameScreen(GameScreen):
         self._conquer_header_font = settings.get_font(settings.FS_HEADING, bold=True)
         self._conquer_hint_font = settings.get_font(settings.FS_SMALL)
         self._conquer_badge_font = settings.get_font(
-            int(0.015 * settings.SCREEN_HEIGHT * _UI_SCALE), bold=True)
+            max(settings.FS_CONQUER_META,
+                int(0.015 * settings.SCREEN_HEIGHT * _UI_SCALE)), bold=True)
         self._conquer_battle_coach_buttons = []
         self._conquer_battle_coach_step = None
         self._conquer_battle_coach_pressed_button_action = None
@@ -263,7 +264,7 @@ class ConquerGameScreen(GameScreen):
         self._conquer_move_panel_title_font = settings.get_font(
             settings.FS_CONQUER_LABEL, bold=True)
         self._conquer_move_panel_empty_font = settings.get_font(
-            max(12, int(settings.FS_TINY * 0.95)), bold=True)
+            max(settings.FS_CONQUER_LABEL, int(settings.FS_TINY * 0.95)), bold=True)
 
         # Unified tactics-hand UI (Phase 9 redesign).  These are lightweight
         # overlays — when the active game uses ``conquer_move_model='tactics_hand'``
@@ -1489,7 +1490,7 @@ class ConquerGameScreen(GameScreen):
                 cached = getattr(self, '_conquer_countdown_cache', None)
                 if cached is None or cached[0] != cache_key:
                     cd_font = settings.get_font(
-                        max(11, int(settings.FS_SMALL * 1.0)), bold=True)
+                        max(settings.FS_CONQUER_LABEL, int(settings.FS_SMALL * 1.0)), bold=True)
                     cd_surf = cd_font.render(countdown_text, True, cd_color)
                     self._conquer_countdown_cache = (cache_key, cd_surf)
                 else:
@@ -1741,7 +1742,7 @@ class ConquerGameScreen(GameScreen):
             cached = getattr(self, '_conquer_countdown_cache', None)
             if cached is None or cached[0] != cache_key:
                 cd_font = settings.get_font(
-                    max(11, int(settings.FS_SMALL * 1.0)), bold=True)
+                    max(settings.FS_CONQUER_LABEL, int(settings.FS_SMALL * 1.0)), bold=True)
                 cd_surf = cd_font.render(countdown_text, True, cd_color)
                 self._conquer_countdown_cache = (cache_key, cd_surf)
             else:
@@ -1775,7 +1776,7 @@ class ConquerGameScreen(GameScreen):
             mode=self._conquer_effective_layout_mode(),
         )
         card = pygame.Rect(*layout.round_ledger.round_card_rects[round_idx])
-        title_font = settings.get_font(max(10, int(settings.FS_TINY * 0.95)), bold=True)
+        title_font = settings.get_font(max(settings.FS_CONQUER_LABEL, int(settings.FS_TINY * 0.95)), bold=True)
         chip_w = int(card.width * 0.34)
         chip_y = card.top + 4 + title_font.get_height() + 4
         chip_h = card.bottom - chip_y - 6
@@ -2186,7 +2187,7 @@ class ConquerGameScreen(GameScreen):
             anchor_cx = pygame.Rect(layout.battlefield.rect).centerx
         except Exception:
             anchor_cx = ledger_rect.centerx
-        font = settings.get_font(max(10, int(settings.FS_TINY * 0.9)), bold=True)
+        font = settings.get_font(max(settings.FS_CONQUER_LABEL, int(settings.FS_TINY * 0.9)), bold=True)
         line_h = font.get_height() + 6
         y = ledger_rect.top - 10 - line_h
         max_w = max(120, int(settings.SCREEN_WIDTH * 0.34))
@@ -4843,7 +4844,7 @@ class ConquerGameScreen(GameScreen):
     def _conquer_move_empty_font(self):
         font = getattr(self, '_conquer_move_panel_empty_font', None)
         if font is None:
-            font = settings.get_font(max(12, int(settings.FS_TINY * 0.95)), bold=True)
+            font = settings.get_font(max(settings.FS_CONQUER_LABEL, int(settings.FS_TINY * 0.95)), bold=True)
             self._conquer_move_panel_empty_font = font
         return font
 
@@ -5435,7 +5436,8 @@ class ConquerGameScreen(GameScreen):
         icon_big = int(icon_inner * big_scale)
         frame_size = int(icon_size * 1.30)
         frame_big = int(frame_size * big_scale)
-        suit_size = max(8, int(icon_size * 0.24))
+        suit_size = max(13 if settings.TOUCH_TARGET_MIN > 0 else 8,
+                        int(icon_size * 0.24))
         suit_big = int(suit_size * big_scale)
 
         glow_cache = {
@@ -5461,7 +5463,15 @@ class ConquerGameScreen(GameScreen):
             frame_cache[name] = self._scaled_or_blank(getattr(family, 'frame_img', None), (frame_size, frame_size))
             frame_cache[name + '_big'] = self._scaled_or_blank(getattr(family, 'frame_img', None), (frame_big, frame_big))
 
-        font = settings.get_font(max(10, int(icon_size * 0.28)), bold=True)
+        # The power number inside the move icon is the single most-read
+        # value in the rail cells and ledger chips. Icon-proportional sizing
+        # bottoms out around 10px on the mobile canvas (~8 CSS px after the
+        # phone downscale), so mobile floors it at the LABEL tier — the
+        # badge ellipse sizes itself from the text, so it simply grows.
+        power_floor = (settings.FS_CONQUER_LABEL
+                       if settings.TOUCH_TARGET_MIN > 0 else 10)
+        font = settings.get_font(
+            max(power_floor, int(icon_size * 0.28)), bold=True)
         caches[icon_size] = (glow_cache, icon_cache, frame_cache, suit_icon_cache, font)
         return caches[icon_size]
 
@@ -6577,8 +6587,12 @@ class ConquerGameScreen(GameScreen):
         side_blocked = any(e.get('kind') == 'blocks_bonus' for e in enemy_support)
 
         # The battle math is the headline of this band: the figure's total
-        # renders a full tier above its name and breakdown segments.
-        name_font = settings.get_font(settings.FS_CONQUER_LABEL, bold=True)
+        # renders a full tier above its name and breakdown segments. The
+        # name runs slightly under LABEL so common figure names still fit
+        # the lane slot un-ellipsized.
+        name_font = settings.get_font(
+            max(settings.FS_CONQUER_META, int(settings.FS_TINY * 0.92)),
+            bold=True)
         value_font = settings.get_font(settings.FS_CONQUER_SECONDARY, bold=True)
         count = min(2, len(figures))
         slot_w = max(1, band.width // count)
@@ -6676,8 +6690,12 @@ class ConquerGameScreen(GameScreen):
             )
             # Segmented colour-coded pill (#2): [base|+buff|+spell|+sup] = total.
             # Anchored directly below the name so it no longer collides
-            # with long figure labels (#round6).
-            seg_font = settings.get_font(settings.FS_CONQUER_LABEL, bold=True)
+            # with long figure labels (#round6). Segments stay a step under
+            # the total so the full breakdown keeps fitting the slot width
+            # (overflow falls back to a lone total chip, hiding the math).
+            seg_font = settings.get_font(
+                max(settings.FS_CONQUER_META, int(settings.FS_TINY * 0.78)),
+                bold=True)
             total_color = (235, 250, 220) if total > base else (250, 230, 220) if total < base else (42, 32, 20)
             total_bg = (40, 110, 60) if total > base else (148, 50, 50) if total < base else (238, 206, 111)
             pill_anchor_y = min(name_rect.bottom + 2, power_bottom_limit - 2)
@@ -7478,7 +7496,11 @@ class ConquerGameScreen(GameScreen):
             midtop=(chip.centerx, chip.top + 3)))
         value_text = str(entry.get('value') or '')
         value_surf = value_font.render(value_text, True, value_color)
-        if value_surf.get_width() > chip.width - 6:
+        # Drop to the LABEL tier when the SECONDARY rendering would spill
+        # out of the chip or overlap the label band above it.
+        value_room_h = chip.height - label_surf.get_height() - 8
+        if (value_surf.get_width() > chip.width - 6
+                or value_surf.get_height() > value_room_h):
             small = settings.get_font(settings.FS_CONQUER_LABEL, bold=True)
             value_surf = small.render(value_text, True, value_color)
         self.window.blit(value_surf, value_surf.get_rect(
@@ -7509,7 +7531,7 @@ class ConquerGameScreen(GameScreen):
         label_h = settings.get_font(settings.FS_CONQUER_META, bold=True).get_height()
         value_h = settings.get_font(settings.FS_CONQUER_SECONDARY, bold=True).get_height()
         chip_h = min(max(label_h + value_h + 9,
-                         settings.TOUCH_COMPACT_MIN or 36), 52)
+                         settings.TOUCH_COMPACT_MIN or 36), 58)
         gap = 5
         max_fit = max(1, (inner.height + gap) // (chip_h + gap))
         visible = chips[:max_fit]
@@ -7816,7 +7838,7 @@ class ConquerGameScreen(GameScreen):
 
         tiny = settings.get_font(settings.FS_CONQUER_META, bold=True)
         name_font = settings.get_font(settings.FS_CONQUER_LABEL, bold=True)
-        value_font = settings.get_font(max(11, int(settings.FS_TINY * 0.88)), bold=True)
+        value_font = settings.get_font(max(settings.FS_CONQUER_LABEL, int(settings.FS_TINY * 0.88)), bold=True)
         round_surf = tiny.render(f'R{round_idx + 1}', True, (232, 220, 180))
         self.window.blit(round_surf, round_surf.get_rect(center=(badge.centerx, badge.top + 9)))
 

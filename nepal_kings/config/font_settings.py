@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
 # See LICENSE file in the project root for full license information.
-from config.screen_settings import SCREEN_HEIGHT, _FS
+from config.screen_settings import SCREEN_HEIGHT, _FS, _IS_MOBILE
 
 import pygame
 
@@ -17,17 +17,21 @@ FS_SMALL    = int(0.026 * _FS)  # Small text — icon captions, turn indicator, 
 FS_TINY     = int(0.026 * _FS)  # Fine detail — tooltips, power circles, scoreboard sub-labels
 
 # Legibility floor: the smallest canvas-px size that stays readable after the
-# mobile canvas is CSS-downscaled (~0.78x on small phones). Every conquer tier
-# below floors on this instead of the old, always-dead max(7..10, ...) guards.
-FS_FLOOR    = max(12, int(0.016 * _FS))
+# mobile canvas is CSS-downscaled (~0.78x on small phones — 15 canvas px is
+# only ~12 CSS px there). Every conquer tier below floors on this instead of
+# the old, always-dead max(7..10, ...) guards. Desktop keeps a lower floor;
+# its formulas already exceed it.
+FS_FLOOR    = max(15, int(0.016 * _FS)) if _IS_MOBILE else max(12, int(0.016 * _FS))
 
 # ── Conquer battle semantic tiers ────────────────────────────────────────────
 # The conquer screen previously derived ~40 ad-hoc sizes from FS_TINY with
 # 0.50–0.95 multipliers, landing below legibility on the mobile canvas. All
-# conquer battle text maps onto these four roles instead.
-FS_CONQUER_PRIMARY   = max(FS_FLOOR * 2, int(0.046 * _FS))            # fighter totals, diff value
-FS_CONQUER_SECONDARY = max(int(FS_FLOOR * 1.3), int(0.030 * _FS))     # chip values, support totals
-FS_CONQUER_LABEL     = max(FS_FLOOR, int(0.020 * _FS))                # SUPPORT/CLASH/R#, captions
+# conquer battle text maps onto these four roles instead. The FS_FLOOR
+# multiples carry mobile (where the 0.0xx*_FS terms are small); the
+# percentage terms carry desktop unchanged.
+FS_CONQUER_PRIMARY   = max(int(FS_FLOOR * 2.2), int(0.046 * _FS))     # fighter totals, diff value
+FS_CONQUER_SECONDARY = max(int(FS_FLOOR * 1.6), int(0.030 * _FS))     # chip values, power numbers
+FS_CONQUER_LABEL     = max(int(FS_FLOOR * 1.3), int(0.020 * _FS))     # names, captions, R#
 FS_CONQUER_META      = FS_FLOOR                                       # sources, fine print
 
 # ── Legacy aliases (keep existing constant names mapped to groups) ────────────

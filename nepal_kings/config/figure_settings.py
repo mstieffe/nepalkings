@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
 # See LICENSE file in the project root for full license information.
 from config.screen_settings import SCREEN_WIDTH, SCREEN_HEIGHT, _FS, _UI_SCALE, _IS_MOBILE
-from config.font_settings import FS_SMALL
+from config.font_settings import FS_SMALL, FS_CONQUER_LABEL
 
 # PATHS
 FIGURE_ICON_IMG_DIR = 'img/figures/icons/'
@@ -57,7 +57,12 @@ FIGURE_ICON_SIN_AMPL = int(0.005 * SCREEN_HEIGHT)
 
 FIGURE_ICON_CAPTION_COLOR = (95, 42, 22)
 
-FIGURE_ICON_FONT_CAPTION_FONT_SIZE     = int(FS_SMALL * 0.82) if _IS_MOBILE else FS_SMALL
+# The figure label plate (name + power + bonus row) is a primary reading
+# surface. The old mobile shrink (0.82x) landed at ~12 CSS px after the
+# phone downscale; floor it just under the LABEL tier — full LABEL forces
+# too much name ellipsis in the narrow field columns.
+FIGURE_ICON_FONT_CAPTION_FONT_SIZE     = (max(int(FS_CONQUER_LABEL * 0.9), int(FS_SMALL * 0.82))
+                                          if _IS_MOBILE else FS_SMALL)
 FIGURE_ICON_FONT_CAPTION_BIG_FONT_SIZE = int(FIGURE_ICON_FONT_CAPTION_FONT_SIZE * 1.18 if _IS_MOBILE else FS_SMALL * 1.25)
 
 
