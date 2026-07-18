@@ -175,6 +175,7 @@ class ConquerGameScreen(GameScreen):
             self.window, self.state,
             x=sub_x, y=sub_y,
             title='Battle Shop',
+            mode='conquer_battle',
         )
 
         _report(0.75, 'Loading conquer battle arena ...')

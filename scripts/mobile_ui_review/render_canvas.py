@@ -34,6 +34,8 @@ DEFAULT_USER = {
 DUEL_SCREEN_ALIASES = {
     "game": "field",
     "game_field": "field",
+    "game_build_figure": "build_figure",
+    "game_cast_spell": "cast_spell",
     "game_battle_shop": "battle_shop",
     "game_battle": "battle",
 }
@@ -65,6 +67,16 @@ KINGDOM_SCREEN_ALIASES = {
 KINGDOM_CONFIG_ALIASES = {
     "kingdom_config": "top",
     "kingdom_config_shield": "shield",
+}
+
+CONFIG_PICKER_ALIASES = {
+    "conquer_build_figure": ("conquer", "_open_build_figure"),
+    "conquer_starting_tactics": ("conquer", "_open_battle_shop"),
+    "conquer_prelude_spell": ("conquer", "_open_prelude_spell_screen"),
+    "defence_build_figure": ("defence", "_open_build_figure"),
+    "defence_starting_tactics": ("defence", "_open_battle_shop"),
+    "defence_prelude_spell": ("defence", "_open_prelude_spell_screen"),
+    "defence_counter_spell": ("defence", "_open_counter_spell_screen"),
 }
 
 BOOSTER_REVEAL_ALIASES = {
@@ -103,12 +115,13 @@ RANK_VALUE = {
 }
 
 
-def configure_env(width: int, height: int, ui_scale: str) -> None:
+def configure_env(width: int, height: int, ui_scale: str,
+                  *, mobile: bool = True) -> None:
     os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
     os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
     os.environ["NK_SCREEN_WIDTH"] = str(width)
     os.environ["NK_SCREEN_HEIGHT"] = str(height)
-    os.environ["NK_IS_MOBILE"] = "1"
+    os.environ["NK_IS_MOBILE"] = "1" if mobile else "0"
     os.environ["NK_UI_SCALE"] = ui_scale
     os.environ.setdefault("SERVER_URL", "http://localhost:5000")
     sys.path.insert(0, str(APP_DIR))
@@ -763,6 +776,9 @@ def populate_duel_game(client, screen, subscreen: str) -> None:
     for subscreen_obj in screen.subscreens.values():
         if hasattr(subscreen_obj, "game"):
             subscreen_obj.game = game
+    picker = screen.subscreens.get(subscreen)
+    if picker is not None and subscreen in {"build_figure", "cast_spell"}:
+        picker.update(game)
     field = screen.subscreens.get("field")
     if field is not None:
         field.update(game)
@@ -779,6 +795,7 @@ def populate_duel_game(client, screen, subscreen: str) -> None:
         shop._loaded_bought_moves_key = shop._bought_moves_cache_key(game)
         shop.ready_button.disabled = False
         shop.ready_button.active = True
+        shop.update(game)
     battle = screen.subscreens.get("battle")
     if battle is not None:
         battle.game = game
@@ -1264,6 +1281,8 @@ def populate_kingdom_config(screen, section: str) -> None:
 
 
 def canonical_screen_name(screen_name: str) -> str:
+    if screen_name in CONFIG_PICKER_ALIASES:
+        return CONFIG_PICKER_ALIASES[screen_name][0]
     if screen_name in COLLECTION_SCREEN_ALIASES:
         return "collection"
     if screen_name in BOOSTER_REVEAL_ALIASES:
@@ -1283,6 +1302,7 @@ def uses_fixture(screen_name: str) -> bool:
     return (
         screen_name in KINGDOM_SCREEN_ALIASES
         or screen_name in KINGDOM_CONFIG_ALIASES
+        or screen_name in CONFIG_PICKER_ALIASES
         or screen_name in DUEL_SCREEN_ALIASES
         or screen_name in CONQUER_GAME_ALIASES
         or screen_name in BOOSTER_REVEAL_ALIASES
@@ -1374,6 +1394,31 @@ def populate_collection_booster_reveal(screen, variant: str):
 
 
 def prepare_screen(client, screen_name: str):
+    if screen_name in CONFIG_PICKER_ALIASES:
+        base_name, opener_name = CONFIG_PICKER_ALIASES[screen_name]
+        screen = client.screens[base_name]
+        if base_name == "conquer":
+            populate_conquer_config(screen)
+        else:
+            populate_defence_config(screen)
+
+        # Config pickers normally fetch the collection on open. Feed the
+        # deterministic fixture through that same path so the screenshot
+        # exercises production construction and card-locking logic.
+        from utils import collection_service
+        original_fetch = collection_service.fetch_collection_cards
+        collection_service.fetch_collection_cards = (
+            lambda: {"cards": fixture_collection_cards()})
+        try:
+            getattr(screen, opener_name)()
+        finally:
+            collection_service.fetch_collection_cards = original_fetch
+
+        picker = screen._subscreen_obj
+        if picker is not None and screen._game_proxy is not None:
+            picker.update(screen._game_proxy)
+        return screen
+
     if screen_name in COLLECTION_SCREEN_ALIASES:
         screen = client.screens["collection"]
         populate_collection_screen(screen)
@@ -1434,8 +1479,9 @@ def prepare_screen(client, screen_name: str):
     return screen
 
 
-def render_screens(width: int, height: int, ui_scale: str, screens: list[str]) -> int:
-    configure_env(width, height, ui_scale)
+def render_screens(width: int, height: int, ui_scale: str,
+                   screens: list[str], *, mobile: bool = True) -> int:
+    configure_env(width, height, ui_scale, mobile=mobile)
     import pygame
     from nepal_kings import Client
 
@@ -1457,6 +1503,7 @@ def render_screens(width: int, height: int, ui_scale: str, screens: list[str]) -
             *CONQUER_GAME_ALIASES.keys(),
             *KINGDOM_SCREEN_ALIASES.keys(),
             *KINGDOM_CONFIG_ALIASES.keys(),
+            *CONFIG_PICKER_ALIASES.keys(),
             *BOOSTER_REVEAL_ALIASES.keys(),
             *COLLECTION_SCREEN_ALIASES.keys(),
         )
@@ -1500,6 +1547,9 @@ def main() -> int:
     parser.add_argument("--size", default="854x480")
     parser.add_argument("--ui-scale", default="1.6")
     parser.add_argument(
+        "--desktop", action="store_true",
+        help="Render with desktop interaction/layout rules.")
+    parser.add_argument(
         "--screens",
         default=(
             "login,game_menu,duel_menu,new_game,load_game,rankings,"
@@ -1515,7 +1565,9 @@ def main() -> int:
     args = parser.parse_args()
     width_s, height_s = args.size.lower().split("x", 1)
     screens = [s.strip() for s in args.screens.split(",") if s.strip()]
-    return render_screens(int(width_s), int(height_s), args.ui_scale, screens)
+    return render_screens(
+        int(width_s), int(height_s), args.ui_scale, screens,
+        mobile=not args.desktop)
 
 
 if __name__ == "__main__":

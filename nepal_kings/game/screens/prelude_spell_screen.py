@@ -14,6 +14,14 @@ from config import settings
 from game.screens.sub_screen import SubScreen
 from game.components.spells.spell_manager import SpellManager
 from game.components.buttons.confirm_button import ConfirmButton
+from game.components.picker_ui import (
+    SegmentedTabs,
+    draw_empty_detail,
+    draw_footer,
+    draw_section_header,
+    footer_button_geometry,
+    layout_family_grid_desktop,
+)
 from utils import http_compat as requests
 import logging
 
@@ -56,22 +64,34 @@ class PreludeSpellScreen(SubScreen):
         self.land_id = land_id
         self.extra_payload = dict(extra_payload or {})
         self.description_overrides = dict(description_overrides or {})
+        self._active_spell_type = 'greed'
+        self._initial_family_selected = False
+        self._desktop_headers = []
+        self._is_counter_picker = 'counter' in str(server_endpoint or '').lower()
+        if self._is_counter_picker:
+            self.title = 'Set Counter · Defence Setup'
+        elif self.mode == 'conquer':
+            self.title = 'Set Prelude · Attack Setup'
+        else:
+            self.title = 'Set Prelude · Defence Setup'
 
         # Spell manager
         self.spell_manager = SpellManager()
 
         # UI components
         self.init_spell_info_box()
+        self.init_spell_category_tabs()
         self.init_spell_family_icons()
         self.init_scroll_test_list_shifter()
 
         self.selected_spell_family = None
 
+        action_label = 'Set Counter' if self._is_counter_picker else 'Set Prelude'
+        bx, by, bw, bh = footer_button_geometry(
+            self, action_label, align='left')
         self.confirm_button = ConfirmButton(
             self.window,
-            self._sx(settings.CAST_SPELL_CONFIRM_BUTTON_X),
-            self._sy(settings.CAST_SPELL_CONFIRM_BUTTON_Y),
-            "select!"
+            bx, by, action_label, width=bw, height=bh,
         )
 
     # ── Initialisation helpers ──────────────────────────────────────
@@ -98,63 +118,111 @@ class PreludeSpellScreen(SubScreen):
             scroll_height=settings.CAST_SPELL_INFO_BOX_SCROLL_HEIGHT,
         )
 
+    def init_spell_category_tabs(self):
+        ordered_types = ['greed', 'enchantment', 'tactics']
+        present_types = []
+        allowed_order = getattr(
+            self, 'allowed_spell_order',
+            sorted(getattr(self, 'allowed_spells', set())))
+        for name in allowed_order:
+            family = self.spell_manager.get_family_by_name(name)
+            if family and family.type not in present_types:
+                present_types.append(family.type)
+        present_types = [
+            spell_type for spell_type in ordered_types
+            if spell_type in present_types
+        ]
+        if not present_types:
+            present_types = ordered_types
+        self._active_spell_type = present_types[0]
+
+        offset_x = getattr(self, '_layout_offset_x', 0)
+        offset_y = getattr(self, '_layout_offset_y', 0)
+        box_x = int(settings.CAST_SPELL_INFO_BOX_X + offset_x)
+        box_y = int(settings.CAST_SPELL_INFO_BOX_Y + offset_y)
+        margin = max(8, int(0.012 * settings.SCREEN_WIDTH))
+        tab_h = max(
+            26,
+            settings.TOUCH_COMPACT_MIN
+            if settings.TOUCH_TARGET_MIN > 0 else 0,
+        )
+        self.spell_category_tabs = SegmentedTabs(
+            self.window,
+            pygame.Rect(
+                box_x + margin,
+                box_y + max(6, int(0.012 * settings.SCREEN_HEIGHT)),
+                settings.CAST_SPELL_INFO_BOX_WIDTH - 2 * margin,
+                tab_h,
+            ),
+            [(spell_type, spell_type.capitalize())
+             for spell_type in present_types],
+            active_key=self._active_spell_type,
+        )
+
     def init_spell_family_icons(self):
-        """Create clickable icons for each allowed spell family, grouped by type.
-
-        Fixed-size icon cells (no hover/selected resize) laid out in one row
-        per spell type.  Row spacing compresses automatically so wide rows
-        (e.g. six tactics families) never overflow the details panel — this
-        keeps the picker overlap-free down to compact landscape resolutions.
-        """
+        """Create fixed-size icons; the selected category forms a clean grid."""
+        if not hasattr(self, 'spell_category_tabs'):
+            self.init_spell_category_tabs()
         self.spell_family_buttons = []
-
-        # Lay families out in the allowlist's order so related spells
-        # (e.g. Draw 2 / Draw 4) sit next to each other.
         ordered_names = getattr(self, 'allowed_spell_order', None) or sorted(self.allowed_spells)
-        families_by_effect = {'greed': [], 'enchantment': [], 'tactics': []}
         for name in ordered_names:
             family = self.spell_manager.get_family_by_name(name)
-            if family is not None and family.type in families_by_effect:
-                families_by_effect[family.type].append(family)
-
-        effect_types_order = ['greed', 'enchantment', 'tactics']
-
-        self.type_label_font = settings.get_font(settings.SPELL_TYPE_LABEL_FONT_SIZE)
+            if family is not None:
+                button = family.make_icon(self.window, self.game,
+                                          0, 0,
+                                          fixed_size=True)
+                if settings.TOUCH_TARGET_MIN <= 0:
+                    # Desktop packs all category rows on one page.
+                    button.grid_mode = True
+                    button.rescale(settings.PICKER_DESKTOP_ICON_SCALE)
+                self.spell_family_buttons.append(button)
         self.type_labels = {}
         self.type_label_positions = {}
+        self._layout_spell_family_icons()
 
-        # Rightmost icon-centre that keeps the whole cell (icon + frame)
-        # inside the info box.
-        box_right = settings.CAST_SPELL_INFO_BOX_X + settings.CAST_SPELL_INFO_BOX_WIDTH
-        max_center_x = box_right - int(settings.SPELL_ICON_WIDTH * 0.9)
-        row_span = max(1, max_center_x - settings.CAST_SPELL_ICON_START_X)
+    def _visible_spell_buttons(self):
+        # Desktop shows the whole spell book at once; mobile pages by category.
+        if settings.TOUCH_TARGET_MIN <= 0:
+            return list(self.spell_family_buttons)
+        active_type = getattr(self, '_active_spell_type', 'greed')
+        return [
+            button for button in self.spell_family_buttons
+            if button.family.type == active_type
+        ]
 
-        for row_index, effect_type in enumerate(effect_types_order):
-            families_in_row = families_by_effect[effect_type]
-
-            label_text = effect_type.capitalize()
-            label_surface = self.type_label_font.render(label_text, True, settings.SPELL_TYPE_LABEL_COLOR)
-            label_surface = pygame.transform.rotate(label_surface, 90)
-            self.type_labels[effect_type] = label_surface
-
-            row_y = settings.CAST_SPELL_ICON_START_Y + row_index * settings.SPELL_ICON_DELTA_Y
-            label_rect = label_surface.get_rect()
-            label_rect.midleft = self._spos(settings.SPELL_TYPE_LABEL_X, row_y)
-            self.type_label_positions[effect_type] = label_rect.topleft
-
-            # Compress spacing only when the default delta would overflow.
-            n_icons = len(families_in_row)
-            delta_x = settings.SPELL_ICON_DELTA_X
-            if n_icons > 1:
-                delta_x = min(delta_x, row_span // (n_icons - 1))
-
-            for col_index, family in enumerate(families_in_row):
-                btn_x = settings.CAST_SPELL_ICON_START_X + col_index * delta_x
-                btn_y = settings.CAST_SPELL_ICON_START_Y + row_index * settings.SPELL_ICON_DELTA_Y
-                button = family.make_icon(self.window, self.game,
-                                          self._sx(btn_x), self._sy(btn_y),
-                                          fixed_size=True)
-                self.spell_family_buttons.append(button)
+    def _layout_spell_family_icons(self):
+        offset_x = getattr(self, '_layout_offset_x', 0)
+        offset_y = getattr(self, '_layout_offset_y', 0)
+        box = pygame.Rect(
+            int(settings.CAST_SPELL_INFO_BOX_X + offset_x),
+            int(settings.CAST_SPELL_INFO_BOX_Y + offset_y),
+            settings.CAST_SPELL_INFO_BOX_WIDTH,
+            settings.CAST_SPELL_INFO_BOX_HEIGHT,
+        )
+        mobile = settings.TOUCH_TARGET_MIN > 0
+        if not mobile:
+            # All allowed families on one page, grouped into category rows.
+            self._desktop_headers = layout_family_grid_desktop(
+                self.spell_family_buttons, box)
+            return
+        cols = 5 if mobile else 6
+        margin_x = int(0.07 * box.w)
+        usable_w = box.w - 2 * margin_x
+        pitch_x = usable_w // max(1, cols - 1)
+        start_x = box.x + margin_x
+        start_y = self.spell_category_tabs.rect.bottom + int(
+            0.105 * settings.SCREEN_HEIGHT)
+        pitch_y = int(0.205 * settings.SCREEN_HEIGHT)
+        visible = set(self._visible_spell_buttons())
+        for button in self.spell_family_buttons:
+            button.visible = button in visible
+            button.caption_max_width = max(48, int(pitch_x * 0.92))
+        for index, button in enumerate(self._visible_spell_buttons()):
+            row, col = divmod(index, cols)
+            button.set_position(
+                start_x + col * pitch_x,
+                start_y + row * pitch_y,
+            )
 
     # ── Card helpers ────────────────────────────────────────────────
 
@@ -201,6 +269,65 @@ class PreludeSpellScreen(SubScreen):
     def _family_description(self, family):
         return self.description_overrides.get(family.name, family.description)
 
+    def _detail_item(self, spell, *, content, cards=None,
+                     missing_cards=None):
+        item = {
+            'title': spell.name,
+            'text': self._family_description(spell.family),
+            'cards': spell.cards if cards is None else cards,
+            'spell_type': self._format_spell_type(spell.family.type),
+            'counterable': spell.counterable,
+            'timing': (
+                'Timing: responds before battle'
+                if self._is_counter_picker
+                else 'Timing: resolves before battle'
+            ),
+            'content': content,
+        }
+        if getattr(spell, 'requires_target', False):
+            item['target_hint'] = 'Target: choose after setting this spell'
+        if missing_cards:
+            item['missing_cards'] = missing_cards
+        return item
+
+    def _select_spell_family(self, button):
+        self.selected_spell_family = button.family
+        castable = self.get_spells_in_collection(button.family)
+        if castable:
+            self.scroll_text_list = [
+                self._detail_item(spell, content=spell)
+                for spell in castable
+            ]
+        else:
+            self.scroll_text_list = []
+            for spell in button.family.spells:
+                given, missing = self.get_given_and_missing_cards(spell)
+                self.scroll_text_list.append(
+                    self._detail_item(
+                        spell, content=None,
+                        cards=given, missing_cards=missing)
+                )
+        self.scroll_text_list_shifter.set_displayed_texts(
+            self.scroll_text_list)
+        for other in self.spell_family_buttons:
+            other.clicked = other is button
+
+    def _select_initial_spell_family(self):
+        if self._initial_family_selected:
+            return
+        visible = self._visible_spell_buttons()
+        if not visible:
+            return
+        chosen = next((button for button in visible if button.is_active),
+                      visible[0])
+        self._select_spell_family(chosen)
+        self._initial_family_selected = True
+
+    def _confirm_action_label(self, selected_spell):
+        if getattr(selected_spell, 'requires_target', False):
+            return 'Choose Target'
+        return 'Set Counter' if self._is_counter_picker else 'Set Prelude'
+
     # ── Update ──────────────────────────────────────────────────────
 
     def update(self, game):
@@ -210,11 +337,17 @@ class PreludeSpellScreen(SubScreen):
             self.card_source.game = game
 
         self._update_icon_states()
+        self._layout_spell_family_icons()
+        if settings.TOUCH_TARGET_MIN > 0:
+            self._select_initial_spell_family()
 
         for button in self.spell_family_buttons:
             button.update()
 
         if self.scroll_text_list_shifter and self.scroll_text_list_shifter.get_current_selected():
+            selected = self.scroll_text_list_shifter.get_current_selected()
+            self.confirm_button.set_text(
+                self._confirm_action_label(selected))
             self.confirm_button.update()
 
     def _update_icon_states(self):
@@ -227,9 +360,8 @@ class PreludeSpellScreen(SubScreen):
     # ── Events ──────────────────────────────────────────────────────
 
     def handle_events(self, events):
-        super().handle_events(events)
-
-        # Dialogue box takes priority
+        # Dialogue input is modal. Handle it before any underlying picker or
+        # subscreen controls.
         if self.dialogue_box:
             response = self.dialogue_box.update(events)
             if response and response.lower() in ('ok', 'got it!'):
@@ -239,48 +371,25 @@ class PreludeSpellScreen(SubScreen):
                     self._on_done()
             return
 
+        super().handle_events(events)
+
+        if settings.TOUCH_TARGET_MIN > 0:
+            changed_type = self.spell_category_tabs.handle_events(events)
+            if changed_type is not None:
+                self._active_spell_type = changed_type
+                self.selected_spell_family = None
+                self.scroll_text_list = []
+                self.scroll_text_list_shifter.set_displayed_texts([])
+                self._initial_family_selected = False
+                self._layout_spell_family_icons()
+                self._select_initial_spell_family()
+
         # Spell family icon clicks
-        for button in self.spell_family_buttons:
+        for button in self._visible_spell_buttons():
             button.handle_events(events)
 
             if button.clicked and button.family != self.selected_spell_family:
-                self.selected_spell_family = button.family
-                castable = self.get_spells_in_collection(button.family)
-
-                if castable:
-                    self.scroll_text_list = [
-                        {
-                            'title': spell.name,
-                            'text': self._family_description(spell.family),
-                            'cards': spell.cards,
-                            'spell_type': self._format_spell_type(spell.family.type),
-                            'counterable': spell.counterable,
-                            'ceasefire': spell.possible_during_ceasefire,
-                            'content': spell,
-                        }
-                        for spell in castable
-                    ]
-                else:
-                    self.scroll_text_list = []
-                    for spell in button.family.spells:
-                        given, missing = self.get_given_and_missing_cards(spell)
-                        self.scroll_text_list.append({
-                            'title': spell.name,
-                            'text': self._family_description(spell.family),
-                            'spell_type': self._format_spell_type(spell.family.type),
-                            'counterable': spell.counterable,
-                            'ceasefire': spell.possible_during_ceasefire,
-                            'cards': given,
-                            'missing_cards': missing,
-                            'content': None,
-                        })
-
-                if self.scroll_text_list_shifter:
-                    self.scroll_text_list_shifter.set_displayed_texts(self.scroll_text_list)
-
-                for other in self.spell_family_buttons:
-                    if other != button:
-                        other.clicked = False
+                self._select_spell_family(button)
 
         # Confirm button
         for event in events:
@@ -340,13 +449,35 @@ class PreludeSpellScreen(SubScreen):
     def draw(self):
         super().draw()
 
-        for effect_type, label_surf in self.type_labels.items():
-            self.window.blit(label_surf, self.type_label_positions[effect_type])
+        selected = (
+            self.scroll_text_list_shifter.get_current_selected()
+            if self.scroll_text_list_shifter else None
+        )
+        draw_footer(
+            self.window, self, '',
+            show_action=bool(selected),
+            show_status=False,
+        )
+        if settings.TOUCH_TARGET_MIN > 0:
+            self.spell_category_tabs.draw()
+        else:
+            for spell_type, header_rect in getattr(self, '_desktop_headers', []):
+                draw_section_header(self.window, spell_type, header_rect)
 
-        for button in self.spell_family_buttons:
+        for button in self._visible_spell_buttons():
             button.draw()
 
-        if self.scroll_text_list_shifter and self.scroll_text_list_shifter.get_current_selected():
+        if not self.scroll_text_list:
+            draw_empty_detail(
+                self.window,
+                pygame.Rect(
+                    self.scroll_x, self.scroll_y,
+                    self.scroll_w, self.scroll_h),
+                'Choose a spell',
+                'Preview its cards, timing, target, and counter rules.',
+            )
+
+        if selected:
             self.confirm_button.draw()
 
         super().draw_on_top()

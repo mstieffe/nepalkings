@@ -1204,7 +1204,7 @@ class ConquerScreen(MenuScreenMixin, Screen):
             mpos = pygame.mouse.get_pos()
             for icon_rect, tip in (
                 (self._btn_build, 'Build a figure'),
-                (self._btn_buy_move, 'Buy battle moves'),
+                (self._btn_buy_move, 'Choose starting tactics'),
                 (self._btn_prelude_edit, 'Choose a spell'),
             ):
                 if icon_rect and icon_rect.collidepoint(mpos):
@@ -1932,7 +1932,7 @@ class ConquerScreen(MenuScreenMixin, Screen):
         self._subscreen_obj = BattleShopScreen(
             self.window, self.state,
             x=sx, y=sy,
-            title='Battle Shop', card_source=card_source, mode='conquer',
+            title='Starting Tactics', card_source=card_source, mode='conquer',
         )
         self._subscreen_obj._on_done = self._close_subscreen
         self._subscreen_obj._on_move_bought = (
@@ -2047,7 +2047,9 @@ class ConquerScreen(MenuScreenMixin, Screen):
 
         if len(moves) < 3:
             missing = 3 - len(moves)
-            problems.append(f'{missing} battle move{"s" if missing > 1 else ""} still missing (need 3).')
+            problems.append(
+                f'{missing} starting tactic{"s" if missing > 1 else ""} '
+                'still missing (need 3).')
 
         return problems
 
@@ -2150,7 +2152,7 @@ class ConquerScreen(MenuScreenMixin, Screen):
             open_dialogue(
                 self,
                 'You have unsaved changes.\n'
-                'Leaving will discard all figures, battle moves,\n'
+                'Leaving will discard all figures, starting tactics,\n'
                 'and spells you have configured.',
                 ['Leave', 'Stay'],
                 'Discard Changes?',

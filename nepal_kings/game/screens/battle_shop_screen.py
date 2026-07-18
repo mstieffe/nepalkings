@@ -16,6 +16,12 @@ from game.components.figures.figure_manager import FigureManager
 from game.components.cards.card import Card
 from game.components.buttons.confirm_button import ConfirmButton
 from game.components.floating_text import FloatingText, FloatingTextLayer
+from game.components.picker_ui import (
+    draw_empty_detail,
+    draw_footer,
+    footer_button_geometry,
+    footer_rect,
+)
 from utils import battle_shop_service
 import logging
 
@@ -47,6 +53,14 @@ class BattleShopScreen(SubScreen):
         from game.core.card_source import GameCardSource
         self.card_source = card_source or GameCardSource(self.game)
         self.mode = mode
+        self._initial_family_selected = False
+        self.title = {
+            'duel': 'Choose Battle Moves · Duel',
+            'conquer_battle': 'Choose Battle Moves · Conquer',
+            'conquer': 'Starting Tactics · Attack Setup',
+            'defence': 'Starting Tactics · Defence Setup',
+            'defence_draft': 'Starting Tactics · Defence Setup',
+        }.get(self.mode, title or 'Choose Battle Moves')
 
         # Manager
         self.battle_move_manager = BattleMoveManager()
@@ -77,13 +91,19 @@ class BattleShopScreen(SubScreen):
 
         # Slot hover state
         self._hovered_slot = None  # Index of currently hovered slot (or None)
+        self._slot_remove_rects = {}
+        self._replace_after_return = False
 
         # Confirm button
+        action_label = (
+            'Add Tactic'
+            if _is_kingdom_config_mode(self.mode)
+            else 'Add Move')
+        bx, by, bw, bh = footer_button_geometry(
+            self, action_label, align='left')
         self.confirm_button = ConfirmButton(
             self.window,
-            self._sx(settings.BATTLE_SHOP_CONFIRM_BUTTON_X),
-            self._sy(settings.BATTLE_SHOP_CONFIRM_BUTTON_Y),
-            "buy!"
+            bx, by, action_label, width=bw, height=bh,
         )
 
         # Floating text layer (buy feedback, similar to collect in kingdom config)
@@ -111,11 +131,15 @@ class BattleShopScreen(SubScreen):
         self._battle_moves_confirmed = False  # This player confirmed
         self._waiting_for_opponent = False
 
+        ready_label = (
+            'Ready for Battle'
+            if not _is_kingdom_config_mode(self.mode)
+            else 'Done')
+        rx, ry, rw, rh = footer_button_geometry(
+            self, ready_label, align='right')
         self.ready_button = ConfirmButton(
             self.window,
-            self._sx(settings.BATTLE_SHOP_READY_BUTTON_X),
-            self._sy(settings.BATTLE_SHOP_READY_BUTTON_Y),
-            "ready!"
+            rx, ry, ready_label, width=rw, height=rh,
         )
         self._config_ready_pressed = False
         self.phase_banner_font = settings.get_font(settings.BATTLE_SHOP_PHASE_BANNER_FONT_SIZE, bold=True)
@@ -142,6 +166,9 @@ class BattleShopScreen(SubScreen):
         self._battle_moves_confirmed = False
         self._waiting_for_opponent = False
         self._config_ready_pressed = False
+        self._initial_family_selected = False
+        self._slot_remove_rects = {}
+        self._replace_after_return = False
         logger.debug("[BattleShop] State reset for game switch")
 
     @property
@@ -151,7 +178,7 @@ class BattleShopScreen(SubScreen):
         During the battle-moves selection phase (battle_confirmed but moves not
         yet confirmed) the shop must remain open for buying/returning.
         """
-        if self._battle_moves_confirmed:
+        if getattr(self, '_battle_moves_confirmed', False):
             return True
         # If we're still in the selection phase, don't lock
         if getattr(self.game, 'battle_moves_phase', False):
@@ -261,6 +288,9 @@ class BattleShopScreen(SubScreen):
         self.move_family_buttons = []
         start_x = settings.BATTLE_SHOP_ICON_START_X
         start_y = settings.BATTLE_SHOP_ICON_START_Y
+        if settings.TOUCH_TARGET_MIN > 0:
+            # Mobile hierarchy: equipped tray first, then the family catalog.
+            start_y += int(0.15 * settings.SCREEN_HEIGHT)
         dx = settings.BATTLE_MOVE_ICON_DELTA_X
 
         for i, family in enumerate(self.battle_move_manager.families):
@@ -456,6 +486,15 @@ class BattleShopScreen(SubScreen):
 
         # Update icon active states based on available cards
         self._update_icon_states()
+        if settings.TOUCH_TARGET_MIN > 0 and not self._initial_family_selected:
+            chosen = next(
+                (button for button in self.move_family_buttons
+                 if button.is_active),
+                self.move_family_buttons[0] if self.move_family_buttons else None,
+            )
+            if chosen is not None:
+                self._on_family_clicked(chosen)
+                self._initial_family_selected = True
 
         for btn in self.move_family_buttons:
             btn.update()
@@ -473,7 +512,10 @@ class BattleShopScreen(SubScreen):
 
     def _ready_button_hit(self, pos=None):
         if pos is not None:
-            return self.ready_button.rect.collidepoint(pos)
+            pad = getattr(self.ready_button, 'hit_pad', 0)
+            hit = self.ready_button.rect.inflate(
+                2 * pad, 2 * pad) if pad else self.ready_button.rect
+            return hit.collidepoint(pos)
         return self.ready_button.collide()
 
     def _update_icon_states(self):
@@ -512,15 +554,14 @@ class BattleShopScreen(SubScreen):
 
     # ---------------------------------------------------------- event handling
     def handle_events(self, events):
-        super().handle_events(events)
-
         in_phase = getattr(self.game, 'battle_moves_phase', False)
         in_config = _is_kingdom_config_mode(self.mode)
         selected_move = None
         if self.scroll_text_list_shifter:
             selected_move = self.scroll_text_list_shifter.get_current_selected()
 
-        # Handle battle move detail box events first (if open)
+        # Overlay input is modal. Handle detail/dialogue controls before the
+        # scroll panel, close control, family icons, or equipped slots.
         if self.battle_move_detail_box:
             response = self.battle_move_detail_box.handle_events(events)
             if response:
@@ -531,6 +572,12 @@ class BattleShopScreen(SubScreen):
                     if self._is_locked:
                         self.battle_move_detail_box = None
                     else:
+                        self._return_detail_box_move()
+                elif response == 'replace':
+                    if self._is_locked:
+                        self.battle_move_detail_box = None
+                    else:
+                        self._replace_after_return = True
                         self._return_detail_box_move()
             return
 
@@ -549,8 +596,14 @@ class BattleShopScreen(SubScreen):
                     self.dialogue_box = None
             return
 
+        super().handle_events(events)
+
         for event in events:
             if event.type == MOUSEBUTTONDOWN:
+                if (not self._is_locked
+                        and self._handle_slot_remove_click(event.pos)):
+                    continue
+
                 # Family icon clicks
                 for btn in self.move_family_buttons:
                     if btn.collide():
@@ -632,6 +685,7 @@ class BattleShopScreen(SubScreen):
                 {
                     "title": btn.family.name,
                     "text": btn.family.description + "\n\nNo matching cards in hand.",
+                    "availability_reason": "No matching cards available.",
                     "content": None,
                 }
             ]
@@ -640,6 +694,13 @@ class BattleShopScreen(SubScreen):
 
         # Immediately update glow so it reflects the first item's suit
         self._update_glow_colors()
+
+    def _slot_top_y(self):
+        if settings.TOUCH_TARGET_MIN > 0:
+            return self._sy(
+                settings.BATTLE_SHOP_INFO_BOX_Y
+                + int(0.08 * settings.SCREEN_HEIGHT))
+        return self._sy(settings.BATTLE_SHOP_SLOT_Y)
 
     def _on_confirm(self, move):
         """Show buy confirmation dialogue."""
@@ -657,11 +718,14 @@ class BattleShopScreen(SubScreen):
         images = [card_img.front_img] if hasattr(card_img, 'front_img') else []
 
         self.make_dialogue_box(
-            message=f"Buy {move.family.name} ({move.suit}, value {move.value})?",
+            message=(
+                f"Add {move.family.name} "
+                f"({move.suit}, value {move.value})?"
+            ),
             actions=['yes', 'cancel'],
             images=images,
             icon="question",
-            title="Buy Battle Move",
+            title="Add Battle Move",
         )
         self._pending_buy_move = move
 
@@ -694,7 +758,8 @@ class BattleShopScreen(SubScreen):
         if result.get('success'):
             from utils import sound
             sound.play('card_place')
-            sound.play('coin', volume=0.6)
+            if self.mode == 'duel':
+                sound.play('coin', volume=0.6)
             fx = self._fx_layer()
             if fx is not None:
                 fx.spawn_burst(pygame.Rect(self.confirm_button.rect),
@@ -719,10 +784,10 @@ class BattleShopScreen(SubScreen):
                         break
 
             self.make_dialogue_box(
-                message=f"{move.family.name} purchased!",
+                message=f"{move.family.name} added!",
                 actions=['ok'],
                 icon="figure",
-                title="Battle Move Bought",
+                title="Battle Move Added",
             )
             self._spawn_buy_floater(move)
             callback = getattr(self, '_on_move_bought', None)
@@ -802,10 +867,11 @@ class BattleShopScreen(SubScreen):
         max_moves = settings.BATTLE_SHOP_MAX_MOVES
 
         # Use same centred positions as _draw_bought_slots
-        box_cx = self._sx(settings.BATTLE_SHOP_INFO_BOX_X + settings.BATTLE_SHOP_INFO_BOX_WIDTH // 2)
+        footer = footer_rect(self)
+        box_cx = footer.centerx
         total_span = (max_moves - 1) * delta_x + sw
         slot_start_x = box_cx - total_span // 2
-        sy = self._sy(settings.BATTLE_SHOP_SLOT_Y)
+        sy = self._slot_top_y()
 
         for i in range(max_moves):
             sx = slot_start_x + i * delta_x
@@ -1026,11 +1092,16 @@ class BattleShopScreen(SubScreen):
                         btn.clicked = True
                         break
 
+            replacing = self._replace_after_return
             self.make_dialogue_box(
-                message="Battle move returned.",
+                message=(
+                    "Slot cleared. Choose and add its replacement."
+                    if replacing else
+                    "Battle move removed and its card returned."
+                ),
                 actions=['ok'],
                 icon="figure",
-                title="Returned",
+                title="Choose Replacement" if replacing else "Move Removed",
             )
         else:
             self.make_dialogue_box(
@@ -1041,6 +1112,7 @@ class BattleShopScreen(SubScreen):
             )
 
         self._pending_return_index = None
+        self._replace_after_return = False
 
     def _on_ready_confirm(self):
         """Player confirms all required battle moves — notify server."""
@@ -1093,14 +1165,53 @@ class BattleShopScreen(SubScreen):
 
         in_phase = getattr(self.game, 'battle_moves_phase', False)
         in_config = _is_kingdom_config_mode(self.mode)
+        count = len(self.bought_moves)
+        required = self._required_battle_move_count()
+        if self._is_locked:
+            footer_status = 'Moves locked · waiting for battle'
+            footer_tone = 'neutral'
+        elif count >= required:
+            footer_status = f'{count}/3 selected · configuration ready'
+            footer_tone = 'good'
+        else:
+            footer_status = f'{count}/3 selected · choose {required - count} more'
+            footer_tone = 'warning'
+        selected = (
+            self.scroll_text_list_shifter.get_current_selected()
+            if self.scroll_text_list_shifter else None
+        )
+        show_action = bool(selected and not self._is_locked)
+        ready_visible = (
+            in_config
+            or (
+                in_phase
+                and not self._is_locked
+                and self._can_ready_for_battle()
+            )
+        )
+        draw_footer(
+            self.window, self, footer_status, tone=footer_tone,
+            show_action=show_action,
+            show_status=True,
+            reserve_status_right=ready_visible,
+        )
 
         # Family icons
         for btn in self.move_family_buttons:
             btn.draw()
 
+        if not self.scroll_text_list:
+            draw_empty_detail(
+                self.window,
+                pygame.Rect(
+                    self.scroll_x, self.scroll_y,
+                    self.scroll_w, self.scroll_h),
+                'Choose a move',
+                'Preview its card, power, effect, and available variants.',
+            )
+
         # Scroll text list + buy confirm button
         if self.scroll_text_list_shifter:
-            selected = self.scroll_text_list_shifter.get_current_selected()
             # Only show buy button when NOT locked (still shopping)
             if selected and not self._is_locked:
                 self.confirm_button.draw()
@@ -1110,7 +1221,10 @@ class BattleShopScreen(SubScreen):
 
         # --- Battle moves phase UI ---
         if in_phase:
-            self._draw_phase_banner()
+            # The shared footer already communicates selection progress. Keep
+            # the legacy phase-banner slot empty so status is never rendered
+            # twice underneath the action buttons.
+            self._phase_banner_rect = None
             if not self._is_locked:
                 if self._can_ready_for_battle():
                     self.ready_button.draw()
@@ -1134,6 +1248,7 @@ class BattleShopScreen(SubScreen):
     def _draw_phase_banner(self):
         """Draw a banner indicating the mandatory battle-move selection phase."""
         self._phase_banner_rect = None
+        footer = footer_rect(self)
         box_cx = self._sx(settings.BATTLE_SHOP_INFO_BOX_X + settings.BATTLE_SHOP_INFO_BOX_WIDTH // 2)
         count = len(self.bought_moves)
         max_m = settings.BATTLE_SHOP_MAX_MOVES
@@ -1166,16 +1281,11 @@ class BattleShopScreen(SubScreen):
                 bold=True,
             )
         banner = banner_font.render(text, True, color)
-        banner_rect = banner.get_rect(
-            centerx=box_cx,
-            bottom=self._sy(settings.BATTLE_SHOP_INFO_BOX_Y + settings.BATTLE_SHOP_INFO_BOX_HEIGHT - int(0.02 * settings.SCREEN_HEIGHT)),
-        )
+        banner_rect = banner.get_rect(center=(box_cx, footer.centery))
         ready_rect = getattr(getattr(self, 'ready_button', None), 'rect', None)
         if ready_visible and ready_rect and banner_rect.colliderect(ready_rect):
             gap = max(3, int(0.006 * settings.SCREEN_HEIGHT))
-            info_bottom = self._sy(
-                settings.BATTLE_SHOP_INFO_BOX_Y + settings.BATTLE_SHOP_INFO_BOX_HEIGHT
-            ) - gap
+            info_bottom = footer.bottom - gap
             below = banner_rect.copy()
             below.top = ready_rect.bottom + gap
             if below.bottom <= info_bottom:
@@ -1183,7 +1293,7 @@ class BattleShopScreen(SubScreen):
             else:
                 above = banner_rect.copy()
                 above.bottom = ready_rect.top - gap
-                info_top = self._sy(settings.BATTLE_SHOP_INFO_BOX_Y) + gap
+                info_top = footer.top + gap
                 if above.top >= info_top:
                     banner_rect = above
         self._phase_banner_rect = banner_rect.copy()
@@ -1205,18 +1315,30 @@ class BattleShopScreen(SubScreen):
         box_cx = self._sx(settings.BATTLE_SHOP_INFO_BOX_X + settings.BATTLE_SHOP_INFO_BOX_WIDTH // 2)
         total_span = (max_moves - 1) * delta_x + sw
         slot_start_x = box_cx - total_span // 2
-        sy = self._sy(settings.BATTLE_SHOP_SLOT_Y)
+        sy = self._slot_top_y()
 
-        # Label with count — centred above the slots
+        # Label with count — centred above the slots.  Skipped on mobile,
+        # where the tray sits flush against the box top with no room for a
+        # heading; the shared footer already reports the running count there.
         count = len(self.bought_moves)
-        label = self.slot_label_font.render(f"Battle Moves ({count}/{max_moves})", True, settings.BATTLE_SHOP_TYPE_LABEL_COLOR)
-        label_rect = label.get_rect(centerx=box_cx, bottom=sy - int(0.04 * settings.SCREEN_HEIGHT))
-        self.window.blit(label, label_rect)
+        if settings.TOUCH_TARGET_MIN <= 0:
+            slot_title = (
+                'Starting Tactics'
+                if _is_kingdom_config_mode(self.mode)
+                else 'Battle Moves')
+            label = self.slot_label_font.render(
+                f"{slot_title} ({count}/{max_moves})",
+                True, settings.BATTLE_SHOP_TYPE_LABEL_COLOR)
+            label_rect = label.get_rect(
+                centerx=box_cx,
+                bottom=sy - int(0.04 * settings.SCREEN_HEIGHT))
+            self.window.blit(label, label_rect)
 
         # Determine hover state
         mouse_pos = pygame.mouse.get_pos()
         mouse_pressed = _get_pressed()[0]
         self._hovered_slot = None
+        self._slot_remove_rects = {}
 
         for i in range(max_moves):
             sx = slot_start_x + i * delta_x
@@ -1245,7 +1367,46 @@ class BattleShopScreen(SubScreen):
                     self.slot_font, sw,
                     hovered=hovered,
                 )
+                if not self._is_locked:
+                    visual_s = max(16, int(0.035 * settings.SCREEN_HEIGHT))
+                    visual = pygame.Rect(0, 0, visual_s, visual_s)
+                    visual.center = (
+                        int(cx + sw * 0.43),
+                        int(cy - sh * 0.43),
+                    )
+                    hit_s = max(visual_s, settings.TOUCH_COMPACT_MIN)
+                    hit = pygame.Rect(0, 0, hit_s, hit_s)
+                    hit.center = visual.center
+                    self._slot_remove_rects[i] = hit
+                    pygame.draw.circle(
+                        self.window, (76, 42, 28), visual.center,
+                        visual_s // 2)
+                    pygame.draw.circle(
+                        self.window, (238, 206, 130), visual.center,
+                        visual_s // 2, 1)
+                    close_font = settings.get_font(
+                        max(9, int(settings.FS_TINY * 0.95)), bold=True)
+                    close = close_font.render('×', True, (255, 238, 200))
+                    self.window.blit(
+                        close, close.get_rect(center=visual.center))
             else:
                 # Empty slot: rotated diamond
                 dr = self._slot_diamond.get_rect(center=(cx, cy))
                 self.window.blit(self._slot_diamond, dr.topleft)
+
+    def _handle_slot_remove_click(self, pos):
+        for index, rect in getattr(self, '_slot_remove_rects', {}).items():
+            if rect.collidepoint(pos):
+                self._pending_return_index = index
+                move = self.bought_moves[index]
+                self.make_dialogue_box(
+                    message=(
+                        f"Remove {move.get('family_name', 'this tactic')} "
+                        "and return its card?"
+                    ),
+                    actions=['return', 'cancel'],
+                    icon='question',
+                    title='Remove Tactic',
+                )
+                return True
+        return False

@@ -290,8 +290,10 @@ class ScrollTextListShifter:
         if self._clip_rect is not None:
             self.window.set_clip(None)  # reset clipping
 
-        # ---- Thin scroll-progress bar on right edge if content is scrolled ----
-        if self._clip_rect is not None and self._content_overflows() and self._content_scroll_y < 0:
+        # ---- Thin scroll-progress bar on right edge when content overflows ----
+        # Show the thumb even at the top so touch users can tell immediately
+        # that the detail card contains more information below.
+        if self._clip_rect is not None and self._content_overflows():
             bar_x = self._clip_rect.right - 3
             bar_h = self._clip_rect.height
             # Thumb size proportional to visible / total content
@@ -306,7 +308,14 @@ class ScrollTextListShifter:
     def draw_text_in_scroll(self, text_dict, x, y, max_width=settings.SCROLL_TEXT_MAX_WIDTH):
         """Draw text to the screen with line breaks after reaching a certain width."""
         # TITLE — gold
-        title_obj = self.title_font.render(text_dict.get('title', ''), True, settings.SCROLL_TEXT_TITLE_COLOR)
+        title_text = str(text_dict.get('title', ''))
+        title_font = self.title_font
+        title_size = settings.SCROLL_FONT_SIZE_TITLE
+        while title_size > 8 and title_font.size(title_text)[0] > max_width:
+            title_size -= 1
+            title_font = settings.get_font(title_size, bold=True)
+        title_obj = title_font.render(
+            title_text, True, settings.SCROLL_TEXT_TITLE_COLOR)
         title_rect = title_obj.get_rect()
         title_rect.midtop = (x + max_width // 2, y)
         self.window.blit(title_obj, title_rect)
@@ -372,6 +381,20 @@ class ScrollTextListShifter:
             self.window.blit(spell_type_obj, spell_type_rect)
             y += spell_type_rect.height + blank_line_height * 0.6
 
+        # MODE-SPECIFIC CONTEXT (e.g. prelude timing / collection source)
+        for meta_key in ('timing', 'card_source_label', 'target_hint'):
+            meta_text = text_dict.get(meta_key)
+            if not meta_text:
+                continue
+            for line in self.wrap_text_lines(
+                    str(meta_text), max_width, use_small_font=True):
+                meta_obj = self.small_font.render(
+                    line, True, settings.SCROLL_TEXT_SECTION_COLOR)
+                meta_rect = meta_obj.get_rect(topleft=(x, y))
+                self.window.blit(meta_obj, meta_rect)
+                y += meta_rect.height + blank_line_height * 0.12
+            y += blank_line_height * 0.23
+
         # SPELL ATTRIBUTES (counterable, ceasefire) - with icons
         if 'counterable' in text_dict:
             # Render label text
@@ -420,10 +443,18 @@ class ScrollTextListShifter:
                 stats_line = f"Support: {text_dict['support']}"
         
         if stats_line:
-            stats_obj = self.scroll_font.render(stats_line, True, settings.SCROLL_TEXT_COLOR)
-            stats_rect = stats_obj.get_rect(topleft=(x, y))
-            self.window.blit(stats_obj, stats_rect)
-            y += stats_rect.height + blank_line_height * 0.8
+            # Narrow mobile detail panels cannot fit "Power | Support" on one
+            # line.  Use compact stacked stat chips rather than clipping.
+            stat_lines = [stats_line]
+            if self.scroll_font.size(stats_line)[0] > max_width and '  |  ' in stats_line:
+                stat_lines = stats_line.split('  |  ')
+            for stat_line in stat_lines:
+                stats_obj = self.scroll_font.render(
+                    stat_line, True, settings.SCROLL_TEXT_COLOR)
+                stats_rect = stats_obj.get_rect(topleft=(x, y))
+                self.window.blit(stats_obj, stats_rect)
+                y += stats_rect.height + blank_line_height * 0.25
+            y += blank_line_height * 0.55
 
         # PRODUCTION
         if 'produces' in text_dict and text_dict['produces']:
@@ -650,6 +681,21 @@ class ScrollTextListShifter:
                 self.window.blit(text_obj, text_rect)
                 y += text_rect.height + blank_line_height * 0.1
 
+        availability_reason = text_dict.get('availability_reason')
+        if availability_reason:
+            y += blank_line_height * 0.4
+            pygame.draw.line(
+                self.window,
+                settings.SCROLL_TEXT_DIVIDER_COLOR,
+                (x, y), (x + max_width, y), 1)
+            y += blank_line_height * 0.4
+            for line in self.wrap_text_lines(
+                    availability_reason, max_width, use_small_font=True):
+                text_obj = self.small_font.render(
+                    line, True, (255, 190, 135))
+                self.window.blit(text_obj, (x, y))
+                y += text_obj.get_height() + blank_line_height * 0.1
+
         # FIGURE STRENGTH (keep for backward compatibility with non-figure items)
         if 'figure_strength' in text_dict:
             y += blank_line_height * 0.4
@@ -686,6 +732,16 @@ class ScrollTextListShifter:
         self._content_scroll_y = 0  # reset content scroll on new data
         self._last_content_h = 0   # reset measured content height
         self.update_displayed_texts()
+
+    def select_index(self, index):
+        """Select an option directly (used by visible card-choice chips)."""
+        if not self.text_list:
+            return False
+        self.start_index = max(0, min(int(index), len(self.text_list) - 1))
+        self._content_scroll_y = 0
+        self._last_content_h = 0
+        self.update_displayed_texts()
+        return True
 
     def get_current_selected(self):
         """Return the currently selected content."""

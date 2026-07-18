@@ -8,6 +8,14 @@ from game.screens.sub_screen import SubScreen
 from game.components.spells.spell_manager import SpellManager
 from game.components.cards.card import Card
 from game.components.buttons.confirm_button import ConfirmButton
+from game.components.picker_ui import (
+    SegmentedTabs,
+    draw_empty_detail,
+    draw_footer,
+    draw_section_header,
+    footer_button_geometry,
+    layout_family_grid_desktop,
+)
 from utils import spell_service
 import logging
 
@@ -28,12 +36,19 @@ class CastSpellScreen(SubScreen):
         from game.core.card_source import GameCardSource
         self.card_source = card_source or GameCardSource(self.game)
         self.mode = mode
+        self._active_spell_type = 'greed'
+        self._initial_family_selected = False
+        self._desktop_headers = []
+        self.title = (
+            'Cast Spell · Duel' if self.mode == 'duel'
+            else title or 'Cast Spell')
         
         # Initialize spell manager and load spells
         self.spell_manager = SpellManager()
         
         # Initialize UI components
         self.init_spell_info_box()
+        self.init_spell_category_tabs()
         self.init_spell_family_icons()
         self.init_scroll_test_list_shifter()
         
@@ -47,11 +62,12 @@ class CastSpellScreen(SubScreen):
         # Tracks which families were castable last update (one-shot pulse)
         self._prev_castable_family_names = None
         
+        action_label = 'Cast Spell'
+        bx, by, bw, bh = footer_button_geometry(
+            self, action_label, align='left')
         self.confirm_button = ConfirmButton(
             self.window,
-            settings.CAST_SPELL_CONFIRM_BUTTON_X,
-            settings.CAST_SPELL_CONFIRM_BUTTON_Y,
-            "cast!"
+            bx, by, action_label, width=bw, height=bh,
         )
     
     def reset_state(self):
@@ -64,6 +80,7 @@ class CastSpellScreen(SubScreen):
         self._last_game_data_version = -1
         self.dialogue_box = None
         self._prev_castable_family_names = None
+        self._initial_family_selected = False
         logger.debug("[CastSpellScreen] State reset for game switch")
 
     def cast_spell_in_db(self, selected_spell):
@@ -368,58 +385,166 @@ class CastSpellScreen(SubScreen):
             settings.CAST_SPELL_SCROLL_TEXT_Y,
             scroll_height=settings.CAST_SPELL_INFO_BOX_SCROLL_HEIGHT
         )
+
+    def init_spell_category_tabs(self):
+        """Horizontal spell categories replace hard-to-read vertical labels."""
+        offset_x = getattr(self, '_layout_offset_x', 0)
+        offset_y = getattr(self, '_layout_offset_y', 0)
+        box_x = int(settings.CAST_SPELL_INFO_BOX_X + offset_x)
+        box_y = int(settings.CAST_SPELL_INFO_BOX_Y + offset_y)
+        margin = max(8, int(0.012 * settings.SCREEN_WIDTH))
+        tab_h = max(
+            26,
+            settings.TOUCH_COMPACT_MIN
+            if settings.TOUCH_TARGET_MIN > 0 else 0,
+        )
+        self.spell_category_tabs = SegmentedTabs(
+            self.window,
+            pygame.Rect(
+                box_x + margin,
+                box_y + max(6, int(0.012 * settings.SCREEN_HEIGHT)),
+                settings.CAST_SPELL_INFO_BOX_WIDTH - 2 * margin,
+                tab_h,
+            ),
+            [
+                ('greed', 'Greed'),
+                ('enchantment', 'Enchantment'),
+                ('tactics', 'Tactics'),
+            ],
+            active_key=self._active_spell_type,
+        )
     
     def init_spell_family_icons(self):
-        """Initialize spell family icons organized by effect type (one row per type)."""
+        """Create spell families; category tabs decide which grid is visible."""
+        if not hasattr(self, '_active_spell_type'):
+            self._active_spell_type = 'greed'
+        if not hasattr(self, 'spell_category_tabs'):
+            self.init_spell_category_tabs()
         self.spell_family_buttons = []
-        
         all_families = self.spell_manager.get_all_families()
-        
-        # Group families by effect type
-        families_by_effect = {
-            'greed': [],
-            'enchantment': [],
-            'tactics': []
-        }
-        
         for family in all_families:
             # Conquer-only families (Royal Decree, Copy Figure, Landslide,
             # Draw 4 MainCards) never appear in the duel spell book.
             if getattr(family, 'conquer_only', False):
                 continue
-            if family.type in families_by_effect:
-                families_by_effect[family.type].append(family)
-        
-        # Layout: one row per effect type
-        effect_types_order = ['greed', 'enchantment', 'tactics']
-        
-        # Create type label surfaces
-        self.type_label_font = settings.get_font(settings.SPELL_TYPE_LABEL_FONT_SIZE)
+            button = family.make_icon(
+                self.window, self.game, 0, 0, fixed_size=True)
+            if settings.TOUCH_TARGET_MIN <= 0:
+                # Desktop packs all three category rows on one page.
+                button.grid_mode = True
+                button.rescale(settings.PICKER_DESKTOP_ICON_SCALE)
+            self.spell_family_buttons.append(button)
+
+        # Kept as empty dictionaries for compatibility with callers/tests that
+        # inspect these attributes; labels are now the horizontal tabs above.
         self.type_labels = {}
         self.type_label_positions = {}
-        
-        for row_index, effect_type in enumerate(effect_types_order):
-            families_in_row = families_by_effect[effect_type]
-            
-            # Create label for this type
-            label_text = effect_type.capitalize()
-            label_surface = self.type_label_font.render(label_text, True, settings.SPELL_TYPE_LABEL_COLOR)
-            # Rotate the label 90 degrees counterclockwise
-            label_surface = pygame.transform.rotate(label_surface, 90)
-            self.type_labels[effect_type] = label_surface
-            
-            # Position label centered with the row of icons
-            row_y = settings.CAST_SPELL_ICON_START_Y + row_index * settings.SPELL_ICON_DELTA_Y
-            label_rect = label_surface.get_rect()
-            label_rect.midleft = (settings.SPELL_TYPE_LABEL_X, row_y)
-            self.type_label_positions[effect_type] = label_rect.topleft
-            
-            for col_index, family in enumerate(families_in_row):
-                x = settings.CAST_SPELL_ICON_START_X + col_index * settings.SPELL_ICON_DELTA_X
-                y = settings.CAST_SPELL_ICON_START_Y + row_index * settings.SPELL_ICON_DELTA_Y
-                
-                button = family.make_icon(self.window, self.game, x, y)
-                self.spell_family_buttons.append(button)
+        self._layout_spell_family_icons()
+
+    def _visible_spell_buttons(self):
+        # Desktop shows the whole spell book at once; mobile pages by category.
+        if settings.TOUCH_TARGET_MIN <= 0:
+            return list(self.spell_family_buttons)
+        active_type = getattr(self, '_active_spell_type', 'greed')
+        return [
+            button for button in self.spell_family_buttons
+            if button.family.type == active_type
+        ]
+
+    def _layout_spell_family_icons(self):
+        offset_x = getattr(self, '_layout_offset_x', 0)
+        offset_y = getattr(self, '_layout_offset_y', 0)
+        box = pygame.Rect(
+            int(settings.CAST_SPELL_INFO_BOX_X + offset_x),
+            int(settings.CAST_SPELL_INFO_BOX_Y + offset_y),
+            settings.CAST_SPELL_INFO_BOX_WIDTH,
+            settings.CAST_SPELL_INFO_BOX_HEIGHT,
+        )
+        mobile = settings.TOUCH_TARGET_MIN > 0
+        if not mobile:
+            # All families on one page, grouped into category rows.
+            self._desktop_headers = layout_family_grid_desktop(
+                self.spell_family_buttons, box)
+            return
+        cols = 5 if mobile else 6
+        margin_x = int(0.07 * box.w)
+        usable_w = box.w - 2 * margin_x
+        pitch_x = usable_w // max(1, cols - 1)
+        start_x = box.x + margin_x
+        start_y = self.spell_category_tabs.rect.bottom + int(
+            0.105 * settings.SCREEN_HEIGHT)
+        pitch_y = int(0.205 * settings.SCREEN_HEIGHT)
+        visible = set(self._visible_spell_buttons())
+        for button in self.spell_family_buttons:
+            button.visible = button in visible
+            button.caption_max_width = max(
+                48, int(pitch_x * 0.92))
+        for index, button in enumerate(self._visible_spell_buttons()):
+            row, col = divmod(index, cols)
+            button.set_position(
+                start_x + col * pitch_x,
+                start_y + row * pitch_y,
+            )
+
+    def _select_spell_family(self, button):
+        self.selected_spell_family = button.family
+        castable_spells = self.get_spells_in_hand(button.family)
+        if castable_spells:
+            self.scroll_text_list = [
+                self._spell_detail_item(spell, content=spell)
+                for spell in castable_spells
+            ]
+        else:
+            self.scroll_text_list = []
+            for spell in button.family.spells:
+                given_cards, missing_cards = (
+                    self.get_given_and_missing_cards_for_spell(spell))
+                self.scroll_text_list.append(
+                    self._spell_detail_item(
+                        spell,
+                        content=None,
+                        cards=given_cards,
+                        missing_cards=missing_cards,
+                    )
+                )
+        self.scroll_text_list_shifter.set_displayed_texts(
+            self.scroll_text_list)
+        for other_button in self.spell_family_buttons:
+            other_button.clicked = other_button is button
+
+    def _spell_detail_item(self, spell, *, content, cards=None,
+                           missing_cards=None):
+        item = {
+            'title': spell.name,
+            'text': spell.family.description,
+            'cards': spell.cards if cards is None else cards,
+            'spell_type': self.format_spell_type(spell.family.type),
+            'counterable': spell.counterable,
+            'ceasefire': spell.possible_during_ceasefire,
+            'content': content,
+        }
+        if missing_cards:
+            item['missing_cards'] = missing_cards
+        return item
+
+    def _select_initial_spell_family(self):
+        if self._initial_family_selected:
+            return
+        visible = self._visible_spell_buttons()
+        if not visible:
+            return
+        chosen = next((button for button in visible if button.is_active),
+                      visible[0])
+        self._select_spell_family(chosen)
+        self._initial_family_selected = True
+
+    @staticmethod
+    def _confirm_action_label(selected_spell):
+        return (
+            'Choose Target'
+            if getattr(selected_spell, 'requires_target', False)
+            else 'Cast Spell'
+        )
     
     def init_spell_info_box(self):
         """Initialize spell info box."""
@@ -463,6 +588,9 @@ class CastSpellScreen(SubScreen):
         if self.game._game_data_version != self._last_game_data_version:
             self._last_game_data_version = self.game._game_data_version
             self.update_spell_icon_states()
+        self._layout_spell_family_icons()
+        if settings.TOUCH_TARGET_MIN > 0:
+            self._select_initial_spell_family()
         
         # Update all spell family buttons
         for button in self.spell_family_buttons:
@@ -472,6 +600,8 @@ class CastSpellScreen(SubScreen):
         if self.scroll_text_list_shifter:
             selected_spell = self.scroll_text_list_shifter.get_current_selected()
             if selected_spell:
+                self.confirm_button.set_text(
+                    self._confirm_action_label(selected_spell))
                 self.confirm_button.update()
     
     def update_spell_icon_states(self):
@@ -514,15 +644,7 @@ class CastSpellScreen(SubScreen):
             castable_spells = self.get_spells_in_hand(self.selected_spell_family)
             if castable_spells:
                 new_list = [
-                    {
-                        "title": spell.name,
-                        "text": spell.family.description,
-                        "cards": spell.cards,
-                        "spell_type": self.format_spell_type(spell.family.type),
-                        "counterable": spell.counterable,
-                        "ceasefire": spell.possible_during_ceasefire,
-                        "content": spell
-                    }
+                    self._spell_detail_item(spell, content=spell)
                     for spell in castable_spells
                 ]
             else:
@@ -530,24 +652,19 @@ class CastSpellScreen(SubScreen):
                 new_list = []
                 for spell in self.selected_spell_family.spells:
                     given_cards, missing_cards = self.get_given_and_missing_cards_for_spell(spell)
-                    new_list.append({
-                        "title": spell.name,
-                        "text": spell.family.description,
-                        "spell_type": self.format_spell_type(spell.family.type),
-                        "counterable": spell.counterable,
-                        "ceasefire": spell.possible_during_ceasefire,
-                        "cards": given_cards,
-                        "missing_cards": missing_cards,
-                        "content": None
-                    })
+                    new_list.append(self._spell_detail_item(
+                        spell,
+                        content=None,
+                        cards=given_cards,
+                        missing_cards=missing_cards,
+                    ))
             self.scroll_text_list = new_list
             self.scroll_text_list_shifter.set_displayed_texts(self.scroll_text_list)
 
     def handle_events(self, events):
         """Handle events for button interactions."""
-        super().handle_events(events)
-        
-        # If dialogue box is active, handle it first and skip other event handling
+        # Dialogue input is modal. Do not let its click reach the picker,
+        # scroll panel, or subscreen close control underneath.
         if self.dialogue_box:
             response = self.dialogue_box.update(events)
             if response:
@@ -567,58 +684,26 @@ class CastSpellScreen(SubScreen):
                     # Error/info message acknowledged
                     self.dialogue_box = None
             return  # Don't process other events when dialogue is active
+
+        super().handle_events(events)
+
+        if settings.TOUCH_TARGET_MIN > 0:
+            changed_type = self.spell_category_tabs.handle_events(events)
+            if changed_type is not None:
+                self._active_spell_type = changed_type
+                self.selected_spell_family = None
+                self.scroll_text_list = []
+                self.scroll_text_list_shifter.set_displayed_texts([])
+                self._initial_family_selected = False
+                self._layout_spell_family_icons()
+                self._select_initial_spell_family()
         
         # Handle spell family button clicks
-        for button in self.spell_family_buttons:
+        for button in self._visible_spell_buttons():
             button.handle_events(events)
             
             if button.clicked and button.family != self.selected_spell_family:
-                # New family selected - use already-cached game state
-                self.selected_spell_family = button.family
-                
-                # Get castable spells
-                castable_spells = self.get_spells_in_hand(button.family)
-                
-                # Build scroll list - show castable spells or all variants with missing cards
-                if castable_spells:
-                    # Show only castable spells with all cards available
-                    self.scroll_text_list = [
-                        {
-                            "title": spell.name,
-                            "text": spell.family.description,
-                            "cards": spell.cards,
-                            "spell_type": self.format_spell_type(spell.family.type),
-                            "counterable": spell.counterable,
-                            "ceasefire": spell.possible_during_ceasefire,
-                            "content": spell
-                        }
-                        for spell in castable_spells
-                    ]
-                else:
-                    # Show all spell variants with given/missing cards
-                    self.scroll_text_list = []
-                    for spell in button.family.spells:
-                        given_cards, missing_cards = self.get_given_and_missing_cards_for_spell(spell)
-                        
-                        self.scroll_text_list.append({
-                            "title": spell.name,
-                            "text": spell.family.description,
-                            "spell_type": self.format_spell_type(spell.family.type),
-                            "counterable": spell.counterable,
-                            "ceasefire": spell.possible_during_ceasefire,
-                            "cards": given_cards,
-                            "missing_cards": missing_cards,
-                            "content": None  # None indicates spell cannot be cast
-                        })
-                
-                # Update the scroll text list shifter with new spells
-                if self.scroll_text_list_shifter:
-                    self.scroll_text_list_shifter.set_displayed_texts(self.scroll_text_list)
-                
-                # Unclick all other buttons
-                for other_button in self.spell_family_buttons:
-                    if other_button != button:
-                        other_button.clicked = False
+                self._select_spell_family(button)
         
         # Handle confirm button click
         for event in events:
@@ -756,20 +841,43 @@ class CastSpellScreen(SubScreen):
         """Draw the screen, including buttons and background."""
         super().draw()
 
-        # Draw spell type labels
-        for effect_type, label_surface in self.type_labels.items():
-            pos = self.type_label_positions[effect_type]
-            self.window.blit(label_surface, pos)
+        selected_spell = (
+            self.scroll_text_list_shifter.get_current_selected()
+            if self.scroll_text_list_shifter else None
+        )
+        if selected_spell:
+            status = 'Casting spends the shown cards from your hand'
+            tone = 'good'
+        else:
+            status = ''
+            tone = 'neutral'
+        draw_footer(
+            self.window, self, status, tone=tone,
+            show_action=bool(selected_spell),
+            show_status=bool(status),
+        )
+        if settings.TOUCH_TARGET_MIN > 0:
+            self.spell_category_tabs.draw()
+        else:
+            for spell_type, header_rect in getattr(self, '_desktop_headers', []):
+                draw_section_header(self.window, spell_type, header_rect)
 
         # Draw spell family buttons (after backgrounds so they appear on top)
-        for button in self.spell_family_buttons:
+        for button in self._visible_spell_buttons():
             button.draw()
+
+        if not self.scroll_text_list:
+            draw_empty_detail(
+                self.window,
+                pygame.Rect(
+                    self.scroll_x, self.scroll_y,
+                    self.scroll_w, self.scroll_h),
+                'Choose a spell',
+                'Preview its card cost, timing, target, and counter rules.',
+            )
         
         # Draw confirm button
-        if self.scroll_text_list_shifter:
-            selected_spell = self.scroll_text_list_shifter.get_current_selected()
-            if selected_spell:
-                self.confirm_button.draw()
+        if selected_spell:
+            self.confirm_button.draw()
         
         super().draw_on_top()
-

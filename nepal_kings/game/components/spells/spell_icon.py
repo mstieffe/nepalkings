@@ -4,6 +4,7 @@ import pygame
 from config import settings
 from config.screen_settings import _UI_SCALE, _IS_MOBILE
 from game.core.input_state import get_pressed as _get_pressed
+from game.components.picker_ui import draw_caption_cell
 
 
 class SpellIcon:
@@ -73,14 +74,50 @@ class SpellIcon:
         self.clicked = False
         self.hovered = False
         self.draw_name = draw_name
+        self.visible = True
+        # Stable caption cells prevent long spell names from colliding with
+        # adjacent icons.  Picker screens can override this after layout.
+        self.caption_max_width = int(0.096 * settings.SCREEN_WIDTH)
         # Fixed-size cells: hover/selected feedback via glow only, the
         # icon/frame footprint never changes (used by the prelude picker).
         self.fixed_size = fixed_size
-        
+        # Compact grid mode tightens the caption gap so the desktop "all
+        # families on one page" layout fits three category rows cleanly.
+        self.grid_mode = False
+
         # Load glow effects
         self.load_glow_effects()
         self.set_position(x, y)
     
+    def rescale(self, factor: float) -> None:
+        """Shrink the icon/frame/glow footprint in place (dense grids).
+
+        Called once at construction time for the desktop all-families page so
+        three category rows fit; the semi-transparent black glow keeps its
+        layering alpha after the rescale.
+        """
+        if factor == 1.0:
+            return
+
+        def _s(img):
+            if img is None:
+                return None
+            w = max(1, int(img.get_width() * factor))
+            h = max(1, int(img.get_height() * factor))
+            return pygame.transform.smoothscale(img, (w, h))
+
+        for attr in (
+            'icon_img', 'icon_gray_img', 'frame_img', 'frame_closed_img',
+            'frame_hidden_img', 'icon_img_big', 'icon_gray_img_big',
+            'frame_img_big', 'frame_closed_img_big', 'frame_hidden_img_big',
+            'glow_black', 'glow_active', 'glow_active_big', 'glow_white_big',
+        ):
+            img = getattr(self, attr, None)
+            if img is not None:
+                setattr(self, attr, _s(img))
+        if getattr(self, 'glow_black', None) is not None:
+            self.glow_black.set_alpha(160)
+
     def scale_image(self, image: pygame.Surface, scale_factor: float) -> pygame.Surface:
         """Scale image smoothly."""
         if image is None:
@@ -145,14 +182,15 @@ class SpellIcon:
     
     def collide(self) -> bool:
         """Check if mouse is over the icon."""
+        if not self.visible:
+            return False
         mouse_pos = pygame.mouse.get_pos()
-        icon_width = self.icon_img.get_width() if self.icon_img else 0
-        icon_height = self.icon_img.get_height() if self.icon_img else 0
-        
-        return (
-            self.x - icon_width // 2 < mouse_pos[0] < self.x + icon_width // 2 and
-            self.y - icon_height // 2 < mouse_pos[1] < self.y + icon_height // 2
-        )
+        frame_width = self.frame_img.get_width() if self.frame_img else 0
+        frame_height = self.frame_img.get_height() if self.frame_img else 0
+        hit_w = max(frame_width, settings.TOUCH_TARGET_MIN)
+        hit_h = max(frame_height, settings.TOUCH_TARGET_MIN)
+        return pygame.Rect(0, 0, hit_w, hit_h).move(
+            self.x - hit_w // 2, self.y - hit_h // 2).collidepoint(mouse_pos)
     
     def handle_events(self, events) -> None:
         """Handle mouse events."""
@@ -167,6 +205,8 @@ class SpellIcon:
     
     def draw(self) -> None:
         """Draw the spell icon with appropriate state."""
+        if not self.visible:
+            return
         is_mouse_pressed = _get_pressed()[0]
         shadow_offset_y = settings.get_y(0.005)
         
@@ -233,15 +273,23 @@ class SpellIcon:
         
         # Draw name if enabled
         if self.draw_name:
-            # Choose text color based on castability — always use normal size
-            if self.is_active:
-                text_surface = self.text_surface
+            if _IS_MOBILE:
+                _name_gap = 3
+            elif self.grid_mode:
+                _name_gap = 5
             else:
-                text_surface = self.text_surface_grey
-            
-            _name_gap = 3 if _IS_MOBILE else 15
-            text_rect = text_surface.get_rect(center=(self.x, self.y + frame_img.get_height() // 2 + _name_gap))
-            self.window.blit(text_surface, text_rect.topleft)
+                _name_gap = 15
+            draw_caption_cell(
+                self.window,
+                self.name,
+                self.x,
+                self.y + frame_img.get_height() // 2 + _name_gap,
+                self.caption_max_width,
+                color=settings.SPELL_ICON_CAPTION_COLOR,
+                inactive=not self.is_active,
+                selected=self.clicked,
+                preferred_size=settings.SPELL_ICON_FONT_SIZE,
+            )
 
 
 class CastSpellIcon(SpellIcon):

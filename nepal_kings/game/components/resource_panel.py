@@ -61,7 +61,8 @@ def _draw_pill(window, x, y, icon_size, req, prod, pill_clr, font, pill_min_w):
 
 
 def draw_resource_panel(window, rect, resources_data, icons, font, *,
-                        compact=False, show_label=True):
+                        compact=False, show_label=True,
+                        draw_background=True):
     """Draw the resource panel inside ``rect``.
 
     Parameters
@@ -72,6 +73,10 @@ def draw_resource_panel(window, rect, resources_data, icons, font, *,
         castle/village layout used in the conquer/defence config screens.
     show_label:
         When True, draw the small "Resources" label above the panel.
+    draw_background:
+        When False, draw only the resource contents. This lets compact
+        resources live inside a shared footer without stacking another panel
+        and border on top of it.
     """
     if not rect:
         return
@@ -87,10 +92,12 @@ def draw_resource_panel(window, rect, resources_data, icons, font, *,
         lbl = font.render('Resources', True, (180, 170, 140))
         window.blit(lbl, (rect.x, rect.y - lbl.get_height() - 2))
 
-    surf = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
-    pygame.draw.rect(surf, (35, 30, 25, 200), surf.get_rect(), border_radius=4)
-    window.blit(surf, rect.topleft)
-    pygame.draw.rect(window, (140, 130, 110), rect, 1, border_radius=4)
+    if draw_background:
+        surf = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
+        pygame.draw.rect(
+            surf, (35, 30, 25, 200), surf.get_rect(), border_radius=4)
+        window.blit(surf, rect.topleft)
+        pygame.draw.rect(window, (140, 130, 110), rect, 1, border_radius=4)
 
     if compact:
         _draw_compact_row(window, rect, produces, requires, icons,
@@ -127,7 +134,25 @@ def _draw_two_column(window, rect, produces, requires, icons,
 def _draw_compact_row(window, rect, produces, requires, icons,
                       icon_s, font, pill_min_w):
     """Single horizontal row: [icon][r][b]  [icon][r][b] ... across rect."""
-    all_rows = CASTLE_ROWS + VILLAGE_ROWS
+    # Do not spend scarce picker-footer width on 0/0 resources.  The full
+    # kingdom panel still shows the complete economy; this compact strip is a
+    # consequence summary for the current configuration.
+    all_rows = []
+    for label, icon_key, res_pairs in CASTLE_ROWS + VILLAGE_ROWS:
+        visible_pairs = []
+        for red_key, black_key in res_pairs:
+            if any(
+                produces.get(key, 0) or requires.get(key, 0)
+                for key in (red_key, black_key)
+            ):
+                visible_pairs.append((red_key, black_key))
+        if visible_pairs:
+            all_rows.append((label, icon_key, visible_pairs))
+
+    if not all_rows:
+        label = font.render('No resource impact', True, (220, 205, 180))
+        window.blit(label, label.get_rect(center=rect.center))
+        return
     group_widths = []
     for _, icon_key, res_pairs in all_rows:
         w = icon_s + 6

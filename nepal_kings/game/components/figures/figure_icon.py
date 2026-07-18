@@ -9,6 +9,7 @@ import pygame
 from game.components.cards.card_img import CardImg
 from config import settings
 from game.core.input_state import get_pressed as _get_pressed
+from game.components.picker_ui import draw_caption_cell
 
 
 _CLONE_AURA_GLOW_SCALE = 1.06
@@ -107,6 +108,7 @@ class FigureIcon:
         self.set_position(x, y)
 
         self.draw_name = draw_name
+        self.caption_max_width = None
 
     def scale_image(self, image: pygame.Surface, scale_factor: float) -> pygame.Surface:
         """
@@ -152,6 +154,30 @@ class FigureIcon:
         :param y_offset: Vertical offset to apply (used in hover or click animations).
         """
         if self.draw_name:
+            if self.caption_max_width:
+                frame = self.frame_img_big if big else self.frame_img
+                top_y = (
+                    self.y + frame.get_height() // 2
+                    + (1 if settings.TOUCH_TARGET_MIN > 0 else 5)
+                    + y_offset
+                )
+                draw_caption_cell(
+                    self.window,
+                    self.name,
+                    self.x,
+                    top_y,
+                    self.caption_max_width,
+                    color=settings.SUIT_ICON_CAPTION_COLOR,
+                    inactive=not self.is_active,
+                    selected=self.clicked,
+                    preferred_size=(
+                        settings.FIGURE_ICON_FONT_CAPTION_BIG_FONT_SIZE
+                        if big else
+                        settings.FIGURE_ICON_FONT_CAPTION_FONT_SIZE
+                    ),
+                    background=True,
+                )
+                return
             padding = settings.FIGURE_NAME_PADDING
 
             if big:
@@ -304,7 +330,13 @@ class FigureIcon:
         :return: True if the mouse is over the icon's frame, False otherwise.
         """
         mx, my = pygame.mouse.get_pos()
-        return self.rect_frame.collidepoint((mx, my))
+        hit = self.rect_frame
+        if self.draw_name and settings.TOUCH_TARGET_MIN > 0:
+            hit = pygame.Rect(0, 0,
+                              max(hit.w, settings.TOUCH_TARGET_MIN),
+                              max(hit.h, settings.TOUCH_TARGET_MIN))
+            hit.center = self.rect_frame.center
+        return hit.collidepoint((mx, my))
 
     def draw_icon(
         self,
@@ -388,7 +420,6 @@ class FigureIcon:
             self.window.blit(glow_img_clicked, (self.rect_glow.topleft[0], self.rect_glow.topleft[1] + y_offset))
             self.window.blit(icon_img, (self.rect_icon.topleft[0], self.rect_icon.topleft[1] + y_offset))
             self.window.blit(frame_img, (self.rect_frame.topleft[0], self.rect_frame.topleft[1] + y_offset))
-            self.window.blit(self.text_surface, (self.text_rect.topleft[0], self.text_rect.topleft[1] + y_offset))
             self.draw_text_with_background(y_offset=y_offset)
 
         elif self.clicked and self.hovered:
@@ -471,6 +502,7 @@ class BuildFigureIcon(FigureIcon):
         self.family = fig_fam
         self.game = game
         self.content = fig_fam.figures
+        self.caption_max_width = int(0.088 * settings.SCREEN_WIDTH)
 
         # Call load_glow_effects to initialize glow attributes
         self.load_glow_effects()

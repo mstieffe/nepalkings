@@ -102,3 +102,7 @@ TOUCH_HIT_PAD = int(0.017 * SCREEN_HEIGHT) if _IS_MOBILE else 0
 TOUCH_TARGET_MIN = max(58, int(0.105 * SCREEN_HEIGHT)) if _IS_MOBILE else 0
 TOUCH_COMPACT_MIN = max(30, int(0.070 * SCREEN_HEIGHT)) if _IS_MOBILE else 0
 TOUCH_ICON_MIN = max(28, int(0.067 * SCREEN_HEIGHT)) if _IS_MOBILE else 0
+
+# Desktop pickers (cast spell / prelude) render every family on one page, so
+# their icons shrink slightly to fit three category rows without crowding.
+PICKER_DESKTOP_ICON_SCALE = 0.64

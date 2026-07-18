@@ -171,19 +171,30 @@ def test_defence_counter_picker_lists_expanded_safe_pool():
 
 
 def _assert_picker_geometry(picker):
-    """All icon cells stay inside the details panel and never overlap."""
+    """Every category grid stays inside the details panel without overlap."""
     from config import settings
     box_right = settings.CAST_SPELL_INFO_BOX_X + settings.CAST_SPELL_INFO_BOX_WIDTH
-    rows = {}
     for btn in picker.spell_family_buttons:
         assert btn.fixed_size is True
-        assert btn.x + settings.SPELL_ICON_WIDTH // 2 <= box_right
-        rows.setdefault(btn.y, []).append(btn.x)
-    for xs in rows.values():
-        xs = sorted(xs)
-        for a, b in zip(xs, xs[1:]):
-            assert b - a >= settings.SPELL_ICON_WIDTH, \
-                f'icon cells overlap: dx={b - a}'
+
+    present_types = {
+        btn.family.type for btn in picker.spell_family_buttons
+    }
+    for spell_type in present_types:
+        picker._active_spell_type = spell_type
+        picker.spell_category_tabs.select(spell_type)
+        picker._layout_spell_family_icons()
+        rows = {}
+        for btn in picker.spell_family_buttons:
+            if not btn.visible:
+                continue
+            assert btn.x + settings.SPELL_ICON_WIDTH // 2 <= box_right
+            rows.setdefault(btn.y, []).append(btn.x)
+        for xs in rows.values():
+            xs = sorted(xs)
+            for a, b in zip(xs, xs[1:]):
+                assert b - a >= settings.SPELL_ICON_WIDTH, \
+                    f'{spell_type} icon cells overlap: dx={b - a}'
 
 
 def test_conquer_picker_has_no_overlap_desktop(spell_manager):
@@ -212,6 +223,7 @@ stub = object.__new__(PreludeSpellScreen)
 stub.window = pygame.display.get_surface()
 stub.game = None
 stub.spell_manager = SpellManager()
+stub.allowed_spell_order = list(_CONQUER_PRELUDE_SPELLS)
 stub.allowed_spells = set(_CONQUER_PRELUDE_SPELLS)
 stub._sx = lambda v: v
 stub._sy = lambda v: v
@@ -219,14 +231,21 @@ stub._spos = lambda x, y: (x, y)
 stub.init_spell_family_icons()
 
 box_right = settings.CAST_SPELL_INFO_BOX_X + settings.CAST_SPELL_INFO_BOX_WIDTH
-rows = {}
-for btn in stub.spell_family_buttons:
-    assert btn.x + settings.SPELL_ICON_WIDTH // 2 <= box_right, (btn.name, btn.x)
-    rows.setdefault(btn.y, []).append(btn.x)
-for xs in rows.values():
-    xs = sorted(xs)
-    for a, b in zip(xs, xs[1:]):
-        assert b - a >= settings.SPELL_ICON_WIDTH, ('overlap', b - a)
+present_types = {btn.family.type for btn in stub.spell_family_buttons}
+for spell_type in present_types:
+    stub._active_spell_type = spell_type
+    stub.spell_category_tabs.select(spell_type)
+    stub._layout_spell_family_icons()
+    rows = {}
+    for btn in stub.spell_family_buttons:
+        if not btn.visible:
+            continue
+        assert btn.x + settings.SPELL_ICON_WIDTH // 2 <= box_right, (btn.name, btn.x)
+        rows.setdefault(btn.y, []).append(btn.x)
+    for xs in rows.values():
+        xs = sorted(xs)
+        for a, b in zip(xs, xs[1:]):
+            assert b - a >= settings.SPELL_ICON_WIDTH, (spell_type, 'overlap', b - a)
 print('OK')
 '''
     env = os.environ.copy()

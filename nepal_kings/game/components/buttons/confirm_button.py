@@ -42,6 +42,10 @@ class ConfirmButton:
         button_height = height or settings.CONFIRM_BUTTON_HEIGHT
         self.rect = pygame.Rect(self.x, self.y, button_width, button_height)
 
+    def set_text(self, text):
+        """Update the label without rebuilding unchanged button artwork."""
+        self.text = str(text)
+
     def load_images(self):
         w, h = self.rect.width, self.rect.height
 

@@ -4196,7 +4196,7 @@ pygame.quit()
         assert ledger.handle_event(tap) == 'inspect_round'
         assert ledger._touch_round_idx is None
 
-    def test_mobile_battle_shop_ready_banner_clears_ready_button(self):
+    def test_mobile_battle_shop_uses_single_footer_status_with_ready_button(self):
         _run_mobile_geometry_check(r'''
 import pygame
 pygame.mouse.set_cursor = lambda *args, **kwargs: None
@@ -4237,10 +4237,10 @@ shop._loaded_bought_moves_key = shop._bought_moves_cache_key(game)
 screen.render()
 banner_rect = getattr(shop, '_phase_banner_rect', None)
 ready_rect = shop.ready_button.rect
-assert banner_rect is not None
-assert not banner_rect.colliderect(ready_rect), (
-    tuple(banner_rect), tuple(ready_rect))
-assert banner_rect.top >= ready_rect.bottom + 2 or banner_rect.bottom <= ready_rect.top - 2
+assert banner_rect is None
+from game.components.picker_ui import footer_rect
+assert footer_rect(shop).contains(ready_rect), (
+    tuple(footer_rect(shop)), tuple(ready_rect))
 pygame.quit()
 ''')
 

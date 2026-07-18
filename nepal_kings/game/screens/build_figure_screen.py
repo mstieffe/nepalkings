@@ -19,6 +19,14 @@ from game.components.castle_cap_indicator import (
     castle_cap_for_land, count_castle_figures, draw_castle_cap_indicator,
 )
 from game.components import resource_panel as _resource_panel
+from game.components.picker_ui import (
+    SegmentedTabs,
+    draw_empty_detail,
+    draw_footer,
+    draw_small_badge,
+    footer_button_geometry,
+    footer_rail_rects,
+)
 import logging
 
 # Suit filter constants
@@ -68,20 +76,29 @@ class BuildFigureScreen(SubScreen):
         self.game = state.game
         self.card_source = card_source or GameCardSource(self.game)
         self.mode = mode
+        self._mobile_picker = settings.TOUCH_TARGET_MIN > 0
+        self._field_filter = 'castle'
+        self._initial_family_selected = False
+        self.title = {
+            'duel': 'Build Figure · Duel',
+            'conquer': 'Build Figure · Attack Setup',
+            'defence': 'Build Figure · Defence Setup',
+            'defence_draft': 'Build Figure · Defence Setup',
+        }.get(self.mode, title or 'Build Figure')
 
         # Map display names to internal color names
         self.color_mapping = {
             'Djungle': 'offensive',
             'Himalaya': 'defensive'
         }
+        self.color = "Djungle"
 
         # Initialize buttons and UI components
         self.init_figure_info_box()
         self.init_color_buttons()
+        self.init_field_tabs()
         self.init_figure_family_icons()
         self.init_scroll_test_list_shifter()
-
-        self.color = "Djungle"
 
         # Store selected figures
         self.selected_figure_family = None
@@ -91,11 +108,17 @@ class BuildFigureScreen(SubScreen):
         self._prev_buildable_family_names = None
         self._collection_tutorial_button_rect = None
 
+        action_label = {
+            'duel': 'Build',
+            'conquer': 'Add to Attack',
+            'defence': 'Add to Defence',
+            'defence_draft': 'Add to Defence',
+        }.get(self.mode, 'Build')
+        bx, by, bw, bh = footer_button_geometry(
+            self, action_label, align='left')
         self.confirm_button = ConfirmButton(
             self.window,
-            self._sx(settings.BUILD_FIGURE_CONFIRM_BUTTON_X),
-            self._sy(settings.BUILD_FIGURE_CONFIRM_BUTTON_Y),
-            "create!"
+            bx, by, action_label, width=bw, height=bh,
         )
 
         # Kingdom-mode extras: castle-cap badge, resource strip, suit filter.
@@ -470,6 +493,86 @@ class BuildFigureScreen(SubScreen):
                 )
 
             self.figure_family_buttons[color] = buttons
+        self._layout_mobile_family_icons()
+
+    def init_field_tabs(self):
+        """Mobile builder navigation; desktop keeps the full hierarchy tree."""
+        self.field_tabs = None
+        if not getattr(self, '_mobile_picker', False):
+            return
+        box_x = self._sx(settings.BUILD_FIGURE_INFO_BOX_X)
+        box_y = self._sy(settings.BUILD_FIGURE_INFO_BOX_Y)
+        margin = max(8, int(0.012 * settings.SCREEN_WIDTH))
+        tab_h = max(26, settings.TOUCH_COMPACT_MIN)
+        self.field_tabs = SegmentedTabs(
+            self.window,
+            pygame.Rect(
+                box_x + margin,
+                box_y + max(6, int(0.012 * settings.SCREEN_HEIGHT)),
+                settings.BUILD_FIGURE_INFO_BOX_WIDTH - 2 * margin,
+                tab_h,
+            ),
+            [
+                ('castle', 'Castle'),
+                ('village', 'Village'),
+                ('military', 'Military'),
+            ],
+            active_key=self._field_filter,
+        )
+
+    def _visible_family_buttons(self):
+        internal_color = self.color_mapping.get(self.color, self.color)
+        buttons = self.figure_family_buttons.get(internal_color, [])
+        if not getattr(self, '_mobile_picker', False):
+            return buttons
+        return [
+            button for button in buttons
+            if getattr(button.family, 'field', None) == self._field_filter
+        ]
+
+    def _layout_mobile_family_icons(self):
+        """Lay the selected field into a stable grid instead of a dense tree."""
+        if (not getattr(self, '_mobile_picker', False)
+                or not hasattr(self, 'figure_family_buttons')):
+            return
+        box = pygame.Rect(
+            self._sx(settings.BUILD_FIGURE_INFO_BOX_X),
+            self._sy(settings.BUILD_FIGURE_INFO_BOX_Y),
+            settings.BUILD_FIGURE_INFO_BOX_WIDTH,
+            settings.BUILD_FIGURE_INFO_BOX_HEIGHT,
+        )
+        cols = 5
+        margin_x = int(0.065 * box.w)
+        usable_w = box.w - 2 * margin_x
+        pitch_x = usable_w // max(1, cols - 1)
+        start_x = box.x + margin_x
+        start_y = box.y + max(
+            settings.TOUCH_COMPACT_MIN + int(0.095 * settings.SCREEN_HEIGHT),
+            int(0.19 * settings.SCREEN_HEIGHT),
+        )
+        pitch_y = int(0.205 * settings.SCREEN_HEIGHT)
+
+        visible = set(self._visible_family_buttons())
+        for color_buttons in self.figure_family_buttons.values():
+            for button in color_buttons:
+                button.is_visible = button in visible
+        for index, button in enumerate(self._visible_family_buttons()):
+            row, col = divmod(index, cols)
+            button.set_position(
+                start_x + col * pitch_x,
+                start_y + row * pitch_y,
+            )
+
+    def _select_initial_family(self):
+        """Preview the first legal visible family so the detail pane is useful."""
+        if self._initial_family_selected:
+            return
+        visible = self._visible_family_buttons()
+        if not visible:
+            return
+        chosen = next((button for button in visible if button.is_active), visible[0])
+        self.update_figure_family_selection(chosen)
+        self._initial_family_selected = True
 
     def init_color_buttons(self):
         """Initialize colour toggle pill buttons."""
@@ -479,7 +582,14 @@ class BuildFigureScreen(SubScreen):
         self.color_buttons = []
         for i, color in enumerate(colors):
             x = start_x + i * (settings.COLOR_TOGGLE_W + gap)
-            btn = ColorTogglePill(self.window, self._sx(x), self._sy(settings.BUILD_FIGURE_COLOR_BUTTON_Y), color)
+            display = {
+                'Djungle': 'Djungle · Attack',
+                'Himalaya': 'Himalaya · Defence',
+            }[color]
+            btn = ColorTogglePill(
+                self.window, self._sx(x),
+                self._sy(settings.BUILD_FIGURE_COLOR_BUTTON_Y),
+                color, display_text=display)
             self.color_buttons.append(btn)
         self.color_buttons[0].active = True
         self.buttons += self.color_buttons
@@ -527,15 +637,29 @@ class BuildFigureScreen(SubScreen):
         self._suit_filter_rects = {}
 
     def _compute_suit_chip_rects(self):
-        """Position the 2 active-color chips left/right of the scroll chevrons."""
+        """Position the two relevant suit filters for the current faction."""
         self._suit_filter_rects = {}
-        shifter = getattr(self, 'scroll_text_list_shifter', None)
-        if shifter is None:
-            return
         color_suits = _COLOR_SUITS.get(self.color, ())
         if len(color_suits) < 2:
             return
         size = self._suit_chip_size
+        if (getattr(self, '_mobile_picker', False)
+                and getattr(self, 'field_tabs', None) is not None):
+            gap = max(8, int(0.010 * settings.SCREEN_WIDTH))
+            center_x = self.field_tabs.rect.centerx
+            top = self.field_tabs.rect.bottom + max(
+                5, int(0.010 * settings.SCREEN_HEIGHT))
+            left = pygame.Rect(0, 0, size, size)
+            left.topright = (center_x - gap // 2, top)
+            right = pygame.Rect(0, 0, size, size)
+            right.topleft = (center_x + gap // 2, top)
+            self._suit_filter_rects[color_suits[0]] = left
+            self._suit_filter_rects[color_suits[1]] = right
+            return
+
+        shifter = getattr(self, 'scroll_text_list_shifter', None)
+        if shifter is None:
+            return
         gap = max(8, int(0.008 * settings.SCREEN_WIDTH))
         left_x = getattr(shifter, '_left_x', None)
         right_x = getattr(shifter, '_right_x', None)
@@ -583,6 +707,21 @@ class BuildFigureScreen(SubScreen):
             return
         count = count_castle_figures(self._kingdom_figures())
         box = self._info_box_screen_rect()
+        if (getattr(self, '_mobile_picker', False)
+                and getattr(self, 'field_tabs', None) is not None):
+            badge_h = max(20, int(0.045 * settings.SCREEN_HEIGHT))
+            badge_w = max(78, int(0.105 * settings.SCREEN_WIDTH))
+            draw_small_badge(
+                self.window,
+                f'Castle {count}/{cap}',
+                pygame.Rect(
+                    box.right - badge_w - 10,
+                    self.field_tabs.rect.bottom + 6,
+                    badge_w, badge_h,
+                ),
+                tone='gold' if count < cap else 'bad',
+            )
+            return
         # Shrinking the right edge moves the badge left; lowering the top
         # moves it down (the helper anchors the badge to rect.top + 5 and
         # rect.right - 6).
@@ -594,11 +733,9 @@ class BuildFigureScreen(SubScreen):
             font=self._kingdom_res_font, always=True)
 
     def _resource_strip_rect(self):
-        """Single-row resource strip rect just below the hierarchy sub-box."""
-        box = self._info_box_screen_rect()
-        strip_h = max(28, int(0.04 * settings.SCREEN_HEIGHT))
-        gap = max(6, int(0.008 * settings.SCREEN_HEIGHT))
-        return pygame.Rect(box.x, box.bottom + gap, box.w, strip_h)
+        """Resource consequence summary inside the right footer rail."""
+        _, status_rail = footer_rail_rects(self)
+        return status_rail.inflate(-6, -6)
 
     def _draw_resource_strip(self):
         rect = self._resource_strip_rect()
@@ -607,10 +744,18 @@ class BuildFigureScreen(SubScreen):
         _resource_panel.draw_resource_panel(
             self.window, rect, resources_data,
             self._kingdom_resource_icons, self._kingdom_res_font,
-            compact=True, show_label=False)
+            compact=True, show_label=False, draw_background=False)
 
     def _draw_suit_filter(self):
         self._compute_suit_chip_rects()
+        if (getattr(self, '_mobile_picker', False)
+                and self._suit_filter_rects):
+            first = next(iter(self._suit_filter_rects.values()))
+            label_font = settings.get_font(settings.FS_TINY, bold=True)
+            label = label_font.render('Suit', True, (95, 62, 28))
+            label_rect = label.get_rect(
+                midright=(first.left - 7, first.centery))
+            self.window.blit(label, label_rect)
         for suit, rect in self._suit_filter_rects.items():
             active = suit in self._suit_filter
             bg_color = (60, 50, 30, 230) if active else (35, 30, 25, 180)
@@ -667,9 +812,12 @@ class BuildFigureScreen(SubScreen):
 
         # Update icon states based on available cards
         self.update_family_icon_states()
+        self._layout_mobile_family_icons()
+        if getattr(self, '_mobile_picker', False):
+            self._select_initial_family()
 
         internal_color = self.color_mapping.get(self.color, self.color)
-        for button in self.figure_family_buttons[internal_color]:
+        for button in self._visible_family_buttons():
             button.update()
 
         if self.scroll_text_list_shifter:
@@ -717,17 +865,14 @@ class BuildFigureScreen(SubScreen):
 
     def handle_events(self, events):
         """Handle events for button interactions."""
-        super().handle_events(events)
-
-        internal_color = self.color_mapping.get(self.color, self.color)
-        for button in self.figure_family_buttons[internal_color]:
-            button.handle_events(events)
-
+        selected_figure = None
         if self.scroll_text_list_shifter:
             selected_figure = self.scroll_text_list_shifter.get_current_selected()
 
+        # Dialogue input is modal. Process it before the scroll panel, close
+        # button, or family icons so a click on a dialogue action cannot also
+        # select the figure underneath it.
         if self.dialogue_box:
-
             response = self.dialogue_box.update(events)
             if response:
                 
@@ -884,6 +1029,22 @@ class BuildFigureScreen(SubScreen):
                     self.dialogue_box = None
 
         else:
+            super().handle_events(events)
+            for button in self._visible_family_buttons():
+                button.handle_events(events)
+
+            if getattr(self, 'field_tabs', None) is not None:
+                changed_field = self.field_tabs.handle_events(events)
+                if changed_field is not None:
+                    self._field_filter = changed_field
+                    self.selected_figure_family = None
+                    self.scroll_text_list = []
+                    if self.scroll_text_list_shifter:
+                        self.scroll_text_list_shifter.set_displayed_texts([])
+                    self._initial_family_selected = False
+                    self._layout_mobile_family_icons()
+                    self.update_family_icon_states()
+                    self._select_initial_family()
 
             for event in events:
                 if event.type == MOUSEBUTTONDOWN:
@@ -1012,8 +1173,7 @@ class BuildFigureScreen(SubScreen):
                         if button.collide():
                             self.update_color_selection(button)
 
-                    internal_color = self.color_mapping.get(self.color, self.color)
-                    for button in self.figure_family_buttons[internal_color]:
+                    for button in self._visible_family_buttons():
                         if button.collide():
                             self.update_figure_family_selection(button)
 
@@ -1023,10 +1183,18 @@ class BuildFigureScreen(SubScreen):
             other_button.active = False
         button.active = True
         self.color = button.text
+        self.selected_figure_family = None
+        self.scroll_text_list = []
+        if self.scroll_text_list_shifter:
+            self.scroll_text_list_shifter.set_displayed_texts([])
+        self._initial_family_selected = False
+        self._layout_mobile_family_icons()
         # Reset suit filter on color change to avoid empty lists.
         if _is_kingdom_config_mode(self.mode):
             self._reset_suit_filter()
-            self._refresh_selected_figure_family()
+        if getattr(self, '_mobile_picker', False):
+            self.update_family_icon_states()
+            self._select_initial_family()
 
     def update_figure_family_selection(self, button):
         """Update figure family selection."""
@@ -1143,7 +1311,7 @@ class BuildFigureScreen(SubScreen):
         if not self._has_buildable_figure_family():
             return 'No recipe is glowing yet. Open your First Journey reward packs in Collection, then return here.'
         if 'castle' not in fields:
-            return 'Choose any glowing Castle recipe, then press "create!".'
+            return 'Choose any glowing Castle recipe, then press "Add to Attack".'
         if 'village' not in fields:
             return 'King built! Now build a Farm (village) — it turns a villager into food.'
         if 'military' not in fields:
@@ -1198,14 +1366,31 @@ class BuildFigureScreen(SubScreen):
         """Draw the screen, including buttons and background."""
         super().draw()
 
-        self.window.blit(self.build_hierarchy, self._spos(settings.BUILD_HIERARCHY_X, settings.BUILD_HIERARCHY_Y))
+        selected_figure = (
+            self.scroll_text_list_shifter.get_current_selected()
+            if self.scroll_text_list_shifter else None
+        )
+        kingdom_mode = _is_kingdom_config_mode(self.mode)
+        draw_footer(
+            self.window, self, '',
+            show_action=bool(selected_figure),
+            show_status=kingdom_mode,
+        )
 
-        internal_color = self.color_mapping.get(self.color, self.color)
+        if not getattr(self, '_mobile_picker', False):
+            self.window.blit(
+                self.build_hierarchy,
+                self._spos(
+                    settings.BUILD_HIERARCHY_X,
+                    settings.BUILD_HIERARCHY_Y))
+        elif getattr(self, 'field_tabs', None) is not None:
+            self.field_tabs.draw()
+
         # Z-order layering: regular → selected → hovered (so info boxes appear on top)
         all_regular = []
         all_selected = []
         all_hovered = None
-        for button in self.figure_family_buttons[internal_color]:
+        for button in self._visible_family_buttons():
             if button.hovered:
                 all_hovered = button
             elif button.clicked:
@@ -1220,10 +1405,18 @@ class BuildFigureScreen(SubScreen):
         if all_hovered:
             all_hovered.draw()
 
-        if self.scroll_text_list_shifter:
-            selected_figure = self.scroll_text_list_shifter.get_current_selected()
-            if selected_figure:
-                self.confirm_button.draw()
+        if not self.scroll_text_list:
+            draw_empty_detail(
+                self.window,
+                pygame.Rect(
+                    self.scroll_x, self.scroll_y,
+                    self.scroll_w, self.scroll_h),
+                'Choose a family',
+                'Preview cards, power, support, skills, and resource impact.',
+            )
+
+        if selected_figure:
+            self.confirm_button.draw()
 
         # Kingdom-mode overlays (cap badge, resource strip, suit filter).
         if _is_kingdom_config_mode(self.mode):

@@ -195,6 +195,8 @@ class BattleMoveDetailBox:
 
         # Close button (X) — top-right (sized like FigureDetailBox)
         cb_size = int(0.028 * settings.SCREEN_HEIGHT)
+        if settings.TOUCH_TARGET_MIN > 0:
+            cb_size = max(cb_size, settings.TOUCH_COMPACT_MIN)
         cb_margin = int(0.009 * settings.SCREEN_HEIGHT)
         self.close_button_rect = pygame.Rect(
             self.rect.right - cb_size - cb_margin,
@@ -206,18 +208,28 @@ class BattleMoveDetailBox:
 
         # ── Create interactive elements at computed absolute positions ──
         self.return_button = None
+        self.replace_button = None
         self.action_buttons = []
 
         abs_btn_y = self.y + btn_y_rel
         if is_battle_context:
             self._create_action_buttons(abs_btn_y)
         else:
-            btn_w = settings.DIALOGUE_BOX_BTN_W
+            gap = max(8, int(0.010 * settings.SCREEN_WIDTH))
+            btn_w = min(
+                settings.DIALOGUE_BOX_BTN_W,
+                (self.rect.w - 3 * gap) // 2,
+            )
             btn_h = settings.DIALOGUE_BOX_BTN_H
-            btn_x = self.rect.centerx - btn_w // 2
-            self.return_button = _DlgButton(window, btn_x, abs_btn_y, "Return",
+            total_w = btn_w * 2 + gap
+            btn_x = self.rect.centerx - total_w // 2
+            self.return_button = _DlgButton(window, btn_x, abs_btn_y, "Remove",
                                             width=btn_w, height=btn_h)
             self.return_button.disabled = False
+            self.replace_button = _DlgButton(
+                window, btn_x + btn_w + gap, abs_btn_y, "Replace",
+                width=btn_w, height=btn_h)
+            self.replace_button.disabled = False
 
         if self._has_fig_selector:
             self._create_fig_arrows(self.y + fig_cy_rel)
@@ -612,6 +624,8 @@ class BattleMoveDetailBox:
                 btn.draw()
         elif self.return_button:
             self.return_button.draw()
+            if self.replace_button:
+                self.replace_button.draw()
 
         # ── Close (X) button ──
         self._draw_close_button()
@@ -884,7 +898,7 @@ class BattleMoveDetailBox:
             {'action': 'use'|'gamble'|'combine', 'move_index': int,
              'selected_figure': Figure | None}
         Shop context returns:
-            'return' | 'close'
+            'return' | 'replace' | 'close'
         """
         # Update button hover states
         if self.is_battle_context:
@@ -893,6 +907,8 @@ class BattleMoveDetailBox:
         else:
             if self.return_button:
                 self.return_button.update()
+            if self.replace_button:
+                self.replace_button.update()
 
         # Always update figure selector arrows (both contexts)
         if self.fig_arrow_left:
@@ -932,6 +948,8 @@ class BattleMoveDetailBox:
                 else:
                     if self.return_button and self.return_button.collide():
                         return 'return'
+                    if self.replace_button and self.replace_button.collide():
+                        return 'replace'
         return None
 
     def handle_events(self, events):

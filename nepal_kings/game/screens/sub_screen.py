@@ -41,16 +41,26 @@ class SubScreen:
         self.scroll_text_list = []
         self.scroll_text_list_shifter = None
 
-        # Close / X button (top-right of subscreen background)
+        # Close / X button (top-right of subscreen background).  Kingdom
+        # pickers are modal on mobile, so the old decorative 13px close mark
+        # was not a usable touch target.  Keep the visual compact on desktop,
+        # but give mobile a visible compact control plus a full-size hit area.
         self._on_done = None  # callback set by parent screen
         self._close_font = settings.get_font(int(settings.FONT_SIZE * 0.85), bold=True)
-        _cbsz = int(0.028 * settings.SCREEN_HEIGHT)  # square X button
+        _cbsz = int(0.028 * settings.SCREEN_HEIGHT)
+        if settings.TOUCH_TARGET_MIN > 0:
+            _cbsz = max(_cbsz, settings.TOUCH_COMPACT_MIN)
         _bg_w = settings.SUB_SCREEN_BACKGROUND_IMG_WIDTH
         _margin = int(0.012 * settings.SCREEN_WIDTH)
         self._close_rect = pygame.Rect(
             self.x + _bg_w - _cbsz - _margin,
             self.y + _margin,
             _cbsz, _cbsz)
+        self._close_hit_rect = self._close_rect.copy()
+        if settings.TOUCH_TARGET_MIN > 0:
+            grow_x = max(0, settings.TOUCH_TARGET_MIN - self._close_hit_rect.w)
+            grow_y = max(0, settings.TOUCH_TARGET_MIN - self._close_hit_rect.h)
+            self._close_hit_rect.inflate_ip(grow_x, grow_y)
 
     def _fx_layer(self):
         """Effects layer of the owning duel shell, or ``None``.
@@ -101,10 +111,20 @@ class SubScreen:
                 title_rect.height + 2 * _pad
             )
 
-            # Opaque brown badge
-            pygame.draw.rect(self.window, settings.SUB_SCREEN_TITLE_BG_COLOR,
+            mode = getattr(self, 'mode', None)
+            title_bg = settings.SUB_SCREEN_TITLE_BG_COLOR
+            title_border = settings.SUB_SCREEN_TITLE_BORDER_COLOR
+            if mode == 'conquer':
+                title_bg = (72, 38, 24)
+                title_border = (210, 142, 72)
+            elif mode in ('defence', 'defence_draft'):
+                title_bg = (35, 48, 66)
+                title_border = (112, 160, 204)
+
+            # Opaque contextual badge; the rest of the picker remains shared.
+            pygame.draw.rect(self.window, title_bg,
                              bg_rect, border_radius=_corner_r)
-            pygame.draw.rect(self.window, settings.SUB_SCREEN_TITLE_BORDER_COLOR,
+            pygame.draw.rect(self.window, title_border,
                              bg_rect, settings.SUB_SCREEN_TITLE_BORDER_WIDTH,
                              border_radius=_corner_r)
 
@@ -279,7 +299,8 @@ class SubScreen:
             self.scroll_text_list_shifter.handle_events(events)
         for event in events:
             if event.type == MOUSEBUTTONUP and getattr(event, 'button', 1) == 1:
-                if self._close_rect.collidepoint(event.pos):
+                hit_rect = getattr(self, '_close_hit_rect', self._close_rect)
+                if hit_rect.collidepoint(event.pos):
                     if self._on_done:
                         self._on_done()
 
@@ -315,7 +336,7 @@ class SubScreen:
             return
         r = self._close_rect
         mouse_pos = pygame.mouse.get_pos()
-        hovered = r.collidepoint(mouse_pos)
+        hovered = getattr(self, '_close_hit_rect', r).collidepoint(mouse_pos)
 
         bg_clr = (80, 50, 25, 220) if hovered else (55, 35, 18, 200)
         border_clr = (180, 160, 120) if hovered else (120, 100, 70)
@@ -345,4 +366,3 @@ class SubScreen:
             button.update()
         if self.scroll_text_list_shifter:
             self.scroll_text_list_shifter.update()
-

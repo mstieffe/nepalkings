@@ -1740,7 +1740,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
             mpos = pygame.mouse.get_pos()
             for icon_rect, tip in (
                 (self._btn_build, 'Build a figure'),
-                (self._btn_buy_move, 'Buy battle moves'),
+                (self._btn_buy_move, 'Choose starting tactics'),
                 (self._btn_prelude_edit, 'Choose a spell'),
                 (self._btn_counter_edit, 'Pick your response'),
             ):
@@ -2706,7 +2706,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
         self._subscreen_obj = BattleShopScreen(
             self.window, self.state,
             x=sx, y=sy,
-            title='Battle Shop', card_source=card_source, mode='defence_draft',
+            title='Starting Tactics', card_source=card_source, mode='defence_draft',
         )
         self._subscreen_obj._on_done = self._close_subscreen
         self._active_subscreen = 'battle_shop'
@@ -2884,7 +2884,9 @@ class DefenceScreen(MenuScreenMixin, Screen):
 
         if len(moves) < 3:
             missing = 3 - len(moves)
-            problems.append(f'{missing} battle move{"s" if missing > 1 else ""} still missing (need 3).')
+            problems.append(
+                f'{missing} starting tactic{"s" if missing > 1 else ""} '
+                'still missing (need 3).')
 
         has_battle_fig = self._config.get('battle_figure_id') is not None
         has_counter_spell = self._config.get('counter_spell_name') is not None

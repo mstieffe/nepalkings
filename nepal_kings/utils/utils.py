@@ -512,11 +512,12 @@ class ColorTogglePill:
         'Himalaya': (80, 130, 210),   # blue
     }
 
-    def __init__(self, window, x, y, text):
+    def __init__(self, window, x, y, text, display_text=None):
         self.window = window
         self.x = x
         self.y = y
         self.text = text
+        self.display_text = display_text or text
         self.font = settings.get_font(settings.COLOR_TOGGLE_FONT_SIZE, bold=True)
 
         self.rect = pygame.Rect(x, y, settings.COLOR_TOGGLE_W, settings.COLOR_TOGGLE_H)
@@ -569,7 +570,11 @@ class ColorTogglePill:
         self.window.blit(pill, self.rect.topleft)
 
         # Text centred
-        txt_surf = self.font.render(self.text, True, txt_clr)
+        font = self.font
+        while (font.size(self.display_text)[0] > max(1, w - 12)
+               and font.get_height() > 8):
+            font = settings.get_font(font.get_height() - 1, bold=True)
+        txt_surf = font.render(self.display_text, True, txt_clr)
         txt_rect = txt_surf.get_rect(center=self.rect.center)
         self.window.blit(txt_surf, txt_rect)
 

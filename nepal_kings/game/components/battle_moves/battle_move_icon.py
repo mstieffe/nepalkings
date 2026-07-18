@@ -5,6 +5,7 @@
 import pygame
 from config import settings
 from game.core.input_state import get_pressed as _get_pressed
+from game.components.picker_ui import draw_caption_cell
 
 
 class BattleMoveIcon:
@@ -25,6 +26,8 @@ class BattleMoveIcon:
         self.is_active = True
         self.clicked = False
         self.hovered = False
+        self.visible = True
+        self.caption_max_width = int(0.096 * settings.SCREEN_WIDTH)
 
         # Fonts
         self.font = settings.get_font(settings.BATTLE_MOVE_ICON_FONT_SIZE)
@@ -114,11 +117,16 @@ class BattleMoveIcon:
         self.y = y
 
     def collide(self):
+        if not self.visible:
+            return False
         mouse = pygame.mouse.get_pos()
-        iw = self.icon_img.get_width() if self.icon_img else 0
-        ih = self.icon_img.get_height() if self.icon_img else 0
-        return (self.x - iw // 2 < mouse[0] < self.x + iw // 2 and
-                self.y - ih // 2 < mouse[1] < self.y + ih // 2)
+        fw = self.frame_img.get_width() if self.frame_img else 0
+        fh = self.frame_img.get_height() if self.frame_img else 0
+        hit_w = max(fw, settings.TOUCH_TARGET_MIN)
+        hit_h = max(fh, settings.TOUCH_TARGET_MIN)
+        return pygame.Rect(
+            self.x - hit_w // 2, self.y - hit_h // 2,
+            hit_w, hit_h).collidepoint(mouse)
 
     def handle_events(self, events):
         for event in events:
@@ -131,6 +139,8 @@ class BattleMoveIcon:
 
     # ------------------------------------------------------------------ draw
     def draw(self):
+        if not self.visible:
+            return
         pressed = _get_pressed()[0]
         shadow_y = settings.get_y(0.005)
 
@@ -181,14 +191,18 @@ class BattleMoveIcon:
         r = cur_frame.get_rect(center=(self.x, self.y))
         self.window.blit(cur_frame, r.topleft)
 
-        # Name
-        if self.is_active:
-            ts = self.text_surface_big if (self.hovered or self.clicked) else self.text_surface
-        else:
-            ts = self.text_surface_grey_big if (self.hovered or self.clicked) else self.text_surface_grey
-
-        tr = ts.get_rect(center=(self.x, self.y + cur_frame.get_height() // 2 + 15))
-        self.window.blit(ts, tr.topleft)
+        draw_caption_cell(
+            self.window,
+            self.family.name,
+            self.x,
+            self.y + cur_frame.get_height() // 2
+            + (3 if settings.TOUCH_TARGET_MIN > 0 else 15),
+            self.caption_max_width,
+            color=settings.BATTLE_MOVE_ICON_CAPTION_COLOR,
+            inactive=not self.is_active,
+            selected=self.clicked,
+            preferred_size=settings.BATTLE_MOVE_ICON_FONT_SIZE,
+        )
 
     # --------------------------------------------------------------- helpers
     def _scale_icon(self, img, factor):
