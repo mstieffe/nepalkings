@@ -24,6 +24,7 @@ class GuideBookScreen(SubScreen):
                     self.current_section = i
                     break
         self.scroll_offset = 0          # pixel offset (not line index)
+        self.menu_scroll_offset = 0     # independent sidebar chapter scroll
 
         # ── fonts ───────────────────────────────────────────────────────
         self.section_title_font = settings.get_font(settings.GUIDE_SECTION_TITLE_FONT_SIZE, bold=True)
@@ -69,6 +70,10 @@ class GuideBookScreen(SubScreen):
         self.dragging = False
         self._touch_scrolling = False
         self._touch_last_y = 0
+        self._menu_touch_scrolling = False
+        self._menu_touch_last_y = 0
+        self._menu_touch_start_y = 0
+        self._menu_touch_moved = False
         self.scrollbar_handle_color = settings.GUIDE_SCROLLBAR_HANDLE_P
 
         # Pre-render content surfaces for the initially selected section
@@ -1297,7 +1302,8 @@ class GuideBookScreen(SubScreen):
 
         Sections carry an optional ``group`` label; consecutive sections
         sharing a group get one header row above them. Item height shrinks
-        automatically so every row fits inside the sidebar.
+        where practical; on shorter mobile panels the remaining rows live in
+        an independently scrollable, clipped sidebar.
         """
         self.menu_rects = []
         self._sidebar_group_rows = []
@@ -1332,6 +1338,61 @@ class GuideBookScreen(SubScreen):
                 rect = pygame.Rect(self.sidebar_x, y, self.sidebar_w, item_h)
                 self.menu_rects.append(rect)
                 y += item_h + pad
+
+        content_bottom = max(
+            [rect.bottom for rect in self.menu_rects]
+            + [rect.bottom for _, rect in self._sidebar_group_rows]
+            + [self.sidebar_y],
+        )
+        bottom_pad = max(2, int(0.008 * settings.SCREEN_HEIGHT))
+        self._sidebar_content_h = content_bottom - self.sidebar_y + bottom_pad
+        self._clamp_menu_scroll()
+        self._ensure_current_menu_item_visible()
+
+    @property
+    def _max_menu_scroll(self):
+        return max(
+            0,
+            int(getattr(self, '_sidebar_content_h', self.sidebar_h))
+            - self.sidebar_h,
+        )
+
+    def _clamp_menu_scroll(self):
+        self.menu_scroll_offset = max(
+            0,
+            min(int(getattr(self, 'menu_scroll_offset', 0)),
+                self._max_menu_scroll),
+        )
+
+    def _sidebar_rect(self):
+        return pygame.Rect(
+            self.sidebar_x, self.sidebar_y, self.sidebar_w, self.sidebar_h)
+
+    def _visible_menu_rect(self, rect):
+        return rect.move(0, -int(getattr(self, 'menu_scroll_offset', 0)))
+
+    def _menu_item_at(self, pos):
+        """Return the visible chapter index at *pos*, or ``None``."""
+        if not self._sidebar_rect().collidepoint(pos):
+            return None
+        for i, rect in enumerate(self.menu_rects):
+            if self._visible_menu_rect(rect).collidepoint(pos):
+                return i
+        return None
+
+    def _ensure_current_menu_item_visible(self):
+        if not self.menu_rects:
+            return
+        index = max(0, min(self.current_section, len(self.menu_rects) - 1))
+        rect = self.menu_rects[index]
+        view_top = self.sidebar_y
+        view_bottom = self.sidebar_y + self.sidebar_h
+        visible = self._visible_menu_rect(rect)
+        if visible.top < view_top:
+            self.menu_scroll_offset -= view_top - visible.top
+        elif visible.bottom > view_bottom:
+            self.menu_scroll_offset += visible.bottom - view_bottom
+        self._clamp_menu_scroll()
 
     def _render_section(self):
         """Pre-render the current section's content onto an off-screen surface.
@@ -1716,6 +1777,7 @@ class GuideBookScreen(SubScreen):
         self.current_section = index
         self.scroll_offset = 0
         self._render_section()
+        self._ensure_current_menu_item_visible()
         self._section_shown_ms = pygame.time.get_ticks()
 
     # ════════════════════════════════════════════════════════════════════
@@ -1795,11 +1857,14 @@ class GuideBookScreen(SubScreen):
         super().handle_events(events)
         for event in events:
             if event.type == MOUSEBUTTONDOWN and event.button == 1:
-                # Sidebar click?
-                for i, rect in enumerate(self.menu_rects):
-                    if rect.collidepoint(event.pos):
-                        self._select_section(i)
-                        break
+                # Defer sidebar selection until pointer-up so a mobile swipe
+                # scrolls the chapter list without opening the touched row.
+                if self._sidebar_rect().collidepoint(event.pos):
+                    self._menu_touch_scrolling = True
+                    self._menu_touch_last_y = event.pos[1]
+                    self._menu_touch_start_y = event.pos[1]
+                    self._menu_touch_moved = False
+                    continue
                 # Scrollbar handle drag start?
                 if self.handle_rect.height > 0 and self.handle_rect.collidepoint(event.pos):
                     self.dragging = True
@@ -1813,13 +1878,31 @@ class GuideBookScreen(SubScreen):
                         self._touch_last_y = event.pos[1]
 
             elif event.type == MOUSEBUTTONUP:
+                if getattr(self, '_menu_touch_scrolling', False):
+                    if (getattr(event, 'button', 1) == 1
+                            and not self._menu_touch_moved):
+                        index = self._menu_item_at(event.pos)
+                        if index is not None:
+                            self._select_section(index)
+                    self._menu_touch_scrolling = False
+                    self._menu_touch_moved = False
+                    continue
                 if self.dragging:
                     self.dragging = False
                     self.scrollbar_handle_color = settings.GUIDE_SCROLLBAR_HANDLE_P
                 self._touch_scrolling = False
 
             elif event.type == MOUSEMOTION:
-                if self.dragging:
+                if getattr(self, '_menu_touch_scrolling', False):
+                    dy = event.pos[1] - self._menu_touch_last_y
+                    self._menu_touch_last_y = event.pos[1]
+                    drag_threshold = max(
+                        6, int(0.008 * settings.SCREEN_HEIGHT))
+                    if abs(event.pos[1] - self._menu_touch_start_y) >= drag_threshold:
+                        self._menu_touch_moved = True
+                    self.menu_scroll_offset -= dy
+                    self._clamp_menu_scroll()
+                elif self.dragging:
                     self._handle_scrollbar_drag(event)
                 elif getattr(self, '_touch_scrolling', False):
                     # Touch-drag vertical scrolling
@@ -1829,8 +1912,13 @@ class GuideBookScreen(SubScreen):
                     self._clamp_scroll()
 
             elif event.type == MOUSEWHEEL:
-                # Only scroll when mouse is over the content area or scrollbar
-                mx, my = pygame.mouse.get_pos()
+                # The chapter list and article body scroll independently.
+                mx, my = getattr(event, 'pos', pygame.mouse.get_pos())
+                if self._sidebar_rect().collidepoint(mx, my):
+                    self.menu_scroll_offset -= (
+                        event.y * settings.GUIDE_SCROLL_SPEED)
+                    self._clamp_menu_scroll()
+                    continue
                 content_rect = pygame.Rect(self.content_x, self.content_y,
                                            self.content_w, self.content_h)
                 if content_rect.collidepoint(mx, my) or self.scrollbar_rect.collidepoint(mx, my):
@@ -1869,18 +1957,22 @@ class GuideBookScreen(SubScreen):
 
     def _draw_sidebar(self):
         """Draw the section menu on the left."""
+        sidebar_rect = self._sidebar_rect()
+
         # Semi-transparent sidebar background
         bg = pygame.Surface((self.sidebar_w, self.sidebar_h), pygame.SRCALPHA)
         bg.fill(settings.GUIDE_SIDEBAR_BG)
         self.window.blit(bg, (self.sidebar_x, self.sidebar_y))
 
-        # Decorative border
-        pygame.draw.rect(self.window, settings.GUIDE_BORDER_CLR,
-                         (self.sidebar_x, self.sidebar_y, self.sidebar_w, self.sidebar_h), 2)
+        # Keep rows and labels inside the panel even when the mobile menu is
+        # taller than its viewport.
+        old_clip = self.window.get_clip()
+        self.window.set_clip(old_clip.clip(sidebar_rect.inflate(-2, -2)))
 
         # Group headers: small-caps label with a thin rule filling the row.
         text_x = settings.GUIDE_MENU_TEXT_X
         for label, rect in getattr(self, '_sidebar_group_rows', []):
+            rect = self._visible_menu_rect(rect)
             surf = self.small_body_font.render(label.upper(), True,
                                                settings.GUIDE_BULLET_CLR)
             ly = rect.centery - surf.get_height() // 2 + 2
@@ -1894,8 +1986,11 @@ class GuideBookScreen(SubScreen):
 
         mouse_pos = pygame.mouse.get_pos()
         for i, rect in enumerate(self.menu_rects):
+            rect = self._visible_menu_rect(rect)
             is_active = (i == self.current_section)
-            is_hovered = rect.collidepoint(mouse_pos) and not is_active
+            is_hovered = (sidebar_rect.collidepoint(mouse_pos)
+                          and rect.collidepoint(mouse_pos)
+                          and not is_active)
 
             # Item background
             if is_active:
@@ -1914,6 +2009,37 @@ class GuideBookScreen(SubScreen):
             lx = rect.x + settings.GUIDE_MENU_TEXT_X
             ly = rect.centery - label.get_height() // 2
             self.window.blit(label, (lx, ly))
+
+        self.window.set_clip(old_clip)
+
+        # A slim indicator makes the extra chapters discoverable without
+        # taking meaningful width from the narrow sidebar.
+        if self._max_menu_scroll > 0:
+            track_pad = max(3, int(0.004 * settings.SCREEN_HEIGHT))
+            track = pygame.Rect(
+                sidebar_rect.right - 4,
+                sidebar_rect.y + track_pad,
+                2,
+                max(1, sidebar_rect.h - track_pad * 2),
+            )
+            content_h = max(self.sidebar_h, self._sidebar_content_h)
+            thumb_h = max(
+                14, int(track.h * (self.sidebar_h / content_h)))
+            thumb_h = min(track.h, thumb_h)
+            ratio = (
+                self.menu_scroll_offset / self._max_menu_scroll
+                if self._max_menu_scroll else 0
+            )
+            thumb_y = track.y + int((track.h - thumb_h) * ratio)
+            pygame.draw.rect(
+                self.window, settings.GUIDE_SCROLLBAR_TRACK, track)
+            pygame.draw.rect(
+                self.window, settings.GUIDE_SCROLLBAR_HANDLE_P,
+                (track.x, thumb_y, track.w, thumb_h))
+
+        # Decorative border remains fixed above the scrolling menu.
+        pygame.draw.rect(
+            self.window, settings.GUIDE_BORDER_CLR, sidebar_rect, 2)
 
     def _draw_content(self):
         """Draw the scrollable content area for the active section."""
