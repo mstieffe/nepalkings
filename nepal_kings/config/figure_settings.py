@@ -61,7 +61,7 @@ FIGURE_ICON_CAPTION_COLOR = (95, 42, 22)
 # surface. The old mobile shrink (0.82x) landed at ~12 CSS px after the
 # phone downscale; floor it just under the LABEL tier — full LABEL forces
 # too much name ellipsis in the narrow field columns.
-FIGURE_ICON_FONT_CAPTION_FONT_SIZE     = (max(int(FS_CONQUER_LABEL * 0.9), int(FS_SMALL * 0.82))
+FIGURE_ICON_FONT_CAPTION_FONT_SIZE     = (max(FS_CONQUER_LABEL, FS_SMALL)
                                           if _IS_MOBILE else FS_SMALL)
 FIGURE_ICON_FONT_CAPTION_BIG_FONT_SIZE = int(FIGURE_ICON_FONT_CAPTION_FONT_SIZE * 1.18 if _IS_MOBILE else FS_SMALL * 1.25)
 

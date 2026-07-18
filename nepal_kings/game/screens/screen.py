@@ -20,7 +20,8 @@ class Screen:
 
         # Set up the font
         self.font = settings.get_font(settings.FONT_SIZE)
-        self._msg_font = settings.get_font(int(0.022 * settings.SCREEN_HEIGHT))
+        self._msg_font = settings.get_font(settings.mobile_font_size(
+            int(0.022 * settings.SCREEN_HEIGHT), settings.FS_BODY))
 
         # Set clock
         self.clock = pygame.time.Clock()

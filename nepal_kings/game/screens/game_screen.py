@@ -55,7 +55,10 @@ class GameScreen(Screen):
 
         # Unread chat message tracking
         self._last_seen_chat_count = 0
-        self._badge_font = settings.get_font(int(0.015 * settings.SCREEN_HEIGHT * _UI_SCALE))
+        # Deck/hand pile counts are primary mobile information, not fine print.
+        self._badge_font = settings.get_font(settings.mobile_font_size(
+            int(0.015 * settings.SCREEN_HEIGHT * _UI_SCALE),
+            settings.FS_BODY), bold=True)
 
         # Field & battle badge tracking
         self._field_unseen_count = 0
@@ -143,8 +146,12 @@ class GameScreen(Screen):
         self._battle_modifier_font = settings.get_font(settings.GAME_BUTTON_FONT_SIZE)
         self._spell_box_title_font = settings.get_font(settings.BATTLE_SPELL_BOX_TITLE_FONT_SIZE, bold=True)
         self._tooltip_font = settings.get_font(settings.TOOLTIP_FONT_SIZE)
-        self._duel_coach_font = settings.get_font(max(12, int(settings.FS_SMALL * 0.95)))
-        self._duel_coach_title_font = settings.get_font(max(13, int(settings.FS_SMALL * 1.05)), bold=True)
+        self._duel_coach_font = settings.get_font(settings.mobile_font_size(
+            max(12, int(settings.FS_SMALL * 0.95)), settings.FS_SMALL))
+        self._duel_coach_title_font = settings.get_font(
+            settings.mobile_font_size(
+                max(13, int(settings.FS_SMALL * 1.05)), settings.FS_BODY),
+            bold=True)
         self._duel_coach_buttons = []
         self._duel_coach_step = None
         self._duel_coach_pressed_button_action = None
@@ -5322,17 +5329,21 @@ class GameScreen(Screen):
         unread = total_opponent - seen_opponent
         if unread <= 0 or self.state.subscreen == 'log':
             return
+        count_text = str(min(unread, 99))
+        text_surface = self._badge_font.render(
+            count_text, True, (255, 255, 255))
         # Draw red circle badge at top-right of log button (gentle breathing
         # pulse so unseen activity draws the eye — pure draw, no state)
-        badge_radius = int(0.006 * settings.SCREEN_WIDTH * _UI_SCALE
-                           * (1.0 + 0.12 * math.sin(pygame.time.get_ticks() * 0.006)))
+        badge_radius = max(
+            (max(text_surface.get_width(), text_surface.get_height()) + 5) // 2,
+            int(0.006 * settings.SCREEN_WIDTH * _UI_SCALE
+                * (1.0 + 0.12 * math.sin(
+                    pygame.time.get_ticks() * 0.006))),
+        )
         badge_x = self.log_button.rect_symbol.right - badge_radius // 2
         badge_y = self.log_button.rect_symbol.top + badge_radius // 2
         pygame.draw.circle(self.window, (220, 40, 40), (badge_x, badge_y), badge_radius)
         pygame.draw.circle(self.window, (255, 255, 255), (badge_x, badge_y), badge_radius, 2)
-        # Draw count text
-        count_text = str(min(unread, 99))
-        text_surface = self._badge_font.render(count_text, True, (255, 255, 255))
         text_rect = text_surface.get_rect(center=(badge_x, badge_y))
         self.window.blit(text_surface, text_rect)
 
@@ -5400,15 +5411,20 @@ class GameScreen(Screen):
         if count <= 0:
             return
         _ui = _UI_SCALE
+        count_text = str(min(count, 99))
+        text_surface = self._badge_font.render(
+            count_text, True, (255, 255, 255))
         # Gentle breathing pulse — pure draw, no state.
-        badge_radius = int(0.006 * settings.SCREEN_WIDTH * _ui
-                           * (1.0 + 0.12 * math.sin(pygame.time.get_ticks() * 0.006)))
+        badge_radius = max(
+            (max(text_surface.get_width(), text_surface.get_height()) + 5) // 2,
+            int(0.006 * settings.SCREEN_WIDTH * _ui
+                * (1.0 + 0.12 * math.sin(
+                    pygame.time.get_ticks() * 0.006))),
+        )
         badge_x = button.rect_symbol.right - badge_radius // 2
         badge_y = button.rect_symbol.top + badge_radius // 2
         pygame.draw.circle(self.window, (220, 40, 40), (badge_x, badge_y), badge_radius)
         pygame.draw.circle(self.window, (255, 255, 255), (badge_x, badge_y), badge_radius, 2)
-        count_text = str(min(count, 99))
-        text_surface = self._badge_font.render(count_text, True, (255, 255, 255))
         text_rect = text_surface.get_rect(center=(badge_x, badge_y))
         self.window.blit(text_surface, text_rect)
 

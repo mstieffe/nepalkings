@@ -541,6 +541,17 @@ class DefenceScreen(MenuScreenMixin, Screen):
             if mobile_ui else int(0.035 * _SH)
         )
         battle_controls_gap = int(0.018 * _SH)
+        battle_header_h = header_h
+        if mobile_ui:
+            # The Auto controls share the Battle Plan header on phones.  Size
+            # the slot offset from the actual control height (plus the
+            # header's top inset), not only the text height, so larger mobile
+            # fonts cannot make the controls touch the first round slot.
+            battle_header_h = max(
+                header_h,
+                int(0.010 * _SH) + ag_btn_h
+                + max(2, int(0.004 * _SH)),
+            )
         fsz = self._mod_frame_size
 
         # Save Defence / Confirm Defence button (bottom-right of box).
@@ -593,7 +604,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
         right_content_bottom = self._btn_save.y - panel_gap
         right_content_h = max(1, right_content_bottom - content_top)
         available_panel_h = max(1, right_content_h - 2 * panel_gap)
-        battle_plan_min_h = header_h + slot_row_h + panel_pad_y
+        battle_plan_min_h = battle_header_h + slot_row_h + panel_pad_y
         if not mobile_ui:
             battle_plan_min_h += battle_controls_gap + ag_btn_h
         prelude_min_h = header_h + fsz + panel_pad_y
@@ -637,7 +648,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
 
         self._move_slots_rect = pygame.Rect(
             self._battle_plan_rect.centerx - slot_row_w // 2,
-            self._battle_plan_rect.y + header_h,
+            self._battle_plan_rect.y + battle_header_h,
             slot_row_w,
             slot_row_h,
         )

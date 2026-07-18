@@ -652,7 +652,9 @@ class ConquerRoundLedger:
         if compact:
             chip_y = rect.top + 3
         else:
-            title_font = settings.get_font(max(10, int(settings.FS_TINY * 0.95)), bold=True)
+            title_font = settings.get_font(settings.mobile_font_size(
+                max(10, int(settings.FS_TINY * 0.95)), settings.FS_TINY),
+                bold=True)
             title_label = self._fit_text(f'Round {idx + 1}', title_font, rect.width - 12)
             ts = title_font.render(title_label, True, _TEXT_SECONDARY)
             self.window.blit(ts, (rect.left + 6, rect.top + 4))

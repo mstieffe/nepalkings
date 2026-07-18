@@ -64,7 +64,9 @@ class _LandButton:
         h = settings.LAND_DETAIL_BTN_H
         self.rect = pygame.Rect(x, y, w, h)
         self.font = settings.get_font(settings.LAND_DETAIL_BODY_FONT)
-        self.font_small = settings.get_font(int(settings.LAND_DETAIL_BODY_FONT * 0.9))
+        self.font_small = settings.get_font(settings.mobile_font_size(
+            int(settings.LAND_DETAIL_BODY_FONT * 0.9),
+            settings.LAND_DETAIL_SMALL_FONT))
         self.btn_img = pygame.transform.smoothscale(_LandButton._btn_img_raw, (w, h))
         self.btn_img_small = pygame.transform.smoothscale(
             _LandButton._btn_img_raw, (int(w * 0.95), int(h * 0.95)))

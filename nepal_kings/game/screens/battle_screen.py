@@ -2775,7 +2775,8 @@ class BattleScreen(SubScreen):
                 card_img.draw_front(rect.x, rect.y)
 
             # Card label below
-            label_font = settings.get_font(int(0.018 * settings.SCREEN_HEIGHT))
+            label_font = settings.get_font(settings.mobile_font_size(
+                int(0.018 * settings.SCREEN_HEIGHT), settings.FS_TINY))
             suit = entry['card_data'].get('suit', '?')
             rank = entry['card_data'].get('rank', '?')
             label = f"{rank} of {suit}"

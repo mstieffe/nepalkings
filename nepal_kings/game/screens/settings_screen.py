@@ -83,11 +83,14 @@ class SettingsScreen(MenuScreenMixin, Screen):
         self._title_surf = self._title_font.render('Settings', True,
                                                    settings.SUB_SCREEN_TITLE_CLR)
 
-        self._section_font = settings.get_font(int(0.026 * _SH), bold=True)
-
-        self._btn_font = settings.get_font(int(0.022 * _SH))
-        self._hint_font = settings.get_font(int(0.018 * _SH))
-        self._banner_font = settings.get_font(int(0.020 * _SH))
+        self._section_font = settings.get_font(settings.mobile_font_size(
+            int(0.026 * _SH), settings.FS_HEADING), bold=True)
+        self._btn_font = settings.get_font(settings.mobile_font_size(
+            int(0.022 * _SH), settings.FS_BODY))
+        self._hint_font = settings.get_font(settings.mobile_font_size(
+            int(0.018 * _SH), settings.FS_SMALL))
+        self._banner_font = settings.get_font(settings.mobile_font_size(
+            int(0.020 * _SH), settings.FS_SMALL))
 
         # ── Resolution state ────────────────────────────────────────
         self._current_w = settings.SCREEN_WIDTH

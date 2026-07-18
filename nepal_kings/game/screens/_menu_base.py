@@ -275,11 +275,21 @@ class MenuScreenMixin:
         self._onboarding_guide_tab_rects = {}
         self._guide_rulebook = None
         self._onboarding_guide_buttons = []
-        self._onboarding_guide_font = settings.get_font(max(16, int(0.020 * _SH)))
-        self._onboarding_guide_small_font = settings.get_font(max(14, int(0.017 * _SH)))
-        self._onboarding_guide_title_font = settings.get_font(max(24, int(0.034 * _SH)), bold=True)
-        self._onboarding_guide_section_font = settings.get_font(max(18, int(0.023 * _SH)), bold=True)
-        self._onboarding_guide_badge_font = settings.get_font(max(16, int(0.020 * _SH)), bold=True)
+        self._onboarding_guide_font = settings.get_font(
+            settings.mobile_font_size(
+                max(16, int(0.020 * _SH)), settings.FS_BODY))
+        self._onboarding_guide_small_font = settings.get_font(
+            settings.mobile_font_size(
+                max(14, int(0.017 * _SH)), settings.FS_SMALL))
+        self._onboarding_guide_title_font = settings.get_font(
+            settings.mobile_font_size(
+                max(24, int(0.034 * _SH)), settings.FS_TITLE), bold=True)
+        self._onboarding_guide_section_font = settings.get_font(
+            settings.mobile_font_size(
+                max(18, int(0.023 * _SH)), settings.FS_HEADING), bold=True)
+        self._onboarding_guide_badge_font = settings.get_font(
+            settings.mobile_font_size(
+                max(16, int(0.020 * _SH)), settings.FS_BODY), bold=True)
         self._onboarding_guide_icon_cache = {}
         self._onboarding_guide_item_rects = {}
         self._onboarding_guide_section_header_rects = {}
@@ -296,8 +306,11 @@ class MenuScreenMixin:
         self._menu_coach_buttons = []
         self._menu_coach_step = None
         self._menu_coach_pressed_button_action = None
-        self._menu_coach_font = settings.get_font(max(14, int(0.018 * _SH)))
-        self._menu_coach_title_font = settings.get_font(max(16, int(0.024 * _SH)), bold=True)
+        self._menu_coach_font = settings.get_font(settings.mobile_font_size(
+            max(14, int(0.018 * _SH)), settings.FS_SMALL))
+        self._menu_coach_title_font = settings.get_font(
+            settings.mobile_font_size(
+                max(16, int(0.024 * _SH)), settings.FS_BODY), bold=True)
         self._menu_chrome_username = self._current_menu_username()
 
         # Icon buttons (top-right): home and guide at top, settings at

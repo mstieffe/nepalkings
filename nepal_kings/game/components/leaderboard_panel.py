@@ -43,8 +43,8 @@ class LeaderboardPanel:
         self._title_font = settings.get_font(settings.FS_SMALL, bold=True)
         self._row_font = settings.get_font(settings.FS_TINY)
         self._row_font_bold = settings.get_font(settings.FS_TINY, bold=True)
-        self._small_font = settings.get_font(
-            max(8, int(settings.FS_TINY * 0.86)))
+        self._small_font = settings.get_font(settings.mobile_font_size(
+            max(8, int(settings.FS_TINY * 0.86)), settings.FS_TINY))
         self._champion_icon = self._load_region_icon(_CHAMPION_ICON_PATH)
         self._suit_icons = {
             suit: self._load_region_icon(

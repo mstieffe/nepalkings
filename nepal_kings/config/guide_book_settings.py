@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
 # See LICENSE file in the project root for full license information.
-from config.screen_settings import SCREEN_WIDTH, SCREEN_HEIGHT, SUB_SCREEN_X, SUB_SCREEN_Y, _FS, _UI_SCALE
+from config.screen_settings import SCREEN_WIDTH, SCREEN_HEIGHT, SUB_SCREEN_X, SUB_SCREEN_Y, _FS, _UI_SCALE, _IS_MOBILE
 from config.font_settings import FS_SUBTITLE, FS_HEADING, FS_BODY, FS_SMALL
 
 # ── Colour palette (earthy/parchment theme) ─────────────────────────
@@ -25,7 +25,7 @@ GUIDE_SECTION_TITLE_FONT_SIZE = int(FS_SUBTITLE * 0.94)  # was int(_FS * 0.032) 
 GUIDE_HEADING_FONT_SIZE       = FS_HEADING               # was int(_FS * 0.026)
 GUIDE_BODY_FONT_SIZE          = FS_BODY                  # was int(_FS * 0.022)
 GUIDE_MENU_FONT_SIZE          = FS_BODY                  # was int(_FS * 0.022)
-GUIDE_MENU_FONT_ACTIVE_SIZE   = int(SCREEN_HEIGHT * 0.023)
+GUIDE_MENU_FONT_ACTIVE_SIZE   = FS_BODY if _IS_MOBILE else int(SCREEN_HEIGHT * 0.023)
 
 # ── Layout geometry ─────────────────────────────────────────────────
 GUIDE_PAD = int(0.022 * SCREEN_WIDTH)

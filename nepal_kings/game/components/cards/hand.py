@@ -15,7 +15,8 @@ class Hand:
     def __init__(self, window, state, x: float = 0.0, y: float = 0.0, type="main_card", hidden=False):
         self.window = window
         self.font = settings.get_font(settings.FONT_SIZE_DETAIL)
-        self.font_small = settings.get_font(int(settings.FONT_SIZE_DETAIL * 0.85))
+        self.font_small = settings.get_font(settings.mobile_font_size(
+            int(settings.FONT_SIZE_DETAIL * 0.85), settings.FS_SMALL))
         self.state = state
         self.game = state.game if state else None
         self.type = type

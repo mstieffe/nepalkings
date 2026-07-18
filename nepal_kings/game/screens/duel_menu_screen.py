@@ -88,7 +88,8 @@ class DuelMenuScreen(MenuScreenMixin, Screen):
         self.menu_buttons += [self.button_new, self.button_load, self.button_back]
 
         # Badge font
-        self._badge_font = settings.get_font(int(0.018 * _SH * _UI_SCALE), bold=True)
+        self._badge_font = settings.get_font(settings.mobile_font_size(
+            int(0.018 * _SH * _UI_SCALE), settings.FS_BODY), bold=True)
         self._duel_tutorial_intro_dialogue = None
 
         # Entrance-slide bookkeeping (stamped when rendering resumes)
@@ -140,12 +141,17 @@ class DuelMenuScreen(MenuScreenMixin, Screen):
         if count <= 0:
             return
         # Gentle breathing pulse — pure draw, no state.
-        radius = int(_BADGE_RADIUS
-                     * (1.0 + 0.12 * math.sin(pygame.time.get_ticks() * 0.006)))
-        cx = btn.rect.right - _BADGE_RADIUS
-        cy = btn.rect.top + _BADGE_RADIUS
-        pygame.draw.circle(self.window, _BADGE_CLR, (cx, cy), radius)
         txt = self._badge_font.render(str(count), True, _BADGE_TXT)
+        content_radius = (max(txt.get_width(), txt.get_height()) + 5) // 2
+        anchor_radius = max(_BADGE_RADIUS, content_radius)
+        radius = max(
+            content_radius,
+            int(_BADGE_RADIUS * (
+                1.0 + 0.12 * math.sin(pygame.time.get_ticks() * 0.006))),
+        )
+        cx = btn.rect.right - anchor_radius
+        cy = btn.rect.top + anchor_radius
+        pygame.draw.circle(self.window, _BADGE_CLR, (cx, cy), radius)
         self.window.blit(txt, txt.get_rect(center=(cx, cy)))
 
     def render(self):

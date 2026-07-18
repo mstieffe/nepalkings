@@ -7,21 +7,27 @@ import pygame
 # ── Font Size Groups ──────────────────────────────────────────────────────────
 # Adjust these shared bases to scale whole categories of related text together.
 # All font size constants across all config files derive from one of these groups.
+#
+# Mobile canvases are rendered larger than their CSS footprint.  The previous
+# 1.6x UI scale kept headings readable, but 0.026-0.030 detail/body text still
+# landed around 9-12 CSS px on smaller phones.  Give the text-heavy tiers a
+# modest mobile-only lift while preserving the established desktop layout.
 FS_DISPLAY  = int(0.060 * _FS)  # Large decorative display  (e.g. battle total score circle)
-FS_TITLE    = int(0.040 * _FS)  # Primary titles and large action/input buttons
-FS_SUBTITLE = int(0.036 * _FS)  # Sub-screen/dialogue titles and section headlines
-FS_HEADING  = int(0.034 * _FS)  # Column/section headings, scroll headers, guide headings
-FS_BODY     = int(0.030 * _FS)  # Body text — labels, list items, messages, round labels
-FS_BUTTON   = int(0.030 * _FS)  # Standard game/confirm/sub-screen button labels
-FS_SMALL    = int(0.026 * _FS)  # Small text — icon captions, turn indicator, mini scroll
-FS_TINY     = int(0.026 * _FS)  # Fine detail — tooltips, power circles, scoreboard sub-labels
+FS_TITLE    = int((0.043 if _IS_MOBILE else 0.040) * _FS)
+FS_SUBTITLE = int((0.040 if _IS_MOBILE else 0.036) * _FS)
+FS_HEADING  = int((0.037 if _IS_MOBILE else 0.034) * _FS)
+FS_BODY     = int((0.034 if _IS_MOBILE else 0.030) * _FS)
+FS_BUTTON   = int((0.034 if _IS_MOBILE else 0.030) * _FS)
+FS_SMALL    = int((0.030 if _IS_MOBILE else 0.026) * _FS)
+FS_TINY     = int((0.029 if _IS_MOBILE else 0.026) * _FS)
 
-# Legibility floor: the smallest canvas-px size that stays readable after the
-# mobile canvas is CSS-downscaled (~0.78x on small phones — 15 canvas px is
-# only ~12 CSS px there). Every conquer tier below floors on this instead of
-# the old, always-dead max(7..10, ...) guards. Desktop keeps a lower floor;
-# its formulas already exceed it.
-FS_FLOOR    = max(15, int(0.016 * _FS)) if _IS_MOBILE else max(12, int(0.016 * _FS))
+# Legibility floor: the smallest requested size accepted by ``get_font`` on
+# mobile.  A number of older screens still derive fonts from raw
+# ``SCREEN_HEIGHT`` (for example 0.016 * 480 = 7px), bypassing ``_UI_SCALE``.
+# Clamping centrally makes those forgotten labels readable too.  Explicit
+# semantic tiers above remain larger, so this is a safety net rather than the
+# normal body-text size.
+FS_FLOOR = max(18, int(0.023 * _FS)) if _IS_MOBILE else max(12, int(0.016 * _FS))
 
 # ── Conquer battle semantic tiers ────────────────────────────────────────────
 # The conquer screen previously derived ~40 ad-hoc sizes from FS_TINY with
@@ -47,8 +53,24 @@ LOGOUT_FONT_SIZE        = FS_TITLE     # logout/navigation buttons
 # Caching by (path, size) reduces ~200 FDs to ~20 unique sizes.
 _font_cache = {}
 
-def get_font(size, bold=False):
-    """Return a cached pygame.font.Font for FONT_PATH at the given size."""
+def mobile_font_size(size, minimum=None):
+    """Return ``size`` with the shared mobile legibility floor applied."""
+    size = max(1, int(size))
+    if not _IS_MOBILE:
+        return size
+    floor = FS_FLOOR if minimum is None else max(FS_FLOOR, int(minimum))
+    return max(size, floor)
+
+
+def get_font(size, bold=False, allow_small=False):
+    """Return a cached font, protecting mobile text from legacy tiny sizes.
+
+    ``allow_small`` is reserved for decorative glyphs whose font size is part
+    of a fixed icon drawing rather than player-facing text.
+    """
+    size = max(1, int(size))
+    if _IS_MOBILE and not allow_small:
+        size = mobile_font_size(size)
     key = (FONT_PATH, size, bold)
     font = _font_cache.get(key)
     if font is None:

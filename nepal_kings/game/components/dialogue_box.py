@@ -68,7 +68,9 @@ class _DlgButton:
         h = height or settings.DIALOGUE_BOX_BTN_H
         self.rect = pygame.Rect(x, y, w, h)
         self.font = settings.get_font(settings.DIALOGUE_BOX_BTN_FONT_SIZE)
-        self.font_small = settings.get_font(int(settings.DIALOGUE_BOX_BTN_FONT_SIZE * 0.9))
+        self.font_small = settings.get_font(settings.mobile_font_size(
+            int(settings.DIALOGUE_BOX_BTN_FONT_SIZE * 0.9),
+            settings.FS_SMALL))
         self.btn_img = pygame.transform.smoothscale(
             _DlgButton._btn_img_raw, (w, h))
         self.btn_img_small = pygame.transform.smoothscale(
@@ -163,7 +165,8 @@ class DialogueBox:
         self.title_font = settings.get_font(settings.FONT_SIZE_TITLE_DIALOGUE_BOX, bold=True)
         self.caption_font = settings.get_font(settings.FS_TINY)
         self.group_title_font = settings.get_font(settings.FS_SMALL, bold=True)
-        self.group_note_font = settings.get_font(max(10, int(settings.FS_TINY * 0.82)))
+        self.group_note_font = settings.get_font(settings.mobile_font_size(
+            max(10, int(settings.FS_TINY * 0.82)), settings.FS_TINY))
         self.actions = actions
         self.auto_close_delay = auto_close_delay
         self.auto_close_timer = pygame.time.get_ticks() if auto_close_delay else None

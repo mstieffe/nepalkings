@@ -1813,8 +1813,11 @@ class CollectionScreen(MenuScreenMixin, Screen):
         total = max(1, int(getattr(self, '_craft_total', 0) or 1))
         missing = list(getattr(self, '_craft_missing', []) or [])
 
-        label_font = settings.get_font(max(10, int(settings.FS_TINY * 0.95)), bold=True)
-        small_font = settings.get_font(max(9, int(settings.FS_TINY * 0.78)))
+        label_font = settings.get_font(settings.mobile_font_size(
+            max(10, int(settings.FS_TINY * 0.95)), settings.FS_SMALL),
+            bold=True)
+        small_font = settings.get_font(settings.mobile_font_size(
+            max(9, int(settings.FS_TINY * 0.78)), settings.FS_TINY))
         title = 'Ready to craft' if ready >= total else f'{ready}/{total} ranks ready'
         title_surf = label_font.render(title, True, settings.COLLECTION_MAHARAJA_BORDER_CLR)
         title_y = area.y + max(0, int(0.002 * _SH))

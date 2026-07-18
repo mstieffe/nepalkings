@@ -725,7 +725,9 @@ class ConquerEffectsLayer:
         pygame.draw.circle(surf, (255, 255, 255, 220), (size, size), 14, 2)
         # Label
         try:
-            font = settings.get_font(max(11, int(settings.FS_TINY * 0.95)), bold=True)
+            font = settings.get_font(settings.mobile_font_size(
+                max(11, int(settings.FS_TINY * 0.95)), settings.FS_TINY),
+                bold=True)
             text_surf = font.render(label, True, (255, 255, 255))
             surf.blit(text_surf, text_surf.get_rect(center=(size, size)))
         except Exception:

@@ -231,7 +231,9 @@ class KingdomScreen(MenuScreenMixin, Screen):
         self._nav_font = settings.get_font(settings.KINGDOM_INFO_FONT_SIZE, bold=True)
         self._activity_title_font = settings.get_font(settings.FS_SMALL, bold=True)
         self._activity_font = settings.get_font(settings.FS_TINY)
-        self._activity_small_font = settings.get_font(int(settings.FS_TINY * 0.86))
+        self._activity_small_font = settings.get_font(
+            settings.mobile_font_size(
+                int(settings.FS_TINY * 0.86), settings.FS_TINY))
 
         # ── Navigation zoom buttons (inside map frame, bottom-left) ─
         btn_sz = max(

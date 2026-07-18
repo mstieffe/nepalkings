@@ -104,7 +104,8 @@ class GameMenuScreen(MenuScreenMixin, Screen):
         # ── Badge polling ───────────────────────────────────────────
         self._badge_timer = 0
         self._badge_interval = 5000          # ms between server polls
-        self._badge_font = settings.get_font(int(0.018 * _SH * _UI_SCALE), bold=True)
+        self._badge_font = settings.get_font(settings.mobile_font_size(
+            int(0.018 * _SH * _UI_SCALE), settings.FS_BODY), bold=True)
         self._welcome_dialogue_username = self._current_menu_username()
         # Welcome sequence: intro window, welcome-gift boxes, then starter suits.
         self._welcome_stage = 0
@@ -398,10 +399,14 @@ class GameMenuScreen(MenuScreenMixin, Screen):
         """Draw a small red notification badge at the top-right of *btn*."""
         if count <= 0:
             return
-        cx = btn.rect.right - _BADGE_RADIUS
-        cy = btn.rect.top + _BADGE_RADIUS
-        pygame.draw.circle(self.window, _BADGE_CLR, (cx, cy), _BADGE_RADIUS)
         txt = self._badge_font.render(str(count), True, _BADGE_TXT)
+        radius = max(
+            _BADGE_RADIUS,
+            (max(txt.get_width(), txt.get_height()) + 5) // 2,
+        )
+        cx = btn.rect.right - radius
+        cy = btn.rect.top + radius
+        pygame.draw.circle(self.window, _BADGE_CLR, (cx, cy), radius)
         self.window.blit(txt, txt.get_rect(center=(cx, cy)))
 
     def update(self, events):

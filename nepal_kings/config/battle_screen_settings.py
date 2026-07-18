@@ -103,7 +103,7 @@ TURN_OPPONENT_COLOR = (160, 140, 100)
 
 # ────────────────── FONTS ─────────────────────────────────────
 BATTLE_SCREEN_FONT_SIZE = FS_BODY                          # was int(0.022 * _FS)
-BATTLE_SCREEN_FONT_SIZE_SMALL = int(FS_SMALL * 0.9)        # was int(0.018 * _FS)  →  0.02 * 0.9 = 0.018
+BATTLE_SCREEN_FONT_SIZE_SMALL = FS_SMALL if _IS_MOBILE else int(FS_SMALL * 0.9)
 BATTLE_SCREEN_VALUE_FONT_SIZE = int(FS_SUBTITLE * 0.94)    # was int(0.032 * _FS)  →  0.034 * 0.94 ≈ 0.032
 BATTLE_SCREEN_DIFF_FONT_SIZE = FS_HEADING                  # was int(0.026 * _FS)
 # Total score font — smaller on mobile so it fits inside the circle

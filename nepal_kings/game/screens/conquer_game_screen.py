@@ -135,7 +135,9 @@ class ConquerGameScreen(GameScreen):
         self.update_interval = 2000
 
         self._last_seen_chat_count = 0
-        self._badge_font = settings.get_font(int(0.015 * settings.SCREEN_HEIGHT * _UI_SCALE))
+        self._badge_font = settings.get_font(settings.mobile_font_size(
+            int(0.015 * settings.SCREEN_HEIGHT * _UI_SCALE),
+            settings.FS_BODY), bold=True)
 
         self._field_unseen_count = 0
         self._last_seen_figure_ids = None
@@ -6882,7 +6884,8 @@ class ConquerGameScreen(GameScreen):
         overflow = max(0, len(items) - len(visible))
         total_w = len(visible) * icon_size + max(0, len(visible) - 1) * gap
         if overflow:
-            count_font = settings.get_font(settings.FS_CONQUER_META, bold=True)
+            count_font = settings.get_font(
+                settings.FS_CONQUER_LABEL, bold=True)
             count_surf = count_font.render(f'+{overflow}', True, (246, 239, 214))
             count_w = max(icon_size, count_surf.get_width() + 6)
             total_w += gap + count_w
@@ -7090,7 +7093,8 @@ class ConquerGameScreen(GameScreen):
 
         count = int(entry.get('aggregate_count') or 1)
         if count > 1:
-            count_font = settings.get_font(settings.FS_CONQUER_META, bold=True)
+            count_font = settings.get_font(
+                settings.FS_CONQUER_LABEL, bold=True)
             count_surf = count_font.render(f'x{count}', True, (24, 18, 12))
             count_chip = count_surf.get_rect()
             count_chip.inflate_ip(6, 4)
@@ -7559,7 +7563,7 @@ class ConquerGameScreen(GameScreen):
             y += chip_h + gap
         overflow_entries = chips[len(visible):]
         if overflow_entries:
-            font = settings.get_font(settings.FS_CONQUER_META, bold=True)
+            font = settings.get_font(settings.FS_CONQUER_LABEL, bold=True)
             text = font.render(f'+{len(overflow_entries)}', True,
                                (246, 239, 214))
             chip = text.get_rect().inflate(10, 6)
@@ -7750,7 +7754,8 @@ class ConquerGameScreen(GameScreen):
                 y += badge_h + entry_gap
             overflow_entries = section_entries[len(visible):]
             if overflow_entries:
-                font = settings.get_font(settings.FS_CONQUER_META, bold=True)
+                font = settings.get_font(
+                    settings.FS_CONQUER_LABEL, bold=True)
                 text = font.render(f'+{len(overflow_entries)}', True, (246, 239, 214))
                 chip = text.get_rect()
                 chip.inflate_ip(8, 4)

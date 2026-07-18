@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
 # See LICENSE file in the project root for full license information.
 from config.screen_settings import SCREEN_WIDTH, SCREEN_HEIGHT, _FS, _UI_SCALE, _IS_MOBILE
-from config.font_settings import FS_TITLE, FS_HEADING, FS_SMALL, FS_TINY
+from config.font_settings import FS_TITLE, FS_HEADING, FS_SMALL, FS_TINY, FS_FLOOR
 
 INFO_SCROLL_WIDTH = int(0.105 * SCREEN_WIDTH)
 INFO_SCROLL_X = int(0.011 * SCREEN_WIDTH)   
@@ -11,7 +11,7 @@ INFO_SCROLL_HEIGHT = int(0.24 * SCREEN_HEIGHT)
 INFO_SCROLL_BG_IMG_PATH = 'img/background/paper4.png'  # legacy, no longer used
 GLOW_RECT_IMG_PATH = 'img/glow/rect/'
 
-INFO_SCROLL_FONT_SIZE = int(FS_SMALL * 0.90) if _IS_MOBILE else FS_SMALL  # mobile bumped 0.82->0.90 for legibility after canvas downscale
+INFO_SCROLL_FONT_SIZE = FS_SMALL
 INFO_SCROLL_Y_TITLE_MARGIN = int(0.015 * SCREEN_HEIGHT)
 INFO_SCROLL_TITLE_SPACING = int(0.025 * SCREEN_HEIGHT)
 INFO_SCROLL_LINE_SPACING = int(0.035 * SCREEN_HEIGHT)
@@ -75,11 +75,11 @@ SCOREBOARD_SCROLL_X_TEXT_MARGIN = int(0.02 * SCREEN_WIDTH)
 SCOREBOARD_SCROLL_SPACER = int(0.01 * SCREEN_WIDTH)
 SCOREBOARD_SCROLL_BG_IMG_PATH = 'img/background/paper3.png'
 
-# Smaller fonts so text fits the panel on all devices (panel is now used everywhere)
-SCOREBOARD_SCROLL_FONT_SIZE = int(FS_TINY * 0.88) if _IS_MOBILE else int(FS_SMALL * 0.85)  # mobile bumped 0.82->0.88 for legibility
+# Compact semantic tiers keep the scoreboard readable without overflowing.
+SCOREBOARD_SCROLL_FONT_SIZE = FS_TINY if _IS_MOBILE else int(FS_SMALL * 0.85)
 # Mobile title previously scaled from the raw canvas height (0.018*480 = 8px,
 # ~6 CSS px) because it skipped the UI scale — derive from _FS like the rest.
-SCOREBOARD_SCROLL_FONT_TITLE_SIZE = max(15, int(0.018 * _FS)) if _IS_MOBILE else int(0.025 * SCREEN_HEIGHT)
+SCOREBOARD_SCROLL_FONT_TITLE_SIZE = FS_SMALL if _IS_MOBILE else int(0.025 * SCREEN_HEIGHT)
 SCOREBOARD_SCROLL_NUMBER_FONT_SIZE = FS_HEADING if _IS_MOBILE else FS_TITLE            # was int(0.028 * _FS) / int(0.04 * _FS)
 SCOREBOARD_SCROLL_LINE_SPACING = int(0.02 * SCREEN_HEIGHT)
 SCOREBOARD_SCROLL_TEXT_COLOR = (20, 20, 20)
@@ -92,7 +92,7 @@ SCOREBOARD_CELL_TEXT_SPACING = int(0.002 * SCREEN_WIDTH)
 SCOREBOARD_CELL_VALUE_OFFSET = int(0.022 * SCREEN_HEIGHT) if _IS_MOBILE else int(0.013 * SCREEN_HEIGHT)
 SCOREBOARD_CELL_SUBTITLE_SPACING = int(0.006 * SCREEN_HEIGHT) if _IS_MOBILE else int(0.012 * SCREEN_HEIGHT)
 SCOREBOARD_BOTTOM_ROW_EXTRA_Y = int(0.012 * SCREEN_HEIGHT)
-SCOREBOARD_SUBTITLE_FONT_SIZE = max(14, int(FS_TINY * 0.66)) if _IS_MOBILE else int(FS_TINY * 0.71)  # floored at ~11 CSS px; stays below the body font as a shrink-to-fit fallback
+SCOREBOARD_SUBTITLE_FONT_SIZE = FS_FLOOR if _IS_MOBILE else int(FS_TINY * 0.71)
 SCOREBOARD_LIMIT_SECTION_HEIGHT = int(0.03 * SCREEN_HEIGHT)
 
 # Panel design used on all devices
@@ -105,9 +105,3 @@ SCOREBOARD_PANEL_TEXT_COLOR    = (220, 215, 200)          # warm off-white for l
 SCOREBOARD_PANEL_VALUE_COLOR   = (250, 245, 230)          # bright off-white for numbers
 SCOREBOARD_PANEL_CROSS_COLOR   = (120, 110, 95)           # subtle warm divider
 SCOREBOARD_PANEL_CROSS_ALPHA   = 120
-
-
-
-
-
-

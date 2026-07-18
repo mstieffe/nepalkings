@@ -37,7 +37,9 @@ class FigureDetailBox:
         # Fonts
         self.title_font = settings.get_font(settings.FONT_SIZE_TITLE_DIALOGUE_BOX, bold=True)
         self.font = settings.get_font(settings.FONT_SIZE_DIALOGUE_BOX)
-        self.small_font = settings.get_font(int(settings.FONT_SIZE_DIALOGUE_BOX * 0.87))
+        self.small_font = settings.get_font(settings.mobile_font_size(
+            int(settings.FONT_SIZE_DIALOGUE_BOX * 0.87),
+            settings.FS_SMALL))
 
         # Create card images for the figure's cards
         card_width = int(settings.SCREEN_WIDTH * 0.05)

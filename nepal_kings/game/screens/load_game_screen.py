@@ -142,7 +142,8 @@ class LoadGameScreen(MenuScreenMixin, Screen):
 
         self._hdr_font = settings.get_font(settings.SUB_SCREEN_HEADER_FONT_SIZE)
         self._cell_font = settings.get_font(settings.LIST_BTN_FONT_SIZE)
-        self._tag_font = settings.get_font(int(0.016 * _SH), bold=True)
+        self._tag_font = settings.get_font(settings.mobile_font_size(
+            int(0.016 * _SH), settings.FS_TINY), bold=True)
 
         # Compute fixed layout positions inside the box
         self._title_render_y = _TITLE_Y

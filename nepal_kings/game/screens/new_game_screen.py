@@ -134,10 +134,14 @@ class NewGameScreen(MenuScreenMixin, Screen):
 
         self._header_font = settings.get_font(settings.SUB_SCREEN_HEADER_FONT_SIZE)
         self._panel_font = settings.get_font(settings.LIST_BTN_FONT_SIZE)
-        self._panel_font_small = settings.get_font(int(0.017 * _SH))
-        self._tag_font = settings.get_font(int(0.016 * _SH), bold=True)
-        self._reward_font = settings.get_font(int(0.017 * _SH))
-        self._reward_title_font = settings.get_font(int(0.018 * _SH), bold=True)
+        self._panel_font_small = settings.get_font(settings.mobile_font_size(
+            int(0.017 * _SH), settings.FS_SMALL))
+        self._tag_font = settings.get_font(settings.mobile_font_size(
+            int(0.016 * _SH), settings.FS_TINY), bold=True)
+        self._reward_font = settings.get_font(settings.mobile_font_size(
+            int(0.017 * _SH), settings.FS_SMALL))
+        self._reward_title_font = settings.get_font(settings.mobile_font_size(
+            int(0.018 * _SH), settings.FS_BODY), bold=True)
 
         # Layout positions inside box
         self._title_y = _BOX_Y + _BOX_PAD
