@@ -467,7 +467,9 @@ class CastSpellScreen(SubScreen):
                 self.spell_family_buttons, box)
             return
         cols = 5 if mobile else 6
-        margin_x = int(0.07 * box.w)
+        # Edge-column captions are centred on the column, so the margin must
+        # cover half a caption width or they bleed over the panel border.
+        margin_x = max(int(0.07 * box.w), int(0.085 * box.w) + 2)
         usable_w = box.w - 2 * margin_x
         pitch_x = usable_w // max(1, cols - 1)
         start_x = box.x + margin_x
@@ -475,10 +477,11 @@ class CastSpellScreen(SubScreen):
             0.105 * settings.SCREEN_HEIGHT)
         pitch_y = int(0.205 * settings.SCREEN_HEIGHT)
         visible = set(self._visible_spell_buttons())
+        caption_w = min(max(48, int(pitch_x * 0.92)),
+                        max(48, 2 * (margin_x - 4)))
         for button in self.spell_family_buttons:
             button.visible = button in visible
-            button.caption_max_width = max(
-                48, int(pitch_x * 0.92))
+            button.caption_max_width = caption_w
         for index, button in enumerate(self._visible_spell_buttons()):
             row, col = divmod(index, cols)
             button.set_position(

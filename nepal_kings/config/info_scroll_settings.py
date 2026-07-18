@@ -77,7 +77,9 @@ SCOREBOARD_SCROLL_BG_IMG_PATH = 'img/background/paper3.png'
 
 # Smaller fonts so text fits the panel on all devices (panel is now used everywhere)
 SCOREBOARD_SCROLL_FONT_SIZE = int(FS_TINY * 0.88) if _IS_MOBILE else int(FS_SMALL * 0.85)  # mobile bumped 0.82->0.88 for legibility
-SCOREBOARD_SCROLL_FONT_TITLE_SIZE = int(0.018 * SCREEN_HEIGHT) if _IS_MOBILE else int(0.025 * SCREEN_HEIGHT)
+# Mobile title previously scaled from the raw canvas height (0.018*480 = 8px,
+# ~6 CSS px) because it skipped the UI scale — derive from _FS like the rest.
+SCOREBOARD_SCROLL_FONT_TITLE_SIZE = max(15, int(0.018 * _FS)) if _IS_MOBILE else int(0.025 * SCREEN_HEIGHT)
 SCOREBOARD_SCROLL_NUMBER_FONT_SIZE = FS_HEADING if _IS_MOBILE else FS_TITLE            # was int(0.028 * _FS) / int(0.04 * _FS)
 SCOREBOARD_SCROLL_LINE_SPACING = int(0.02 * SCREEN_HEIGHT)
 SCOREBOARD_SCROLL_TEXT_COLOR = (20, 20, 20)
@@ -90,7 +92,7 @@ SCOREBOARD_CELL_TEXT_SPACING = int(0.002 * SCREEN_WIDTH)
 SCOREBOARD_CELL_VALUE_OFFSET = int(0.022 * SCREEN_HEIGHT) if _IS_MOBILE else int(0.013 * SCREEN_HEIGHT)
 SCOREBOARD_CELL_SUBTITLE_SPACING = int(0.006 * SCREEN_HEIGHT) if _IS_MOBILE else int(0.012 * SCREEN_HEIGHT)
 SCOREBOARD_BOTTOM_ROW_EXTRA_Y = int(0.012 * SCREEN_HEIGHT)
-SCOREBOARD_SUBTITLE_FONT_SIZE = int(FS_TINY * 0.66) if _IS_MOBILE else int(FS_TINY * 0.71)  # mobile bumped 0.53->0.66 (was ~7px CSS, unreadable); stays below body font as a shrink-to-fit fallback
+SCOREBOARD_SUBTITLE_FONT_SIZE = max(14, int(FS_TINY * 0.66)) if _IS_MOBILE else int(FS_TINY * 0.71)  # floored at ~11 CSS px; stays below the body font as a shrink-to-fit fallback
 SCOREBOARD_LIMIT_SECTION_HEIGHT = int(0.03 * SCREEN_HEIGHT)
 
 # Panel design used on all devices

@@ -5506,11 +5506,15 @@ class ConquerGameScreen(GameScreen):
 
         title_font = self._conquer_move_title_font()
         count_text = f'Moves {len(moves)}/{self.CONQUER_BATTLE_MOVE_PANEL_MAX_MOVES}'
-        title = title_font.render(
-            self._fit_text(count_text, title_font, rect.width - layout['pad'] * 2),
-            True,
-            (238, 218, 170),
-        )
+        title_budget = rect.width - layout['pad'] * 2
+        fitted = self._fit_text(count_text, title_font, title_budget)
+        if fitted != count_text:
+            # Narrow panel: an ellipsized "Moves…" hides the count, which is
+            # the whole point of the title — show the bare count instead.
+            fitted = self._fit_text(
+                f'{len(moves)}/{self.CONQUER_BATTLE_MOVE_PANEL_MAX_MOVES}',
+                title_font, title_budget)
+        title = title_font.render(fitted, True, (238, 218, 170))
         self.window.blit(title, (rect.centerx - title.get_width() // 2, rect.top + layout['pad']))
 
         if not moves:

@@ -198,8 +198,14 @@ class ScoreboardScroll:
         if text_spacing is None:
             text_spacing = settings.SCOREBOARD_CELL_TEXT_SPACING
 
-        # Render the text and value
+        # Render the text and value. Labels must stay inside their cell —
+        # long opponent names otherwise collide with the neighbouring cell,
+        # so fall back to the subtitle font and then ellipsize.
         text_obj = self.font_text.render(text, True, self._text_color)
+        max_label_w = max(12, self.cell_width - 4)
+        if text_obj.get_width() > max_label_w:
+            label = self._ellipsize(text, self.font_subtitle, max_label_w)
+            text_obj = self.font_subtitle.render(label, True, self._text_color)
         vfont = value_font or self.font_number
         value_obj = vfont.render(str(value), True, value_color)
 

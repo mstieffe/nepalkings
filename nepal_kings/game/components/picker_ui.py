@@ -74,7 +74,8 @@ def draw_caption_cell(window, text, center_x, top_y, max_width, *,
     preferred_size = preferred_size or settings.FS_TINY
     font = _fit_font(
         str(text or ''), max_width * 1.55, preferred_size,
-        bold=selected, minimum=max(8, int(settings.FS_TINY * 0.72)),
+        bold=selected,
+        minimum=max(settings.FS_CONQUER_META, int(settings.FS_TINY * 0.72)),
     )
     lines = split_caption(text, font, max_width, max_lines=2)
     line_h = font.get_linesize()
@@ -122,7 +123,8 @@ class SegmentedTabs:
             else (self.options[0][0] if self.options else None)
         )
         self.font = settings.get_font(
-            max(9, int(settings.FS_SMALL * 0.92)), bold=True)
+            max(settings.FS_CONQUER_LABEL, int(settings.FS_SMALL * 0.92)),
+            bold=True)
         self._tab_rects = {}
         self._rebuild_rects()
 
@@ -182,7 +184,7 @@ class SegmentedTabs:
                 border_radius=max(4, int(0.006 * settings.SCREEN_HEIGHT)))
             font = _fit_font(
                 label, max(1, rect.w - 10), self.font.get_height(),
-                bold=True, minimum=8)
+                bold=True, minimum=settings.FS_CONQUER_META)
             color = _GOLD_BRIGHT if active else (222, 205, 180)
             surf = font.render(label, True, color)
             self.window.blit(surf, surf.get_rect(center=rect.center))
@@ -218,7 +220,7 @@ def layout_family_grid_desktop(buttons, box, *, type_order=_TYPE_ORDER,
     bottom = box.bottom - int(0.012 * settings.SCREEN_HEIGHT)
     block_h = max(1, (bottom - top) // len(present))
     header_font = settings.get_font(
-        max(10, int(settings.FS_SMALL * 0.98)), bold=True)
+        max(settings.FS_CONQUER_LABEL, int(settings.FS_SMALL * 0.98)), bold=True)
     label_h = header_font.get_height() + int(0.004 * settings.SCREEN_HEIGHT)
     gap = max(4, int(0.008 * settings.SCREEN_HEIGHT))
 
@@ -256,7 +258,8 @@ def layout_family_grid_desktop(buttons, box, *, type_order=_TYPE_ORDER,
 
 def draw_section_header(window, label_text, rect):
     """Draw a left-aligned gold section label with a trailing hairline rule."""
-    font = settings.get_font(max(10, int(settings.FS_SMALL * 0.98)), bold=True)
+    font = settings.get_font(
+        max(settings.FS_CONQUER_LABEL, int(settings.FS_SMALL * 0.98)), bold=True)
     text = str(label_text or '').capitalize()
     surf = font.render(text, True, _GOLD_BRIGHT)
     window.blit(surf, surf.get_rect(midleft=(rect.x, rect.centery)))
@@ -418,8 +421,16 @@ def draw_footer(
             text_rect.width = max(1, int(text_rect.w * 0.60))
         font = settings.get_font(settings.FS_SMALL, bold=tone != 'neutral')
         font = _fit_font(status, text_rect.w, font.get_height(),
-                         bold=tone != 'neutral', minimum=8)
-        surf = font.render(status, True, colors.get(tone, colors['neutral']))
+                         bold=tone != 'neutral',
+                         minimum=settings.FS_CONQUER_META)
+        # At the legibility floor the text may still exceed the rail —
+        # ellipsize rather than shrinking into unreadability.
+        shown = status
+        if font.size(shown)[0] > text_rect.w:
+            while shown and font.size(shown + '…')[0] > text_rect.w:
+                shown = shown[:-1]
+            shown = (shown.rstrip() + '…') if shown else '…'
+        surf = font.render(shown, True, colors.get(tone, colors['neutral']))
         window.blit(surf, surf.get_rect(center=text_rect.center))
     return footer_rect(subscreen)
 
@@ -441,6 +452,6 @@ def draw_small_badge(window, text, rect, *, tone='gold'):
     pygame.draw.rect(window, (145, 112, 68), rect, 1,
                      border_radius=max(4, rect.h // 3))
     font = _fit_font(text, rect.w - 8, settings.FS_TINY,
-                     bold=True, minimum=8)
+                     bold=True, minimum=settings.FS_CONQUER_META)
     label = font.render(text, True, text_color)
     window.blit(label, label.get_rect(center=rect.center))

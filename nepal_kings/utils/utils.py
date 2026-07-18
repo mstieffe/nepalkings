@@ -569,10 +569,12 @@ class ColorTogglePill:
         pygame.draw.rect(pill, border, (0, 0, w, h), 2, border_radius=r)
         self.window.blit(pill, self.rect.topleft)
 
-        # Text centred
+        # Text centred. The shrink-to-fit stops at a mobile legibility floor
+        # (the callers pass short labels there instead).
+        min_h = 13 if settings.TOUCH_TARGET_MIN > 0 else 8
         font = self.font
         while (font.size(self.display_text)[0] > max(1, w - 12)
-               and font.get_height() > 8):
+               and font.get_height() > min_h):
             font = settings.get_font(font.get_height() - 1, bold=True)
         txt_surf = font.render(self.display_text, True, txt_clr)
         txt_rect = txt_surf.get_rect(center=self.rect.center)

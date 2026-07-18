@@ -542,7 +542,10 @@ class BuildFigureScreen(SubScreen):
             settings.BUILD_FIGURE_INFO_BOX_HEIGHT,
         )
         cols = 5
-        margin_x = int(0.065 * box.w)
+        # Column centres need at least half an icon frame of margin, or the
+        # first/last icons hang over the panel border into the detail pane.
+        margin_x = max(int(0.065 * box.w),
+                       int(settings.BUILD_FIGURE_ICON_WIDTH * 1.4))
         usable_w = box.w - 2 * margin_x
         pitch_x = usable_w // max(1, cols - 1)
         start_x = box.x + margin_x
@@ -582,10 +585,16 @@ class BuildFigureScreen(SubScreen):
         self.color_buttons = []
         for i, color in enumerate(colors):
             x = start_x + i * (settings.COLOR_TOGGLE_W + gap)
-            display = {
-                'Djungle': 'Djungle · Attack',
-                'Himalaya': 'Himalaya · Defence',
-            }[color]
+            # The narrow mobile pills cannot fit the role suffix at a legible
+            # size (it shrank to ~8 CSS px); the screen title already carries
+            # the Attack/Defence context there.
+            if settings.TOUCH_TARGET_MIN > 0:
+                display = color
+            else:
+                display = {
+                    'Djungle': 'Djungle · Attack',
+                    'Himalaya': 'Himalaya · Defence',
+                }[color]
             btn = ColorTogglePill(
                 self.window, self._sx(x),
                 self._sy(settings.BUILD_FIGURE_COLOR_BUTTON_Y),
