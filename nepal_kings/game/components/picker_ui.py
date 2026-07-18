@@ -404,7 +404,10 @@ def draw_footer(
     action_rect, status_rect = footer_rail_rects(subscreen)
     if show_status is None:
         show_status = bool(status)
-    if show_action:
+    # Mobile: the action button carries its own chrome — an extra rail box
+    # behind it reads as clutter on the small canvas. The status rail stays;
+    # its text needs the backdrop.
+    if show_action and settings.TOUCH_TARGET_MIN <= 0:
         _draw_footer_rail(window, action_rect)
     if show_status:
         _draw_footer_rail(window, status_rect)

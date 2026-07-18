@@ -290,7 +290,9 @@ class BattleShopScreen(SubScreen):
         start_y = settings.BATTLE_SHOP_ICON_START_Y
         if settings.TOUCH_TARGET_MIN > 0:
             # Mobile hierarchy: equipped tray first, then the family catalog.
-            start_y += int(0.15 * settings.SCREEN_HEIGHT)
+            # The catalog sits low enough that the tray's power badges and
+            # remove buttons never reach into the family icons.
+            start_y += int(0.21 * settings.SCREEN_HEIGHT)
         dx = settings.BATTLE_MOVE_ICON_DELTA_X
 
         for i, family in enumerate(self.battle_move_manager.families):
