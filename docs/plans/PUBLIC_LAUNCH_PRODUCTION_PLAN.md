@@ -517,7 +517,7 @@ Priority: **P0**
 - [ ] Validate collections, open games, configurations, kingdoms, regions, and
   land ownership.
 - [ ] Rehearse twice against recent backup copies.
-- [ ] Add maintenance/read-only mode for the cutover.
+- [x] Add maintenance/read-only mode for the cutover.
 - [ ] Enable managed backups and PITR.
 - [ ] Add one encrypted daily backup outside the primary provider.
 - [ ] Perform and time a complete restore drill.

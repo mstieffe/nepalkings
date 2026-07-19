@@ -133,3 +133,17 @@ def test_finished_game_orphan_config_migration_is_selective(app):
 
     assert db.session.get(Game, finished_id).conquer_config_id is None
     assert db.session.get(Game, active_id).conquer_config_id == 987655
+
+
+def test_password_hash_column_supports_current_scrypt_length(app):
+    from models import User
+    from werkzeug.security import generate_password_hash
+
+    password_hash = generate_password_hash('test-password')
+    assert len(password_hash) > 128
+
+    user = User(username='scrypt_length', password_hash=password_hash)
+    db.session.add(user)
+    db.session.commit()
+
+    assert db.session.get(User, user.id).password_hash == password_hash

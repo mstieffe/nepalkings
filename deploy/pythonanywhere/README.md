@@ -139,6 +139,44 @@ schema version.
    authenticated read.
 9. Watch error and access logs before promoting the client.
 
+## SQLite-to-PostgreSQL cutover
+
+Never import the live SQLite file in place. Work from a verified backup copy:
+
+1. Set `MAINTENANCE_MODE=True` in the currently live environment and reload.
+2. Confirm gameplay/auth calls return JSON `503` while `/healthz`, `/readyz`,
+   and `/legal/versions` remain available.
+3. Take a final SQLite backup and run `PRAGMA integrity_check`.
+4. Copy the backup to a disposable working file.
+5. Point `DB_URL` at that working copy and run
+   `manage.py prepare-database`; this upgrades the copy to the current schema
+   and performs the approved reconciliation.
+6. Create an empty target PostgreSQL database.
+7. Open an SSH tunnel if running the importer from the local Mac, then set
+   `TARGET_DATABASE_URL` to the tunnel URL.
+8. Run:
+
+   ```bash
+   TARGET_DATABASE_URL='postgresql+psycopg://...' \
+     .venv/bin/python scripts/migrate_sqlite_to_postgres.py \
+       --source /path/to/prepared-working-copy.db
+   ```
+
+The importer refuses a stale or corrupt source, a nonempty target, mismatched
+tables/columns, row-count drift, or any orphaned declared foreign key. It
+preserves IDs, restores nullable cyclic references, resets PostgreSQL
+sequences, and reports key domain counts.
+
+After the import:
+
+1. Point the staging private environment at PostgreSQL.
+2. Run `manage.py prepare-database` against PostgreSQL.
+3. Reload and require `/readyz` to report PostgreSQL and schema readiness.
+4. Validate collections, open games, configurations, kingdoms, region
+   champions, 4,800 lands, and owned-land counts against the import report.
+5. Keep maintenance mode enabled until authenticated smoke tests pass.
+6. Rehearse this complete process twice before the production cutover.
+
 ## Application rollback
 
 An application rollback must not automatically restore the database:

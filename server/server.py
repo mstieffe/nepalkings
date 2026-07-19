@@ -84,7 +84,30 @@ limiter = Limiter(
     storage_uri=settings.RATELIMIT_STORAGE_URI,
 )
 
-# ── JSON error for oversized request bodies ──
+# ── Maintenance and request-size guards ──
+@app.before_request
+def _enforce_maintenance_mode():
+    if not settings.MAINTENANCE_MODE:
+        return None
+    if (
+        request.path in {'/healthz', '/readyz'}
+        or request.path.startswith('/legal/')
+    ):
+        return None
+    response = jsonify({
+        'success': False,
+        'message': settings.MAINTENANCE_MESSAGE,
+        'reason': 'maintenance',
+        'retryable': True,
+    })
+    response.status_code = 503
+    response.headers['Retry-After'] = str(
+        settings.MAINTENANCE_RETRY_AFTER_SECONDS
+    )
+    response.headers['Cache-Control'] = 'no-store'
+    return response
+
+
 # Werkzeug only raises 413 lazily when a view reads the body, where the
 # routes' blanket except-blocks would turn it into a 500 — so reject
 # based on the declared Content-Length before any view runs.

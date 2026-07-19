@@ -74,3 +74,22 @@ def test_readyz_rejects_database_failure(client, monkeypatch):
 
     assert response.status_code == 503
     assert response.get_json()['reason'] == 'database_unavailable'
+
+
+def test_maintenance_mode_blocks_gameplay_but_keeps_ops_and_legal(
+        client, monkeypatch):
+    import server_settings as settings
+
+    monkeypatch.setattr(settings, 'MAINTENANCE_MODE', True)
+    monkeypatch.setattr(settings, 'MAINTENANCE_RETRY_AFTER_SECONDS', 123)
+
+    blocked = client.post('/auth/login', data={
+        'username': 'nobody',
+        'password': 'invalid',
+    })
+    assert blocked.status_code == 503
+    assert blocked.get_json()['reason'] == 'maintenance'
+    assert blocked.headers['Retry-After'] == '123'
+
+    assert client.get('/healthz').status_code == 200
+    assert client.get('/legal/versions').status_code == 200

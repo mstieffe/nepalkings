@@ -75,7 +75,9 @@ class SideRank(enum.Enum):
 class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False)
-    password_hash = db.Column(db.String(128), nullable=False)
+    # Werkzeug's current scrypt representation is longer than the legacy
+    # PBKDF2 hashes stored by the SQLite deployment.
+    password_hash = db.Column(db.String(255), nullable=False)
     # Legacy/default construction value; registration explicitly starts at 0
     # and awards INITIAL_GOLD at the First Journey finale.
     gold = db.Column(db.Integer, nullable=False, default=server_config.INITIAL_GOLD)

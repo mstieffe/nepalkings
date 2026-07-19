@@ -375,6 +375,16 @@ def _m_clear_finished_game_orphan_config_refs():
     db.session.commit()
 
 
+def _m_widen_password_hash_for_scrypt():
+    """Allow current Werkzeug scrypt hashes on length-enforcing databases."""
+    if db.engine.dialect.name.startswith('postgres'):
+        db.session.execute(text(
+            'ALTER TABLE "user" '
+            'ALTER COLUMN password_hash TYPE VARCHAR(255)'
+        ))
+        db.session.commit()
+
+
 # ── Registry ───────────────────────────────────────────────────────
 
 MIGRATIONS = [
@@ -395,6 +405,8 @@ MIGRATIONS = [
      _m_regenerate_kingdom_map_into_regions),
     (15, 'clear finished-game orphan configuration references',
      _m_clear_finished_game_orphan_config_refs),
+    (16, 'widen user password hashes for scrypt',
+     _m_widen_password_hash_for_scrypt),
 ]
 
 CURRENT_SCHEMA_VERSION = max(version for version, _description, _fn in MIGRATIONS)

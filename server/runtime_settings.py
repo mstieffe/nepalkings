@@ -48,3 +48,18 @@ BACKGROUND_SERVICES_ENABLED = _boolean(
     'BACKGROUND_SERVICES_ENABLED',
     IS_DEVELOPMENT,
 )
+
+# Cutover/incident switch. A maintenance worker serves only liveness,
+# readiness, and legal documents; every gameplay/auth route returns 503.
+MAINTENANCE_MODE = _boolean('MAINTENANCE_MODE', False)
+MAINTENANCE_MESSAGE = (
+    os.getenv(
+        'MAINTENANCE_MESSAGE',
+        'Nepal Kings is temporarily unavailable for maintenance.',
+    ).strip()
+    or 'Nepal Kings is temporarily unavailable for maintenance.'
+)
+MAINTENANCE_RETRY_AFTER_SECONDS = max(
+    1,
+    int(os.getenv('MAINTENANCE_RETRY_AFTER_SECONDS', '300')),
+)
