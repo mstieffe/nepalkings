@@ -324,6 +324,60 @@ Nepal Kings is temporarily unavailable for maintenance.
 reason=maintenance retryable=True retry_after=300
 ```
 
+### Staging PostgreSQL message-polling fix
+
+The first complete Conquer tutorial against PostgreSQL staging succeeded, but
+the desktop log showed repeated `400` responses from:
+
+```text
+/msg/get_log_entries?game_id=3
+/msg/get_chat_messages?game_id=3
+```
+
+The staging traceback showed that both routes passed query-string game ID
+`"3"` into the shared membership query as text. SQLite had accepted the
+resulting integer-to-text comparison during local development, while
+PostgreSQL rejected it with `operator does not exist: integer = character
+varying`.
+
+Commit `90bfa02fa5b00b5d59998bb2b558ac19201595c1`:
+
+- converts both message route query parameters to integers;
+- normalizes and validates game IDs again at the shared authorization
+  boundary;
+- adds endpoint and authorization regression tests;
+- logs intentional stale background-poll discards at debug instead of warning,
+  because cache invalidation already guarantees redelivery of a current
+  snapshot.
+
+Verification and staging deployment evidence:
+
+- full local suite: `2635 passed, 2 skipped`;
+- pre-deploy staging PostgreSQL backup:
+  `/home/nepalkingz/backups/postgres-staging/staging-pre-90bfa02-20260719T212344Z.dump`;
+- backup mode/size: `600`, `211151` bytes;
+- backup SHA-256:
+  `33058ac97281f19fdaf662d55979264a0727e7f376513651e12833987079ee61`;
+- immutable server archive SHA-256:
+  `c0ff333faf517f275f1fd6f46da3b806b02807dbf19f68de6c42f1281baa660b`;
+- staging WSGI, provider source directory, private `RELEASE_SHA`, and always-on
+  task `35390` now point to `90bfa02...`;
+- `/healthz` and `/readyz` return `200` with release `90bfa02...`,
+  environment `staging`, PostgreSQL, and schema `17`;
+- non-mutating authenticated checks for game `3` return `200` from both
+  formerly failing message endpoints;
+- the staging worker returned to `Running` on the matching release;
+- the staging error log retained its pre-deploy modification time
+  `2026-07-19 21:06:36 UTC`, confirming no new web exception was written by
+  the deployment or live checks.
+
+Staging rollback is isolated from production: restore the staging environment,
+WSGI, provider source directory, and task `35390` to release
+`949126c9db5fbea5f86d3b053831cb9210250bb3`, then restart the task and reload
+only `nepalkingz.eu.pythonanywhere.com`. The verified backup is retained; this
+code-only fix did not change schema version `17`, so no automatic database
+restore is part of rollback.
+
 ## Execution checklist
 
 - [x] Confirm local branch, commit, archive hash, and clean worktree.
@@ -419,5 +473,6 @@ Complete this section as execution proceeds.
 | Concurrency smoke | passed for six reads and six heartbeat writes; Conquer mutation pending |
 | Smoke-account cleanup | passed; fresh counts and sequences restored |
 | Staging isolation regression | passed |
+| Staging PostgreSQL message polling | passed on release `90bfa02...`; both game `3` endpoints return `200` |
 | Client artifact routing | passed in both staged archives; not deployed |
 | Production maintenance final state | on and verified |
