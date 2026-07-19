@@ -16,6 +16,12 @@ from game_service.battle_card_repository import (
     first_deterministic_returnable_card as _first_deterministic_returnable_card_impl,
     return_unplayed_battle_move_cards as _return_unplayed_battle_move_cards_impl,
 )
+from game_service.battle_cleanup import (
+    clear_battle_state as _clear_battle_state_impl,
+    collect_resting_figure_ids as _collect_resting_figure_ids_impl,
+    deactivate_all_spells as _deactivate_all_spells_impl,
+    destroy_figure_and_collect_cards as _destroy_figure_and_collect_cards_impl,
+)
 from game_service.conquer_prelude_replay_targets import (
     conquer_destroyed_replay_targets_for_prelude,
 )
@@ -5346,44 +5352,12 @@ def _destroy_figure_and_collect_cards(figure):
     Cards are detached from the player (player_id=None) so they appear as
     orphans until finish_battle_pick_card returns them to the deck.
     """
-    card_assocs = CardToFigure.query.filter_by(figure_id=figure.id).all()
-    cards = []
-    for assoc in card_assocs:
-        if assoc.card_type == 'main':
-            card = db.session.get(MainCard, assoc.card_id)
-        else:
-            card = db.session.get(SideCard, assoc.card_id)
-        if card:
-            card.part_of_figure = False
-            card.player_id = None
-            cards.append((card, assoc.card_type))
-
-    # Delete associations and the figure
-    CardToFigure.query.filter_by(figure_id=figure.id).delete()
-    db.session.delete(figure)
-    return cards
+    return _destroy_figure_and_collect_cards_impl(figure)
 
 
 def _clear_battle_state(game):
     """Reset all battle / advance state on the game after resolution."""
-    game.advancing_figure_id = None
-    game.advancing_figure_id_2 = None
-    game.advancing_player_id = None
-    game.defending_figure_id = None
-    game.defending_figure_id_2 = None
-    game.battle_modifier = []
-    game.battle_confirmed = False
-    game.battle_decisions = None
-    game.battle_moves_confirmed = None
-    game.fold_outcome = None
-    game.fold_winner_id = None
-    game.auto_loss_reason = None
-    game.auto_loss_detail = None
-    game.battle_round = 0
-    game.battle_turn_player_id = None
-    game.battle_skipped_rounds = None
-    game.battle_gamble_counts = None
-    game.battle_gamble_previews = None
+    return _clear_battle_state_impl(game)
 
 
 def _collect_resting_figure_ids(game):
@@ -5392,21 +5366,12 @@ def _collect_resting_figure_ids(game):
     MUST be called BEFORE _clear_battle_state, which wipes the advancing/defending IDs.
     Checks all four possible battle participants (advancing × 2, defending × 2).
     """
-    resting = []
-    for fig_id in (game.advancing_figure_id, game.advancing_figure_id_2,
-                   game.defending_figure_id, game.defending_figure_id_2):
-        if fig_id is not None:
-            fig = db.session.get(Figure, fig_id)
-            if fig and fig.rest_after_attack:
-                resting.append(fig_id)
-    return resting or None
+    return _collect_resting_figure_ids_impl(game)
 
 
 def _deactivate_all_spells(game):
     """Deactivate all active spells in a game (post-battle cleanup)."""
-    active = ActiveSpell.query.filter_by(game_id=game.id, is_active=True).all()
-    for spell in active:
-        spell.is_active = False
+    return _deactivate_all_spells_impl(game)
 
 
 def _return_unplayed_battle_move_cards(game_id):
