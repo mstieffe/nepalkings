@@ -226,6 +226,64 @@ def _loot_cards_public(cards, include_id=False):
     return out
 
 
+def resolve_attacker_win_loot(
+    game,
+    land,
+    *,
+    is_ai_defender,
+    get_ai_defence_template_for_land,
+    rng,
+    logger,
+):
+    """Select the loot awarded when a Conquer attacker wins."""
+    defender_loot_pool = []
+    if is_ai_defender and land:
+        template = get_ai_defence_template_for_land(land)
+        if template:
+            defender_loot_pool = _snapshot_template_loot_cards(template)
+            if not defender_loot_pool:
+                logger.warning(
+                    '[CONQUER_RESOLVE] AI template for land=%s had no '
+                    'lootable cards to reward',
+                    game.land_id,
+                )
+    elif game.defence_config_id:
+        defence_config = db.session.get(
+            LandConfig,
+            game.defence_config_id,
+        )
+        if defence_config:
+            defender_loot_pool = _snapshot_config_loot_cards(
+                defence_config
+            )
+
+    defender_looted_cards = _select_conquer_loot_cards(
+        defender_loot_pool,
+        land.tier if land else 1,
+        rng=rng,
+    )
+    loot_gained_cards = _loot_cards_public(defender_looted_cards)
+    looted_lost_cards = list(loot_gained_cards)
+    card_won_suit = None
+    card_won_rank = None
+    if loot_gained_cards:
+        card_won_suit = loot_gained_cards[0].get('suit')
+        card_won_rank = loot_gained_cards[0].get('rank')
+    defender_looted_ids = {
+        card.get('id')
+        for card in defender_looted_cards
+        if card.get('id')
+    }
+
+    return (
+        loot_gained_cards,
+        looted_lost_cards,
+        defender_looted_ids,
+        card_won_suit,
+        card_won_rank,
+    )
+
+
 def resolve_defender_win_loot(
     game,
     land,

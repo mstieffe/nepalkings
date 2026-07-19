@@ -62,6 +62,7 @@ from game_service.conquer_loot import (
     _snapshot_config_loot_cards,
     _snapshot_template_loot_cards,
     _template_figure_key_cards,
+    resolve_attacker_win_loot,
     resolve_defender_win_loot,
 )
 from game_service.conquer_ownership_transfer import (
@@ -7138,37 +7139,22 @@ def _resolve_conquer_battle(game, winner, requesting_player):
     victory_review_config_id = None
 
     if attacker_won:
-        # ── Attacker wins: loot from defender config/template by land tier ──
-        defender_loot_pool = []
-        defender_looted_ids = set()
-        if is_ai_land and land:
-            tpl = get_ai_defence_template_for_land(land)
-            if tpl:
-                defender_loot_pool = _snapshot_template_loot_cards(tpl)
-                if not defender_loot_pool:
-                    logger.warning(
-                        '[CONQUER_RESOLVE] AI template for land=%s had no lootable cards to reward',
-                        game.land_id,
-                    )
-        else:
-            if game.defence_config_id:
-                def_cfg = db.session.get(LandConfig, game.defence_config_id)
-                if def_cfg:
-                    defender_loot_pool = _snapshot_config_loot_cards(def_cfg)
-
-        defender_looted_cards = _select_conquer_loot_cards(
-            defender_loot_pool,
-            land.tier if land else 1,
+        (
+            loot_gained_cards,
+            looted_lost_cards,
+            defender_looted_ids,
+            card_won_suit,
+            card_won_rank,
+        ) = resolve_attacker_win_loot(
+            game,
+            land,
+            is_ai_defender=is_ai_land,
+            get_ai_defence_template_for_land=(
+                get_ai_defence_template_for_land
+            ),
             rng=_random,
+            logger=logger,
         )
-        loot_gained_cards = _loot_cards_public(defender_looted_cards)
-        looted_lost_cards = list(loot_gained_cards)
-        if loot_gained_cards:
-            card_won_suit = loot_gained_cards[0].get('suit')
-            card_won_rank = loot_gained_cards[0].get('rank')
-        defender_looted_ids = {
-            c.get('id') for c in defender_looted_cards if c.get('id')
-        }
 
         # Transfer land ownership
         if land:
