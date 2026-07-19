@@ -7,7 +7,7 @@ import random
 import secrets
 import logging
 import math
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from models import db, User, Challenge, ChallengeStatus, Player, Game, MainCard, SideCard, Figure, CardToFigure, CardRole, LogEntry, ChatMessage, BattleMove, ConquerTactic, ActiveSpell, GameResult, Land, LandAttackLog, LandConfig, LandConfigFigure, CollectionCard, Kingdom, KingdomNotification
 from game_service.deck_manager import DeckManager
 from game_service.battle_card_repository import (
@@ -64,6 +64,9 @@ from game_service.conquer_loot import (
     _template_figure_key_cards,
     resolve_attacker_win_loot,
     resolve_defender_win_loot,
+)
+from game_service.conquer_land_transition import (
+    apply_attacker_land_config_transition,
 )
 from game_service.conquer_ownership_transfer import (
     _clear_split_transfer_defences,
@@ -7156,42 +7159,29 @@ def _resolve_conquer_battle(game, winner, requesting_player):
             logger=logger,
         )
 
-        # Transfer land ownership
-        if land:
-            land.owner_user_id = attacker_user.id
-            land.kingdom_id = None
-            land.owned_since = _utcnow()
-            protect_seconds = max(
-                int(getattr(settings, 'LAND_CONQUER_PROTECTION_SECONDS', 0)), 0)
-            if protect_seconds > 0:
-                land.conquer_cooldown_until = _utcnow() + timedelta(seconds=protect_seconds)
-            else:
-                land.conquer_cooldown_until = None
-
-        # Convert attacker's conquer config to defence config. Figures,
-        # battle-move tactics, and a defence-compatible prelude carry over so
-        # the conquered land is defended automatically; attack-only cards
-        # return instead of being consumed.
-        if game.conquer_config_id:
-            atk_cfg = db.session.get(LandConfig, game.conquer_config_id)
-            if atk_cfg:
-                _return_config_attack_only_cards(atk_cfg)
-                atk_cfg.config_type = 'defence'
-                atk_cfg.land_id = game.land_id
-                _rekey_config_lock_types(atk_cfg, 'defence')
-                if land:
-                    land.defence_config_id = atk_cfg.id
-                victory_review_config_id = atk_cfg.id
-
-        # The old defender's config is removed.  Looted cards are deleted from
-        # the loser and placed in the attacker's pending loot inbox; every
-        # unlooted card returns to the defender's collection.
-        if game.defence_config_id:
-            def_cfg = db.session.get(LandConfig, game.defence_config_id)
-            if def_cfg:
-                _wipe_land_config_return_unlooted(def_cfg, defender_looted_ids)
-        if defender_user:
-            _wipe_defence_drafts_for_lost_land(defender_user.id, game.land_id)
+        victory_review_config_id = apply_attacker_land_config_transition(
+            game,
+            land,
+            attacker_user,
+            defender_user,
+            defender_looted_ids,
+            now=_utcnow,
+            protection_seconds=lambda: getattr(
+                settings,
+                'LAND_CONQUER_PROTECTION_SECONDS',
+                0,
+            ),
+            return_config_attack_only_cards=(
+                _return_config_attack_only_cards
+            ),
+            rekey_config_lock_types=_rekey_config_lock_types,
+            wipe_land_config_return_unlooted=(
+                _wipe_land_config_return_unlooted
+            ),
+            wipe_defence_drafts_for_lost_land=(
+                _wipe_defence_drafts_for_lost_land
+            ),
+        )
         try:
             from kingdom_service import (reconcile_after_land_transfer,
                                          award_kingdom_xp,
