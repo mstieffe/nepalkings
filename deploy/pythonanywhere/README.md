@@ -26,6 +26,13 @@ The current `nepalkingz.eu.pythonanywhere.com` app may remain the temporary
 staging app until custom DNS is ready. A second PythonAnywhere web app needs a
 custom domain.
 
+Current verified state and instructions for routing browser/desktop clients
+are documented in
+[`docs/environments.md`](../../docs/environments.md). In particular, the
+published client still points to the legacy US server by default; use its
+explicit staging override until the production web app, fresh database, and
+custom domain pass the cutover gates.
+
 ## 1. Create PostgreSQL databases and least-privilege users
 
 Enable the PostgreSQL add-on and set the PostgreSQL administrator password on
@@ -171,7 +178,16 @@ maintenance mode.
    authenticated read.
 10. Watch error and access logs before promoting the client.
 
-## SQLite-to-PostgreSQL cutover
+`deploy_server.sh` is not the deploy path for this paid immutable-release
+layout. It remains a legacy mutable-directory/SQLite helper that defaults to
+the old US account. Use the order above until a PostgreSQL-aware immutable
+deployment command replaces it.
+
+## Optional SQLite-to-PostgreSQL import
+
+The public EU launch intentionally starts with a fresh `nepalkings_prod`
+database. This import procedure is retained for rehearsals or an explicitly
+approved future data import; it is not part of the launch cutover.
 
 Never import the live SQLite file in place. Work from a verified backup copy:
 
@@ -207,7 +223,7 @@ After the import:
 4. Validate collections, open games, configurations, kingdoms, region
    champions, 4,800 lands, and owned-land counts against the import report.
 5. Keep maintenance mode enabled until authenticated smoke tests pass.
-6. Rehearse this complete process twice before the production cutover.
+6. Rehearse this complete process before any future approved import.
 
 ## Application rollback
 

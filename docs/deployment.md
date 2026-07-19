@@ -22,6 +22,12 @@ The exact pre-upgrade single-worker SQLite deployment remains available on
 `backup/pythonanywhere-free-eu-2026-07-19` as an emergency free-plan fallback.
 Its database is not interchangeable with the new PostgreSQL database.
 
+For the exact local, legacy-development, EU-staging, and future EU-production
+URLs
+and the client cutover sequence, read:
+
+[Environments and client routing](environments.md)
+
 ---
 
 ## Client Distribution
@@ -32,9 +38,11 @@ Share the repo + instructions:
 git clone <repo-url>
 cd nepalkings/nepal_kings
 pip install -r requirements.txt
-python main.py --server-url https://USERNAME.pythonanywhere.com
+python main.py \
+  --server-url https://nepalkingz.eu.pythonanywhere.com
 ```
-The server URL is saved to `~/.nepalkings/resolution.json` and remembered.
+This connects to EU staging. The server URL is saved to
+`~/.nepalkings/resolution.json` and remembered.
 
 ### For non-technical testers (bundled app)
 Build platform-specific executables using PyInstaller.
@@ -68,7 +76,7 @@ All settings are stored in `~/.nepalkings/resolution.json`:
 {
   "width": 1920,
   "height": 1080,
-  "server_url": "https://USERNAME.pythonanywhere.com"
+  "server_url": "https://nepalkingz.eu.pythonanywhere.com"
 }
 ```
 
@@ -81,6 +89,6 @@ All settings are stored in `~/.nepalkings/resolution.json`:
 ### Environment variables (override config file)
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `SERVER_URL` | `http://localhost:5000` | Server base URL |
+| `SERVER_URL` | baked client default | Override the server base URL |
 | `NK_SCREEN_WIDTH` | `1920` | Game window width |
 | `NK_SCREEN_HEIGHT` | `1080` | Game window height |

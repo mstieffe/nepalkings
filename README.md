@@ -242,17 +242,31 @@ To open the settings picker first:
 ./run_local.sh -s
 ```
 
-### Remote server (PythonAnywhere)
+### Remote server (legacy development PythonAnywhere)
 
-Connect to the live server at `https://nepalkings.pythonanywhere.com`:
+The published client currently defaults to the legacy development server at
+`https://nepalkings.pythonanywhere.com`:
 
 ```bash
 ./run_remote.sh
 ```
 
+To test the paid EU staging server instead:
+
+```bash
+cd nepal_kings
+python main.py \
+  --server-url https://nepalkingz.eu.pythonanywhere.com
+```
+
+The complete environment matrix and browser staging link are in
+[`docs/environments.md`](docs/environments.md).
+
 ### Switching servers via the UI
 
-Run the client with the `-s` or `--settings` flag to open the settings picker, which lets you choose between **Local (dev)** and **PythonAnywhere**:
+Run the client with the `-s` or `--settings` flag to open the settings picker,
+which currently lets you choose between **Local (dev)** and the legacy
+**PythonAnywhere** server:
 
 ```bash
 cd nepal_kings
@@ -380,15 +394,14 @@ The tested pre-upgrade free-plan layout is preserved on
 
 ### Deploying updates
 
-After making changes to the `server/` directory, deploy with a single command:
+Paid EU staging and production releases must follow the immutable
+PostgreSQL deployment order in the
+[PythonAnywhere EU runbook](deploy/pythonanywhere/README.md): verified backup,
+immutable upload, pinned dependencies, explicit database preparation, worker
+restart, web reload, readiness, authenticated smoke test, and log review.
 
-```bash
-./deploy_server.sh
-```
-
-The deploy script uploads the server-only subset using the PythonAnywhere API.
-Production releases must also follow the runbook's backup, dependency,
-explicit migration, reload, readiness, and rollback sequence.
+Do not use `deploy_server.sh` for the paid EU PostgreSQL layout. It is the
+legacy mutable-directory/SQLite helper for the old deployment shape.
 
 > **Note:** Only server code is deployed. Client changes don't need server deployment — they're built into the installer or run locally.
 
@@ -556,6 +569,12 @@ Stored at `~/.nepalkings/resolution.json`:
 }
 ```
 
+The value above is still the published default, but its data is disposable and
+will not be migrated to EU production. Use
+`https://nepalkingz.eu.pythonanywhere.com` only for staging tests. See
+[`docs/environments.md`](docs/environments.md) before changing a released
+client.
+
 Delete this file to reset all settings and show the picker on next launch.
 
 ### Crash logs
@@ -568,7 +587,8 @@ The client resolves the server URL in this order (first match wins):
 1. `--server-url` CLI flag
 2. `SERVER_URL` environment variable
 3. Saved value in `~/.nepalkings/resolution.json`
-4. Default: `http://localhost:5000`
+4. Baked client default: currently
+   `https://nepalkings.pythonanywhere.com`
 
 ---
 

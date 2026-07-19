@@ -83,6 +83,9 @@ Known launch blockers:
 
 - The production environment and custom API domain are not configured or
   cut over; only staging is on PostgreSQL.
+- EU production will intentionally start with a fresh database. Legacy US
+  development users, games, collections, kingdoms, and ownership will not be
+  migrated.
 - Multi-worker gameplay still needs authenticated two-account conflicting-action
   tests and a 24-hour soak before public registration. The live duplicate-action
   regression now passes against three web workers.
@@ -532,7 +535,7 @@ Verification:
 
 ---
 
-## Phase 2 — PostgreSQL migration
+## Phase 2 — PostgreSQL setup and recovery
 
 Priority: **P0**
 
@@ -544,14 +547,14 @@ Priority: **P0**
 - [x] Build a repeatable SQLite-to-PostgreSQL importer.
 - [x] Preserve IDs and reset PostgreSQL sequences.
 - [x] Validate row counts and foreign keys.
-- [ ] Validate collections, open games, configurations, kingdoms, regions, and
-  land ownership.
-- [ ] Rehearse twice against recent backup copies.
+- [ ] Validate the fresh production bootstrap: schema version, one AI user,
+  4,800 lands, region/champion seeds, and zero human accounts/games/ownership.
+- [ ] Rehearse fresh production initialization and application rollback twice.
 - [x] Add maintenance/read-only mode for the cutover.
 - [ ] Enable managed backups and PITR.
 - [ ] Add one encrypted daily backup outside the primary provider.
 - [ ] Perform and time a complete restore drill.
-- [ ] Document cutover and rollback.
+- [x] Document fresh initialization, optional import, and application rollback.
 
 Verification:
 
@@ -855,7 +858,7 @@ At every stage:
 ## Final public-registration go/no-go gate
 
 - [ ] Hosting provider and region meet the measured latency target.
-- [ ] PostgreSQL migration is rehearsed and validated.
+- [ ] Fresh PostgreSQL production initialization is rehearsed and validated.
 - [ ] No production SQLite remains.
 - [ ] Two web workers plus the job worker pass a 24-hour soak.
 - [ ] No correctness dependency remains process-local.
@@ -888,7 +891,7 @@ At every stage:
 ## Indicative execution sequence
 
 - Week 1: hosting bake-off, provider decision, production skeleton.
-- Weeks 2–3: PostgreSQL migration and multi-worker correctness.
+- Weeks 2–3: PostgreSQL setup/recovery and multi-worker correctness.
 - Weeks 3–4: request consolidation, polling, database and bundle performance.
 - Weeks 4–5: observability, deployment, backup, and recovery.
 - Weeks 5–6: account lifecycle, moderation, legal, and attribution.
@@ -912,3 +915,4 @@ Part-time expectation: approximately two to three months.
 | 2026-07-19 | Dedicated PythonAnywhere always-on worker driven from durable game state | Three paid WSGI workers made in-process AI/sweeper startup unsafe; controlled staging worker test initialized AI, swept, and shut down cleanly | Web workers keep AI/background services disabled; PostgreSQL advisory leadership prevents duplicate task ownership; attempt limits and failure history remain before launch |
 | 2026-07-19 | PostgreSQL-backed multi-worker coordination | Release `e52611c` passed local, Python 3.11, and disposable PostgreSQL 16 tests; staging reports schema 17 with three workers | Conquer receipts, deadlines, game transaction locks, and security rate limits are shared; live gameplay and soak gates remain |
 | 2026-07-19 | Promote staging to release `949126c` after live race discovery | Validated PostgreSQL backup, green 2,627-test/CI/security gates, permanent task `35390`, six concurrent identical withdrawals with one canonical response and one durable receipt, and clean post-deploy logs | Staging is open on three workers plus one dedicated worker; next gates are restore automation, conflicting-action/two-account testing, and the 24-hour soak |
+| 2026-07-19 | Start EU production with fresh data | The old US server and its accounts were development-only | Do not run a legacy data import; initialize and verify the empty `nepalkings_prod` database before switching released clients |
