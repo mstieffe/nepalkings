@@ -145,6 +145,14 @@ def test_import_runs_against_postgres_and_resets_sequences(tmp_path):
             result = connection.execute(user.insert(), {
                 'username': 'after_import',
                 'password_hash': 'test-hash',
+                'gold': 0,
+                'is_ai': False,
+                'email_verified': False,
+                'notify_emails_enabled': True,
+                'age_confirmed': False,
+                'booster_packs': 0,
+                'booster_packs_side': 0,
+                'maps': 0,
             })
             assert result.inserted_primary_key == (42,)
     finally:
