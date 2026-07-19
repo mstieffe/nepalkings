@@ -8,7 +8,7 @@ import secrets
 import logging
 import math
 from datetime import datetime, timezone
-from models import db, User, Challenge, ChallengeStatus, Player, Game, MainCard, SideCard, Figure, CardToFigure, CardRole, LogEntry, ChatMessage, BattleMove, ConquerTactic, ActiveSpell, GameResult, Land, LandAttackLog, LandConfig, LandConfigFigure, CollectionCard, Kingdom, KingdomNotification
+from models import db, User, Challenge, ChallengeStatus, Player, Game, MainCard, SideCard, Figure, CardToFigure, CardRole, LogEntry, ChatMessage, BattleMove, ConquerTactic, ActiveSpell, GameResult, Land, LandAttackLog, LandConfig, LandConfigFigure, CollectionCard, Kingdom
 from game_service.deck_manager import DeckManager
 from game_service.battle_card_repository import (
     collect_battle_move_cards as _collect_battle_move_cards_impl,
@@ -67,6 +67,9 @@ from game_service.conquer_loot import (
 )
 from game_service.conquer_land_transition import (
     apply_attacker_land_config_transition,
+)
+from game_service.conquer_kingdom_reconciliation import (
+    reconcile_conquered_land_kingdom,
 )
 from game_service.conquer_ownership_transfer import (
     _clear_split_transfer_defences,
@@ -7182,98 +7185,27 @@ def _resolve_conquer_battle(game, winner, requesting_player):
                 _wipe_defence_drafts_for_lost_land
             ),
         )
-        try:
-            from kingdom_service import (reconcile_after_land_transfer,
-                                         award_kingdom_xp,
-                                         transfer_split_off_kingdom_lands)
-            from kingdom_progression import xp_for_land_tier
-            split_transfer_summary = transfer_split_off_kingdom_lands(
-                old_owner_id=old_land_owner_id,
-                new_owner_id=attacker_user.id if attacker_user else None,
-                source_kingdom_id=lost_kingdom_id,
-                split_land_id=game.land_id,
-                now=land.owned_since if land else _utcnow(),
-                commit=False,
-            )
-            if split_transfer_summary:
-                cleared_ids = _clear_split_transfer_defences(
-                    old_land_owner_id,
-                    split_transfer_summary,
-                )
-                if cleared_ids:
-                    split_transfer_summary['cleared_defence_config_ids'] = cleared_ids
-            reconcile_after_land_transfer(
-                old_owner_id=old_land_owner_id,
-                new_owner_id=attacker_user.id,
-                commit=False,
-            )
-            affected_regions = {land.region} if land and land.region else set()
-            for transferred_id in (
-                    (split_transfer_summary or {}).get('transferred_land_ids') or []):
-                transferred_land = db.session.get(Land, transferred_id)
-                if transferred_land and transferred_land.region:
-                    affected_regions.add(transferred_land.region)
-            if affected_regions:
-                from region_service import reconcile_region_champion
-                champion_now = _utcnow()
-                for affected_region in sorted(affected_regions):
-                    reconcile_region_champion(
-                        affected_region,
-                        now=champion_now,
-                        commit=False,
-                    )
-            # Award XP for every conquered land based on its tier, including
-            # founding lands that create brand-new kingdoms.  Collateral lands
-            # from splits also award tier-based XP.
-            if land and land.kingdom_id:
-                joined_kingdom = db.session.get(Kingdom, land.kingdom_id)
-                if joined_kingdom and joined_kingdom.owner_user_id == attacker_user.id:
-                    collateral_ids = set(
-                        (split_transfer_summary or {}).get('transferred_land_ids') or []
-                    )
-                    # Award XP for the directly conquered land.
-                    award_kingdom_xp(
-                        joined_kingdom,
-                        xp_for_land_tier(int(land.tier or 0)),
-                        reason='conquer',
-                    )
-                    # Also award XP for every collateral land the split
-                    # transferred to the attacker; they all join the same
-                    # kingdom so the attacker should receive the tier-based
-                    # XP for each one, just like a direct conquer would.
-                    for coll_id in collateral_ids:
-                        coll_land = db.session.get(Land, coll_id)
-                        if coll_land and coll_land.owner_user_id == attacker_user.id:
-                            award_kingdom_xp(
-                                joined_kingdom,
-                                xp_for_land_tier(int(coll_land.tier or 0)),
-                                reason='conquer_split',
-                            )
-            if lost_kingdom_id and db.session.get(Kingdom, lost_kingdom_id) is None:
-                deleted_kingdom_id = lost_kingdom_id
-                deleted_kingdom_name = lost_kingdom_name or f'Kingdom #{lost_kingdom_id}'
-                if old_land_owner_id:
-                    try:
-                        db.session.add(KingdomNotification(
-                            user_id=old_land_owner_id,
-                            kind='kingdom_dissolved',
-                            kingdom_id=deleted_kingdom_id,
-                            payload={'kingdom_name': deleted_kingdom_name},
-                        ))
-                    except Exception as _kn_err:
-                        logger.warning('Failed to record kingdom_dissolved notification: %s',
-                                       _kn_err)
-            if split_transfer_summary:
-                _record_split_transfer_notifications(
-                    split_transfer_summary,
-                    land,
-                    attacker_user,
-                    defender_user,
-                )
-        except Exception as _kingdom_reconcile_err:
-            logger.exception('Persistent kingdom reconciliation failed after conquer: %s',
-                             _kingdom_reconcile_err)
-            raise
+        (
+            split_transfer_summary,
+            deleted_kingdom_id,
+            deleted_kingdom_name,
+        ) = reconcile_conquered_land_kingdom(
+            land,
+            attacker_user,
+            defender_user,
+            land_id=game.land_id,
+            old_land_owner_id=old_land_owner_id,
+            lost_kingdom_id=lost_kingdom_id,
+            lost_kingdom_name=lost_kingdom_name,
+            now=_utcnow,
+            clear_split_transfer_defences=(
+                _clear_split_transfer_defences
+            ),
+            record_split_transfer_notifications=(
+                _record_split_transfer_notifications
+            ),
+            logger=logger,
+        )
 
     else:
         (
