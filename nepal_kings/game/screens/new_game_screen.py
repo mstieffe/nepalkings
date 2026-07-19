@@ -12,7 +12,8 @@ from game.screens._menu_base import (
 from game.core.game import Game
 from game.core.screen_routing import gameplay_screen_for
 from config import settings
-from utils.utils import Button, InputField
+from game.components.buttons.menu_button import Button
+from game.components.inputs.input_field import InputField
 from utils.game_service import fetch_users, fetch_user, create_challenge, remove_challenge, create_game, fetch_game
 from utils.background_poller import BackgroundPoller
 import logging

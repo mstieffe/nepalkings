@@ -24,7 +24,7 @@ from game.components.figures.figure_manager import FigureManager
 from game.components.figure_detail_box import FigureDetailBox
 from utils import battle_shop_service
 from utils import game_service
-from utils.utils import Button
+from game.components.buttons.menu_button import Button
 from game.components.dialogue_box import _DlgButton
 from utils.background_poller import BackgroundPoller
 import logging

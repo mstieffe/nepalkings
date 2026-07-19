@@ -4,8 +4,8 @@ import pygame
 from game.components.cards.card_img import CardImg
 from game.components.cards.card_slot import CardSlot
 from config import settings
-from utils.utils import GameButton
-from utils.utils import Button
+from game.components.buttons.game_button import GameButton
+from game.components.buttons.menu_button import Button
 from game.components.dialogue_box import DialogueBox
 
 

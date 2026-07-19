@@ -12,7 +12,7 @@ from nepal_kings.game.components.figure_icon import FigureIconButton
 from game.components.button_list_shifter import ButtonListShifter
 #from nepal_kings.game.components.buttons import FigureIconButton, SuitIconButton, ButtonListShifter
 from game.components.figure import FigureManager
-from utils.utils import Button
+from game.components.buttons.menu_button import Button
 
 
 class OptionBox:

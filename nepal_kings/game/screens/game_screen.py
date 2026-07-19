@@ -12,7 +12,7 @@ from game.components.coach_card import draw_coach_button, draw_coach_panel
 from game.components.info_scroll import InfoScroll
 from game.components.scoreboard_scroll import ScoreboardScroll
 from game.components.buttons.state_button import StateButton
-from utils.utils import GameButton
+from game.components.buttons.game_button import GameButton
 from utils import onboarding_service
 from game.screens.build_figure_screen import BuildFigureScreen
 from game.screens.log_screen import LogScreen

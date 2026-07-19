@@ -13,7 +13,7 @@ from game.components.buttons.confirm_button import ConfirmButton
 from game.components.figures.figure_db_service import FigureDbService
 from game.core.card_source import CollectionCardSource, GameCardSource
 from game.core.game import battle_required_field
-from utils.utils import ColorTogglePill
+from game.components.buttons.color_toggle_pill import ColorTogglePill
 from utils import collection_service, http_compat as requests
 from game.components.castle_cap_indicator import (
     castle_cap_for_land, count_castle_figures, draw_castle_cap_indicator,

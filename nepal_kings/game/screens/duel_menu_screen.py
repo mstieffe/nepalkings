@@ -8,7 +8,7 @@ from game.screens._menu_base import MenuScreenMixin
 from game.components.easing import ease_out_back
 from config import settings
 from config.screen_settings import _UI_SCALE
-from utils.utils import Button
+from game.components.buttons.menu_button import Button
 from utils.game_service import fetch_user_games, fetch_user
 from utils import sound
 import logging

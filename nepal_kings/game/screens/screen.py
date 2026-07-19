@@ -4,8 +4,9 @@ import sys
 import pygame
 from pygame.locals import *
 from config import settings
+from game.components.buttons.game_button import GameButton
 from game.components.dialogue_box import DialogueBox
-from utils.utils import Button, ControlButton, GameButton
+from game.components.buttons.menu_button import Button, ControlButton
 
 class Screen:
     def __init__(self, state):

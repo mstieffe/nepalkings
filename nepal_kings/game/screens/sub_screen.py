@@ -4,9 +4,9 @@ import sys
 import pygame
 from pygame.locals import *
 from config import settings
+from game.components.buttons.subscreen_button import SubScreenButton
 from game.components.dialogue_box import DialogueBox
 from game.components.scroll_text_list_shifter import ScrollTextListShifter
-from utils.utils import SubScreenButton
 
 class SubScreen:
     def __init__(self, window, game, x, y, title=None):

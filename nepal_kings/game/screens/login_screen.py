@@ -7,7 +7,8 @@ from pygame.locals import *
 from game.screens.screen import Screen
 from config import settings
 from config.screen_settings import _FS, _IS_MOBILE as _MOBILE_UI, _UI_SCALE
-from utils.utils import Button, InputField
+from game.components.buttons.menu_button import Button
+from game.components.inputs.input_field import InputField
 from utils.auth_service import login, register
 import utils.http_compat as _http
 

@@ -15,7 +15,7 @@ from game.components.cards.card_img import CardImg
 from game.components.card_workshop_dialogue import CardWorkshopDialogue
 from game.components.dialogue_box import DialogueBox
 from config import settings
-from utils.utils import Button
+from game.components.buttons.menu_button import Button
 from utils.background_poller import BackgroundPoller
 from utils import collection_service, onboarding_service
 import logging

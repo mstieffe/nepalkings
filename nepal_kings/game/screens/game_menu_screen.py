@@ -8,7 +8,7 @@ from game.screens.screen import Screen
 from game.screens._menu_base import MenuScreenMixin
 from config import settings
 from config.screen_settings import _UI_SCALE
-from utils.utils import Button
+from game.components.buttons.menu_button import Button
 from utils.game_service import fetch_user_games, fetch_user, fetch_game, remove_challenge
 from utils.auth_service import send_heartbeat
 from utils import onboarding_service

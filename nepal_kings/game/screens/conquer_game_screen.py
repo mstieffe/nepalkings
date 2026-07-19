@@ -57,7 +57,7 @@ from game.screens.screen import Screen
 from utils import battle_shop_service, game_service, onboarding_service
 from utils.background_poller import BackgroundPoller
 from utils.perf_monitor import perf_section
-from utils.utils import GameButton
+from game.components.buttons.game_button import GameButton
 
 
 logger = logging.getLogger('nk.screens.conquer_game')
