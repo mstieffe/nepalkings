@@ -5,6 +5,8 @@
 import inspect
 from types import SimpleNamespace
 
+import pytest
+
 
 def test_route_orm_predicates_share_behavior_but_keep_historical_metadata():
     from game_service.game_mode import is_tactics_hand_conquer
@@ -56,3 +58,61 @@ def test_route_orm_predicates_share_behavior_but_keep_historical_metadata():
     assert str(inspect.signature(battle_shop_predicate)) == '(game)'
     assert games_predicate.__module__ == 'routes.games'
     assert battle_shop_predicate.__module__ == 'routes.battle_shop'
+
+
+def test_ai_state_predicates_share_behavior_and_keep_typed_signatures():
+    from ai.game_state import (
+        _is_tactics_hand_conquer as game_state_predicate,
+    )
+    from ai.strategy_planner import (
+        _is_tactics_hand_conquer as strategy_predicate,
+    )
+
+    cases = (
+        ({}, False),
+        (
+            {
+                'mode': 'duel',
+                'conquer_move_model': 'tactics_hand',
+            },
+            False,
+        ),
+        (
+            {
+                'mode': 'conquer',
+                'conquer_move_model': None,
+            },
+            False,
+        ),
+        (
+            {
+                'mode': 'conquer',
+                'conquer_move_model': 'battle_move',
+            },
+            False,
+        ),
+        (
+            {
+                'mode': 'conquer',
+                'conquer_move_model': 'tactics_hand',
+            },
+            True,
+        ),
+    )
+    for game_state, expected in cases:
+        assert game_state_predicate(game_state) is expected
+        assert strategy_predicate(game_state) is expected
+
+    with pytest.raises(AttributeError):
+        game_state_predicate(None)
+    with pytest.raises(AttributeError):
+        strategy_predicate(None)
+
+    assert str(inspect.signature(game_state_predicate)) == (
+        "(game_dict: 'dict') -> 'bool'"
+    )
+    assert str(inspect.signature(strategy_predicate)) == (
+        "(game_dict: 'dict[str, Any]') -> 'bool'"
+    )
+    assert game_state_predicate.__module__ == 'ai.game_state'
+    assert strategy_predicate.__module__ == 'ai.strategy_planner'
