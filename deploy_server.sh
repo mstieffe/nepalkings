@@ -3,6 +3,10 @@
 #
 # Usage:
 #   ./deploy_server.sh
+#   PA_USER=yourname PA_HOST=eu.pythonanywhere.com \
+#     PA_DOMAIN=yourname.eu.pythonanywhere.com \
+#     PA_TOKEN_FILE="$HOME/.nepalkings_eu_pa_token" \
+#     ./deploy_server.sh --no-backup
 #
 # First-time setup:
 #   1. Get your API token from https://www.pythonanywhere.com/user/nepalkings/account/#api_token
@@ -17,21 +21,29 @@
 
 set -e
 
-PA_USER="nepalkings"
-PA_HOST="www.pythonanywhere.com"
-PA_DOMAIN="${PA_USER}.pythonanywhere.com"
-PA_BASE="/home/${PA_USER}/nepalkings"
+# Defaults preserve the existing production target.  Environment overrides make
+# it possible to deploy the same server subset to a staging or EU account
+# without maintaining a second deploy script.
+PA_USER="${PA_USER:-nepalkings}"
+PA_HOST="${PA_HOST:-www.pythonanywhere.com}"
+if [ "$PA_HOST" = "eu.pythonanywhere.com" ]; then
+    _DEFAULT_PA_DOMAIN="${PA_USER}.eu.pythonanywhere.com"
+else
+    _DEFAULT_PA_DOMAIN="${PA_USER}.pythonanywhere.com"
+fi
+PA_DOMAIN="${PA_DOMAIN:-${_DEFAULT_PA_DOMAIN}}"
+PA_BASE="${PA_BASE:-/home/${PA_USER}/nepalkings}"
+PA_TOKEN_FILE="${PA_TOKEN_FILE:-$HOME/.nepalkings_pa_token}"
 CURL_TIMEOUT="--connect-timeout 15 --max-time 60"
 
 # ── Resolve API token ──────────────────────────────────────────────
 if [ -z "$PA_API_TOKEN" ]; then
-    TOKEN_FILE="$HOME/.nepalkings_pa_token"
-    if [ -f "$TOKEN_FILE" ]; then
-        PA_API_TOKEN=$(cat "$TOKEN_FILE" | tr -d '[:space:]')
+    if [ -f "$PA_TOKEN_FILE" ]; then
+        PA_API_TOKEN=$(cat "$PA_TOKEN_FILE" | tr -d '[:space:]')
     else
         echo "❌ No API token found."
-        echo "   Set PA_API_TOKEN env var or create ~/.nepalkings_pa_token"
-        echo "   Get your token: https://www.pythonanywhere.com/user/${PA_USER}/account/#api_token"
+        echo "   Set PA_API_TOKEN or create ${PA_TOKEN_FILE}"
+        echo "   Get your token from https://${PA_HOST}/user/${PA_USER}/account/#api_token"
         exit 1
     fi
 fi
@@ -41,6 +53,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
 echo "=== Nepal Kings — Deploy Server to PythonAnywhere ==="
+echo "   API host: ${PA_HOST}"
+echo "   Web app:  https://${PA_DOMAIN}"
+echo "   Base dir: ${PA_BASE}"
 echo ""
 
 # ── 0. Back up the production database ────────────────────────────
