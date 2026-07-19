@@ -5,6 +5,65 @@
 from models import Land, LandAttackLog, User, db
 
 
+def build_conquer_resolution_cache(
+    saved,
+    game,
+    winner,
+    attacker_player,
+    defender_player,
+    attacker_user,
+    defender_user,
+    *,
+    attacker_won,
+    consumed_cards,
+    defence_consumed_cards,
+    loot_gained_cards,
+    loot_lost_cards,
+    cards_spent,
+    card_lost_suit,
+    card_lost_rank,
+    card_won_suit,
+    card_won_rank,
+    is_ai_defender,
+    attacker_first_conquest,
+    victory_review_config_id,
+    split_transfer_summary,
+):
+    """Build the persisted idempotency and reconnect snapshot for a resolution."""
+    result = dict(saved) if isinstance(saved, dict) else {}
+    result.update({
+        'conquer_resolved': True,
+        'winner_player_id': winner.id,
+        'loser_player_id': (
+            defender_player.id if attacker_won else attacker_player.id
+        ),
+        'conquer_attacker_player_id': attacker_player.id,
+        'conquer_attacker_user_id': (
+            attacker_user.id if attacker_user else None
+        ),
+        'conquer_defender_player_id': defender_player.id,
+        'conquer_defender_user_id': (
+            defender_user.id if defender_user else None
+        ),
+        'conquer_consumed_cards': consumed_cards,
+        'defence_consumed_cards': defence_consumed_cards,
+        'conquer_loot_gained_cards': loot_gained_cards,
+        'conquer_loot_lost_cards': loot_lost_cards,
+        'cards_spent': cards_spent,
+        'card_lost_suit': card_lost_suit,
+        'card_lost_rank': card_lost_rank,
+        'card_won_suit': card_won_suit,
+        'card_won_rank': card_won_rank,
+        'is_ai_defender': bool(is_ai_defender),
+        'attacker_first_conquest': bool(attacker_first_conquest),
+        'victory_review_config_id': victory_review_config_id,
+        'victory_review_land_id': game.land_id if attacker_won else None,
+    })
+    if split_transfer_summary:
+        result['kingdom_split_transfer'] = split_transfer_summary
+    return result
+
+
 def _append_battle_score(payload, game, last_result, viewer_user_id):
     """Add canonical battle math and the viewer-oriented final total."""
     # Battle math is stored in one stable, non-viewer-specific perspective:

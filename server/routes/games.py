@@ -70,6 +70,7 @@ from game_service.conquer_ownership_transfer import (
     _wipe_defence_drafts_for_lost_land,
 )
 from game_service.conquer_result_serialization import (
+    build_conquer_resolution_cache,
     serialize_finished_conquer_result as _serialize_finished_conquer_result_impl,
 )
 from game_service.conquer_tactics_rules import (
@@ -7423,32 +7424,29 @@ def _resolve_conquer_battle(game, winner, requesting_player):
 
     cards_spent = len(looted_lost_cards)
 
-    merged_last_result = dict(saved) if isinstance(saved, dict) else {}
-    merged_last_result.update({
-        'conquer_resolved': True,
-        'winner_player_id': winner.id,
-        'loser_player_id': def_player.id if attacker_won else atk_player.id,
-        'conquer_attacker_player_id': atk_player.id,
-        'conquer_attacker_user_id': attacker_user.id if attacker_user else None,
-        'conquer_defender_player_id': def_player.id,
-        'conquer_defender_user_id': defender_user.id if defender_user else None,
-        'conquer_consumed_cards': consumed_cards,
-        'defence_consumed_cards': defence_consumed_cards,
-        'conquer_loot_gained_cards': loot_gained_cards,
-        'conquer_loot_lost_cards': looted_lost_cards,
-        'cards_spent': cards_spent,
-        'card_lost_suit': card_lost_suit,
-        'card_lost_rank': card_lost_rank,
-        'card_won_suit': card_won_suit,
-        'card_won_rank': card_won_rank,
-        'is_ai_defender': bool(is_ai_land),
-        'attacker_first_conquest': bool(attacker_first_conquest),
-        'victory_review_config_id': victory_review_config_id,
-        'victory_review_land_id': game.land_id if attacker_won else None,
-    })
-    if split_transfer_summary:
-        merged_last_result['kingdom_split_transfer'] = split_transfer_summary
-    game.last_battle_result = merged_last_result
+    game.last_battle_result = build_conquer_resolution_cache(
+        saved,
+        game,
+        winner,
+        atk_player,
+        def_player,
+        attacker_user,
+        defender_user,
+        attacker_won=attacker_won,
+        consumed_cards=consumed_cards,
+        defence_consumed_cards=defence_consumed_cards,
+        loot_gained_cards=loot_gained_cards,
+        loot_lost_cards=looted_lost_cards,
+        cards_spent=cards_spent,
+        card_lost_suit=card_lost_suit,
+        card_lost_rank=card_lost_rank,
+        card_won_suit=card_won_suit,
+        card_won_rank=card_won_rank,
+        is_ai_defender=is_ai_land,
+        attacker_first_conquest=attacker_first_conquest,
+        victory_review_config_id=victory_review_config_id,
+        split_transfer_summary=split_transfer_summary,
+    )
 
     # Only humans get a Victory Review. AI attackers have no client to drive it,
     # so opportunistically stamp the ack timestamp so we don't reserve state for
