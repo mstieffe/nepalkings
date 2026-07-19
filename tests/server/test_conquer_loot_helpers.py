@@ -308,3 +308,261 @@ class TestDeleteLootedCollectionCards:
         for card_id in deleted_ids:
             assert db.session.get(CollectionCard, card_id) is None
         assert db.session.get(CollectionCard, retained_id) is not None
+
+
+class TestConfigFigureKeyCardIds:
+    def test_none_config_returns_empty_list(self):
+        from routes.games import _config_figure_key_card_ids
+
+        assert _config_figure_key_card_ids(None) == []
+
+    def test_returns_case_insensitive_key_roles_in_figure_order(self):
+        from routes.games import _config_figure_key_card_ids
+
+        cfg = SimpleNamespace(figures=[
+            SimpleNamespace(
+                card_ids=[11, 12, 13],
+                card_roles=['number', 'KEY'],
+            ),
+            SimpleNamespace(
+                card_ids=[21, 22],
+                card_roles=['key', None],
+            ),
+            SimpleNamespace(card_ids=None, card_roles=None),
+        ])
+
+        assert _config_figure_key_card_ids(cfg) == [12, 21]
+
+
+class TestTemplateFigureKeyCards:
+    def test_finds_explicit_and_role_list_keys_without_copying_cards(self):
+        from routes.games import _template_figure_key_cards
+
+        explicit = {'suit': 'Spades', 'rank': 'A', 'role': 'KEY'}
+        fallback = {'suit': 'Hearts', 'rank': 'K'}
+        overridden = {'suit': 'Clubs', 'rank': 'Q', 'role': 'number'}
+        template = {
+            'figures': [{
+                'cards': [explicit, fallback, overridden, 'invalid'],
+                'card_roles': ['number', 'key', 'key', 'key'],
+            }],
+        }
+
+        result = _template_figure_key_cards(template)
+
+        assert result == [explicit, fallback]
+        assert result[0] is explicit
+        assert result[1] is fallback
+
+    def test_none_template_returns_empty_list(self):
+        from routes.games import _template_figure_key_cards
+
+        assert _template_figure_key_cards(None) == []
+
+
+class TestConquerLootBaseQuota:
+    def test_coerces_tier_and_enforces_minimum_one(self):
+        from routes.games import _conquer_loot_base_quota
+
+        assert _conquer_loot_base_quota(None) == (1, 1)
+        assert _conquer_loot_base_quota(0) == (1, 1)
+        assert _conquer_loot_base_quota(-4) == (1, 1)
+        assert _conquer_loot_base_quota('3') == (3, 3)
+        assert _conquer_loot_base_quota(2.8) == (2, 2)
+        assert _conquer_loot_base_quota('invalid') == (1, 1)
+
+
+class _FirstChoiceRng:
+    def __init__(self, random_values=()):
+        self._random_values = iter(random_values)
+
+    def choice(self, values):
+        return values[0]
+
+    def random(self):
+        return next(self._random_values)
+
+
+class TestRandomPickWithoutReplacement:
+    def test_selects_without_mutating_input_or_repeating_positions(self):
+        from routes.games import _random_pick_without_replacement
+
+        pool = ['first', 'second', 'third']
+
+        assert _random_pick_without_replacement(
+            pool, 2, _FirstChoiceRng()) == ['first', 'second']
+        assert pool == ['first', 'second', 'third']
+        assert _random_pick_without_replacement(
+            pool, 99, _FirstChoiceRng()) == pool
+        assert _random_pick_without_replacement(
+            pool, -1, _FirstChoiceRng()) == []
+
+
+class TestSelectConquerLootCards:
+    def test_applies_independent_key_and_number_quotas(self):
+        from routes.games import _select_conquer_loot_cards
+
+        key_a = {'name': 'key-a', 'bucket': 'key'}
+        number_a = {'name': 'number-a', 'bucket': 'number'}
+        key_b = {'name': 'key-b', 'bucket': 'key'}
+        number_b = {'name': 'number-b', 'bucket': 'number'}
+        cards = [key_a, number_a, key_b, number_b]
+
+        result = _select_conquer_loot_cards(
+            cards,
+            1,
+            rng=_FirstChoiceRng(),
+        )
+
+        assert result == [key_a, number_a]
+        assert cards == [key_a, number_a, key_b, number_b]
+
+    def test_extra_chance_selects_remaining_cards_in_snapshot_order(self):
+        from routes.games import _select_conquer_loot_cards
+
+        key_a = {'name': 'key-a', 'bucket': 'key'}
+        number_a = {'name': 'number-a', 'bucket': 'number'}
+        key_b = {'name': 'key-b', 'bucket': 'key'}
+        number_b = {'name': 'number-b', 'bucket': 'number'}
+
+        result = _select_conquer_loot_cards(
+            [key_a, number_a, key_b, number_b],
+            1,
+            extra_chance=1,
+            rng=_FirstChoiceRng([0.0, 0.0]),
+        )
+
+        assert result == [key_a, number_a, key_b, number_b]
+
+    def test_invalid_extra_chance_is_treated_as_zero(self):
+        from routes.games import _select_conquer_loot_cards
+
+        key_a = {'name': 'key-a', 'bucket': 'key'}
+        key_b = {'name': 'key-b', 'bucket': 'key'}
+
+        assert _select_conquer_loot_cards(
+            [key_a, key_b],
+            1,
+            extra_chance='invalid',
+            rng=_FirstChoiceRng(),
+        ) == [key_a]
+
+
+class TestLootCardsPublic:
+    def test_strips_internal_fields_and_optionally_keeps_truthy_ids(self):
+        from routes.games import _loot_cards_public
+
+        cards = [
+            {
+                'id': 17,
+                'suit': 'Spades',
+                'rank': 'A',
+                'value': '3',
+                'role': 'key',
+                'source': 'figure',
+                'bucket': 'key',
+                'internal': 'discard-me',
+            },
+            {
+                'id': 0,
+                'suit': 'Hearts',
+                'rank': '7',
+                'value': None,
+            },
+            'invalid',
+        ]
+
+        assert _loot_cards_public(cards, include_id=True) == [
+            {
+                'id': 17,
+                'suit': 'Spades',
+                'rank': 'A',
+                'value': 3,
+                'role': 'key',
+                'source': 'figure',
+                'bucket': 'key',
+            },
+            {
+                'suit': 'Hearts',
+                'rank': '7',
+                'value': 0,
+                'role': None,
+                'source': None,
+                'bucket': None,
+            },
+        ]
+        assert 'id' not in _loot_cards_public(cards)[0]
+
+
+class TestCreateKingdomLootEvents:
+    def test_empty_cards_create_no_events(self, app, db, two_users):
+        from models import KingdomLootEvent
+        from routes.games import _create_kingdom_loot_events
+
+        gained_user, lost_user = two_users
+
+        assert _create_kingdom_loot_events(
+            attack_log_id=None,
+            land_id=None,
+            gained_user_id=gained_user.id,
+            lost_user_id=lost_user.id,
+            cards=[],
+        ) is None
+        assert KingdomLootEvent.query.count() == 0
+
+    def test_creates_mirrored_gain_and_loss_events(
+            self, app, db, two_users):
+        from models import KingdomLootEvent
+        from routes.games import _create_kingdom_loot_events
+
+        gained_user, lost_user = two_users
+        cards = [{
+            'id': 99,
+            'suit': 'Spades',
+            'rank': 'A',
+            'value': '3',
+            'role': 'key',
+            'source': 'figure',
+            'bucket': 'key',
+            'internal': 'discard-me',
+        }]
+
+        result = _create_kingdom_loot_events(
+            attack_log_id=None,
+            land_id=None,
+            gained_user_id=gained_user.id,
+            lost_user_id=lost_user.id,
+            gained_kingdom_id=101,
+            lost_kingdom_id=202,
+            source='attacker_win',
+            cards=cards,
+        )
+        db.session.flush()
+
+        events = KingdomLootEvent.query.order_by(
+            KingdomLootEvent.direction
+        ).all()
+        assert result is None
+        assert len(events) == 2
+        gained = next(event for event in events if event.direction == 'gained')
+        lost = next(event for event in events if event.direction == 'lost')
+        expected_cards = [{
+            'suit': 'Spades',
+            'rank': 'A',
+            'value': 3,
+            'role': 'key',
+            'source': 'figure',
+            'bucket': 'key',
+        }]
+        assert gained.user_id == gained_user.id
+        assert gained.kingdom_id == 101
+        assert gained.counterparty_user_id == lost_user.id
+        assert gained.cards == expected_cards
+        assert gained.collected is False
+        assert gained.seen is False
+        assert lost.user_id == lost_user.id
+        assert lost.kingdom_id == 202
+        assert lost.counterparty_user_id == gained_user.id
+        assert lost.cards == expected_cards
+        assert lost.collected is True
+        assert lost.seen is False
