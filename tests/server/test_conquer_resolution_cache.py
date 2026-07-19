@@ -23,8 +23,14 @@ def _start_conquer_battle(app, db, attacker, land):
     return db.session.get(Game, response.get_json()['game_id'])
 
 
-def test_resolver_cache_preserves_prior_metadata_and_matches_live_payload(app, db):
+def test_resolver_cache_preserves_prior_metadata_and_matches_live_payload(
+    app,
+    db,
+    monkeypatch,
+):
     from routes.games import _resolve_conquer_battle
+    import kingdom_service
+    import server_settings
 
     with app.app_context():
         attacker_user = _make_user(db, username='cache_attacker')
@@ -45,6 +51,27 @@ def test_resolver_cache_preserves_prior_metadata_and_matches_live_payload(app, d
             'custom_preserved_key': {'nested': True},
         }
         db.session.flush()
+
+        skill_calls = []
+
+        def kingdom_skill_level(kingdom_id, skill_name):
+            skill_calls.append(('level', kingdom_id, skill_name))
+            return 3
+
+        def skill_effect_at_level(skill_name, level):
+            skill_calls.append(('effect', skill_name, level))
+            return 1.0
+
+        monkeypatch.setattr(
+            kingdom_service,
+            'kingdom_skill_level',
+            kingdom_skill_level,
+        )
+        monkeypatch.setattr(
+            server_settings,
+            'skill_effect_at_level',
+            skill_effect_at_level,
+        )
 
         payload = _resolve_conquer_battle(game, defender, attacker)
         db.session.flush()
@@ -70,6 +97,7 @@ def test_resolver_cache_preserves_prior_metadata_and_matches_live_payload(app, d
         assert cache['conquer_loot_lost_cards'] == payload['loot_lost_cards']
         assert cache['cards_spent'] == payload['cards_spent']
         assert cache['cards_spent'] == len(cache['conquer_loot_lost_cards'])
+        assert cache['cards_spent'] == 5
         assert cache['card_won_suit'] == payload['card_won_suit']
         assert cache['card_won_rank'] == payload['card_won_rank']
         assert cache['card_lost_suit'] == payload['card_lost_suit']
@@ -120,6 +148,10 @@ def test_resolver_cache_preserves_prior_metadata_and_matches_live_payload(app, d
         )
         assert payload['conquer_result'] == 'defender_won'
         assert payload['attacker_won'] is False
+        assert skill_calls == [
+            ('level', land.kingdom_id, 'loot_chance'),
+            ('effect', 'loot_chance', 3),
+        ]
         assert payload['conquer_attacker_player_id'] == attacker.id
         assert payload['conquer_attacker_user_id'] == attacker_user.id
         assert payload['conquer_defender_player_id'] == defender.id
