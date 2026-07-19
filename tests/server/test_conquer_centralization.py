@@ -14,7 +14,7 @@ Covers:
 """
 from datetime import datetime, timezone, timedelta
 
-from models import (db, Game, Player, LandConfig, LandAttackLog,
+from models import (db, Game, Kingdom, Player, LandConfig, LandAttackLog,
                     CollectionCard, KingdomNotification)
 
 # Reuse the helpers from the land-battle test suite.
@@ -350,6 +350,12 @@ class TestConquerLootNotifications:
 
             game = _start_conquer_battle(app, db, attacker, land)
             atk_player = db.session.get(Player, game.invader_player_id)
+            lost_kingdom_id = land.kingdom_id
+            lost_kingdom = db.session.get(Kingdom, lost_kingdom_id)
+            lost_kingdom_name = (
+                lost_kingdom.name
+                or f'Kingdom #{lost_kingdom_id}'
+            )
 
             _resolve_conquer_battle(game, atk_player, atk_player)
             db.session.commit()
@@ -358,12 +364,27 @@ class TestConquerLootNotifications:
                 user_id=attacker.id, kind='card_looted',
             ).count()
             assert notes == 0
+            assert db.session.get(Kingdom, lost_kingdom_id) is None
+            dissolved = KingdomNotification.query.filter_by(
+                user_id=defender.id,
+                kind='kingdom_dissolved',
+            ).one()
+            assert dissolved.kingdom_id == lost_kingdom_id
+            assert dissolved.payload == {
+                'kingdom_name': lost_kingdom_name,
+            }
 
 
 class TestConquerSplitCollateral:
     """Successful connector conquests transfer smaller split-off remnants."""
 
-    def test_attacker_claims_smaller_split_component_and_players_are_notified(self, app, db):
+    def test_attacker_claims_smaller_split_component_and_players_are_notified(
+        self,
+        app,
+        db,
+        monkeypatch,
+    ):
+        import region_service
         from routes.games import _resolve_conquer_battle
         from kingdom_service import reconcile_user_kingdoms
         with app.app_context():
@@ -373,6 +394,8 @@ class TestConquerSplitCollateral:
             target = _make_land(db, tier=2, owner_user_id=defender.id, col=1, row=0)
             kept_a = _make_land(db, tier=1, owner_user_id=defender.id, col=2, row=0)
             kept_b = _make_land(db, tier=1, owner_user_id=defender.id, col=3, row=0)
+            split_off.region = 'karnali'
+            target.region = 'gandaki'
             kingdom = reconcile_user_kingdoms(defender.id, commit=True)[0]
             kingdom.name = 'Defender Ridge'
             db.session.commit()
@@ -389,6 +412,17 @@ class TestConquerSplitCollateral:
             game = _start_conquer_battle(app, db, attacker, target)
             atk_player = db.session.get(Player, game.invader_player_id)
 
+            region_calls = []
+
+            def reconcile_region_champion(region, *, now, commit):
+                region_calls.append((region, now, commit))
+
+            monkeypatch.setattr(
+                region_service,
+                'reconcile_region_champion',
+                reconcile_region_champion,
+            )
+
             result = _resolve_conquer_battle(game, atk_player, atk_player)
             db.session.commit()
 
@@ -397,6 +431,12 @@ class TestConquerSplitCollateral:
             assert split_summary['transferred_land_ids'] == [split_off.id]
             assert split_summary['kept_land_count'] == 2
             assert game.last_battle_result['kingdom_split_transfer']['transferred_land_ids'] == [split_off.id]
+            assert [call[0] for call in region_calls] == [
+                'gandaki',
+                'karnali',
+            ]
+            assert all(call[2] is False for call in region_calls)
+            assert region_calls[0][1] is region_calls[1][1]
 
             for land in (split_off, target, kept_a, kept_b):
                 db.session.refresh(land)
