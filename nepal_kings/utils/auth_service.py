@@ -3,6 +3,33 @@
 from utils import http_compat as requests
 from config import settings
 
+
+def _server_error(response, fallback):
+    """Return a safe server-provided error instead of a generic HTTP failure."""
+    try:
+        payload = response.json()
+    except Exception:
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+
+    result = {
+        'success': False,
+        'message': payload.get('message') or fallback,
+    }
+    for key in ('reason', 'retryable'):
+        if key in payload:
+            result[key] = payload[key]
+
+    try:
+        retry_after = response.headers.get('Retry-After')
+    except Exception:
+        retry_after = None
+    if retry_after:
+        result['retry_after'] = retry_after
+    return result
+
+
 def send_heartbeat(username=None):
     """Ping the server to mark this user as online.
 
@@ -40,6 +67,12 @@ def login(username, password):
         # Check if the response indicates a failure due to wrong credentials (401 Unauthorized)
         if response.status_code == 401:
             return {'success': False, 'message': 'Login failed. Username or password incorrect'}
+
+        if response.status_code == 503:
+            return _server_error(
+                response,
+                'Nepal Kings is temporarily unavailable. Please try again later.',
+            )
 
         # If the status code is not 200, raise an exception for other kinds of errors
         response.raise_for_status()
@@ -80,6 +113,12 @@ def register(username, password, email=None, legal_confirmed=False):
         # Check for username conflicts (409 Conflict)
         if response.status_code == 409:
             return {'success': False, 'message': 'Registration failed. Username already exists.'}
+
+        if response.status_code == 503:
+            return _server_error(
+                response,
+                'Registration is temporarily unavailable. Please try again later.',
+            )
 
         # Handle validation errors (400) — read the server's message
         if response.status_code == 400:

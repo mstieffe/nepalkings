@@ -306,6 +306,24 @@ Nothing from `build/web-staging` was deployed. The existing Pages artifact
 continues to use the legacy development server until an approved merge to
 `main`.
 
+### Desktop maintenance-message follow-up
+
+Testing the new source default while production was intentionally maintained
+revealed that the desktop auth wrapper printed a generic `503 Server Error`
+and replaced the server's useful maintenance explanation with a network-error
+message. The web client already preserved JSON error messages.
+
+`utils/auth_service.py` now handles login and registration `503` responses
+before `raise_for_status()`. It returns the safe server message plus
+`reason`, `retryable`, and `Retry-After` metadata when supplied. Two regression
+tests cover desktop login and registration. The focused auth/login suite
+passed eight tests, and a live non-mutating desktop login probe returned:
+
+```text
+Nepal Kings is temporarily unavailable for maintenance.
+reason=maintenance retryable=True retry_after=300
+```
+
 ## Execution checklist
 
 - [x] Confirm local branch, commit, archive hash, and clean worktree.
