@@ -82,7 +82,58 @@ def test_resolver_cache_preserves_prior_metadata_and_matches_live_payload(app, d
 
         assert payload['points_awarded'] == 7
         assert payload['destroyed_figure_name'] == 'Prior General'
+        assert set(payload) == {
+            'success',
+            'message',
+            'conquer_result',
+            'attacker_won',
+            'conquer_attacker_player_id',
+            'conquer_defender_player_id',
+            'conquer_attacker_user_id',
+            'conquer_defender_user_id',
+            'land_id',
+            'land_gold_rate',
+            'land_tier',
+            'points_awarded',
+            'destroyed_figure_name',
+            'card_won_suit',
+            'card_won_rank',
+            'card_lost_suit',
+            'card_lost_rank',
+            'is_ai_defender',
+            'attacker_first_conquest',
+            'loot_lost_cards',
+            'loot_gained_cards',
+            'consumed_cards',
+            'defence_consumed_cards',
+            'cards_spent',
+            'kingdom_split_transfer',
+            'victory_review_available',
+            'victory_review_config_id',
+            'victory_review_land_id',
+            'game',
+            'onboarding',
+        }
+        assert payload['success'] is True
+        assert payload['message'] == (
+            'Conquer battle resolved: defender_won'
+        )
         assert payload['conquer_result'] == 'defender_won'
         assert payload['attacker_won'] is False
+        assert payload['conquer_attacker_player_id'] == attacker.id
+        assert payload['conquer_attacker_user_id'] == attacker_user.id
+        assert payload['conquer_defender_player_id'] == defender.id
+        assert payload['conquer_defender_user_id'] == defender_user.id
+        assert payload['land_id'] == land.id
+        assert payload['land_gold_rate'] == 5.0
+        assert payload['land_tier'] == 2
+        assert payload['is_ai_defender'] is False
+        assert payload['attacker_first_conquest'] is False
+        assert payload['kingdom_split_transfer'] is None
+        assert payload['victory_review_available'] is False
+        assert payload['victory_review_config_id'] is None
+        assert payload['victory_review_land_id'] is None
+        assert isinstance(payload['game'], dict)
+        assert isinstance(payload['onboarding'], dict)
 
         assert LandAttackLog.query.filter_by(land_id=land.id).count() == 1
