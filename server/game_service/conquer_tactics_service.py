@@ -4,6 +4,9 @@ import logging
 
 from sqlalchemy import or_
 
+from game_service.game_mode import (
+    is_tactics_hand_conquer as _is_tactics_hand_conquer,
+)
 from models import db, ConquerTactic, Figure, MainCard, SideCard, Game
 
 
@@ -38,11 +41,7 @@ _SPECIAL_RANK_TIEBREAK = {
 
 
 def is_tactics_hand_conquer(game):
-    return bool(
-        game
-        and game.mode == 'conquer'
-        and (getattr(game, 'conquer_move_model', None) or 'battle_move') == 'tactics_hand'
-    )
+    return _is_tactics_hand_conquer(game)
 
 
 def _choice_value(value):
