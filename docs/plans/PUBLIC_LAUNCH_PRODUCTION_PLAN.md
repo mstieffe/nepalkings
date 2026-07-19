@@ -524,11 +524,11 @@ Priority: **P0**
 - [x] Pin one supported server Python version across local development, CI, and
   hosting.
 - [x] Remove dependency installation from WSGI import.
-- [ ] Create separate staging and production environments.
+- [x] Create separate staging and production environments.
 - [x] Store secrets in private provider-side environment files outside the
   repository; deployment templates contain placeholders only.
 - [x] Configure TLS and force HTTPS.
-- [ ] Configure and live-verify exact CORS origins for both environments.
+- [x] Configure and live-verify exact CORS origins for both environments.
 - [x] Add `/healthz` without a database dependency.
 - [x] Add `/readyz` with database and schema-version checks.
 - [x] Add build metadata: commit SHA, API version, and minimum client version.
@@ -555,7 +555,7 @@ Priority: **P0**
 - [x] Build a repeatable SQLite-to-PostgreSQL importer.
 - [x] Preserve IDs and reset PostgreSQL sequences.
 - [x] Validate row counts and foreign keys.
-- [ ] Validate the fresh production bootstrap: schema version, one AI user,
+- [x] Validate the fresh production bootstrap: schema version, one AI user,
   4,800 lands, region/champion seeds, and zero human accounts/games/ownership.
 - [ ] Rehearse fresh production initialization and application rollback twice.
 - [x] Add maintenance/read-only mode for the cutover.
@@ -566,7 +566,7 @@ Priority: **P0**
 
 Verification:
 
-- [ ] No production SQLite dependency remains.
+- [x] No production SQLite dependency remains.
 - [x] Migration validation is automated and passes.
 - [ ] Restore meets RPO and RTO.
 
@@ -783,10 +783,10 @@ Priority: **P0**
 - [ ] Auto-deploy `develop` to staging.
 - [ ] Deploy production only from an approved tag or `main`.
 - [x] Tie immutable artifacts to a commit SHA.
-- [ ] Add post-deploy smoke tests.
+- [x] Add post-deploy smoke tests.
 - [ ] Add schema/client compatibility checks.
 - [ ] Add maintenance mode and feature flags.
-- [ ] Test application rollback independently of database recovery.
+- [x] Test application rollback independently of database recovery.
 - [ ] Add checksums/signing for installers.
 - [ ] Publish release notes and known issues.
 

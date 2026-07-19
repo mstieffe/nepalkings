@@ -36,7 +36,7 @@ Client routing and the environment matrix are in
 | PostgreSQL role | `nepalkings_staging` | `nepalkings_prod` |
 | Private environment | `~/.config/nepalkings/staging.env` | `~/.config/nepalkings/production.env` |
 | Virtualenv | `~/.virtualenvs/nepalkings-staging` | `~/.virtualenvs/nepalkings-production` |
-| Background worker | always-on task `35390` | separate task; not created yet |
+| Background worker | always-on task `35390` | always-on task `35394` |
 
 Both environments may reference the same read-only immutable release
 directory, but they must not share a database, role, signing key, environment
@@ -378,6 +378,108 @@ only `nepalkingz.eu.pythonanywhere.com`. The verified backup is retained; this
 code-only fix did not change schema version `17`, so no automatic database
 restore is part of rollback.
 
+### Production worker, rollback, mutation, and recovery gates
+
+After the subscription was raised from one to two always-on tasks, production
+was advanced to the staging-tested server release
+`90bfa02fa5b00b5d59998bb2b558ac19201595c1` while maintenance remained
+enabled.
+
+Before the release switch, the deployment created and verified:
+
+```text
+/home/nepalkingz/backups/postgres-production/production-pre-90bfa02-20260719T213221Z.dump
+```
+
+- mode/size: `600`, `197936` bytes;
+- SHA-256:
+  `d692d3016ce4b200a780ddecc8b28011e1ada514ecf76647ac3a59f1d4337a43`.
+
+The remote release's auth, message-route, and requirements hashes matched the
+committed source. Production dependency installation remained pinned,
+`pip check` passed, and `prepare-database` completed at schema `17`.
+Production WSGI, provider source, private `RELEASE_SHA`, and the new worker all
+point to `90bfa02...`.
+
+Production always-on task `35394` uses only:
+
+```text
+NEPAL_KINGS_ENV_FILE=/home/nepalkingz/.config/nepalkings/production.env
+AI_ENABLED=True
+/home/nepalkingz/.virtualenvs/nepalkings-production/bin/python
+/home/nepalkingz/releases/90bfa02.../server/manage.py run-worker
+```
+
+Provider state reached `Running`. PostgreSQL showed exactly one production
+leadership lock (`classid=20044`, environment key `730732783`) owned by role
+`nepalkings_prod`, alongside the independent staging lock owned by
+`nepalkings_staging`. Provider server logs confirm three WSGI workers in each
+web app; the configured pool size/overflow remains bounded at `1 + 1` per
+process.
+
+#### Application rollback rehearsal
+
+With production maintained, the deployment switched WSGI, provider source,
+private release metadata, and worker task `35394` from `90bfa02...` back to
+schema-compatible release `949126c9...`. The rollback release returned:
+
+- `/healthz`: `200`, environment `production`, release `949126c9...`;
+- `/readyz`: `200`, PostgreSQL, schema `17`;
+- protected authentication: `503`.
+
+The same pointers were then advanced to `90bfa02...`; health, readiness, and
+maintenance enforcement passed again. Staging was not reloaded or modified.
+This is one completed application-rollback rehearsal independent of database
+recovery.
+
+#### Authenticated Conquer mutation smoke
+
+Immediately before mutation, the database contained schema `17`, `4,800`
+lands, one AI user, and zero humans, games, players, collection cards,
+kingdoms, or events. A second exact-baseline backup was created:
+
+```text
+/home/nepalkingz/backups/postgres-production/production-pre-conquer-smoke-20260719T214323Z.dump
+```
+
+- mode/size: `600`, `198108` bytes;
+- SHA-256:
+  `a6c87778def031e4c2b0d97aef45ce5c01c4ff9a0825dcad32993cfb4768e8a0`.
+
+Maintenance was briefly disabled only for the controlled smoke. The reusable
+`scripts/smoke_conquer_api.py` command verified:
+
+- registration and starter onboarding;
+- the 4,800-land kingdom map and recommended tutorial land `2733`;
+- Conquer configuration;
+- battle creation (`game_id=1`);
+- authenticated game read;
+- log and chat reads, including the PostgreSQL message-ID fix.
+
+Observed single-request times were `208.2 ms` registration, `455.2 ms` map,
+`98.1 ms` Conquer config, `422.5 ms` battle creation, `86.3 ms` game read,
+`49.3 ms` log read, and `103.0 ms` chat read. These are smoke observations,
+not percentile benchmarks. The worker sweep saw one candidate game and no
+traceback was written.
+
+Maintenance was restored immediately after the smoke.
+
+#### Database restore drill
+
+Only production worker `35394` and web app `56868` were stopped. Staging
+remained online and `/readyz` returned `200` throughout. The pre-smoke custom
+archive was restored with `--clean`, `--if-exists`, `--exit-on-error`, and
+`--single-transaction`, followed by the idempotent preparation command.
+
+- transactional restore: less than one whole second;
+- restore plus preparation: `3 seconds`;
+- recovered inventory: schema `17`, `4,800` lands, one AI user, zero humans,
+  games, players, collection cards, kingdoms, and events.
+
+Production was re-enabled on `90bfa02...` with maintenance still on.
+Health/readiness/legal checks passed, protected registration returned JSON
+`503` with `Retry-After: 300`, and staging readiness remained green.
+
 ## Execution checklist
 
 - [x] Confirm local branch, commit, archive hash, and clean worktree.
@@ -394,13 +496,15 @@ restore is part of rollback.
 - [x] Initialize the fresh database and verify schema/domain counts.
 - [x] Create the production web app, keep maintenance enabled, and configure
       immutable WSGI/virtualenv paths.
-- [ ] Allocate web workers deliberately: three production, one staging.
+- [x] Confirm provider web-worker allocation: three production and three
+      staging; keep per-process PostgreSQL pools bounded.
 - [x] Verify `/healthz`, `/readyz`, legal endpoints, TLS, maintenance
       behavior, and exact CORS origin.
-- [ ] Create exactly one production always-on worker and verify its
+- [x] Create exactly one production always-on worker and verify its
       environment-specific leadership.
-- [x] Temporarily disable maintenance for authenticated/concurrency smoke,
-      clean any smoke account, and re-enable maintenance until client cutover.
+- [x] Temporarily disable maintenance for authenticated/concurrency/Conquer
+      smoke, restore the exact clean baseline, and re-enable maintenance until
+      client cutover.
 - [x] Verify staging remains healthy, isolated, and unchanged.
 - [x] Update client/build production defaults on `develop`.
 - [x] Test and inspect the built artifact; do not deploy Pages from
@@ -465,12 +569,15 @@ Complete this section as execution proceeds.
 | Pre-initialization backup | passed; custom-format archive validated, SHA-256 `893ba8f...dea4` |
 | Production schema/counts | passed; schema 17, 4,800 lands, zero human/domain data |
 | Production web app ID/host | passed; ID `56868`, `api-nepalkingz.eu.pythonanywhere.com` |
-| Web-worker allocation | partial; production has three, staging allocation must be confirmed |
-| Production always-on task | blocked by provider-reported one-task account limit |
+| Web-worker allocation | passed; provider logs show three production and three staging |
+| Production always-on task | passed; task `35394`, production role/environment, one advisory leadership lock |
 | Health/readiness/legal/TLS | passed |
 | Exact CORS preflight | passed for GitHub Pages; untrusted origin not granted |
 | Authenticated smoke | passed |
-| Concurrency smoke | passed for six reads and six heartbeat writes; Conquer mutation pending |
+| Concurrency smoke | passed for six reads and six heartbeat writes |
+| Production Conquer mutation | passed through battle creation and game/message reads |
+| Application rollback | passed once from `90bfa02...` to `949126c9...` and forward |
+| Database restore | passed; transactional restore under 1 second, restore plus prepare 3 seconds |
 | Smoke-account cleanup | passed; fresh counts and sequences restored |
 | Staging isolation regression | passed |
 | Staging PostgreSQL message polling | passed on release `90bfa02...`; both game `3` endpoints return `200` |
