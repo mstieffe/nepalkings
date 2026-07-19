@@ -16,6 +16,72 @@ _TRANSFERABLE_DEFENCE_PRELUDE_SPELLS = frozenset({
 })
 
 
+def snapshot_collection_cards(card_ids, include_id=False):
+    """Snapshot collection-card suit and rank in requested ID order."""
+    from models import CollectionCard
+
+    unique_ids = []
+    seen_ids = set()
+    for card_id in card_ids or []:
+        if not card_id or card_id in seen_ids:
+            continue
+        seen_ids.add(card_id)
+        unique_ids.append(card_id)
+    if not unique_ids:
+        return []
+
+    cards = CollectionCard.query.filter(CollectionCard.id.in_(unique_ids)).all()
+    cards_by_id = {card.id: card for card in cards}
+    snapshot = []
+    for card_id in unique_ids:
+        card = cards_by_id.get(card_id)
+        if not card:
+            continue
+        data = {'suit': card.suit, 'rank': card.rank}
+        if include_id:
+            data['id'] = card.id
+        snapshot.append(data)
+    return snapshot
+
+
+def snapshot_config_battle_cards(
+    cfg,
+    include_id=False,
+    *,
+    config_battle_card_ids,
+    snapshot_cards,
+):
+    """Snapshot cards consumed with a config's battle and spell package."""
+    return snapshot_cards(
+        config_battle_card_ids(cfg),
+        include_id=include_id,
+    )
+
+
+def consume_config_figure_cards(cfg, exclude_card_ids=None):
+    """Delete a config's figure cards and figure rows, except exclusions."""
+    from models import CollectionCard, LandConfigFigure
+
+    excluded = set(exclude_card_ids or [])
+    figures = LandConfigFigure.query.filter_by(config_id=cfg.id).all()
+    card_ids = []
+    for figure in figures:
+        if figure.card_ids:
+            card_ids.extend(
+                card_id
+                for card_id in figure.card_ids
+                if card_id not in excluded
+            )
+
+    if card_ids:
+        CollectionCard.query.filter(
+            CollectionCard.id.in_(card_ids)
+        ).delete(synchronize_session='fetch')
+
+    for figure in figures:
+        db.session.delete(figure)
+
+
 def _config_battle_card_ids(cfg):
     """Return battle-move/modifier/spell card IDs referenced by a land config."""
     if not cfg:

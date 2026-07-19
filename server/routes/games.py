@@ -45,6 +45,9 @@ from game_service.conquer_config_transition import (
     _return_config_attack_only_cards,
     _wipe_land_config,
     _wipe_land_config_return_unlooted,
+    consume_config_figure_cards as _consume_config_figure_cards_impl,
+    snapshot_collection_cards as _snapshot_collection_cards_impl,
+    snapshot_config_battle_cards as _snapshot_config_battle_cards_impl,
 )
 from game_service.conquer_loot import (
     _config_figure_key_card_ids,
@@ -7524,57 +7527,25 @@ def _serialize_finished_conquer_result(game, viewer_user_id=None):
 
 def _snapshot_collection_cards(card_ids, include_id=False):
     """Snapshot suit/rank for collection cards, preserving input order."""
-    unique_ids = []
-    seen_ids = set()
-    for cid in card_ids or []:
-        if not cid or cid in seen_ids:
-            continue
-        seen_ids.add(cid)
-        unique_ids.append(cid)
-    if not unique_ids:
-        return []
-
-    cards = CollectionCard.query.filter(CollectionCard.id.in_(unique_ids)).all()
-    cards_by_id = {card.id: card for card in cards}
-    snapshot = []
-    for cid in unique_ids:
-        card = cards_by_id.get(cid)
-        if not card:
-            continue
-        data = {'suit': card.suit, 'rank': card.rank}
-        if include_id:
-            data['id'] = card.id
-        snapshot.append(data)
-    return snapshot
+    return _snapshot_collection_cards_impl(card_ids, include_id=include_id)
 
 
 def _snapshot_config_battle_cards(cfg, include_id=False):
     """Snapshot cards that are spent when a config's battle/spell package is consumed."""
-    return _snapshot_collection_cards(
-        _config_battle_card_ids(cfg),
+    return _snapshot_config_battle_cards_impl(
+        cfg,
         include_id=include_id,
+        config_battle_card_ids=_config_battle_card_ids,
+        snapshot_cards=_snapshot_collection_cards,
     )
 
 
 def _consume_config_figure_cards(cfg, exclude_card_ids=None):
     """Delete collection cards used for figures in a config (loser's figures consumed)."""
-    from models import CollectionCard, LandConfigFigure
-
-    excluded = set(exclude_card_ids or [])
-    figures = LandConfigFigure.query.filter_by(config_id=cfg.id).all()
-    card_ids = []
-    for fig in figures:
-        if fig.card_ids:
-            card_ids.extend(cid for cid in fig.card_ids if cid not in excluded)
-
-    if card_ids:
-        CollectionCard.query.filter(
-            CollectionCard.id.in_(card_ids)
-        ).delete(synchronize_session='fetch')
-
-    # Delete the figure records
-    for fig in figures:
-        db.session.delete(fig)
+    return _consume_config_figure_cards_impl(
+        cfg,
+        exclude_card_ids=exclude_card_ids,
+    )
 
 
 @games.route('/finish_battle_pick_card', methods=['POST'])
