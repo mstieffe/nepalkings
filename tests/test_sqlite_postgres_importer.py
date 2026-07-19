@@ -3,8 +3,10 @@
 """Repeatable SQLite-to-PostgreSQL importer regression coverage."""
 
 from pathlib import Path
+import os
 
-from sqlalchemy import MetaData, create_engine, select
+import pytest
+from sqlalchemy import MetaData, create_engine, select, text
 
 from scripts.migrate_sqlite_to_postgres import (
     CURRENT_SCHEMA_VERSION,
@@ -112,3 +114,41 @@ def test_import_preserves_ids_json_and_cyclic_foreign_keys(tmp_path):
         assert game['pending_spell_id'] == 81
         assert game['last_battle_result'] == {'imported': True}
     engine.dispose()
+
+
+@pytest.mark.skipif(
+    not os.environ.get('TEST_DATABASE_URL'),
+    reason='PostgreSQL service is only available in the compatibility CI job',
+)
+def test_import_runs_against_postgres_and_resets_sequences(tmp_path):
+    source_path = tmp_path / 'postgres-source.db'
+    _build_current_source(source_path)
+    target_url = os.environ['TEST_DATABASE_URL']
+
+    row_counts, summary = migrate(source_path, target_url)
+
+    assert row_counts['user'] == 1
+    assert summary['user'] == 1
+
+    engine = create_engine(target_url)
+    metadata = MetaData()
+    metadata.reflect(engine)
+    user = metadata.tables['user']
+    game = metadata.tables['game']
+    try:
+        with engine.begin() as connection:
+            imported_game = connection.execute(
+                select(game).where(game.c.id == 51)
+            ).mappings().one()
+            assert imported_game['last_battle_result'] == {'imported': True}
+
+            result = connection.execute(user.insert(), {
+                'username': 'after_import',
+                'password_hash': 'test-hash',
+            })
+            assert result.inserted_primary_key == (42,)
+    finally:
+        with engine.begin() as connection:
+            connection.execute(text('DROP SCHEMA public CASCADE'))
+            connection.execute(text('CREATE SCHEMA public'))
+        engine.dispose()
