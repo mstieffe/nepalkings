@@ -5,57 +5,8 @@
 from models import Land, LandAttackLog, User, db
 
 
-def serialize_finished_conquer_result(
-    game,
-    viewer_user_id=None,
-    *,
-    serialize_game_for_viewer,
-    serialize_viewer_onboarding,
-    conquer_attacker_player,
-    conquer_original_defender_player,
-):
-    """Return a stable result payload for an already-finished Conquer game."""
-    if not game or game.mode != 'conquer' or game.state != 'finished':
-        return None
-
-    serialized_game = (
-        serialize_game_for_viewer(game, viewer_user_id)
-        if viewer_user_id is not None
-        else game.serialize()
-    )
-
-    land = db.session.get(Land, game.land_id) if game.land_id else None
-    attacker_player = conquer_attacker_player(game)
-    attacker_id = attacker_player.id if attacker_player else game.invader_player_id
-
-    if game.winner_player_id is None:
-        conquer_result = 'draw'
-        attacker_won = False
-    else:
-        attacker_won = game.winner_player_id == attacker_id
-        conquer_result = 'attacker_won' if attacker_won else 'defender_won'
-
-    last_result = (
-        game.last_battle_result
-        if isinstance(game.last_battle_result, dict)
-        else {}
-    )
-
-    payload = {
-        'success': True,
-        'message': f'Conquer battle already resolved: {conquer_result}',
-        'already_resolved': True,
-        'conquer_result': conquer_result,
-        'attacker_won': attacker_won,
-        'land_id': game.land_id,
-        'land_gold_rate': land.gold_rate if land else 0,
-        'land_tier': land.tier if land else None,
-        'game': serialized_game,
-    }
-    onboarding = serialize_viewer_onboarding(viewer_user_id)
-    if onboarding is not None:
-        payload['onboarding'] = onboarding
-
+def _append_battle_score(payload, game, last_result, viewer_user_id):
+    """Add canonical battle math and the viewer-oriented final total."""
     # Battle math is stored in one stable, non-viewer-specific perspective:
     # the player who was advancing when the clash resolved. This matters for
     # Invader Swap, where that player is the original Conquer defender.
@@ -112,6 +63,9 @@ def serialize_finished_conquer_result(
         payload['total_diff'] = viewer_total
         payload['battle_total_diff'] = viewer_total
 
+
+def _append_cached_result_details(payload, game, last_result):
+    """Add persisted card, loot, participant, and auto-loss details."""
     card_detail_keys = (
         'card_won_suit',
         'card_won_rank',
@@ -181,6 +135,9 @@ def serialize_finished_conquer_result(
     if 'auto_loss_detail' in last_result:
         payload['auto_loss_detail'] = last_result.get('auto_loss_detail')
 
+
+def _append_victory_review(payload, game, last_result, attacker_won):
+    """Add the resumable victory-review prompt state."""
     cached_review_config = last_result.get('victory_review_config_id')
     cached_review_land = last_result.get('victory_review_land_id')
     attacker_user_id = last_result.get('conquer_attacker_user_id')
@@ -202,6 +159,62 @@ def serialize_finished_conquer_result(
     payload['victory_review_land_id'] = (
         cached_review_land if review_available else None
     )
+
+
+def serialize_finished_conquer_result(
+    game,
+    viewer_user_id=None,
+    *,
+    serialize_game_for_viewer,
+    serialize_viewer_onboarding,
+    conquer_attacker_player,
+    conquer_original_defender_player,
+):
+    """Return a stable result payload for an already-finished Conquer game."""
+    if not game or game.mode != 'conquer' or game.state != 'finished':
+        return None
+
+    serialized_game = (
+        serialize_game_for_viewer(game, viewer_user_id)
+        if viewer_user_id is not None
+        else game.serialize()
+    )
+
+    land = db.session.get(Land, game.land_id) if game.land_id else None
+    attacker_player = conquer_attacker_player(game)
+    attacker_id = attacker_player.id if attacker_player else game.invader_player_id
+
+    if game.winner_player_id is None:
+        conquer_result = 'draw'
+        attacker_won = False
+    else:
+        attacker_won = game.winner_player_id == attacker_id
+        conquer_result = 'attacker_won' if attacker_won else 'defender_won'
+
+    last_result = (
+        game.last_battle_result
+        if isinstance(game.last_battle_result, dict)
+        else {}
+    )
+
+    payload = {
+        'success': True,
+        'message': f'Conquer battle already resolved: {conquer_result}',
+        'already_resolved': True,
+        'conquer_result': conquer_result,
+        'attacker_won': attacker_won,
+        'land_id': game.land_id,
+        'land_gold_rate': land.gold_rate if land else 0,
+        'land_tier': land.tier if land else None,
+        'game': serialized_game,
+    }
+    onboarding = serialize_viewer_onboarding(viewer_user_id)
+    if onboarding is not None:
+        payload['onboarding'] = onboarding
+
+    _append_battle_score(payload, game, last_result, viewer_user_id)
+    _append_cached_result_details(payload, game, last_result)
+    _append_victory_review(payload, game, last_result, attacker_won)
 
     if conquer_result == 'draw':
         payload['outcome'] = 'draw'
