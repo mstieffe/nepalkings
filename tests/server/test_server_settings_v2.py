@@ -101,6 +101,9 @@ class TestV2ServerSettings:
     def test_land_conquer_protection_nonnegative(self):
         assert config.LAND_CONQUER_PROTECTION_SECONDS >= 0
 
+    def test_region_champion_startup_reconciliation_is_opt_in(self):
+        assert config.RECONCILE_REGION_CHAMPIONS_ON_STARTUP is False
+
     def test_ai_defence_generation_rules_all_tiers(self):
         for tier in (1, 2, 3, 4):
             assert tier in ai_defence_config.AI_DEFENCE_GENERATION_RULES

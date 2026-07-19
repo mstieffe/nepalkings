@@ -294,6 +294,13 @@ REGION_TRIBUTE_RATE = float(os.getenv('REGION_TRIBUTE_RATE', '0.05'))
 REGION_TRIBUTE_CAP_HOURS = int(
     os.getenv('REGION_TRIBUTE_CAP_HOURS', '24')
 )
+# Full-map reconciliation is maintenance work, not a WSGI import requirement.
+# Migration 14 seeds the initial rows and Conquer updates affected regions
+# transactionally.  Hosts with generous startup windows may opt back in.
+RECONCILE_REGION_CHAMPIONS_ON_STARTUP = os.getenv(
+    'RECONCILE_REGION_CHAMPIONS_ON_STARTUP',
+    'False',
+).lower() == 'true'
 
 # Land tiers 1..KINGDOM_TIER_COUNT.  Higher = rarer / more valuable.  The map
 # is generated as a "landscape" with one elevation peak per suit cluster, so
