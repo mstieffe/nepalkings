@@ -15,7 +15,7 @@ full launch gate is
 | Local development | `http://localhost:5000` | Local development database | Developer-only |
 | Legacy development server | `https://nepalkings.pythonanywhere.com` | Disposable development data | Current default for the published web client and installers; not production data |
 | EU staging | `https://nepalkingz.eu.pythonanywhere.com` | Isolated `nepalkings_staging` PostgreSQL database | Integration, performance, schema/restore, and soak testing |
-| EU production | Final custom API domain not selected | Fresh, isolated `nepalkings_prod` PostgreSQL database | Database exists; web app and worker are not configured yet |
+| EU production | Planned: `https://api-nepalkingz.eu.pythonanywhere.com` | Fresh, isolated `nepalkings_prod` PostgreSQL database | Database exists; web app and worker are not configured yet |
 
 Do not treat EU staging as production. Accounts, tokens, games, collections,
 and ownership are isolated by database and signing key. A user created on one
@@ -123,9 +123,13 @@ result in the launch plan.
 
 Do not update the public client's default server until every item below passes.
 
-1. Select the canonical production API domain, for example
-   `api.nepalkings.com`.
-2. Point its DNS at PythonAnywhere and create the second EU web app.
+1. Create the second EU web app at the temporary production hostname
+   `api-nepalkingz.eu.pythonanywhere.com`. PythonAnywhere supports additional
+   paid-account apps in the form
+   `something-username.eu.pythonanywhere.com`, so no purchased domain or DNS
+   change is required for launch.
+2. Keep `nepalkingz.eu.pythonanywhere.com` as staging. Never point both web apps
+   at the same private environment file or database.
 3. Complete the private `production.env` with a production-only signing key,
    the `nepalkings_prod` database URL, the production API URL, exact CORS
    origin, and maintenance mode enabled.
@@ -146,11 +150,43 @@ Do not update the public client's default server until every item below passes.
    gameplay, logs, and rollback.
 10. Disable production maintenance only after the smoke gates pass.
 
+## Add polished domains later
+
+Adding branded domains later does not require moving or recreating the
+PostgreSQL databases. A future layout can be:
+
+| Purpose | Temporary launch URL | Future custom URL |
+|---|---|---|
+| Web client | `https://mstieffe.github.io/nepalkings/` | `https://play.YOUR_DOMAIN/` |
+| Production API | `https://api-nepalkingz.eu.pythonanywhere.com` | `https://api.YOUR_DOMAIN/` |
+| Staging API | `https://nepalkingz.eu.pythonanywhere.com` | optional; keep private/technical |
+
+Provider domains are suitable for staging, internal testing, and an invited
+beta. Prefer adding the polished API domain before broadly distributing native
+installers: unlike the web client, an installed build does not update its
+baked-in default automatically. If the API domain changes after installers are
+public, keep the old API hostname working through the supported client-upgrade
+window.
+
+For the later API-domain change:
+
+1. Add the owned subdomain to the existing PythonAnywhere production web app
+   and configure its CNAME and HTTPS certificate.
+2. Change `SERVER_URL` and `SERVER_BASE_URL` in `production.env`.
+3. Reload the production web app and restart its always-on worker.
+4. Verify TLS, readiness, CORS, authenticated gameplay, and logs.
+5. Rebuild the client with the custom production API URL.
+
+For the later GitHub Pages domain change, configure and verify the custom
+domain in the repository's Pages settings, add the required DNS records, and
+re-test HTTPS and the exact API CORS origin. Keep the old URLs available during
+the transition where possible.
+
 ## Promote the web client to EU production
 
 After the production cutover passes, replace the legacy development URL with
-the canonical production API URL in the five client/build locations listed
-above.
+`https://api-nepalkingz.eu.pythonanywhere.com` in the five client/build
+locations listed above.
 Then:
 
 1. Run client tests and build the optimized web archive.

@@ -22,16 +22,18 @@ Use two isolated web apps and databases:
 | staging | staging custom domain | `nepalkings_staging` | `~/.config/nepalkings/staging.env` |
 | production | canonical API domain | `nepalkings_prod` | `~/.config/nepalkings/production.env` |
 
-The current `nepalkingz.eu.pythonanywhere.com` app may remain the temporary
-staging app until custom DNS is ready. A second PythonAnywhere web app needs a
-custom domain.
+Keep the current `nepalkingz.eu.pythonanywhere.com` app as staging. A paid EU
+account can create the production app without buying a domain by using
+`api-nepalkingz.eu.pythonanywhere.com`; PythonAnywhere supports additional
+hostnames in the form `something-username.eu.pythonanywhere.com`. A polished
+custom domain can replace that hostname later.
 
 Current verified state and instructions for routing browser/desktop clients
 are documented in
 [`docs/environments.md`](../../docs/environments.md). In particular, the
 published client still points to the legacy US server by default; use its
-explicit staging override until the production web app, fresh database, and
-custom domain pass the cutover gates.
+explicit staging override until the production web app and fresh database pass
+the cutover gates.
 
 ## 1. Create PostgreSQL databases and least-privilege users
 

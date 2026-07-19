@@ -81,8 +81,9 @@ Already present:
 
 Known launch blockers:
 
-- The production environment and custom API domain are not configured or
-  cut over; only staging is on PostgreSQL.
+- The production web app at the planned temporary hostname
+  `api-nepalkingz.eu.pythonanywhere.com` is not configured or cut over; only
+  staging is on PostgreSQL.
 - EU production will intentionally start with a fresh database. Legacy US
   development users, games, collections, kingdoms, and ownership will not be
   migrated.
@@ -916,3 +917,4 @@ Part-time expectation: approximately two to three months.
 | 2026-07-19 | PostgreSQL-backed multi-worker coordination | Release `e52611c` passed local, Python 3.11, and disposable PostgreSQL 16 tests; staging reports schema 17 with three workers | Conquer receipts, deadlines, game transaction locks, and security rate limits are shared; live gameplay and soak gates remain |
 | 2026-07-19 | Promote staging to release `949126c` after live race discovery | Validated PostgreSQL backup, green 2,627-test/CI/security gates, permanent task `35390`, six concurrent identical withdrawals with one canonical response and one durable receipt, and clean post-deploy logs | Staging is open on three workers plus one dedicated worker; next gates are restore automation, conflicting-action/two-account testing, and the 24-hour soak |
 | 2026-07-19 | Start EU production with fresh data | The old US server and its accounts were development-only | Do not run a legacy data import; initialize and verify the empty `nepalkings_prod` database before switching released clients |
+| 2026-07-19 | Launch first on provider domains | PythonAnywhere supports `something-username.eu.pythonanywhere.com` for additional paid-account apps, and GitHub Pages already hosts the client | Use `api-nepalkingz.eu.pythonanywhere.com` for initial production and add polished web/API domains later without moving PostgreSQL data |
