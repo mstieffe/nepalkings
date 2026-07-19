@@ -2,6 +2,7 @@
 # See LICENSE file in the project root for full license information.
 """Card validation and round-progression rules for Conquer tactics."""
 
+from game_service.game_mode import is_tactics_hand_conquer
 from models import (
     BattleMove,
     ConquerTactic,
@@ -33,11 +34,7 @@ _CONQUER_TACTIC_FAMILY_BY_RANK = {
 
 
 def _is_tactics_hand_conquer(game):
-    return bool(
-        game
-        and game.mode == 'conquer'
-        and (getattr(game, 'conquer_move_model', None) or 'battle_move') == 'tactics_hand'
-    )
+    return is_tactics_hand_conquer(game)
 
 
 def _get_tactic_card(tactic, *, secondary=False):

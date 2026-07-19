@@ -6,6 +6,7 @@ import random
 import logging
 from flask import Blueprint, request, jsonify, current_app, g
 from models import db, Game, Player, MainCard, SideCard, BattleMove, User, LogEntry
+from game_service.game_mode import is_tactics_hand_conquer
 import server_settings as settings
 from routes.auth import require_token, verify_game_membership, verify_player_ownership
 from routes.serialization import serialize_battle_moves_for_viewer, serialize_game_for_viewer
@@ -101,11 +102,7 @@ def _is_tactics_hand_conquer(game):
     battle-decision time, and the player interacts with them directly via
     play/combine/dismantle/gamble.
     """
-    return bool(
-        game
-        and game.mode == 'conquer'
-        and (getattr(game, 'conquer_move_model', None) or 'battle_move') == 'tactics_hand'
-    )
+    return is_tactics_hand_conquer(game)
 
 
 def _block_legacy_battle_shop_mutation(game):

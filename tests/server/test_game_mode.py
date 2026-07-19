@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 
 def test_route_orm_predicates_share_behavior_but_keep_historical_metadata():
+    from game_service.game_mode import is_tactics_hand_conquer
     from routes.battle_shop import (
         _is_tactics_hand_conquer as battle_shop_predicate,
     )
@@ -46,9 +47,11 @@ def test_route_orm_predicates_share_behavior_but_keep_historical_metadata():
         ),
     )
     for game, expected in cases:
+        assert is_tactics_hand_conquer(game) is expected
         assert games_predicate(game) is expected
         assert battle_shop_predicate(game) is expected
 
+    assert str(inspect.signature(is_tactics_hand_conquer)) == '(game)'
     assert str(inspect.signature(games_predicate)) == '(game)'
     assert str(inspect.signature(battle_shop_predicate)) == '(game)'
     assert games_predicate.__module__ == 'routes.games'
