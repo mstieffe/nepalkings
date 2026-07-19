@@ -82,3 +82,54 @@ def test_duel_turn_time_limit_migration_adds_legacy_columns(app):
     game_cols = {c['name'] for c in sa_inspect(db.engine).get_columns('game')}
     assert 'turn_time_limit' in challenge_cols
     assert 'turn_time_limit' in game_cols
+
+
+def test_finished_game_orphan_config_migration_is_selective(app):
+    from models import Game, LandConfig, User
+
+    if db.engine.dialect.name == 'postgresql':
+        user = User(username='migration_owner', password_hash='test')
+        db.session.add(user)
+        db.session.flush()
+        config = LandConfig(
+            user_id=user.id,
+            config_type='conquer',
+        )
+        db.session.add(config)
+        db.session.flush()
+        finished = Game(
+            state='finished',
+            mode='conquer',
+            conquer_config_id=config.id,
+        )
+        db.session.add(finished)
+        db.session.commit()
+        finished_id = finished.id
+
+        migration_runner._m_clear_finished_game_orphan_config_refs()
+
+        assert (
+            db.session.get(Game, finished_id).conquer_config_id
+            == config.id
+        )
+        return
+
+    finished = Game(
+        state='finished',
+        mode='conquer',
+        conquer_config_id=987654,
+    )
+    active = Game(
+        state='active',
+        mode='conquer',
+        conquer_config_id=987655,
+    )
+    db.session.add_all([finished, active])
+    db.session.commit()
+    finished_id = finished.id
+    active_id = active.id
+
+    migration_runner._m_clear_finished_game_orphan_config_refs()
+
+    assert db.session.get(Game, finished_id).conquer_config_id is None
+    assert db.session.get(Game, active_id).conquer_config_id == 987655

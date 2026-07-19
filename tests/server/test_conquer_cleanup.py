@@ -247,6 +247,63 @@ class TestDestroyLandConfig:
         assert db.session.get(CollectionCard, looted_id) is not None
         assert db.session.get(CollectionCard, consumed_id) is None
 
+    def test_clears_foreign_key_references_before_deleting(
+            self, app, db, two_users):
+        from routes.games import _destroy_land_config
+        from models import Game, Land, LandConfig, LandConfigFigure
+
+        user, _ = two_users
+        cfg = _mk_config(db, user.id)
+        figure = LandConfigFigure(
+            config_id=cfg.id,
+            family_name='F',
+            name='F',
+            suit='spades',
+            color='offensive',
+            field='village',
+            card_ids=[],
+            card_roles=[],
+        )
+        db.session.add(figure)
+        db.session.flush()
+        cfg.battle_figure_id = figure.id
+
+        game = Game(
+            mode='conquer',
+            state='finished',
+            conquer_config_id=cfg.id,
+            defence_config_id=cfg.id,
+        )
+        land = Land(
+            col=999,
+            row=999,
+            tier=1,
+            gold_rate=1.0,
+            suit_bonus_suit='Hearts',
+            suit_bonus_value=1,
+            defence_config_id=cfg.id,
+        )
+        derived = LandConfig(
+            user_id=user.id,
+            config_type='conquer',
+            base_config_id=cfg.id,
+        )
+        db.session.add_all([game, land, derived])
+        db.session.commit()
+        cfg_id = cfg.id
+        game_id = game.id
+        land_id = land.id
+        derived_id = derived.id
+
+        _destroy_land_config(cfg)
+        db.session.commit()
+
+        assert db.session.get(LandConfig, cfg_id) is None
+        assert db.session.get(Game, game_id).conquer_config_id is None
+        assert db.session.get(Game, game_id).defence_config_id is None
+        assert db.session.get(Land, land_id).defence_config_id is None
+        assert db.session.get(LandConfig, derived_id).base_config_id is None
+
 
 class TestWipeLandConfigReturnUnlooted:
     def test_route_reexports_canonical_transition_helper(self):

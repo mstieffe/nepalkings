@@ -350,6 +350,31 @@ def _m_clear_fill_up_to_10_preludes():
     db.session.commit()
 
 
+def _m_clear_finished_game_orphan_config_refs():
+    """Clear legacy pointers to already-deleted ephemeral configurations."""
+    db.session.execute(text(
+        'UPDATE game '
+        'SET conquer_config_id = NULL '
+        "WHERE state = 'finished' "
+        'AND conquer_config_id IS NOT NULL '
+        'AND NOT EXISTS ('
+        '  SELECT 1 FROM land_config '
+        '  WHERE land_config.id = game.conquer_config_id'
+        ')'
+    ))
+    db.session.execute(text(
+        'UPDATE game '
+        'SET defence_config_id = NULL '
+        "WHERE state = 'finished' "
+        'AND defence_config_id IS NOT NULL '
+        'AND NOT EXISTS ('
+        '  SELECT 1 FROM land_config '
+        '  WHERE land_config.id = game.defence_config_id'
+        ')'
+    ))
+    db.session.commit()
+
+
 # ── Registry ───────────────────────────────────────────────────────
 
 MIGRATIONS = [
@@ -368,6 +393,8 @@ MIGRATIONS = [
     (13, 'figure.is_clone column', _m_figure_is_clone_column),
     (14, 'regenerate kingdom map into historic regions',
      _m_regenerate_kingdom_map_into_regions),
+    (15, 'clear finished-game orphan configuration references',
+     _m_clear_finished_game_orphan_config_refs),
 ]
 
 CURRENT_SCHEMA_VERSION = max(version for version, _description, _fn in MIGRATIONS)

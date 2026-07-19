@@ -2,6 +2,7 @@
 # See LICENSE file in the project root for full license information.
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
+from sqlalchemy import false, true
 from sqlalchemy_utils import ChoiceType
 import enum
 from datetime import datetime, timezone
@@ -86,8 +87,18 @@ class User(db.Model):
     email_verification_token = db.Column(db.String(128), nullable=True)
     email_verification_sent_at = db.Column(db.DateTime, nullable=True)
     # Opt-out for gameplay notification emails (your-turn / challenge / result)
-    notify_emails_enabled = db.Column(db.Boolean, nullable=False, default=True, server_default='1')
-    age_confirmed = db.Column(db.Boolean, nullable=False, default=False, server_default='0')
+    notify_emails_enabled = db.Column(
+        db.Boolean,
+        nullable=False,
+        default=True,
+        server_default=true(),
+    )
+    age_confirmed = db.Column(
+        db.Boolean,
+        nullable=False,
+        default=False,
+        server_default=false(),
+    )
     age_confirmed_at = db.Column(db.DateTime, nullable=True)
     terms_version = db.Column(db.String(32), nullable=True)
     terms_accepted_at = db.Column(db.DateTime, nullable=True)
@@ -496,7 +507,7 @@ class Figure(db.Model):
     # Purely cosmetic on the client (permanent clone aura); the figure
     # otherwise behaves like any other runtime figure.
     is_clone = db.Column(db.Boolean, default=False, nullable=False,
-                         server_default='0')
+                         server_default=false())
     cards = db.relationship('CardToFigure', backref='figure', lazy=True)
     date_created = db.Column(db.DateTime, default=_utcnow)
 

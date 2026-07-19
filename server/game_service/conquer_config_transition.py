@@ -224,6 +224,37 @@ def _rekey_config_lock_types(cfg, new_config_type):
             cc.lock_type = new_lt
 
 
+def _clear_land_config_foreign_key_references(cfg):
+    """Detach relational pointers before deleting a configuration.
+
+    SQLite historically allowed finished games to retain IDs for deleted
+    ephemeral attack configurations. PostgreSQL enforces these foreign keys.
+    The durable battle result remains in ``Game.last_battle_result``; only
+    pointers to rows that are about to disappear are cleared.
+    """
+    from models import Game, Land, LandConfig
+
+    Game.query.filter_by(conquer_config_id=cfg.id).update(
+        {Game.conquer_config_id: None},
+        synchronize_session=False,
+    )
+    Game.query.filter_by(defence_config_id=cfg.id).update(
+        {Game.defence_config_id: None},
+        synchronize_session=False,
+    )
+    Land.query.filter_by(defence_config_id=cfg.id).update(
+        {Land.defence_config_id: None},
+        synchronize_session=False,
+    )
+    LandConfig.query.filter_by(base_config_id=cfg.id).update(
+        {LandConfig.base_config_id: None},
+        synchronize_session=False,
+    )
+    cfg.battle_figure_id = None
+    cfg.battle_figure_id_2 = None
+    db.session.flush()
+
+
 def _wipe_land_config_return_unlooted(cfg, looted_card_ids=None):
     """Delete a config, deleting only looted cards and unlocking the rest."""
     from models import CollectionCard, LandConfigFigure, LandConfigBattleMove
@@ -255,6 +286,7 @@ def _wipe_land_config_return_unlooted(cfg, looted_card_ids=None):
             CollectionCard.id.in_(looted)
         ).delete(synchronize_session='fetch')
 
+    _clear_land_config_foreign_key_references(cfg)
     LandConfigBattleMove.query.filter_by(config_id=cfg.id).delete()
     LandConfigFigure.query.filter_by(config_id=cfg.id).delete()
     db.session.delete(cfg)
@@ -287,6 +319,7 @@ def _destroy_land_config(cfg, exclude_card_ids=None):
             CollectionCard.id.in_(card_ids)
         ).delete(synchronize_session='fetch')
 
+    _clear_land_config_foreign_key_references(cfg)
     LandConfigBattleMove.query.filter_by(config_id=cfg.id).delete()
     LandConfigFigure.query.filter_by(config_id=cfg.id).delete()
     db.session.delete(cfg)
@@ -324,6 +357,7 @@ def _wipe_land_config(cfg):
         }, synchronize_session='fetch')
 
     # Delete figures and moves
+    _clear_land_config_foreign_key_references(cfg)
     LandConfigBattleMove.query.filter_by(config_id=cfg.id).delete()
     LandConfigFigure.query.filter_by(config_id=cfg.id).delete()
     db.session.delete(cfg)

@@ -82,4 +82,6 @@ jobs:
           pytest -q \
             tests/server/test_migration_runner.py \
             tests/server/test_ops.py \
-            tests/server/test_security_hardening.py
+            tests/server/test_security_hardening.py \
+            tests/server/test_conquer_cleanup.py \
+            tests/test_sqlite_postgres_importer.py

@@ -4,6 +4,7 @@
 import os
 import sys
 import pytest
+from sqlalchemy import text
 
 # Make the server package importable when tests run from the repo root
 SERVER_DIR = os.path.join(os.path.dirname(__file__), '..', '..', 'server')
@@ -27,6 +28,20 @@ from server import app as flask_app  # noqa: E402
 from models import db as _db  # noqa: E402
 
 
+def _reset_database_schema():
+    _db.session.remove()
+    if _db.engine.dialect.name == 'postgresql':
+        # PostgreSQL correctly refuses metadata.drop_all() for the intentional
+        # Game/Player/Figure/ActiveSpell FK cycle unless every legacy
+        # constraint is named. Tests own this disposable schema, so resetting
+        # the schema is both faster and more faithful.
+        with _db.engine.begin() as connection:
+            connection.execute(text('DROP SCHEMA IF EXISTS public CASCADE'))
+            connection.execute(text('CREATE SCHEMA public'))
+    else:
+        _db.drop_all()
+
+
 @pytest.fixture(scope='function')
 def app():
     flask_app.config['TESTING'] = True
@@ -36,11 +51,10 @@ def app():
     flask_app.config['RATELIMIT_ENABLED'] = False
 
     with flask_app.app_context():
-        _db.drop_all()
+        _reset_database_schema()
         _db.create_all()
         yield flask_app
-        _db.session.remove()
-        _db.drop_all()
+        _reset_database_schema()
 
 
 @pytest.fixture(autouse=True)
