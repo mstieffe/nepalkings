@@ -7,27 +7,13 @@ This module intentionally keeps AI land defence balancing out of
 ``ai/defence/generator.py`` turns them into concrete battle templates.
 """
 
+from game_service.card_values import AI_DEFENCE_RANK_VALUES
+
 AI_DEFENCE_GENERATOR_VERSION = 7
 
 AI_DEFENCE_SUITS = ('Hearts', 'Diamonds', 'Clubs', 'Spades')
 AI_DEFENCE_RED_SUITS = ('Hearts', 'Diamonds')
 AI_DEFENCE_BLACK_SUITS = ('Clubs', 'Spades')
-
-AI_DEFENCE_RANK_VALUES = {
-    'A': 3,
-    'K': 4,
-    'Q': 2,
-    'J': 1,
-    '10': 10,
-    '9': 9,
-    '8': 8,
-    '7': 7,
-    '6': 6,
-    '5': 5,
-    '4': 4,
-    '3': 3,
-    '2': 2,
-}
 
 AI_DEFENCE_TIER_NAMES = {
     1: 'Border Watch',

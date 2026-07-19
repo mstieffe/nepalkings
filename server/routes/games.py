@@ -24,6 +24,23 @@ from game_service.conquer_tactics_idempotency import (
     get_cached_response as _conquer_idem_get,
     store_response as _conquer_idem_store,
 )
+from game_service.conquer_config_transition import (
+    _TRANSFERABLE_DEFENCE_PRELUDE_SPELLS,
+    _config_battle_card_ids,
+    _consume_config_battle_cards,
+    _destroy_land_config,
+    _rekey_config_lock_types,
+    _return_config_attack_only_cards,
+    _wipe_land_config,
+    _wipe_land_config_return_unlooted,
+)
+from game_service.conquer_loot import (
+    _delete_looted_collection_cards,
+    _loot_card_bucket,
+    _normalise_loot_card,
+    _snapshot_config_loot_cards,
+    _snapshot_template_loot_cards,
+)
 from routes.auth import get_game_membership, require_token, verify_game_membership, verify_player_ownership
 from routes.serialization import serialize_game_for_viewer, serialize_spell_for_viewer, viewer_has_all_seeing_eye
 from analytics import track
@@ -295,16 +312,6 @@ _CONQUER_PRELUDE_SPELLS = frozenset({
     'Poison', 'Health Boost', 'All Seeing Eye', 'Explosion',
     'Peasant War', 'Civil War', 'Blitzkrieg',
     'Invader Swap',
-    'Royal Decree', 'Copy Figure', 'Landslide', 'Draw 4 MainCards',
-})
-
-# Conquer preludes that remain legal when a winning attack config becomes the
-# new defence config.  Blitzkrieg and Invader Swap are attack-only; the legacy
-# Fill up to 10 entry above is retained only for old battle-state replay.
-_TRANSFERABLE_DEFENCE_PRELUDE_SPELLS = frozenset({
-    'Draw 2 MainCards', 'Dump Cards', 'Forced Deal',
-    'Poison', 'Health Boost', 'All Seeing Eye', 'Explosion',
-    'Peasant War', 'Civil War',
     'Royal Decree', 'Copy Figure', 'Landslide', 'Draw 4 MainCards',
 })
 
@@ -7299,119 +7306,6 @@ def _conquer_loot_base_quota(land_tier):
     return tier, tier
 
 
-def _loot_card_bucket(rank):
-    """Return the loot bucket ('key' or 'number') for a card rank.
-
-    Buckets are rank-only: every card belongs to exactly one bucket.  Unknown
-    ranks default to ``'number'`` defensively.
-    """
-    r = str(rank or '').strip()
-    if r in settings.LOOT_KEY_RANKS:
-        return 'key'
-    if r in settings.LOOT_NUMBER_RANKS:
-        return 'number'
-    return 'number'
-
-
-def _normalise_loot_card(card, *, source, role=None, card_id=None):
-    """Return a stable loot-card dict from a CollectionCard/template card."""
-    if not card:
-        return None
-    if isinstance(card, dict):
-        suit = card.get('suit')
-        rank = card.get('rank')
-        value = card.get('value')
-        card_role = role if role is not None else card.get('role')
-        source_card_id = card_id if card_id is not None else card.get('id')
-    else:
-        suit = getattr(card, 'suit', None)
-        rank = getattr(card, 'rank', None)
-        value = getattr(card, 'value', None)
-        card_role = role
-        source_card_id = card_id if card_id is not None else getattr(card, 'id', None)
-    if not suit or not rank:
-        return None
-    if value is None:
-        value = AI_DEFENCE_RANK_VALUES.get(rank, 0)
-    return {
-        'id': source_card_id,
-        'suit': suit,
-        'rank': rank,
-        'value': int(value or 0),
-        'role': str(getattr(card_role, 'value', card_role) or source or 'card'),
-        'source': source,
-        'bucket': _loot_card_bucket(rank),
-    }
-
-
-def _snapshot_config_loot_cards(cfg):
-    """Snapshot every persistent card in a conquer/defence config for loot risk.
-
-    Figure key cards are in the ``key`` bucket. Every other committed card —
-    figure number/upgrade cards, battle moves, modifiers, and spells — is in
-    the ``support`` bucket.  The snapshot includes collection-card IDs so the
-    loser can lose the exact physical copies.
-    """
-    if not cfg:
-        return []
-    rows = []
-    seen = set()
-
-    def add_card_id(cid, source, role):
-        if not cid or cid in seen:
-            return
-        cc = db.session.get(CollectionCard, cid)
-        if not cc:
-            return
-        data = _normalise_loot_card(cc, source=source, role=role, card_id=cid)
-        if data:
-            rows.append(data)
-            seen.add(cid)
-
-    for fig in cfg.figures:
-        roles = list(fig.card_roles or [])
-        for index, cid in enumerate(fig.card_ids or []):
-            role = roles[index] if index < len(roles) else 'number'
-            add_card_id(cid, 'figure', role)
-    for move in cfg.battle_moves:
-        add_card_id(move.card_id, 'battle_move', 'battle_move')
-    for source, ids in (
-        ('modifier', cfg.modifier_card_ids),
-        ('spell', cfg.spell_card_ids),
-        ('prelude_spell', cfg.prelude_spell_card_ids),
-        ('counter_spell', cfg.counter_spell_card_ids),
-    ):
-        for cid in ids or []:
-            add_card_id(cid, source, source)
-    return rows
-
-
-def _snapshot_template_loot_cards(template):
-    """Snapshot every AI-template card that can become conquer loot."""
-    rows = []
-    for fig in (template or {}).get('figures', []):
-        cards = list(fig.get('cards') or [])
-        roles = list(fig.get('card_roles') or [])
-        for index, card in enumerate(cards):
-            if not isinstance(card, dict):
-                continue
-            role = card.get('role')
-            if role is None and index < len(roles):
-                role = roles[index]
-            data = _normalise_loot_card(card, source='figure', role=role)
-            if data:
-                rows.append(data)
-    for move in (template or {}).get('battle_moves', []) or []:
-        data = _normalise_loot_card(
-            move,
-            source='battle_move',
-            role='battle_move',
-        )
-        if data:
-            rows.append(data)
-    return rows
-
-
 def _random_pick_without_replacement(pool, count, rng):
     chosen = []
     remaining = list(pool or [])
@@ -7592,98 +7486,6 @@ def _record_split_transfer_notifications(split_summary, land, attacker_user, def
             kind='kingdom_split_claimed',
             payload=attacker_payload,
         ))
-
-
-def _delete_looted_collection_cards(cards):
-    ids = [c.get('id') for c in cards or [] if c.get('id')]
-    if ids:
-        CollectionCard.query.filter(
-            CollectionCard.id.in_(ids)
-        ).delete(synchronize_session='fetch')
-
-
-def _wipe_land_config_return_unlooted(cfg, looted_card_ids=None):
-    """Delete a config, deleting only looted cards and unlocking the rest."""
-    from models import CollectionCard, LandConfigFigure, LandConfigBattleMove
-
-    looted = set(looted_card_ids or [])
-    card_ids = []
-    for fig in cfg.figures:
-        if fig.card_ids:
-            card_ids.extend(fig.card_ids)
-    for move in cfg.battle_moves:
-        if move.card_id:
-            card_ids.append(move.card_id)
-    for arr in (cfg.modifier_card_ids, cfg.spell_card_ids,
-                cfg.prelude_spell_card_ids, cfg.counter_spell_card_ids):
-        if arr:
-            card_ids.extend(arr)
-
-    unlock_ids = [cid for cid in card_ids if cid not in looted]
-    if unlock_ids:
-        CollectionCard.query.filter(
-            CollectionCard.id.in_(unlock_ids)
-        ).update({
-            CollectionCard.locked: False,
-            CollectionCard.lock_type: None,
-            CollectionCard.lock_ref_id: None,
-        }, synchronize_session='fetch')
-    if looted:
-        CollectionCard.query.filter(
-            CollectionCard.id.in_(looted)
-        ).delete(synchronize_session='fetch')
-
-    LandConfigBattleMove.query.filter_by(config_id=cfg.id).delete()
-    LandConfigFigure.query.filter_by(config_id=cfg.id).delete()
-    db.session.delete(cfg)
-
-
-def _return_config_attack_only_cards(cfg):
-    """Unlock and clear the attack-only cards from a surviving config.
-
-    Used when a winning attacker's conquer config becomes the new defence: its
-    figures, battle-move tactics, and defence-compatible prelude carry over to
-    the defence (so the conquered land is defended automatically), while the
-    battle modifier, in-battle spell, counter spell, and any conquer-only
-    prelude are unlocked and returned to the collection.
-    """
-    from models import CollectionCard
-
-    keep_prelude = (
-        cfg.prelude_spell_name in _TRANSFERABLE_DEFENCE_PRELUDE_SPELLS
-    )
-    card_ids = []
-    returned_card_arrays = [
-        cfg.modifier_card_ids,
-        cfg.spell_card_ids,
-        cfg.counter_spell_card_ids,
-    ]
-    if not keep_prelude:
-        returned_card_arrays.append(cfg.prelude_spell_card_ids)
-    for arr in returned_card_arrays:
-        if arr:
-            card_ids.extend(arr)
-    if card_ids:
-        CollectionCard.query.filter(
-            CollectionCard.id.in_(card_ids)
-        ).update({
-            CollectionCard.locked: False,
-            CollectionCard.lock_type: None,
-            CollectionCard.lock_ref_id: None,
-        }, synchronize_session='fetch')
-    cfg.battle_modifier = None
-    cfg.modifier_card_ids = []
-    cfg.spell_name = None
-    cfg.spell_target_figure_id = None
-    cfg.spell_card_ids = []
-    if not keep_prelude:
-        cfg.prelude_spell_name = None
-        cfg.prelude_spell_data = None
-        cfg.prelude_spell_card_ids = []
-    cfg.counter_spell_name = None
-    cfg.counter_spell_data = None
-    cfg.counter_spell_card_ids = []
-    cfg.counter_spell_target_figure_id = None
 
 
 def _serialize_viewer_onboarding(viewer_user_id):
@@ -8357,21 +8159,6 @@ def _serialize_finished_conquer_result(game, viewer_user_id=None):
     return payload
 
 
-def _config_battle_card_ids(cfg):
-    """Return battle-move/modifier/spell card IDs referenced by a land config."""
-    if not cfg:
-        return []
-    card_ids = []
-    for move in cfg.battle_moves:
-        if move.card_id:
-            card_ids.append(move.card_id)
-    for arr in (cfg.modifier_card_ids, cfg.spell_card_ids,
-                cfg.prelude_spell_card_ids, cfg.counter_spell_card_ids):
-        if arr:
-            card_ids.extend(arr)
-    return card_ids
-
-
 def _snapshot_collection_cards(card_ids, include_id=False):
     """Snapshot suit/rank for collection cards, preserving input order."""
     unique_ids = []
@@ -8406,42 +8193,6 @@ def _snapshot_config_battle_cards(cfg, include_id=False):
     )
 
 
-def _consume_config_battle_cards(cfg):
-    """Delete collection cards used for battle moves, modifiers, and spells.
-
-    Spell cards (main, prelude, counter) are one-shot: they are consumed
-    together with battle move and modifier cards.  Stale references on the
-    config are cleared so the row can either be re-purposed or deleted
-    safely afterwards.
-    """
-    from models import CollectionCard, LandConfigBattleMove
-
-    moves = LandConfigBattleMove.query.filter_by(config_id=cfg.id).all()
-    card_ids = _config_battle_card_ids(cfg)
-
-    if card_ids:
-        CollectionCard.query.filter(
-            CollectionCard.id.in_(card_ids)
-        ).delete(synchronize_session='fetch')
-
-    # Delete the move records
-    for m in moves:
-        db.session.delete(m)
-
-    # Clear stale references so the cfg cannot accidentally be reused
-    cfg.modifier_card_ids = []
-    cfg.spell_card_ids = []
-    cfg.prelude_spell_card_ids = []
-    cfg.counter_spell_card_ids = []
-    cfg.spell_name = None
-    cfg.spell_target_figure_id = None
-    cfg.prelude_spell_name = None
-    cfg.prelude_spell_data = None
-    cfg.counter_spell_name = None
-    cfg.counter_spell_data = None
-    cfg.counter_spell_target_figure_id = None
-
-
 def _consume_config_figure_cards(cfg, exclude_card_ids=None):
     """Delete collection cards used for figures in a config (loser's figures consumed)."""
     from models import CollectionCard, LandConfigFigure
@@ -8461,43 +8212,6 @@ def _consume_config_figure_cards(cfg, exclude_card_ids=None):
     # Delete the figure records
     for fig in figures:
         db.session.delete(fig)
-
-
-def _wipe_land_config(cfg):
-    """Delete a land config and all its figures, moves, and unlock cards."""
-    from models import CollectionCard, LandConfigFigure, LandConfigBattleMove
-
-    # Collect all card IDs to unlock
-    card_ids = []
-    for fig in cfg.figures:
-        if fig.card_ids:
-            card_ids.extend(fig.card_ids)
-    for move in cfg.battle_moves:
-        if move.card_id:
-            card_ids.append(move.card_id)
-    if cfg.modifier_card_ids:
-        card_ids.extend(cfg.modifier_card_ids)
-    if cfg.spell_card_ids:
-        card_ids.extend(cfg.spell_card_ids)
-    if cfg.prelude_spell_card_ids:
-        card_ids.extend(cfg.prelude_spell_card_ids)
-    if cfg.counter_spell_card_ids:
-        card_ids.extend(cfg.counter_spell_card_ids)
-
-    # Unlock all cards
-    if card_ids:
-        CollectionCard.query.filter(
-            CollectionCard.id.in_(card_ids)
-        ).update({
-            CollectionCard.locked: False,
-            CollectionCard.lock_type: None,
-            CollectionCard.lock_ref_id: None,
-        }, synchronize_session='fetch')
-
-    # Delete figures and moves
-    LandConfigBattleMove.query.filter_by(config_id=cfg.id).delete()
-    LandConfigFigure.query.filter_by(config_id=cfg.id).delete()
-    db.session.delete(cfg)
 
 
 def _wipe_defence_drafts_for_lost_land(user_id, land_id):
@@ -8522,81 +8236,6 @@ def _wipe_defence_drafts_for_lost_land(user_id, land_id):
     )
     for draft in drafts:
         _wipe_land_config(draft)
-
-
-def _destroy_land_config(cfg, exclude_card_ids=None):
-    """Delete a land config and DELETE every collection card it referenced.
-
-    Used when an attacker loses: all cards committed to the attack are
-    consumed.  `exclude_card_ids` lets the caller protect cards that have
-    already been transferred elsewhere (e.g. looted by the defender).
-    """
-    from models import CollectionCard, LandConfigFigure, LandConfigBattleMove
-
-    excluded = set(exclude_card_ids or [])
-    card_ids = []
-    for fig in cfg.figures:
-        if fig.card_ids:
-            card_ids.extend(cid for cid in fig.card_ids if cid not in excluded)
-    for move in cfg.battle_moves:
-        if move.card_id and move.card_id not in excluded:
-            card_ids.append(move.card_id)
-    for arr in (cfg.modifier_card_ids, cfg.spell_card_ids,
-                cfg.prelude_spell_card_ids, cfg.counter_spell_card_ids):
-        if arr:
-            card_ids.extend(cid for cid in arr if cid not in excluded)
-
-    if card_ids:
-        CollectionCard.query.filter(
-            CollectionCard.id.in_(card_ids)
-        ).delete(synchronize_session='fetch')
-
-    LandConfigBattleMove.query.filter_by(config_id=cfg.id).delete()
-    LandConfigFigure.query.filter_by(config_id=cfg.id).delete()
-    db.session.delete(cfg)
-
-
-def _rekey_config_lock_types(cfg, new_config_type):
-    """Re-key the lock_type of every CollectionCard locked by this config.
-
-    Used when a winning attacker's conquer config is converted into the
-    new defence config: every 'conquer_*' lock_type must become 'defence_*'
-    so subsequent unlock/wipe logic recognises them.
-    """
-    from models import CollectionCard
-
-    mapping = {
-        'conquer_figure':   f'{new_config_type}_figure',
-        'conquer_move':     f'{new_config_type}_move',
-        'conquer_modifier': f'{new_config_type}_modifier',
-        'conquer_spell':    f'{new_config_type}_spell',
-        'conquer_prelude':  f'{new_config_type}_prelude',
-        'conquer_counter':  f'{new_config_type}_counter',
-    }
-
-    # Gather every card id still locked by this cfg. Attack-only cards have
-    # already been returned, while a defence-compatible prelude remains.
-    card_ids = []
-    for fig in cfg.figures:
-        if fig.card_ids:
-            card_ids.extend(fig.card_ids)
-    for move in cfg.battle_moves:
-        if move.card_id:
-            card_ids.append(move.card_id)
-    for arr in (cfg.modifier_card_ids, cfg.spell_card_ids,
-                cfg.prelude_spell_card_ids, cfg.counter_spell_card_ids):
-        if arr:
-            card_ids.extend(arr)
-    if not card_ids:
-        return
-
-    cards = CollectionCard.query.filter(
-        CollectionCard.id.in_(card_ids)
-    ).all()
-    for cc in cards:
-        new_lt = mapping.get(cc.lock_type)
-        if new_lt:
-            cc.lock_type = new_lt
 
 
 @games.route('/finish_battle_pick_card', methods=['POST'])

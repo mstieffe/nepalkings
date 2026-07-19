@@ -9,6 +9,9 @@ Covers the helpers added in the card-lock cleanup pass:
 - defence-compatible preludes remain committed after an attacker win
 - ``_wipe_land_config`` unlocks (does not delete) every referenced card
 """
+import pickle
+from types import SimpleNamespace
+
 import pytest
 
 
@@ -32,72 +35,191 @@ def _mk_config(db, user_id, config_type='conquer', land_id=None):
     return cfg
 
 
+class TestConfigBattleCardIds:
+    def test_route_reexports_canonical_transition_helper(self):
+        from game_service.conquer_config_transition import (
+            _config_battle_card_ids as canonical_helper,
+        )
+        from routes.games import _config_battle_card_ids as legacy_helper
+
+        assert legacy_helper is canonical_helper
+        assert canonical_helper.__module__ == 'routes.games'
+        assert pickle.loads(pickle.dumps(canonical_helper)) is canonical_helper
+
+    def test_none_config_returns_empty_list(self):
+        from routes.games import _config_battle_card_ids
+
+        assert _config_battle_card_ids(None) == []
+
+    def test_preserves_source_order_duplicates_and_skips_empty_move_ids(self):
+        from routes.games import _config_battle_card_ids
+
+        cfg = SimpleNamespace(
+            battle_moves=[
+                SimpleNamespace(card_id=11),
+                SimpleNamespace(card_id=None),
+                SimpleNamespace(card_id=12),
+            ],
+            modifier_card_ids=[13, 11],
+            spell_card_ids=[14],
+            prelude_spell_card_ids=None,
+            counter_spell_card_ids=[15],
+        )
+
+        assert _config_battle_card_ids(cfg) == [
+            11,
+            12,
+            13,
+            11,
+            14,
+            15,
+        ]
+
+
 class TestConsumeConfigBattleCards:
+    def test_route_reexports_canonical_transition_helper(self):
+        from game_service.conquer_config_transition import (
+            _consume_config_battle_cards as canonical_helper,
+        )
+        from routes.games import _consume_config_battle_cards as legacy_helper
+
+        assert legacy_helper is canonical_helper
+        assert canonical_helper.__module__ == 'routes.games'
+        assert pickle.loads(pickle.dumps(canonical_helper)) is canonical_helper
+
     def test_consumes_spell_arrays(self, app, db, two_users):
         from routes.games import _consume_config_battle_cards
-        from models import CollectionCard
+        from models import CollectionCard, LandConfigBattleMove
         u, _ = two_users
         cfg = _mk_config(db, u.id)
 
+        move = _mk_card(db, u.id, rank='8', value=8,
+                        lock_type='conquer_move', lock_ref_id=cfg.id)
+        modifier = _mk_card(db, u.id, rank='2', value=2,
+                            lock_type='conquer_modifier',
+                            lock_ref_id=cfg.id)
         spell = _mk_card(db, u.id, rank='K', lock_type='conquer_spell',
                          lock_ref_id=cfg.id)
         prelude = _mk_card(db, u.id, rank='Q', lock_type='conquer_prelude',
                            lock_ref_id=cfg.id)
         counter = _mk_card(db, u.id, rank='J', lock_type='conquer_counter',
                            lock_ref_id=cfg.id)
+        db.session.add(LandConfigBattleMove(
+            config_id=cfg.id,
+            family_name='Dagger',
+            card_id=move.id,
+            suit='spades',
+            rank='8',
+            value=8,
+            round_index=0,
+        ))
+        cfg.battle_modifier = {'type': 'Blitzkrieg'}
+        cfg.modifier_card_ids = [modifier.id]
         cfg.spell_card_ids = [spell.id]
         cfg.prelude_spell_card_ids = [prelude.id]
         cfg.counter_spell_card_ids = [counter.id]
-        cfg.modifier_card_ids = []
         cfg.spell_name = 'health_boost'
         cfg.prelude_spell_name = 'spy'
         cfg.counter_spell_name = 'lightning'
         db.session.commit()
         cfg_id = cfg.id
-        spell_id, prelude_id, counter_id = spell.id, prelude.id, counter.id
+        consumed_ids = [
+            move.id,
+            modifier.id,
+            spell.id,
+            prelude.id,
+            counter.id,
+        ]
 
         _consume_config_battle_cards(cfg)
         db.session.commit()
 
-        for cid in (spell_id, prelude_id, counter_id):
+        for cid in consumed_ids:
             assert db.session.get(CollectionCard, cid) is None
+        assert LandConfigBattleMove.query.filter_by(config_id=cfg_id).count() == 0
 
         # Stale references on the cfg are cleared (re-fetch after commit)
         from models import LandConfig
         cfg2 = db.session.get(LandConfig, cfg_id)
+        assert (cfg2.modifier_card_ids or []) == []
         assert (cfg2.spell_card_ids or []) == []
         assert (cfg2.prelude_spell_card_ids or []) == []
         assert (cfg2.counter_spell_card_ids or []) == []
         assert cfg2.spell_name is None
         assert cfg2.prelude_spell_name is None
         assert cfg2.counter_spell_name is None
+        assert cfg2.battle_modifier == {'type': 'Blitzkrieg'}
 
 
 class TestDestroyLandConfig:
+    def test_route_reexports_canonical_transition_helper(self):
+        from game_service.conquer_config_transition import (
+            _destroy_land_config as canonical_helper,
+        )
+        from routes.games import _destroy_land_config as legacy_helper
+
+        assert legacy_helper is canonical_helper
+        assert canonical_helper.__module__ == 'routes.games'
+        assert pickle.loads(pickle.dumps(canonical_helper)) is canonical_helper
+
     def test_deletes_all_cards_and_cfg(self, app, db, two_users):
         from routes.games import _destroy_land_config
-        from models import CollectionCard, LandConfig, LandConfigFigure
+        from models import (
+            CollectionCard,
+            LandConfig,
+            LandConfigBattleMove,
+            LandConfigFigure,
+        )
         u, _ = two_users
         cfg = _mk_config(db, u.id)
 
         c1 = _mk_card(db, u.id, rank='A', lock_type='conquer_figure')
         c2 = _mk_card(db, u.id, rank='K', lock_type='conquer_figure')
-        c_spell = _mk_card(db, u.id, rank='Q', lock_type='conquer_spell')
+        c_move = _mk_card(
+            db, u.id, rank='8', value=8, lock_type='conquer_move')
+        c_modifier = _mk_card(
+            db, u.id, rank='2', value=2, lock_type='conquer_modifier')
+        c_spell = _mk_card(
+            db, u.id, rank='3', value=3, lock_type='conquer_spell')
+        c_prelude = _mk_card(
+            db, u.id, rank='4', value=4, lock_type='conquer_prelude')
+        c_counter = _mk_card(
+            db, u.id, rank='5', value=5, lock_type='conquer_counter')
         fig = LandConfigFigure(
             config_id=cfg.id, family_name='F', name='F', suit='spades',
             color='spades', field='north', card_ids=[c1.id, c2.id],
             card_roles=['key', 'support'],
         )
         db.session.add(fig)
+        db.session.add(LandConfigBattleMove(
+            config_id=cfg.id,
+            family_name='Dagger',
+            card_id=c_move.id,
+            suit='spades',
+            rank='8',
+            value=8,
+            round_index=0,
+        ))
+        cfg.modifier_card_ids = [c_modifier.id]
         cfg.spell_card_ids = [c_spell.id]
+        cfg.prelude_spell_card_ids = [c_prelude.id]
+        cfg.counter_spell_card_ids = [c_counter.id]
         db.session.commit()
         cfg_id = cfg.id
-        c1_id, c2_id, c_spell_id = c1.id, c2.id, c_spell.id
+        consumed_ids = [
+            c1.id,
+            c2.id,
+            c_move.id,
+            c_modifier.id,
+            c_spell.id,
+            c_prelude.id,
+            c_counter.id,
+        ]
 
         _destroy_land_config(cfg)
         db.session.commit()
 
-        for cid in (c1_id, c2_id, c_spell_id):
+        for cid in consumed_ids:
             assert db.session.get(CollectionCard, cid) is None
         assert db.session.get(LandConfig, cfg_id) is None
 
@@ -126,7 +248,270 @@ class TestDestroyLandConfig:
         assert db.session.get(CollectionCard, consumed_id) is None
 
 
+class TestWipeLandConfigReturnUnlooted:
+    def test_route_reexports_canonical_transition_helper(self):
+        from game_service.conquer_config_transition import (
+            _wipe_land_config_return_unlooted as canonical_helper,
+        )
+        from routes.games import (
+            _wipe_land_config_return_unlooted as legacy_helper,
+        )
+
+        assert legacy_helper is canonical_helper
+        assert canonical_helper.__module__ == 'routes.games'
+        assert pickle.loads(pickle.dumps(canonical_helper)) is canonical_helper
+
+    def test_deletes_looted_cards_unlocks_rest_and_removes_config(
+            self, app, db, two_users):
+        from routes.games import _wipe_land_config_return_unlooted
+        from models import (
+            CollectionCard,
+            LandConfig,
+            LandConfigBattleMove,
+            LandConfigFigure,
+        )
+        u, _ = two_users
+        cfg = _mk_config(db, u.id)
+        looted_figure = _mk_card(
+            db, u.id, rank='A', lock_type='defence_figure',
+            lock_ref_id=cfg.id,
+        )
+        kept_figure = _mk_card(
+            db, u.id, rank='K', lock_type='defence_figure',
+            lock_ref_id=cfg.id,
+        )
+        kept_move = _mk_card(
+            db, u.id, rank='8', value=8, lock_type='defence_move',
+            lock_ref_id=cfg.id,
+        )
+        looted_modifier = _mk_card(
+            db, u.id, rank='2', value=2, lock_type='defence_modifier',
+            lock_ref_id=cfg.id,
+        )
+        kept_spell = _mk_card(
+            db, u.id, rank='3', value=3, lock_type='defence_spell',
+            lock_ref_id=cfg.id,
+        )
+        kept_prelude = _mk_card(
+            db, u.id, rank='4', value=4, lock_type='defence_prelude',
+            lock_ref_id=cfg.id,
+        )
+        kept_counter = _mk_card(
+            db, u.id, rank='5', value=5, lock_type='defence_counter',
+            lock_ref_id=cfg.id,
+        )
+        db.session.add(LandConfigFigure(
+            config_id=cfg.id,
+            family_name='F',
+            name='F',
+            suit='spades',
+            color='defensive',
+            field='village',
+            card_ids=[looted_figure.id, kept_figure.id],
+            card_roles=['key', 'number'],
+        ))
+        db.session.add(LandConfigBattleMove(
+            config_id=cfg.id,
+            family_name='Dagger',
+            card_id=kept_move.id,
+            suit='spades',
+            rank='8',
+            value=8,
+            round_index=0,
+        ))
+        cfg.modifier_card_ids = [looted_modifier.id]
+        cfg.spell_card_ids = [kept_spell.id]
+        cfg.prelude_spell_card_ids = [kept_prelude.id]
+        cfg.counter_spell_card_ids = [kept_counter.id]
+        db.session.commit()
+        cfg_id = cfg.id
+        looted_ids = [looted_figure.id, looted_modifier.id]
+        returned_ids = [
+            kept_figure.id,
+            kept_move.id,
+            kept_spell.id,
+            kept_prelude.id,
+            kept_counter.id,
+        ]
+
+        _wipe_land_config_return_unlooted(cfg, looted_ids)
+        db.session.commit()
+
+        assert db.session.get(LandConfig, cfg_id) is None
+        assert LandConfigFigure.query.filter_by(config_id=cfg_id).count() == 0
+        assert LandConfigBattleMove.query.filter_by(config_id=cfg_id).count() == 0
+        for card_id in looted_ids:
+            assert db.session.get(CollectionCard, card_id) is None
+        for card_id in returned_ids:
+            returned = db.session.get(CollectionCard, card_id)
+            assert returned.locked is False
+            assert returned.lock_type is None
+            assert returned.lock_ref_id is None
+
+
+class TestWipeLandConfig:
+    def test_route_reexports_canonical_transition_helper(self):
+        from game_service.conquer_config_transition import (
+            _wipe_land_config as canonical_helper,
+        )
+        from routes.games import _wipe_land_config as legacy_helper
+
+        assert legacy_helper is canonical_helper
+        assert canonical_helper.__module__ == 'routes.games'
+        assert pickle.loads(pickle.dumps(canonical_helper)) is canonical_helper
+
+    def test_unlocks_every_card_source_and_removes_config(
+            self, app, db, two_users):
+        from routes.games import _wipe_land_config
+        from models import (
+            CollectionCard,
+            LandConfig,
+            LandConfigBattleMove,
+            LandConfigFigure,
+        )
+        u, _ = two_users
+        cfg = _mk_config(db, u.id)
+        figure_card = _mk_card(
+            db, u.id, rank='A', lock_type='conquer_figure',
+            lock_ref_id=cfg.id,
+        )
+        move_card = _mk_card(
+            db, u.id, rank='8', value=8, lock_type='conquer_move',
+            lock_ref_id=cfg.id,
+        )
+        modifier_card = _mk_card(
+            db, u.id, rank='2', value=2, lock_type='conquer_modifier',
+            lock_ref_id=cfg.id,
+        )
+        spell_card = _mk_card(
+            db, u.id, rank='3', value=3, lock_type='conquer_spell',
+            lock_ref_id=cfg.id,
+        )
+        prelude_card = _mk_card(
+            db, u.id, rank='4', value=4, lock_type='conquer_prelude',
+            lock_ref_id=cfg.id,
+        )
+        counter_card = _mk_card(
+            db, u.id, rank='5', value=5, lock_type='conquer_counter',
+            lock_ref_id=cfg.id,
+        )
+        db.session.add(LandConfigFigure(
+            config_id=cfg.id,
+            family_name='F',
+            name='F',
+            suit='spades',
+            color='offensive',
+            field='village',
+            card_ids=[figure_card.id],
+            card_roles=['key'],
+        ))
+        db.session.add(LandConfigBattleMove(
+            config_id=cfg.id,
+            family_name='Dagger',
+            card_id=move_card.id,
+            suit='spades',
+            rank='8',
+            value=8,
+            round_index=0,
+        ))
+        cfg.modifier_card_ids = [modifier_card.id]
+        cfg.spell_card_ids = [spell_card.id]
+        cfg.prelude_spell_card_ids = [prelude_card.id]
+        cfg.counter_spell_card_ids = [counter_card.id]
+        db.session.commit()
+        cfg_id = cfg.id
+        returned_ids = [
+            figure_card.id,
+            move_card.id,
+            modifier_card.id,
+            spell_card.id,
+            prelude_card.id,
+            counter_card.id,
+        ]
+
+        _wipe_land_config(cfg)
+        db.session.commit()
+
+        assert db.session.get(LandConfig, cfg_id) is None
+        assert LandConfigFigure.query.filter_by(config_id=cfg_id).count() == 0
+        assert LandConfigBattleMove.query.filter_by(config_id=cfg_id).count() == 0
+        for card_id in returned_ids:
+            returned = db.session.get(CollectionCard, card_id)
+            assert returned is not None
+            assert returned.locked is False
+            assert returned.lock_type is None
+            assert returned.lock_ref_id is None
+
+
 class TestRekeyConfigLockTypes:
+    def test_route_reexports_canonical_transition_helper(self):
+        from game_service.conquer_config_transition import (
+            _rekey_config_lock_types as canonical_helper,
+        )
+        from routes.games import _rekey_config_lock_types as legacy_helper
+
+        assert legacy_helper is canonical_helper
+        assert canonical_helper.__module__ == 'routes.games'
+        assert pickle.loads(pickle.dumps(canonical_helper)) is canonical_helper
+
+    def test_rekeys_modifier_spell_and_counter_but_leaves_unknown_lock(
+            self, app, db, two_users):
+        from routes.games import _rekey_config_lock_types
+        from models import CollectionCard
+        u, _ = two_users
+        cfg = _mk_config(db, u.id)
+        modifier = _mk_card(
+            db,
+            u.id,
+            rank='2',
+            lock_type='conquer_modifier',
+            lock_ref_id=cfg.id,
+        )
+        spell = _mk_card(
+            db,
+            u.id,
+            rank='3',
+            lock_type='conquer_spell',
+            lock_ref_id=cfg.id,
+        )
+        counter = _mk_card(
+            db,
+            u.id,
+            rank='4',
+            lock_type='conquer_counter',
+            lock_ref_id=cfg.id,
+        )
+        unknown = _mk_card(
+            db,
+            u.id,
+            rank='5',
+            lock_type='legacy_custom',
+            lock_ref_id=cfg.id,
+        )
+        cfg.modifier_card_ids = [modifier.id, unknown.id]
+        cfg.spell_card_ids = [spell.id]
+        cfg.counter_spell_card_ids = [counter.id]
+        db.session.commit()
+
+        _rekey_config_lock_types(cfg, 'defence')
+        db.session.commit()
+
+        assert db.session.get(
+            CollectionCard,
+            modifier.id,
+        ).lock_type == 'defence_modifier'
+        assert db.session.get(
+            CollectionCard,
+            spell.id,
+        ).lock_type == 'defence_spell'
+        assert db.session.get(
+            CollectionCard,
+            counter.id,
+        ).lock_type == 'defence_counter'
+        unchanged = db.session.get(CollectionCard, unknown.id)
+        assert unchanged.lock_type == 'legacy_custom'
+        assert unchanged.lock_ref_id == cfg.id
+
     def test_conquer_to_defence(self, app, db, two_users):
         from routes.games import _rekey_config_lock_types
         from models import CollectionCard, LandConfigFigure
@@ -195,6 +580,75 @@ class TestRekeyConfigLockTypes:
 
 
 class TestReturnConfigAttackOnlyCards:
+    def test_route_reexports_canonical_transition_helper(self):
+        from game_service.conquer_config_transition import (
+            _return_config_attack_only_cards as canonical_helper,
+        )
+        from routes.games import (
+            _return_config_attack_only_cards as legacy_helper,
+        )
+
+        assert legacy_helper is canonical_helper
+        assert canonical_helper.__module__ == 'routes.games'
+        assert pickle.loads(pickle.dumps(canonical_helper)) is canonical_helper
+
+    def test_clears_and_unlocks_modifier_spell_and_counter_state(
+            self, app, db, two_users):
+        from routes.games import _return_config_attack_only_cards
+        from models import CollectionCard
+        u, _ = two_users
+        cfg = _mk_config(db, u.id)
+        modifier = _mk_card(
+            db,
+            u.id,
+            rank='2',
+            lock_type='conquer_modifier',
+            lock_ref_id=cfg.id,
+        )
+        spell = _mk_card(
+            db,
+            u.id,
+            rank='3',
+            lock_type='conquer_spell',
+            lock_ref_id=cfg.id,
+        )
+        counter = _mk_card(
+            db,
+            u.id,
+            rank='4',
+            lock_type='conquer_counter',
+            lock_ref_id=cfg.id,
+        )
+        cfg.battle_modifier = {'type': 'Blitzkrieg'}
+        cfg.modifier_card_ids = [modifier.id]
+        cfg.spell_name = 'Health Boost'
+        cfg.spell_target_figure_id = 73
+        cfg.spell_card_ids = [spell.id]
+        cfg.counter_spell_name = 'Block Spell'
+        cfg.counter_spell_data = {'source': 'characterization'}
+        cfg.counter_spell_card_ids = [counter.id]
+        cfg.counter_spell_target_figure_id = 91
+        db.session.commit()
+        returned_card_ids = [modifier.id, spell.id, counter.id]
+
+        _return_config_attack_only_cards(cfg)
+        db.session.commit()
+
+        for card_id in returned_card_ids:
+            returned = db.session.get(CollectionCard, card_id)
+            assert returned.locked is False
+            assert returned.lock_type is None
+            assert returned.lock_ref_id is None
+        assert cfg.battle_modifier is None
+        assert cfg.modifier_card_ids == []
+        assert cfg.spell_name is None
+        assert cfg.spell_target_figure_id is None
+        assert cfg.spell_card_ids == []
+        assert cfg.counter_spell_name is None
+        assert cfg.counter_spell_data is None
+        assert cfg.counter_spell_card_ids == []
+        assert cfg.counter_spell_target_figure_id is None
+
     def test_keeps_battle_moves_and_returns_attack_only_cards(self, app, db, two_users):
         # The winning attack becomes the new defence: figures + tactics stay
         # committed; conquer-only preludes and other attack-only cards return.
