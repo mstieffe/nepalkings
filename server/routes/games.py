@@ -3983,7 +3983,10 @@ def _resolve_conquer_auto_loss(game, winner_player, loser_player,
         f"[CONQUER_AUTO_LOSS] game={game.id} reason={auto_loss_reason} "
         f"winner={winner_player.id} loser={loser_player.id}"
     )
-    return result
+    # A concurrent worker can acquire the game lock after this commit but
+    # before the first worker stores its idempotency receipt. Always return the
+    # same persisted reconstruction that that second worker will build.
+    return _serialize_finished_conquer_result(game) or result
 
 
 @games.route('/conquer_withdraw', methods=['POST'])
@@ -3991,9 +3994,19 @@ def _resolve_conquer_auto_loss(game, winner_player, loser_player,
 def conquer_withdraw():
     """Let the original conquer attacker intentionally forfeit the conquest."""
     try:
-        data = request.json
-        game_id = data['game_id']
-        player_id = data['player_id']
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return jsonify({
+                'success': False,
+                'message': 'A valid JSON object is required',
+            }), 400
+        game_id = data.get('game_id')
+        player_id = data.get('player_id')
+        if not game_id or not player_id:
+            return jsonify({
+                'success': False,
+                'message': 'game_id and player_id are required',
+            }), 400
         client_action_id = data.get('client_action_id')
 
         err = verify_player_ownership(player_id)

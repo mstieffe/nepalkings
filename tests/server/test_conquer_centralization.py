@@ -219,7 +219,11 @@ class TestConquerWithdraw:
 
             resp = client.post(
                 '/games/conquer_withdraw',
-                json={'game_id': game.id, 'player_id': atk_player.id},
+                json={
+                    'game_id': game.id,
+                    'player_id': atk_player.id,
+                    'client_action_id': 'withdraw-race-regression',
+                },
                 headers=_auth_headers(app, attacker),
             )
             data = resp.get_json()
@@ -232,6 +236,43 @@ class TestConquerWithdraw:
             assert game.last_battle_result.get('auto_loss_reason') == 'withdraw'
             assert data['game']['state'] == 'finished'
             assert data['game']['last_battle_result']['auto_loss_reason'] == 'withdraw'
+
+            # Reproduce the cross-worker gap where another request observes
+            # the committed finish before the first worker's receipt insert.
+            from game_service.conquer_tactics_idempotency import (
+                reset_cache_for_tests,
+            )
+            from models import ConquerActionReceipt
+
+            ConquerActionReceipt.query.filter_by(game_id=game.id).delete()
+            db.session.commit()
+            reset_cache_for_tests()
+            replay = client.post(
+                '/games/conquer_withdraw',
+                json={
+                    'game_id': game.id,
+                    'player_id': atk_player.id,
+                    'client_action_id': 'withdraw-race-regression',
+                },
+                headers=_auth_headers(app, attacker),
+            )
+            assert replay.status_code == 200, replay.get_json()
+            assert replay.get_json() == data
+
+    def test_malformed_withdraw_json_is_client_error(self, app, db):
+        with app.app_context():
+            attacker = _make_user(db, username='withdraw_bad_json')
+            client = app.test_client()
+
+            resp = client.post(
+                '/games/conquer_withdraw',
+                data='{"game_id":',
+                content_type='application/json',
+                headers=_auth_headers(app, attacker),
+            )
+
+            assert resp.status_code == 400
+            assert resp.get_json()['success'] is False
 
     def test_new_battle_after_withdraw_starts_open(self, app, db):
         with app.app_context():
