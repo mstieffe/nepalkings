@@ -10,3 +10,11 @@ def is_tactics_hand_conquer(game):
         and game.mode == 'conquer'
         and (getattr(game, 'conquer_move_model', None) or 'battle_move') == 'tactics_hand'
     )
+
+
+def is_tactics_hand_conquer_state(game_state):
+    """Return whether a serialized game uses the Conquer tactics-hand model."""
+    return bool(
+        game_state.get('mode') == 'conquer'
+        and (game_state.get('conquer_move_model') or 'battle_move') == 'tactics_hand'
+    )

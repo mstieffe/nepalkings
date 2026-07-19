@@ -10,6 +10,7 @@ from typing import Any
 
 from ai.figure_completion import best_figure_targets
 from ai.opponent_model import build_opponent_belief_snapshot
+from game_service.game_mode import is_tactics_hand_conquer_state
 
 
 _RANK_VALUE_MAP = {
@@ -129,10 +130,7 @@ def _planned_battle_moves(player: dict[str, Any], count: int = 3) -> list[dict[s
 
 
 def _is_tactics_hand_conquer(game_dict: dict[str, Any]) -> bool:
-    return bool(
-        game_dict.get('mode') == 'conquer'
-        and (game_dict.get('conquer_move_model') or 'battle_move') == 'tactics_hand'
-    )
+    return is_tactics_hand_conquer_state(game_dict)
 
 
 def _planned_conquer_tactics(

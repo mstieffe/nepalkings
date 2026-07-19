@@ -61,6 +61,7 @@ def test_route_orm_predicates_share_behavior_but_keep_historical_metadata():
 
 
 def test_ai_state_predicates_share_behavior_and_keep_typed_signatures():
+    from game_service.game_mode import is_tactics_hand_conquer_state
     from ai.game_state import (
         _is_tactics_hand_conquer as game_state_predicate,
     )
@@ -100,9 +101,12 @@ def test_ai_state_predicates_share_behavior_and_keep_typed_signatures():
         ),
     )
     for game_state, expected in cases:
+        assert is_tactics_hand_conquer_state(game_state) is expected
         assert game_state_predicate(game_state) is expected
         assert strategy_predicate(game_state) is expected
 
+    with pytest.raises(AttributeError):
+        is_tactics_hand_conquer_state(None)
     with pytest.raises(AttributeError):
         game_state_predicate(None)
     with pytest.raises(AttributeError):
@@ -113,6 +117,9 @@ def test_ai_state_predicates_share_behavior_and_keep_typed_signatures():
     )
     assert str(inspect.signature(strategy_predicate)) == (
         "(game_dict: 'dict[str, Any]') -> 'bool'"
+    )
+    assert str(inspect.signature(is_tactics_hand_conquer_state)) == (
+        '(game_state)'
     )
     assert game_state_predicate.__module__ == 'ai.game_state'
     assert strategy_predicate.__module__ == 'ai.strategy_planner'

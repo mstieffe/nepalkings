@@ -10,6 +10,7 @@ description that the LLM can understand and reason about.
 import logging
 
 from ai.figure_recipes import FAMILY_SKILLS
+from game_service.game_mode import is_tactics_hand_conquer_state
 
 logger = logging.getLogger('nepalkings.ai.game_state')
 
@@ -168,10 +169,7 @@ def serialize_game_for_llm(game_dict: dict, ai_player_id: int) -> str:
 
 
 def _is_tactics_hand_conquer(game_dict: dict) -> bool:
-    return bool(
-        game_dict.get('mode') == 'conquer'
-        and (game_dict.get('conquer_move_model') or 'battle_move') == 'tactics_hand'
-    )
+    return is_tactics_hand_conquer_state(game_dict)
 
 
 def _find_figure(game_dict: dict, figure_id: int) -> dict | None:
