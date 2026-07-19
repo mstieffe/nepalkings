@@ -15,7 +15,8 @@ logger = logging.getLogger('nepalkings.routes.msg')
 # ── Message length limits ──
 _MAX_LOG_MESSAGE = 500
 _MAX_CHAT_MESSAGE = 1000
-_MAX_LOG_FIELD = 64       # author / type
+_MAX_LOG_AUTHOR = 80
+_MAX_LOG_TYPE = 50
 _MAX_ROUND_TURN = 10000   # sane upper bound for round/turn counters
 
 
@@ -48,8 +49,8 @@ def add_log_entry():
             return jsonify({'success': False, 'message': 'round_number or turn_number out of range'}), 400
 
         message = data['message'][:_MAX_LOG_MESSAGE] if data.get('message') else ''
-        author = str(data['author'])[:_MAX_LOG_FIELD]
-        type = str(data['type'])[:_MAX_LOG_FIELD]
+        author = str(data['author'])[:_MAX_LOG_AUTHOR]
+        type = str(data['type'])[:_MAX_LOG_TYPE]
 
         log_entry = LogEntry(
             game_id=game_id,

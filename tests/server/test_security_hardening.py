@@ -315,8 +315,8 @@ def test_add_log_entry_truncates_oversized_fields(client, db, two_users):
     assert resp.status_code == 200
     entry = resp.get_json()['log_entry']
     assert len(entry['message']) == 500
-    assert len(entry['author']) == 64
-    assert len(entry['type']) == 64
+    assert len(entry['author']) == 80
+    assert len(entry['type']) == 50
 
 
 def test_get_rankings_aggregates_finished_games(client, db, two_users):
