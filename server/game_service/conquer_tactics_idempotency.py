@@ -1,33 +1,37 @@
 # Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
 # See LICENSE file in the project root for full license information.
-"""In-process idempotency cache and per-game mutex for conquer tactic actions.
+"""Durable idempotency and cross-worker locking for game mutations.
 
-Clients optionally include a ``client_action_id`` (UUID) with each mutating
-conquer-tactic request. When the server processes the request it stores the
-resulting JSON-serialisable response keyed by ``(game_id, player_id, endpoint,
-client_action_id)``. If the client retries with the same ``client_action_id``
-(e.g. after a network timeout) the cached response is returned verbatim — no
-duplicate state mutation occurs.
+Clients optionally include a ``client_action_id`` with mutating Conquer
+requests. Successful responses are cached in-process and persisted briefly in
+the database so a retry routed to another WSGI worker receives the same
+response.
 
-This module also exposes :func:`game_lock` so the five mutating conquer-tactic
-endpoints can serialise concurrent requests on the same game (e.g. a withdraw
-arriving while the opponent is mid-play). The lock is a per-process
-``threading.RLock`` keyed by game id; it is best-effort only and does not span
-multiple workers, but combined with the idempotency cache it eliminates the
-most common race patterns observed in the unified conquer redesign.
+PostgreSQL deployments also use transaction-level advisory locks keyed by game
+ID. SQLite and local tests retain a per-process ``threading.RLock`` fallback.
 """
 
 from __future__ import annotations
 
+import hashlib
+import logging
 import threading
 import time
 from collections import OrderedDict
 from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
+
+from flask import has_app_context
+from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 
 _CACHE_TTL_SECONDS = 60.0
 _CACHE_MAX_ENTRIES = 2048
+_POSTGRES_GAME_LOCK_NAMESPACE = 20043
+
+logger = logging.getLogger('nepalkings.conquer.coordination')
 
 
 class _LRUTTLCache:
@@ -72,46 +76,144 @@ _GAME_LOCK_GUARD = threading.Lock()
 
 
 def _cache_key(game_id, player_id, endpoint, client_action_id):
-    return (int(game_id) if game_id is not None else None,
-            int(player_id) if player_id is not None else None,
-            str(endpoint),
-            str(client_action_id))
-
-
-def get_cached_response(game_id, player_id, endpoint,
-                       client_action_id) -> Optional[Any]:
-    """Return a cached response for an idempotent retry, or None."""
-    if not client_action_id:
-        return None
-    return _RESPONSE_CACHE.get(
-        _cache_key(game_id, player_id, endpoint, client_action_id))
-
-
-def store_response(game_id, player_id, endpoint, client_action_id,
-                  response) -> None:
-    """Cache a response so a future retry with the same id replays it."""
-    if not client_action_id:
-        return
-    _RESPONSE_CACHE.set(
-        _cache_key(game_id, player_id, endpoint, client_action_id),
-        response,
+    action_digest = hashlib.sha256(
+        str(client_action_id).encode('utf-8'),
+    ).hexdigest()
+    return (
+        int(game_id) if game_id is not None else None,
+        int(player_id) if player_id is not None else None,
+        str(endpoint),
+        action_digest,
     )
 
 
+def _utcnow():
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _get_persisted_response(key) -> Optional[Any]:
+    if not has_app_context():
+        return None
+    try:
+        from models import ConquerActionReceipt
+
+        game_id, player_id, endpoint, client_action_id = key
+        receipt = ConquerActionReceipt.query.filter_by(
+            game_id=game_id,
+            player_id=player_id,
+            endpoint=endpoint,
+            client_action_id=client_action_id,
+        ).first()
+        if receipt is None or receipt.expires_at <= _utcnow():
+            return None
+        return receipt.response_body
+    except SQLAlchemyError:
+        # Production deploys create this table before reload. The fallback
+        # keeps a partially migrated local database usable long enough to run
+        # the explicit preparation command.
+        from models import db
+
+        db.session.rollback()
+        logger.exception('Failed to read durable Conquer action receipt')
+        return None
+
+
+def get_cached_response(game_id, player_id, endpoint,
+                        client_action_id) -> Optional[Any]:
+    """Return a cached response for an idempotent retry, or ``None``."""
+    if not client_action_id:
+        return None
+    key = _cache_key(game_id, player_id, endpoint, client_action_id)
+    cached = _RESPONSE_CACHE.get(key)
+    if cached is not None:
+        return cached
+    persisted = _get_persisted_response(key)
+    if persisted is not None:
+        _RESPONSE_CACHE.set(key, persisted)
+    return persisted
+
+
+def store_response(game_id, player_id, endpoint, client_action_id,
+                   response) -> None:
+    """Store a short-lived response receipt for cross-worker retries."""
+    if not client_action_id:
+        return
+    key = _cache_key(game_id, player_id, endpoint, client_action_id)
+    _RESPONSE_CACHE.set(key, response)
+    if not has_app_context():
+        return
+
+    from models import ConquerActionReceipt, db
+
+    now = _utcnow()
+    expires_at = now + timedelta(seconds=_CACHE_TTL_SECONDS)
+    try:
+        ConquerActionReceipt.query.filter(
+            ConquerActionReceipt.expires_at <= now,
+        ).delete(synchronize_session=False)
+        receipt = ConquerActionReceipt.query.filter_by(
+            game_id=key[0],
+            player_id=key[1],
+            endpoint=key[2],
+            client_action_id=key[3],
+        ).first()
+        if receipt is None:
+            db.session.add(ConquerActionReceipt(
+                game_id=key[0],
+                player_id=key[1],
+                endpoint=key[2],
+                client_action_id=key[3],
+                response_body=response,
+                created_at=now,
+                expires_at=expires_at,
+            ))
+        else:
+            receipt.response_body = response
+            receipt.expires_at = expires_at
+        db.session.commit()
+    except IntegrityError:
+        # A concurrent worker stored the same successful action first.
+        db.session.rollback()
+    except SQLAlchemyError:
+        db.session.rollback()
+        logger.exception('Failed to persist Conquer action receipt')
+
+
 def reset_cache_for_tests() -> None:
-    """Test helper: drop all cached responses and per-game locks."""
+    """Drop process-local cached responses and mutexes."""
     _RESPONSE_CACHE.clear()
     with _GAME_LOCK_GUARD:
         _GAME_LOCKS.clear()
 
 
+def acquire_game_transaction_lock(game_id):
+    """Acquire the PostgreSQL transaction lock for one game.
+
+    PostgreSQL holds this lock until the current SQLAlchemy transaction commits
+    or rolls back. Non-PostgreSQL databases rely on :func:`game_lock`'s local
+    mutex.
+    """
+    if game_id is None or not has_app_context():
+        return False
+
+    from models import db
+
+    bind = db.session.get_bind()
+    if bind.dialect.name != 'postgresql':
+        return False
+    db.session.execute(
+        text('SELECT pg_advisory_xact_lock(:namespace, :game_id)'),
+        {
+            'namespace': _POSTGRES_GAME_LOCK_NAMESPACE,
+            'game_id': int(game_id),
+        },
+    )
+    return True
+
+
 @contextmanager
 def game_lock(game_id):
-    """Serialise mutations on a single conquer game within this process.
-
-    Falls back to a no-op when ``game_id`` is None so callers can defer
-    validation without breaking the context-manager protocol.
-    """
+    """Serialise mutations on one game across threads and WSGI workers."""
     if game_id is None:
         yield
         return
@@ -123,6 +225,7 @@ def game_lock(game_id):
             _GAME_LOCKS[key] = lock
     lock.acquire()
     try:
+        acquire_game_transaction_lock(key)
         yield
     finally:
         lock.release()

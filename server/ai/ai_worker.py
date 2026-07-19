@@ -348,8 +348,11 @@ def trigger_ai_if_needed(game_id, app=None):
         logger.error(f"AI trigger: detect_phase crashed for game {game_id}: {e}", exc_info=True)
         return
     if not phase:
-        logger.info(f"AI trigger for game {game_id}: no action needed "
-                     f"(turn={game_dict.get('turn_player_id')}, actor={automated_player.id})")
+        logger.debug(
+            f"AI trigger for game {game_id}: no action needed "
+            f"(turn={game_dict.get('turn_player_id')}, "
+            f"actor={automated_player.id})"
+        )
         return
     
     # Avoid spawning duplicate threads for the same game

@@ -49,6 +49,8 @@ def clear_battle_state(game):
     game.battle_round = 0
     game.battle_turn_player_id = None
     game.battle_skipped_rounds = None
+    game.battle_round_deadline_round = None
+    game.battle_round_deadline_at = None
     game.battle_gamble_counts = None
     game.battle_gamble_previews = None
 

@@ -69,6 +69,11 @@ def test_new_columns_exist_after_run(app):
     assert 'notify_emails_enabled' in user_cols
     assert 'turn_email_log' in game_cols
     assert 'turn_time_limit' in game_cols
+    assert 'battle_round_deadline_round' in game_cols
+    assert 'battle_round_deadline_at' in game_cols
+    table_names = set(sa_inspect(db.engine).get_table_names())
+    assert 'conquer_action_receipt' in table_names
+    assert 'security_rate_limit_counter' in table_names
 
 
 def test_duel_turn_time_limit_migration_adds_legacy_columns(app):

@@ -1785,6 +1785,8 @@ def _execute_spell_impl(spell: ActiveSpell, game: Game, caster: Player):
                             game.defending_figure_id_2 = None
                             game.battle_decisions = None
                             game.battle_confirmed = False
+                            game.battle_round_deadline_round = None
+                            game.battle_round_deadline_at = None
 
                             # Log ignored defence counter spell (server-only, no player notification)
                             if game.defence_config_id:

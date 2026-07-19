@@ -7,7 +7,7 @@ import random
 import secrets
 import logging
 import math
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from models import db, User, Challenge, ChallengeStatus, Player, Game, MainCard, SideCard, Figure, CardToFigure, CardRole, LogEntry, ChatMessage, BattleMove, ConquerTactic, ActiveSpell, GameResult, Land, LandAttackLog, LandConfig, LandConfigFigure, CollectionCard, Kingdom
 from game_service.deck_manager import DeckManager
 from game_service.battle_card_repository import (
@@ -126,11 +126,12 @@ _ai_logger = logging.getLogger('nepalkings.ai.trigger')
 
 # --- Conquer per-round move timer (human players only) ------------------
 # Each human player gets up to ``CONQUER_ROUND_TIMEOUT_SEC`` seconds per
-# battle round to play a tactic. Authoritative server-side deadline is
-# tracked in-memory keyed by game id and battle round. When exceeded we
-# auto-play a random available tactic (or auto-skip if none).
+# battle round to play a tactic. The authoritative deadline is persisted on
+# Game so every WSGI worker reports and enforces the same clock.
 import time as _time
 CONQUER_ROUND_TIMEOUT_SEC = 60
+# Backwards-compatible test shadow. Production never reads this process-local
+# map; tests that explicitly force a timestamp can keep doing so.
 _conquer_round_deadlines = {}  # {game_id: (round_idx, deadline_unix_ts)}
 _conquer_timeout_last_check = {}  # {game_id: last_check_unix_ts}
 
@@ -180,22 +181,48 @@ def _ensure_conquer_round_deadline(game):
     round_idx = int(getattr(game, 'battle_round', 0) or 0)
     if round_idx not in (0, 1, 2):
         return None
-    entry = _conquer_round_deadlines.get(game.id)
-    if entry is None or entry[0] != round_idx:
-        deadline = _time.time() + CONQUER_ROUND_TIMEOUT_SEC
-        _conquer_round_deadlines[game.id] = (round_idx, deadline)
-        return deadline
-    return entry[1]
+
+    if current_app.config.get('TESTING'):
+        test_entry = _conquer_round_deadlines.get(game.id)
+        if test_entry is not None and test_entry[0] == round_idx:
+            return test_entry[1]
+
+    with _conquer_game_lock(game.id):
+        db.session.refresh(game)
+        deadline_round = getattr(
+            game,
+            'battle_round_deadline_round',
+            None,
+        )
+        deadline_at = getattr(game, 'battle_round_deadline_at', None)
+        if deadline_at is None or deadline_round != round_idx:
+            deadline_at = (
+                datetime.now(timezone.utc).replace(tzinfo=None)
+                + timedelta(seconds=CONQUER_ROUND_TIMEOUT_SEC)
+            )
+            game.battle_round_deadline_round = round_idx
+            game.battle_round_deadline_at = deadline_at
+            db.session.commit()
+
+    deadline = deadline_at.replace(tzinfo=timezone.utc).timestamp()
+    _conquer_round_deadlines[game.id] = (round_idx, deadline)
+    return deadline
 
 
 def _conquer_round_deadline_for(game):
-    entry = _conquer_round_deadlines.get(getattr(game, 'id', None))
-    if entry is None:
-        return None
     round_idx = int(getattr(game, 'battle_round', 0) or 0)
-    if entry[0] != round_idx:
+    if current_app.config.get('TESTING'):
+        test_entry = _conquer_round_deadlines.get(getattr(game, 'id', None))
+        if test_entry is not None and test_entry[0] == round_idx:
+            return test_entry[1]
+    if getattr(game, 'battle_round_deadline_round', None) != round_idx:
         return None
-    return entry[1]
+    deadline_at = getattr(game, 'battle_round_deadline_at', None)
+    if deadline_at is None:
+        return None
+    if deadline_at.tzinfo is None:
+        deadline_at = deadline_at.replace(tzinfo=timezone.utc)
+    return deadline_at.timestamp()
 
 
 def _human_players_pending_in_current_round(game):
@@ -291,13 +318,17 @@ def _check_conquer_round_timeout(game):
     if now - last < 2.0:
         return
     _conquer_timeout_last_check[game.id] = now
-    pending_humans = _human_players_pending_in_current_round(game)
-    pending_all = _all_players_pending_in_current_round(game)
-    if not pending_all:
-        return
     try:
         with _conquer_game_lock(game.id):
-            # Re-check after acquiring lock — round may have advanced.
+            # Re-read after acquiring the cross-worker lock. Another worker
+            # may have advanced this round while this request was queued.
+            db.session.refresh(game)
+            refreshed_deadline = _conquer_round_deadline_for(game)
+            if refreshed_deadline is None or _time.time() < refreshed_deadline:
+                return
+            pending_all = _all_players_pending_in_current_round(game)
+            if not pending_all:
+                return
             still_pending_humans = _human_players_pending_in_current_round(game)
             previous_round = int(getattr(game, 'battle_round', 0) or 0)
             for player in still_pending_humans:
@@ -4485,6 +4516,8 @@ def battle_decision():
                 game.battle_round = 0
                 game.battle_turn_player_id = None
                 game.battle_skipped_rounds = None
+                game.battle_round_deadline_round = None
+                game.battle_round_deadline_at = None
                 game.battle_gamble_counts = None
 
                 # Auto-fill both players' hands before entering battle shop

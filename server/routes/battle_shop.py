@@ -429,6 +429,8 @@ def confirm_battle_moves():
         game.battle_moves_confirmed = {pid: True for pid in player_ids}
         game.battle_round = 0
         game.battle_turn_player_id = game.invader_player_id
+        game.battle_round_deadline_round = None
+        game.battle_round_deadline_at = None
         # Reset played_round on all battle moves so they start as "in hand"
         moves = BattleMove.query.filter_by(game_id=game_id).all()
         for m in moves:

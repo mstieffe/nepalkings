@@ -2,6 +2,8 @@
 # See LICENSE file in the project root for full license information.
 """Focused coverage for the conquer tactics-hand model."""
 
+import pytest
+
 from models import (ActiveSpell, BattleMove, CollectionCard, ConquerTactic,
                     Figure, Game, MainCard, Player)
 
@@ -670,6 +672,35 @@ def test_serialize_exposes_combine_lineage_always(app, db):
     assert data['source_tactic_id_b'] is None
 
 
+def test_conquer_round_deadline_survives_process_cache_reset(app, db):
+    """The authoritative round clock is persisted for every WSGI worker."""
+    from routes.games import (
+        _conquer_round_deadline_for,
+        _conquer_round_deadlines,
+        _ensure_conquer_round_deadline,
+    )
+
+    _client, _attacker, _defender, game, attacker_player, defender_player = (
+        _start_player_owned_conquer(app, db)
+    )
+    _force_active_battle(db, game, attacker_player, defender_player)
+
+    first = _ensure_conquer_round_deadline(game)
+    assert first is not None
+    db.session.refresh(game)
+    assert game.battle_round_deadline_round == game.battle_round
+    assert game.battle_round_deadline_at is not None
+
+    # A second worker starts with an empty process-local cache.
+    _conquer_round_deadlines.clear()
+    db.session.expire_all()
+    reloaded = db.session.get(Game, game.id)
+    assert _conquer_round_deadline_for(reloaded) == pytest.approx(
+        first,
+        abs=0.01,
+    )
+
+
 def test_play_conquer_tactic_idempotent_replay(app, db):
     """Replaying play with the same client_action_id returns cached result."""
     from game_service.conquer_tactics_idempotency import reset_cache_for_tests
@@ -693,7 +724,9 @@ def test_play_conquer_tactic_idempotent_replay(app, db):
     assert first.status_code == 200, first.get_json()
     first_body = first.get_json()
 
-    # Retry with same client_action_id — must not error, must return cached.
+    # Simulate a retry landing on another worker by clearing the process-local
+    # fast cache. The durable receipt must still return the original result.
+    reset_cache_for_tests()
     second = client.post('/games/play_conquer_tactic', json=payload,
                         headers=_auth_headers(app, attacker))
     assert second.status_code == 200, second.get_json()
@@ -703,6 +736,11 @@ def test_play_conquer_tactic_idempotent_replay(app, db):
     # The tactic was only "played" once; played_round remains the original round.
     db.session.refresh(tactic)
     assert tactic.status == 'played'
+    from models import ConquerActionReceipt
+    assert ConquerActionReceipt.query.filter_by(
+        game_id=game.id,
+        player_id=attacker_player.id,
+    ).count() == 1
 
 
 def test_dismantle_validates_source_card_state(app, db):

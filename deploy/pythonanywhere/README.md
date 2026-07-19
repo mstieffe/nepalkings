@@ -126,6 +126,31 @@ curl -fsS https://API_DOMAIN/readyz
 database. `/readyz` additionally requires a reachable database at the current
 schema version.
 
+## 6. Configure the always-on background worker
+
+Web workers must keep `AI_ENABLED=False` and
+`BACKGROUND_SERVICES_ENABLED=False`. This prevents PythonAnywhere's multiple
+WSGI processes from starting duplicate AI threads. Create exactly one
+always-on task per environment:
+
+```bash
+NEPAL_KINGS_ENV_FILE="$HOME/.config/nepalkings/staging.env" \
+AI_ENABLED=True \
+"$HOME/.virtualenvs/nepalkings-staging/bin/python" \
+"$HOME/releases/RELEASE_SHA/server/manage.py" run-worker
+```
+
+Use the production environment file, production virtualenv, and approved
+production release for the production task. The worker has an
+environment-specific lifetime lock, polls for pending AI turns, and owns the
+stuck-game sweep. A duplicate task refuses to start.
+
+The worker holds environment-specific PostgreSQL advisory-lock leadership, so
+a duplicate task refuses to start and a crashed task releases leadership with
+its database connection. After every deployment, update the always-on task
+command to the immutable release directory and restart it before disabling
+maintenance mode.
+
 ## Deploy order
 
 1. Confirm the target branch, clean worktree, and immutable commit SHA.
@@ -134,10 +159,11 @@ schema version.
 4. Install the pinned requirements.
 5. Set `RELEASE_SHA` in the target private environment file.
 6. Run `manage.py prepare-database`.
-7. Reload the target web app.
-8. Check `/healthz`, `/readyz`, legal versions, invalid login JSON, and one
+7. Update and restart the environment's always-on worker.
+8. Reload the target web app.
+9. Check `/healthz`, `/readyz`, legal versions, invalid login JSON, and one
    authenticated read.
-9. Watch error and access logs before promoting the client.
+10. Watch error and access logs before promoting the client.
 
 ## SQLite-to-PostgreSQL cutover
 

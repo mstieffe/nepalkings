@@ -182,24 +182,20 @@ def _lock_user_for_spend(user_id):
         return db.session.get(User, user_id)
 
 
-# In-memory rate-limit window for per-user kingdom rename attempts.
-_RENAME_ATTEMPTS = {}
-
-
 def _check_rename_rate_limit(user_id):
-    """Return True if this rename attempt is within the per-user hourly cap."""
+    """Return True if this rename attempt is within the shared hourly cap."""
     cap = int(getattr(config, 'KINGDOM_RENAME_RATE_LIMIT_PER_HOUR', 10) or 10)
     if cap <= 0:
         return True
-    now = _utcnow()
-    window_start = now - timedelta(hours=1)
-    history = [t for t in _RENAME_ATTEMPTS.get(user_id, []) if t >= window_start]
-    if len(history) >= cap:
-        _RENAME_ATTEMPTS[user_id] = history
-        return False
-    history.append(now)
-    _RENAME_ATTEMPTS[user_id] = history
-    return True
+    from security_rate_limits import consume_rate_limit
+
+    allowed, _remaining, _retry_after = consume_rate_limit(
+        'kingdom.rename',
+        user_id,
+        limit=cap,
+        window_seconds=60 * 60,
+    )
+    return allowed
 
 
 # ── POST /kingdom/<id>/collect_gold|collect_production ─────────────────────

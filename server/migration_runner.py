@@ -385,6 +385,20 @@ def _m_widen_password_hash_for_scrypt():
         db.session.commit()
 
 
+def _m_multiworker_conquer_coordination():
+    """Persist the Conquer round clock shared by every web worker."""
+    _add_column_if_missing(
+        'game',
+        'battle_round_deadline_round',
+        'INTEGER',
+    )
+    _add_column_if_missing(
+        'game',
+        'battle_round_deadline_at',
+        'TIMESTAMP',
+    )
+
+
 # ── Registry ───────────────────────────────────────────────────────
 
 MIGRATIONS = [
@@ -407,6 +421,8 @@ MIGRATIONS = [
      _m_clear_finished_game_orphan_config_refs),
     (16, 'widen user password hashes for scrypt',
      _m_widen_password_hash_for_scrypt),
+    (17, 'persist multi-worker Conquer coordination',
+     _m_multiworker_conquer_coordination),
 ]
 
 CURRENT_SCHEMA_VERSION = max(version for version, _description, _fn in MIGRATIONS)

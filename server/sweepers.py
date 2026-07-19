@@ -53,53 +53,74 @@ def sweep_stuck_conquer_games(timeout_seconds=None):
     )
 
     resolved = 0
-    for game in candidates:
-        # Require an explicit last_activity_at signal.  Games predating the
-        # column (or never touched by an authenticated request) report
-        # NULL and are left alone — better to leak a stuck row for one
-        # player to revisit than to forfeit a possibly-active battle the
-        # first time the sweeper runs after a deploy.
-        last_active = game.last_activity_at
-        if last_active is None:
-            continue
-        # Normalize to aware datetime for comparison
-        if last_active.tzinfo is None:
-            last_active = last_active.replace(tzinfo=timezone.utc)
-        if last_active >= cutoff:
-            continue
-
-        # Determine the defender — they win on attacker abandonment.
-        from routes.games import _conquer_attacker_player, _resolve_conquer_battle
-        atk_player = _conquer_attacker_player(game)
-        if atk_player is None and game.invader_player_id:
-            atk_player = db.session.get(Player, game.invader_player_id)
-        defender = None
-        if atk_player is not None:
-            defender = next(
-                (p for p in game.players if p.id != atk_player.id),
-                None,
-            )
-        if defender is None:
-            logger.warning(
-                "[STUCK_SWEEP] could not determine defender for game %s; skipping",
-                game.id,
-            )
-            continue
-
+    for candidate in candidates:
         try:
-            _resolve_conquer_battle(game, defender, defender)
-            db.session.commit()
-            resolved += 1
-            logger.info(
-                "[STUCK_SWEEP] auto-forfeited conquer game %s (land=%s, attacker=%s) — "
-                "no activity since %s",
-                game.id, game.land_id, atk_player.id if atk_player else None,
-                last_active.isoformat(),
-            )
+            from game_service.conquer_tactics_idempotency import game_lock
+
+            with game_lock(candidate.id):
+                # The candidate list is intentionally optimistic. Re-read it
+                # after acquiring the cross-worker lock so a request that
+                # arrived while the sweeper was waiting cannot be forfeited.
+                db.session.expire_all()
+                game = db.session.get(Game, candidate.id)
+                if (
+                    game is None
+                    or game.state not in ('active', 'open')
+                    or game.mode != 'conquer'
+                ):
+                    continue
+
+                # Require an explicit last_activity_at signal. Games predating
+                # the column are left alone.
+                last_active = game.last_activity_at
+                if last_active is None:
+                    continue
+                if last_active.tzinfo is None:
+                    last_active = last_active.replace(tzinfo=timezone.utc)
+                if last_active >= cutoff:
+                    continue
+
+                # Determine the defender — they win on abandonment.
+                from routes.games import (
+                    _conquer_attacker_player,
+                    _resolve_conquer_battle,
+                )
+                atk_player = _conquer_attacker_player(game)
+                if atk_player is None and game.invader_player_id:
+                    atk_player = db.session.get(
+                        Player,
+                        game.invader_player_id,
+                    )
+                defender = None
+                if atk_player is not None:
+                    defender = next(
+                        (p for p in game.players if p.id != atk_player.id),
+                        None,
+                    )
+                if defender is None:
+                    logger.warning(
+                        '[STUCK_SWEEP] could not determine defender for '
+                        'game %s; skipping',
+                        game.id,
+                    )
+                    continue
+
+                _resolve_conquer_battle(game, defender, defender)
+                db.session.commit()
+                resolved += 1
+                logger.info(
+                    '[STUCK_SWEEP] auto-forfeited conquer game %s '
+                    '(land=%s, attacker=%s) — no activity since %s',
+                    game.id,
+                    game.land_id,
+                    atk_player.id if atk_player else None,
+                    last_active.isoformat(),
+                )
         except Exception:
             db.session.rollback()
             logger.exception(
-                "[STUCK_SWEEP] failed to auto-resolve game %s", game.id,
+                '[STUCK_SWEEP] failed to auto-resolve game %s',
+                candidate.id,
             )
 
     return resolved

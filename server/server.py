@@ -240,6 +240,80 @@ else:
     }
 db.init_app(app)
 
+# ── Cross-worker request coordination ──
+_GAME_MUTATION_BLUEPRINTS = {
+    'games',
+    'figures',
+    'spells',
+    'battle_shop',
+}
+
+
+@app.before_request
+def _serialize_game_mutations():
+    """Lock one game's PostgreSQL transaction before a mutating route."""
+    if request.method not in {'POST', 'PUT', 'PATCH', 'DELETE'}:
+        return None
+    if request.blueprint not in _GAME_MUTATION_BLUEPRINTS:
+        return None
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        data = request.form or {}
+    game_id = data.get('game_id')
+    if game_id is None:
+        return None
+    try:
+        game_id = int(game_id)
+    except (TypeError, ValueError):
+        return None
+
+    from game_service.conquer_tactics_idempotency import (
+        acquire_game_transaction_lock,
+    )
+
+    acquire_game_transaction_lock(game_id)
+    return None
+
+
+@app.before_request
+def _enforce_shared_auth_rate_limits():
+    """Apply exact cross-worker limits to login and registration."""
+    if settings.IS_DEVELOPMENT:
+        return None
+    if not app.config.get('RATELIMIT_ENABLED', True):
+        return None
+    limits_by_endpoint = {
+        'auth.login': settings.RATE_LIMIT_LOGIN,
+        'auth.register': settings.RATE_LIMIT_REGISTER,
+    }
+    configured = limits_by_endpoint.get(request.endpoint)
+    if not configured:
+        return None
+
+    from limits import parse
+    from security_rate_limits import consume_rate_limit
+
+    item = parse(configured)
+    allowed, remaining, retry_after = consume_rate_limit(
+        request.endpoint,
+        get_remote_address(),
+        limit=item.amount,
+        window_seconds=item.get_expiry(),
+    )
+    if allowed:
+        return None
+    response = jsonify({
+        'success': False,
+        'message': 'Too many requests. Try again later.',
+        'reason': 'rate_limit',
+        'retryable': True,
+    })
+    response.status_code = 429
+    response.headers['Retry-After'] = str(retry_after)
+    response.headers['X-RateLimit-Remaining'] = str(remaining)
+    response.headers['Cache-Control'] = 'no-store'
+    return response
+
 # Local development keeps the historical convenience. Production runs this
 # command explicitly before WSGI reload:
 #   python manage.py prepare-database

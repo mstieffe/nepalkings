@@ -208,6 +208,11 @@ class Game(db.Model):
     battle_round = db.Column(db.Integer, nullable=False, default=0)  # current battle round (0-2)
     battle_turn_player_id = db.Column(db.Integer, db.ForeignKey('player.id'), nullable=True)  # whose turn in battle
     battle_skipped_rounds = db.Column(db.JSON, nullable=True)  # {str(player_id): [round_indices]} — tracks skipped rounds
+    # Authoritative Conquer round clock.  Keeping both the round number and
+    # deadline in PostgreSQL makes every WSGI worker report and enforce the
+    # same timer.
+    battle_round_deadline_round = db.Column(db.Integer, nullable=True)
+    battle_round_deadline_at = db.Column(db.DateTime, nullable=True)
 
     # Post-battle side card draw — {str(player_id): [{suit, rank}, ...]}
     post_battle_drawn_cards = db.Column(db.JSON, nullable=True)
@@ -745,6 +750,40 @@ class ConquerTactic(db.Model):
         if self.value_b is not None:
             data['value_b'] = self.value_b
         return data
+
+
+class ConquerActionReceipt(db.Model):
+    """Short-lived response receipt for idempotent Conquer mutations."""
+    __tablename__ = 'conquer_action_receipt'
+
+    id = db.Column(db.Integer, primary_key=True)
+    game_id = db.Column(db.Integer, nullable=False, index=True)
+    player_id = db.Column(db.Integer, nullable=False)
+    endpoint = db.Column(db.String(64), nullable=False)
+    # Store a bounded digest, not attacker-controlled request text.
+    client_action_id = db.Column(db.String(64), nullable=False)
+    response_body = db.Column(db.JSON, nullable=False)
+    created_at = db.Column(db.DateTime, nullable=False, default=_utcnow)
+    expires_at = db.Column(db.DateTime, nullable=False, index=True)
+
+    __table_args__ = (
+        db.UniqueConstraint(
+            'game_id',
+            'player_id',
+            'endpoint',
+            'client_action_id',
+            name='uq_conquer_action_receipt_request',
+        ),
+    )
+
+
+class SecurityRateLimitCounter(db.Model):
+    """Shared fixed-window counter for security-sensitive actions."""
+    __tablename__ = 'security_rate_limit_counter'
+
+    key = db.Column(db.String(64), primary_key=True)
+    count = db.Column(db.Integer, nullable=False, default=0)
+    expires_at = db.Column(db.DateTime, nullable=False, index=True)
 
 
 class GameResult(db.Model):

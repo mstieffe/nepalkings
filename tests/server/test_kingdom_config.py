@@ -7,8 +7,15 @@ from unittest.mock import patch
 
 import pytest
 
-from models import (Game, Land, Kingdom, KingdomCosmeticUnlock, KingdomNotification,
-                    KingdomSkillAllocation)
+from models import (
+    Game,
+    Kingdom,
+    KingdomCosmeticUnlock,
+    KingdomNotification,
+    KingdomSkillAllocation,
+    Land,
+    SecurityRateLimitCounter,
+)
 import server_settings as config
 from kingdom_service import (effective_gold_rate_for_lands, reconcile_user_kingdoms,
                              serialize_kingdom_config,
@@ -261,8 +268,8 @@ class TestKingdomConfigRoutes:
         kingdom = reconcile_user_kingdoms(u1.id, commit=True)[0]
         url = f'/kingdom/config/{kingdom.id}/rename'
 
-        from routes.kingdom import _RENAME_ATTEMPTS
-        _RENAME_ATTEMPTS.pop(u1.id, None)
+        SecurityRateLimitCounter.query.delete()
+        db.session.commit()
 
         with patch.object(config, 'KINGDOM_RENAME_RATE_LIMIT_PER_HOUR', 2):
             rv1 = client.post(url, headers=auth_headers_user1, json={'name': 'A1'})
@@ -271,7 +278,6 @@ class TestKingdomConfigRoutes:
         assert rv1.status_code == 200
         assert rv2.status_code == 200
         assert rv3.status_code == 429
-        _RENAME_ATTEMPTS.pop(u1.id, None)
 
     def test_empty_kingdoms_are_deleted_during_reconcile(self, db, two_users):
         u1, _ = two_users

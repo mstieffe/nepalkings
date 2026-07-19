@@ -84,4 +84,6 @@ jobs:
             tests/server/test_ops.py \
             tests/server/test_security_hardening.py \
             tests/server/test_conquer_cleanup.py \
+            tests/server/test_conquer_tactics_hand.py \
+            tests/server/test_multiworker_coordination.py \
             tests/test_sqlite_postgres_importer.py

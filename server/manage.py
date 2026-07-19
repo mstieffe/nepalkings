@@ -26,7 +26,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
         'command',
-        choices=('prepare-database',),
+        choices=('prepare-database', 'run-worker'),
     )
     args = parser.parse_args()
 
@@ -40,11 +40,16 @@ def main():
 
     # Import only after the private environment has been loaded.
     from server import app
-    from startup import prepare_database
-
     if args.command == 'prepare-database':
+        from startup import prepare_database
+
         prepare_database(app)
         print('Database preparation completed successfully')
+        return 0
+    if args.command == 'run-worker':
+        from background_worker import run_forever
+
+        run_forever(app)
         return 0
     return 2
 
