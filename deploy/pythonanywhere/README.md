@@ -109,11 +109,17 @@ In the PythonAnywhere Web tab:
 1. Select manual configuration with Python 3.11.
 2. Set source code and working directory to
    `/home/nepalkingz/nepalkings/server`.
-3. Set the virtualenv to `/home/nepalkingz/.virtualenvs/nepalkings`.
+3. Set the virtualenv to the environment-specific path, for example
+   `/home/nepalkingz/.virtualenvs/nepalkings-staging`.
 4. Copy `wsgi.py.example` into the provider WSGI file and set the username and
-   environment.
+   environment, release SHA, and immutable release directory.
 5. Enable **Force HTTPS**.
 6. Reload only after `prepare-database` succeeds.
+
+Keep `load_dotenv(ENV_FILE, override=True)` in the provider WSGI file.
+PythonAnywhere's WSGI-file touch is a soft reload and may otherwise retain
+stale values such as `RELEASE_SHA` or `MAINTENANCE_MODE` from the existing
+uWSGI master.
 
 Check:
 

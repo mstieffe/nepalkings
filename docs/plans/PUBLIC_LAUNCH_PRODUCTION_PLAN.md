@@ -35,6 +35,13 @@ Execution checkpoint (2026-07-19):
   PostgreSQL or multi-worker changes.
 - PythonAnywhere EU is selected for the staged public beta. GitHub Pages
   remains the static client host.
+- Staging now runs immutable release
+  `e52611c0534997f8be3c57dcebf193de29124411` on PostgreSQL schema 17 behind
+  three managed WSGI workers. It remains in maintenance mode until the
+  permanent always-on task and authenticated gameplay smoke test are complete.
+- The release passed 2,626 local tests, focused coordination tests, the
+  GitHub Python 3.11 suite, PostgreSQL 16 compatibility/concurrency tests,
+  dependency audit, and secret scan.
 
 Already present:
 
@@ -50,22 +57,23 @@ Already present:
 
 Known launch blockers:
 
-- Production still uses SQLite.
-- Multiple web workers are not gameplay-safe because important coordination is
-  process-local.
-- Database migration, reconciliation, map seeding, AI setup, and a sweeper run
-  during WSGI startup.
-- The current US PythonAnywhere route has high end-to-end latency from Europe.
+- The production environment and custom API domain are not configured or
+  cut over; only staging is on PostgreSQL.
+- The permanent staging always-on task still needs to be created after saving
+  a valid EU PythonAnywhere API token. Its exact command has passed a
+  controlled live startup, sweep, AI initialization, and shutdown test.
+- Multi-worker gameplay still needs an authenticated two-account smoke test
+  and 24-hour soak before public registration.
+- Job failure history/attempt limits and the remaining mutation-atomicity audit
+  are incomplete.
 - Screens and game polling fan out over multiple HTTP requests.
-- There are no production health/readiness endpoints or complete application
-  metrics.
+- Complete application metrics and alerting are still missing.
 - Account recovery, deletion/export, and session revocation are incomplete.
 - Player reporting, blocking, suspension, and moderator tooling are missing.
 - Legal operator/contact details, retention specifics, and final attribution
   are incomplete.
 - The staged browser archive is approximately 45 MiB.
-- CI does not exercise PostgreSQL, production container builds, migrations, or
-  load tests.
+- CI does not yet exercise production builds or load tests.
 
 ## Release contract
 
@@ -496,7 +504,7 @@ Priority: **P0**
 
 Verification:
 
-- [ ] Fresh staging deployment succeeds from an empty environment.
+- [x] Fresh staging deployment succeeds from an empty environment.
 - [x] Health and readiness fail correctly when dependencies are unavailable.
 - [x] No package installation or schema mutation occurs in a web-worker import.
 
@@ -510,7 +518,7 @@ Priority: **P0**
 - [x] Add PostgreSQL to CI.
 - [x] Audit every raw DDL operation and migration for PostgreSQL.
 - [x] Decide whether to harden the custom runner or adopt Alembic.
-- [ ] Test JSON, timestamps, indexes, unique constraints, and row locking.
+- [x] Test JSON, timestamps, indexes, unique constraints, and row locking.
 - [x] Build a repeatable SQLite-to-PostgreSQL importer.
 - [x] Preserve IDs and reset PostgreSQL sequences.
 - [x] Validate row counts and foreign keys.
@@ -526,7 +534,7 @@ Priority: **P0**
 Verification:
 
 - [ ] No production SQLite dependency remains.
-- [ ] Migration validation is automated and passes.
+- [x] Migration validation is automated and passes.
 - [ ] Restore meets RPO and RTO.
 
 ---
@@ -535,17 +543,21 @@ Verification:
 
 Priority: **P0**
 
-- [ ] Replace in-process Conquer idempotency with durable idempotency records
+- [x] Replace in-process Conquer idempotency with durable idempotency records
   and unique constraints.
-- [ ] Replace process-local game locks with transactional row/advisory locks.
-- [ ] Persist Conquer round deadlines.
-- [ ] Move AI work into a durable job mechanism.
-- [ ] Move sweepers and reconciliation into a dedicated worker.
+- [x] Replace process-local game locks with transactional row/advisory locks.
+- [x] Persist Conquer round deadlines.
+- [x] Move AI execution out of web workers into a dedicated always-on worker
+  driven from durable game state.
+- [x] Move the stuck-game sweeper into the dedicated worker.
+- [x] Keep migration, seeding, and reconciliation in an explicit pre-reload
+  preparation command instead of WSGI import.
 - [ ] Add job leases, retries, attempt limits, and failure history.
-- [ ] Replace `/tmp` leader election with database-backed leadership.
-- [ ] Use shared rate-limit counters.
+- [x] Replace `/tmp` leader election with database-backed leadership.
+- [x] Use shared rate-limit counters for login, registration, and kingdom
+  rename.
 - [ ] Make reward, collection, ownership, and battle mutations atomic.
-- [ ] Remove migration, seeding, reconciliation, and worker startup from WSGI
+- [x] Remove migration, seeding, reconciliation, and worker startup from WSGI
   import.
 - [ ] Test simultaneous duplicate and conflicting actions.
 - [ ] Run at least two web workers plus one job worker for a 24-hour soak.
@@ -873,4 +885,5 @@ Part-time expectation: approximately two to three months.
 | 2026-07-19 | Preserve the free-plan deployment before production changes | Pushed and live-tested `backup/pythonanywhere-free-eu-2026-07-19` at `7c85e83` | SQLite/single-worker fallback remains reproducible but requires its matching database snapshot |
 | 2026-07-19 | Harden the existing migration runner for PostgreSQL instead of adopting Alembic before beta | Only 14 ordered migrations exist; changing frameworks during the database cutover adds avoidable migration-state risk | Add PostgreSQL CI, portability tests, and explicit pre-reload execution now; reconsider Alembic after beta |
 | 2026-07-19 | PostgreSQL plan | Separate least-privilege staging/production DB owners on PythonAnywhere; 1 GiB initial allocation | Locks backup and connection design; live credentials still need provider-side creation |
-| TBD | Background job design | Multi-worker correctness prototype | Locks worker/Redis requirements |
+| 2026-07-19 | Dedicated PythonAnywhere always-on worker driven from durable game state | Three paid WSGI workers made in-process AI/sweeper startup unsafe; controlled staging worker test initialized AI, swept, and shut down cleanly | Web workers keep AI/background services disabled; PostgreSQL advisory leadership prevents duplicate task ownership; attempt limits and failure history remain before launch |
+| 2026-07-19 | PostgreSQL-backed multi-worker coordination | Release `e52611c` passed local, Python 3.11, and disposable PostgreSQL 16 tests; staging reports schema 17 with three workers | Conquer receipts, deadlines, game transaction locks, and security rate limits are shared; live gameplay and soak gates remain |

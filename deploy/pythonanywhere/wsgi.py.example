@@ -1,22 +1,31 @@
 # PythonAnywhere provider-owned WSGI configuration for Nepal Kings.
 #
-# Replace USERNAME and ENVIRONMENT, then paste this into the WSGI file linked
-# from the PythonAnywhere Web tab. No secret belongs in this file.
+# Replace USERNAME, ENVIRONMENT, and RELEASE_SHA, then paste this into the WSGI
+# file linked from the PythonAnywhere Web tab. No secret belongs in this file.
 
 import os
 import sys
 
+from dotenv import load_dotenv
+
 
 USERNAME = 'USERNAME'
 ENVIRONMENT = 'production'  # or: staging
-SERVER_DIRECTORY = f'/home/{USERNAME}/nepalkings/server'
+RELEASE_SHA = 'RELEASE_SHA'
+PROJECT_DIRECTORY = f'/home/{USERNAME}/releases/{RELEASE_SHA}'
+SERVER_DIRECTORY = f'{PROJECT_DIRECTORY}/server'
 ENV_FILE = (
     f'/home/{USERNAME}/.config/nepalkings/{ENVIRONMENT}.env'
 )
 
+os.chdir(PROJECT_DIRECTORY)
 if SERVER_DIRECTORY not in sys.path:
     sys.path.insert(0, SERVER_DIRECTORY)
 
 os.environ['NEPAL_KINGS_ENV_FILE'] = ENV_FILE
+# PythonAnywhere's documented WSGI-file touch performs a soft reload. Refresh
+# values inherited from the existing uWSGI master so RELEASE_SHA, maintenance
+# mode, and other private settings cannot remain stale.
+load_dotenv(ENV_FILE, override=True)
 
 from wsgi import application  # noqa: E402,F401
