@@ -2,6 +2,8 @@
 # See LICENSE file in the project root for full license information.
 """Characterization tests for Conquer ownership-transfer helpers."""
 
+import importlib
+import pickle
 from types import SimpleNamespace
 
 
@@ -20,6 +22,26 @@ def _land(db, owner_user_id, *, col, row):
     db.session.add(land)
     db.session.flush()
     return land
+
+
+class TestOwnershipTransferCompatibility:
+    def test_route_reexports_canonical_helpers(self):
+        canonical_module = importlib.import_module(
+            'game_service.conquer_ownership_transfer'
+        )
+        legacy_module = importlib.import_module('routes.games')
+
+        for name in (
+            '_clear_split_transfer_defences',
+            '_split_transfer_payload',
+            '_record_split_transfer_notifications',
+            '_wipe_defence_drafts_for_lost_land',
+        ):
+            canonical = getattr(canonical_module, name)
+            legacy = getattr(legacy_module, name)
+            assert legacy is canonical
+            assert canonical.__module__ == 'routes.games'
+            assert pickle.loads(pickle.dumps(canonical)) is canonical
 
 
 class TestSplitTransferPayload:
