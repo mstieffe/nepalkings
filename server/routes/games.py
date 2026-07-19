@@ -71,6 +71,15 @@ from game_service.conquer_tactics_rules import (
     _validate_conquer_tactic_call_figure,
     _validate_conquer_tactic_family_rank,
 )
+from game_service.post_battle_choice import (
+    clear_post_battle_pending_choice as _clear_post_battle_pending_choice_impl,
+    make_post_battle_pending_choice as _make_post_battle_pending_choice_impl,
+    parse_pending_choice_deadline as _parse_pending_choice_deadline_impl,
+    pending_choice_expired as _pending_choice_expired_impl,
+    post_battle_choice_timeout_seconds as _post_battle_choice_timeout_seconds_impl,
+    serialize_battle_card as _serialize_battle_card_impl,
+    set_post_battle_pending_choice as _set_post_battle_pending_choice_impl,
+)
 from routes.auth import get_game_membership, require_token, verify_game_membership, verify_player_ownership
 from routes.serialization import serialize_game_for_viewer, serialize_spell_for_viewer, viewer_has_all_seeing_eye
 from analytics import track
@@ -5487,64 +5496,54 @@ def _delete_all_battle_moves(game_id):
 
 def _serialize_battle_card(card, card_type):
     """Create a serialisable dict for a card involved in the battle."""
-    data = card.serialize() if hasattr(card, 'serialize') else {}
-    data['card_type'] = card_type
-    return data
+    return _serialize_battle_card_impl(card, card_type)
 
 
 def _post_battle_choice_timeout_seconds():
-    return max(int(getattr(settings, 'POST_BATTLE_CHOICE_TIMEOUT_SECONDS', 300)), 0)
+    return _post_battle_choice_timeout_seconds_impl(settings)
 
 
 def _make_post_battle_pending_choice(choice_type, player_id, default):
-    now = _utcnow()
-    timeout = _post_battle_choice_timeout_seconds()
-    deadline = now + timedelta(seconds=timeout)
-    return {
-        'type': choice_type,
-        'player_id': player_id,
-        'default': default,
-        'created_at': now.isoformat(),
-        'deadline_at': deadline.isoformat(),
-        'timeout_seconds': timeout,
-    }
+    return _make_post_battle_pending_choice_impl(
+        choice_type,
+        player_id,
+        default,
+        now=_utcnow,
+        timeout_seconds=_post_battle_choice_timeout_seconds,
+    )
 
 
 def _parse_pending_choice_deadline(pending):
-    try:
-        deadline_raw = (pending or {}).get('deadline_at')
-        return datetime.fromisoformat(deadline_raw) if deadline_raw else None
-    except Exception:
-        return None
+    return _parse_pending_choice_deadline_impl(pending)
 
 
 def _pending_choice_expired(pending):
-    if not pending:
-        return False
-    if _post_battle_choice_timeout_seconds() == 0:
-        return True
-    deadline = _parse_pending_choice_deadline(pending)
-    return bool(deadline and _utcnow() >= deadline)
+    return _pending_choice_expired_impl(
+        pending,
+        timeout_seconds=_post_battle_choice_timeout_seconds,
+        parse_deadline=_parse_pending_choice_deadline,
+        now=_utcnow,
+    )
 
 
 def _set_post_battle_pending_choice(game, choice_type, player_id, default):
-    result = dict(game.last_battle_result) if isinstance(game.last_battle_result, dict) else {}
-    result['post_battle_pending_choice'] = _make_post_battle_pending_choice(
-        choice_type, player_id, default
+    return _set_post_battle_pending_choice_impl(
+        game,
+        choice_type,
+        player_id,
+        default,
+        make_pending_choice=_make_post_battle_pending_choice,
+        mark_modified=flag_modified,
     )
-    game.last_battle_result = result
-    flag_modified(game, 'last_battle_result')
 
 
 def _clear_post_battle_pending_choice(game, *, defaulted=False, choice=None):
-    result = dict(game.last_battle_result) if isinstance(game.last_battle_result, dict) else {}
-    result.pop('post_battle_pending_choice', None)
-    if defaulted:
-        result['post_battle_choice_defaulted'] = True
-    if choice:
-        result['post_battle_choice'] = choice
-    game.last_battle_result = result
-    flag_modified(game, 'last_battle_result')
+    return _clear_post_battle_pending_choice_impl(
+        game,
+        defaulted=defaulted,
+        choice=choice,
+        mark_modified=flag_modified,
+    )
 
 
 def _first_deterministic_returnable_card(game_id):
