@@ -5,7 +5,7 @@
 import random
 
 from game_service.card_values import AI_DEFENCE_RANK_VALUES
-from models import CollectionCard, KingdomLootEvent, db
+from models import CollectionCard, KingdomLootEvent, LandConfig, db
 import server_settings as settings
 
 
@@ -224,6 +224,85 @@ def _loot_cards_public(cards, include_id=False):
             row['id'] = card.get('id')
         out.append(row)
     return out
+
+
+def resolve_defender_win_loot(
+    game,
+    land,
+    attack_loot_pool,
+    *,
+    attacker_first_conquest_attempt,
+    is_ai_defender,
+    lost_kingdom_id,
+    rng,
+    wipe_land_config_return_unlooted,
+    logger,
+):
+    """Resolve the card loss when a Conquer defender wins."""
+    tutorial_first_loss = bool(
+        attacker_first_conquest_attempt and is_ai_defender
+    )
+    extra_chance = 0.0
+    if lost_kingdom_id and not tutorial_first_loss:
+        try:
+            from kingdom_service import kingdom_skill_level
+
+            level = kingdom_skill_level(
+                lost_kingdom_id,
+                'loot_chance',
+            )
+            extra_chance = settings.skill_effect_at_level(
+                'loot_chance',
+                level,
+            )
+        except Exception as loot_skill_error:
+            logger.warning(
+                'Failed to resolve defensive loot skill: %s',
+                loot_skill_error,
+            )
+
+    loot_gained_cards = []
+    looted_lost_cards = []
+    card_lost_suit = None
+    card_lost_rank = None
+    if game.conquer_config_id:
+        attack_config = db.session.get(
+            LandConfig,
+            game.conquer_config_id,
+        )
+        if attack_config:
+            if tutorial_first_loss:
+                looted_ids = set()
+            else:
+                defender_looted_cards = _select_conquer_loot_cards(
+                    attack_loot_pool,
+                    land.tier if land else 1,
+                    extra_chance=extra_chance,
+                    rng=rng,
+                )
+                loot_gained_cards = _loot_cards_public(
+                    defender_looted_cards
+                )
+                looted_lost_cards = list(loot_gained_cards)
+                if looted_lost_cards:
+                    card_lost_suit = looted_lost_cards[0].get('suit')
+                    card_lost_rank = looted_lost_cards[0].get('rank')
+                looted_ids = {
+                    card.get('id')
+                    for card in defender_looted_cards
+                    if card.get('id')
+                }
+            wipe_land_config_return_unlooted(
+                attack_config,
+                looted_ids,
+            )
+
+    return (
+        loot_gained_cards,
+        looted_lost_cards,
+        card_lost_suit,
+        card_lost_rank,
+    )
 
 
 def _create_kingdom_loot_events(*, attack_log_id, land_id, gained_user_id,

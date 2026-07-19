@@ -62,6 +62,7 @@ from game_service.conquer_loot import (
     _snapshot_config_loot_cards,
     _snapshot_template_loot_cards,
     _template_figure_key_cards,
+    resolve_defender_win_loot,
 )
 from game_service.conquer_ownership_transfer import (
     _clear_split_transfer_defences,
@@ -7299,40 +7300,24 @@ def _resolve_conquer_battle(game, winner, requesting_player):
             raise
 
     else:
-        # ── Defender wins: loot from attacker config by tier + defender skill ──
-        # The tutorial's first conquest is a no-penalty retry: a brand-new
-        # player who loses their first AI-land battle keeps every card (nothing
-        # is looted) so they can immediately attack the same land again.
-        tutorial_first_loss = bool(attacker_first_conquest_attempt and is_ai_land)
-        extra_chance = 0.0
-        if lost_kingdom_id and not tutorial_first_loss:
-            try:
-                from kingdom_service import kingdom_skill_level
-                level = kingdom_skill_level(lost_kingdom_id, 'loot_chance')
-                extra_chance = settings.skill_effect_at_level('loot_chance', level)
-            except Exception as _loot_skill_err:
-                logger.warning('Failed to resolve defensive loot skill: %s', _loot_skill_err)
-        if game.conquer_config_id:
-            atk_cfg = db.session.get(LandConfig, game.conquer_config_id)
-            if atk_cfg:
-                if tutorial_first_loss:
-                    looted_ids = set()  # no penalty -> every card returns
-                else:
-                    defender_looted_cards = _select_conquer_loot_cards(
-                        attack_loot_pool,
-                        land.tier if land else 1,
-                        extra_chance=extra_chance,
-                        rng=_random,
-                    )
-                    loot_gained_cards = _loot_cards_public(defender_looted_cards)
-                    looted_lost_cards = list(loot_gained_cards)
-                    if looted_lost_cards:
-                        card_lost_suit = looted_lost_cards[0].get('suit')
-                        card_lost_rank = looted_lost_cards[0].get('rank')
-                    looted_ids = {
-                        c.get('id') for c in defender_looted_cards if c.get('id')
-                    }
-                _wipe_land_config_return_unlooted(atk_cfg, looted_ids)
+        (
+            loot_gained_cards,
+            looted_lost_cards,
+            card_lost_suit,
+            card_lost_rank,
+        ) = resolve_defender_win_loot(
+            game,
+            land,
+            attack_loot_pool,
+            attacker_first_conquest_attempt=attacker_first_conquest_attempt,
+            is_ai_defender=is_ai_land,
+            lost_kingdom_id=lost_kingdom_id,
+            rng=_random,
+            wipe_land_config_return_unlooted=(
+                _wipe_land_config_return_unlooted
+            ),
+            logger=logger,
+        )
 
     consumed_cards = []
 
