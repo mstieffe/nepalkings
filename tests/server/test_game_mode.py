@@ -9,6 +9,9 @@ import pytest
 
 
 def test_route_orm_predicates_share_behavior_but_keep_historical_metadata():
+    from game_service.conquer_tactics_service import (
+        is_tactics_hand_conquer as tactics_service_predicate,
+    )
     from game_service.game_mode import is_tactics_hand_conquer
     from routes.battle_shop import (
         _is_tactics_hand_conquer as battle_shop_predicate,
@@ -50,14 +53,19 @@ def test_route_orm_predicates_share_behavior_but_keep_historical_metadata():
     )
     for game, expected in cases:
         assert is_tactics_hand_conquer(game) is expected
+        assert tactics_service_predicate(game) is expected
         assert games_predicate(game) is expected
         assert battle_shop_predicate(game) is expected
 
     assert str(inspect.signature(is_tactics_hand_conquer)) == '(game)'
+    assert str(inspect.signature(tactics_service_predicate)) == '(game)'
     assert str(inspect.signature(games_predicate)) == '(game)'
     assert str(inspect.signature(battle_shop_predicate)) == '(game)'
     assert games_predicate.__module__ == 'routes.games'
     assert battle_shop_predicate.__module__ == 'routes.battle_shop'
+    assert tactics_service_predicate.__module__ == (
+        'game_service.conquer_tactics_service'
+    )
 
 
 def test_ai_state_predicates_share_behavior_and_keep_typed_signatures():
