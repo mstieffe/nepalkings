@@ -2,6 +2,7 @@
 # See LICENSE file in the project root for full license information.
 """Characterization tests for conquer loot helper boundaries."""
 
+import importlib
 import pickle
 from types import SimpleNamespace
 
@@ -332,6 +333,28 @@ class TestConfigFigureKeyCardIds:
         ])
 
         assert _config_figure_key_card_ids(cfg) == [12, 21]
+
+
+class TestLootPolicyCompatibility:
+    def test_route_reexports_canonical_policy_and_event_helpers(self):
+        conquer_loot = importlib.import_module('game_service.conquer_loot')
+        games = importlib.import_module('routes.games')
+
+        names = (
+            '_config_figure_key_card_ids',
+            '_template_figure_key_cards',
+            '_conquer_loot_base_quota',
+            '_random_pick_without_replacement',
+            '_select_conquer_loot_cards',
+            '_loot_cards_public',
+            '_create_kingdom_loot_events',
+        )
+        for name in names:
+            canonical = getattr(conquer_loot, name)
+            legacy = getattr(games, name)
+            assert legacy is canonical
+            assert canonical.__module__ == 'routes.games'
+            assert pickle.loads(pickle.dumps(canonical)) is canonical
 
 
 class TestTemplateFigureKeyCards:
