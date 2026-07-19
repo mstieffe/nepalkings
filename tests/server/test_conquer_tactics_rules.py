@@ -2,6 +2,8 @@
 # See LICENSE file in the project root for full license information.
 """Characterization tests for Conquer tactics-hand domain rules."""
 
+import importlib
+import pickle
 from types import SimpleNamespace
 
 
@@ -24,6 +26,44 @@ def _game_with_players(db, two_users):
     db.session.flush()
     game.invader_player_id = players[0].id
     return game, players
+
+
+class TestConquerTacticsRulesCompatibility:
+    def test_route_reexports_canonical_functions_and_constants(self):
+        canonical_module = importlib.import_module(
+            'game_service.conquer_tactics_rules'
+        )
+        legacy_module = importlib.import_module('routes.games')
+
+        for name in (
+            '_is_tactics_hand_conquer',
+            '_get_tactic_card',
+            '_conquer_tactic_rank',
+            '_same_conquer_tactic_colour',
+            '_validate_conquer_tactic_family_rank',
+            '_battle_player_skipped_round',
+            '_battle_player_completed_round',
+            '_battle_round_complete',
+            '_battle_all_rounds_complete',
+            '_advance_conquer_tactic_turn',
+            '_validate_conquer_tactic_call_figure',
+        ):
+            canonical = getattr(canonical_module, name)
+            legacy = getattr(legacy_module, name)
+            assert legacy is canonical
+            assert canonical.__module__ == 'routes.games'
+            assert pickle.loads(pickle.dumps(canonical)) is canonical
+
+        for name in (
+            '_CONQUER_BLACK_SUITS',
+            '_CONQUER_CALL_FIELD_MAP',
+            '_CONQUER_RED_SUITS',
+            '_CONQUER_TACTIC_FAMILY_BY_RANK',
+        ):
+            assert (
+                getattr(legacy_module, name)
+                is getattr(canonical_module, name)
+            )
 
 
 class TestTacticsHandDetection:

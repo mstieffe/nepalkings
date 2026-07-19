@@ -54,6 +54,23 @@ from game_service.conquer_ownership_transfer import (
     _split_transfer_payload,
     _wipe_defence_drafts_for_lost_land,
 )
+from game_service.conquer_tactics_rules import (
+    _CONQUER_BLACK_SUITS,
+    _CONQUER_CALL_FIELD_MAP,
+    _CONQUER_RED_SUITS,
+    _CONQUER_TACTIC_FAMILY_BY_RANK,
+    _advance_conquer_tactic_turn,
+    _battle_all_rounds_complete,
+    _battle_player_completed_round,
+    _battle_player_skipped_round,
+    _battle_round_complete,
+    _conquer_tactic_rank,
+    _get_tactic_card,
+    _is_tactics_hand_conquer,
+    _same_conquer_tactic_colour,
+    _validate_conquer_tactic_call_figure,
+    _validate_conquer_tactic_family_rank,
+)
 from routes.auth import get_game_membership, require_token, verify_game_membership, verify_player_ownership
 from routes.serialization import serialize_game_for_viewer, serialize_spell_for_viewer, viewer_has_all_seeing_eye
 from analytics import track
@@ -67,14 +84,6 @@ logger = logging.getLogger('nepalkings.routes.games')
 games = Blueprint('games', __name__)
 
 _ai_logger = logging.getLogger('nepalkings.ai.trigger')
-
-
-def _is_tactics_hand_conquer(game):
-    return bool(
-        game
-        and game.mode == 'conquer'
-        and (getattr(game, 'conquer_move_model', None) or 'battle_move') == 'tactics_hand'
-    )
 
 
 # --- Conquer per-round move timer (human players only) ------------------
@@ -300,16 +309,6 @@ def _conquer_spell_visible_in_live_state(spell):
         or effect_data.get('target_figure_snapshot')
         or effect_data.get('destroyed_figure_snapshot')
     )
-
-
-def _get_tactic_card(tactic, *, secondary=False):
-    card_id = tactic.card_id_b if secondary else tactic.card_id
-    card_type = (tactic.card_type_b if secondary else tactic.card_type) or 'main'
-    if card_id is None:
-        return None
-    if card_type == 'side':
-        return db.session.get(SideCard, card_id)
-    return db.session.get(MainCard, card_id)
 
 
 def _played_battle_entries(game):
@@ -5602,161 +5601,6 @@ def _start_new_round(game, winner_player):
 
 
 # ─────────────────── 3-round battle turn management ───────────────────
-
-_CONQUER_CALL_FIELD_MAP = {
-    'Call Villager': 'village',
-    'Call Military': 'military',
-    'Call King': 'castle',
-}
-
-_CONQUER_RED_SUITS = {'Hearts', 'Diamonds'}
-_CONQUER_BLACK_SUITS = {'Clubs', 'Spades'}
-_CONQUER_TACTIC_FAMILY_BY_RANK = {
-    '7': 'Dagger',
-    '8': 'Dagger',
-    '9': 'Dagger',
-    '10': 'Dagger',
-    'J': 'Call Villager',
-    'Q': 'Block',
-    'K': 'Call King',
-    'A': 'Call Military',
-}
-
-
-def _conquer_tactic_rank(value):
-    if value is None:
-        return ''
-    return str(value.value if hasattr(value, 'value') else value)
-
-
-def _same_conquer_tactic_colour(suit_a, suit_b):
-    return ((suit_a in _CONQUER_RED_SUITS and suit_b in _CONQUER_RED_SUITS)
-            or (suit_a in _CONQUER_BLACK_SUITS and suit_b in _CONQUER_BLACK_SUITS))
-
-
-def _validate_conquer_tactic_family_rank(tactic):
-    def _validate_card(card):
-        if not card:
-            return 'Tactic card is missing'
-        if card.game_id != tactic.game_id or card.player_id != tactic.player_id:
-            return 'Tactic card does not belong to this player/game'
-        if card.in_deck or card.part_of_figure:
-            return 'Tactic card is not available'
-        return None
-
-    card = _get_tactic_card(tactic)
-    card_err = _validate_card(card)
-    if card_err:
-        return card_err
-
-    if tactic.family_name == 'Double Dagger':
-        card_b = _get_tactic_card(tactic, secondary=True)
-        card_b_err = _validate_card(card_b)
-        if card_b_err:
-            return card_b_err
-
-        rank_a = _conquer_tactic_rank(card.rank)
-        rank_b = _conquer_tactic_rank(card_b.rank)
-        if (_CONQUER_TACTIC_FAMILY_BY_RANK.get(rank_a) != 'Dagger'
-                or _CONQUER_TACTIC_FAMILY_BY_RANK.get(rank_b) != 'Dagger'):
-            return 'Double Dagger requires two Dagger cards'
-        if _conquer_tactic_rank(tactic.rank) != f'{rank_a}+{rank_b}':
-            return 'Double Dagger rank does not match its cards'
-        return None
-
-    if tactic.card_id_b or tactic.card_type_b:
-        return 'Only Double Dagger can use two cards'
-
-    card_rank = _conquer_tactic_rank(card.rank)
-    if _conquer_tactic_rank(tactic.rank) != card_rank:
-        return 'Tactic rank does not match its card'
-    expected_family = _CONQUER_TACTIC_FAMILY_BY_RANK.get(card_rank)
-    if not expected_family:
-        return 'Tactic rank is not playable in conquer'
-    if tactic.family_name != expected_family:
-        return 'Tactic family does not match its rank'
-    return None
-
-
-def _battle_player_skipped_round(game, player_id, round_idx):
-    skipped = game.battle_skipped_rounds or {}
-    rounds = skipped.get(str(player_id), [])
-    try:
-        round_key = str(int(round_idx))
-    except (TypeError, ValueError):
-        return False
-    return any(str(raw_round) == round_key for raw_round in rounds or [])
-
-
-def _battle_player_completed_round(game, player_id, round_idx):
-    round_idx = int(round_idx or 0)
-    if _battle_player_skipped_round(game, player_id, round_idx):
-        return True
-    if _is_tactics_hand_conquer(game):
-        return ConquerTactic.query.filter_by(
-            game_id=game.id,
-            player_id=player_id,
-            status='played',
-            played_round=round_idx,
-        ).first() is not None
-    return BattleMove.query.filter_by(
-        game_id=game.id,
-        player_id=player_id,
-        played_round=round_idx,
-    ).first() is not None
-
-
-def _battle_round_complete(game, round_idx):
-    players = list(game.players or [])
-    if len(players) < 2:
-        return False
-    return all(_battle_player_completed_round(game, p.id, round_idx) for p in players)
-
-
-def _battle_all_rounds_complete(game):
-    return all(_battle_round_complete(game, idx) for idx in (0, 1, 2))
-
-
-def _advance_conquer_tactic_turn(game, player_id):
-    other_player = next((p for p in game.players if p.id != player_id), None)
-    if not other_player:
-        return False
-
-    current_round = int(game.battle_round or 0)
-    other_played = ConquerTactic.query.filter_by(
-        game_id=game.id,
-        player_id=other_player.id,
-        status='played',
-        played_round=current_round,
-    ).first()
-    skipped = game.battle_skipped_rounds or {}
-    other_skipped = (str(other_player.id) in skipped
-                     and current_round in skipped[str(other_player.id)])
-
-    if other_played or other_skipped:
-        if current_round < 2:
-            game.battle_round = current_round + 1
-            game.battle_turn_player_id = game.invader_player_id
-        else:
-            game.battle_turn_player_id = None
-    else:
-        game.battle_turn_player_id = other_player.id
-    return True
-
-
-def _validate_conquer_tactic_call_figure(tactic, call_figure_id, player_id, game_id):
-    if not call_figure_id:
-        return None
-    expected_field = _CONQUER_CALL_FIELD_MAP.get(tactic.family_name)
-    if expected_field is None:
-        return 'This tactic cannot call a figure'
-    fig = db.session.get(Figure, call_figure_id)
-    if not fig or fig.game_id != game_id or fig.player_id != player_id:
-        return 'Call figure does not belong to this player/game'
-    if fig.field != expected_field:
-        return f'{tactic.family_name} can only call a {expected_field} figure'
-    return None
-
 
 @games.route('/play_conquer_tactic', methods=['POST'])
 @require_token
