@@ -10,6 +10,12 @@ import math
 from datetime import datetime, timezone, timedelta
 from models import db, User, Challenge, ChallengeStatus, Player, Game, MainCard, SideCard, Figure, CardToFigure, CardRole, LogEntry, ChatMessage, BattleMove, ConquerTactic, ActiveSpell, GameResult, Land, LandAttackLog, LandConfig, LandConfigFigure, CollectionCard, Kingdom, KingdomNotification
 from game_service.deck_manager import DeckManager
+from game_service.battle_card_repository import (
+    collect_battle_move_cards as _collect_battle_move_cards_impl,
+    delete_all_battle_moves as _delete_all_battle_moves_impl,
+    first_deterministic_returnable_card as _first_deterministic_returnable_card_impl,
+    return_unplayed_battle_move_cards as _return_unplayed_battle_move_cards_impl,
+)
 from game_service.conquer_prelude_replay_targets import (
     conquer_destroyed_replay_targets_for_prelude,
 )
@@ -5326,40 +5332,11 @@ def _collect_battle_move_cards(game_id):
     Returns (cards_list, battle_moves) where cards_list is a list of
     (card_obj, card_type_str) tuples and battle_moves is the queryset.
     """
-    game = db.session.get(Game, game_id)
-    if _is_tactics_hand_conquer(game):
-        tactics = ConquerTactic.query.filter_by(game_id=game_id, status='played').all()
-        cards = []
-        for tactic in tactics:
-            card = _get_tactic_card(tactic)
-            if card:
-                cards.append((card, tactic.card_type or 'main'))
-            card_b = _get_tactic_card(tactic, secondary=True)
-            if card_b:
-                cards.append((card_b, tactic.card_type_b or 'main'))
-        return cards, tactics
-
-    moves = BattleMove.query.filter_by(game_id=game_id).all()
-    cards = []
-    for bm in moves:
-        # Primary card
-        if bm.card_type == 'side':
-            card = db.session.get(SideCard, bm.card_id)
-        else:
-            card = db.session.get(MainCard, bm.card_id)
-        if card:
-            cards.append((card, bm.card_type))
-
-        # Second card (Double Dagger)
-        if bm.card_id_b is not None:
-            ct_b = bm.card_type_b or 'main'
-            if ct_b == 'side':
-                card_b = db.session.get(SideCard, bm.card_id_b)
-            else:
-                card_b = db.session.get(MainCard, bm.card_id_b)
-            if card_b:
-                cards.append((card_b, ct_b))
-    return cards, moves
+    return _collect_battle_move_cards_impl(
+        game_id,
+        is_tactics_hand_conquer=_is_tactics_hand_conquer,
+        get_tactic_card=_get_tactic_card,
+    )
 
 
 def _destroy_figure_and_collect_cards(figure):
@@ -5440,58 +5417,17 @@ def _return_unplayed_battle_move_cards(game_id):
     The corresponding BattleMove rows are deleted.
     Played moves are left untouched for the loot/deck pool.
     """
-    game = db.session.get(Game, game_id)
-    if _is_tactics_hand_conquer(game):
-        unplayed_tactics = ConquerTactic.query.filter_by(
-            game_id=game_id, status='available').all()
-        if unplayed_tactics:
-            logger.info(f"[RETURN_UNPLAYED_TACTICS] game={game_id} returning {len(unplayed_tactics)} unplayed tactic cards")
-        for tactic in unplayed_tactics:
-            card = _get_tactic_card(tactic)
-            if card:
-                card.part_of_battle_move = False
-                card.in_deck = False
-            card_b = _get_tactic_card(tactic, secondary=True)
-            if card_b:
-                card_b.part_of_battle_move = False
-                card_b.in_deck = False
-            db.session.delete(tactic)
-        return
-
-    unplayed = BattleMove.query.filter_by(game_id=game_id).filter(
-        BattleMove.played_round.is_(None)
-    ).all()
-    if unplayed:
-        logger.info(f"[RETURN_UNPLAYED] game={game_id} returning {len(unplayed)} unplayed BM cards to owners")
-    for bm in unplayed:
-        # Primary card
-        if bm.card_type == 'side':
-            card = db.session.get(SideCard, bm.card_id)
-        else:
-            card = db.session.get(MainCard, bm.card_id)
-        if card:
-            card.part_of_battle_move = False
-            card.in_deck = False
-            logger.debug(f"[RETURN_UNPLAYED] bm_id={bm.id} card_id={card.id} ({bm.family_name}/{bm.suit}) → player {bm.player_id}")
-
-        # Second card (Double Dagger)
-        if bm.card_id_b is not None:
-            ct_b = bm.card_type_b or 'main'
-            if ct_b == 'side':
-                card_b = db.session.get(SideCard, bm.card_id_b)
-            else:
-                card_b = db.session.get(MainCard, bm.card_id_b)
-            if card_b:
-                card_b.part_of_battle_move = False
-                card_b.in_deck = False
-
-        db.session.delete(bm)
+    return _return_unplayed_battle_move_cards_impl(
+        game_id,
+        is_tactics_hand_conquer=_is_tactics_hand_conquer,
+        get_tactic_card=_get_tactic_card,
+        logger=logger,
+    )
 
 
 def _delete_all_battle_moves(game_id):
     """Remove all BattleMove rows for a game."""
-    ConquerTactic.query.filter_by(game_id=game_id).delete()
-    BattleMove.query.filter_by(game_id=game_id).delete()
+    return _delete_all_battle_moves_impl(game_id)
 
 
 def _serialize_battle_card(card, card_type):
@@ -5547,23 +5483,10 @@ def _clear_post_battle_pending_choice(game, *, defaulted=False, choice=None):
 
 
 def _first_deterministic_returnable_card(game_id):
-    bm_cards, _ = _collect_battle_move_cards(game_id)
-    orphaned_main = MainCard.query.filter_by(
-        game_id=game_id,
-        in_deck=False,
-        part_of_figure=False,
-        player_id=None,
-    ).all()
-    orphaned_side = SideCard.query.filter_by(
-        game_id=game_id,
-        in_deck=False,
-        part_of_figure=False,
-        player_id=None,
-    ).all()
-    candidates = bm_cards + [(c, 'main') for c in orphaned_main] + [(c, 'side') for c in orphaned_side]
-    if not candidates:
-        return None, None
-    return sorted(candidates, key=lambda pair: (pair[1], pair[0].id))[0]
+    return _first_deterministic_returnable_card_impl(
+        game_id,
+        collect_cards=_collect_battle_move_cards,
+    )
 
 
 def _start_new_round(game, winner_player):
