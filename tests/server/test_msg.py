@@ -104,6 +104,40 @@ def msg_token_human_vs_ai(app, msg_ai_game):
 
 
 class TestChatMessages:
+    def test_get_chat_messages_coerces_query_game_id_to_integer(
+        self,
+        client,
+        msg_game,
+        msg_token_p1,
+        monkeypatch,
+    ):
+        import importlib
+
+        msg_routes = importlib.import_module('routes.msg')
+
+        game, _, _ = msg_game
+        seen_game_ids = []
+        original_verify = msg_routes.verify_game_membership
+
+        def recording_verify(game_id):
+            seen_game_ids.append(game_id)
+            return original_verify(game_id)
+
+        monkeypatch.setattr(
+            msg_routes,
+            'verify_game_membership',
+            recording_verify,
+        )
+
+        response = client.get(
+            f'/msg/get_chat_messages?game_id={game.id}',
+            headers={'Authorization': f'Bearer {msg_token_p1}'},
+        )
+
+        assert response.status_code == 200
+        assert seen_game_ids == [game.id]
+        assert isinstance(seen_game_ids[0], int)
+
     def test_add_and_get_chat_messages_enforces_ownership_and_truncates(
         self,
         client,
@@ -162,6 +196,40 @@ class TestChatMessages:
 
 
 class TestLogEntries:
+    def test_get_log_entries_coerces_query_game_id_to_integer(
+        self,
+        client,
+        msg_game,
+        msg_token_p1,
+        monkeypatch,
+    ):
+        import importlib
+
+        msg_routes = importlib.import_module('routes.msg')
+
+        game, _, _ = msg_game
+        seen_game_ids = []
+        original_verify = msg_routes.verify_game_membership
+
+        def recording_verify(game_id):
+            seen_game_ids.append(game_id)
+            return original_verify(game_id)
+
+        monkeypatch.setattr(
+            msg_routes,
+            'verify_game_membership',
+            recording_verify,
+        )
+
+        response = client.get(
+            f'/msg/get_log_entries?game_id={game.id}',
+            headers={'Authorization': f'Bearer {msg_token_p1}'},
+        )
+
+        assert response.status_code == 200
+        assert seen_game_ids == [game.id]
+        assert isinstance(seen_game_ids[0], int)
+
     def test_add_and_get_log_entries_with_truncation(
         self,
         client,

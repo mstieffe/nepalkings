@@ -75,7 +75,7 @@ def add_log_entry():
 @require_token
 def get_log_entries():
     try:
-        game_id = request.args.get('game_id')
+        game_id = request.args.get('game_id', type=int)
 
         if not game_id:
             return jsonify({'success': False, 'message': 'Game ID is required'}), 400
@@ -140,7 +140,7 @@ def add_chat_message():
 @require_token
 def get_chat_messages():
     try:
-        game_id = request.args.get('game_id')
+        game_id = request.args.get('game_id', type=int)
 
         if not game_id:
             return jsonify({'success': False, 'message': 'Game ID is required'}), 400

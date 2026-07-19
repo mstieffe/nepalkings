@@ -211,6 +211,52 @@ class TestTokenDecorator:
         assert resp.get_json()['success'] is True
 
 
+class TestGameMembership:
+    def test_accepts_numeric_string_game_id(self, app, db, two_users):
+        from flask import g
+        from models import Game, Player
+        from routes.auth import get_game_membership
+
+        user, _ = two_users
+        game = Game(current_round=1, stake=10)
+        db.session.add(game)
+        db.session.commit()
+        player = Player(
+            user_id=user.id,
+            game_id=game.id,
+            turns_left=1,
+            points=0,
+        )
+        db.session.add(player)
+        db.session.commit()
+
+        with app.test_request_context():
+            g.user_id = user.id
+            membership, response, status = get_game_membership(str(game.id))
+
+        assert membership.id == player.id
+        assert response is None
+        assert status is None
+
+    def test_rejects_non_integer_game_id_before_query(
+        self,
+        app,
+        two_users,
+    ):
+        from flask import g
+        from routes.auth import get_game_membership
+
+        user, _ = two_users
+        with app.test_request_context():
+            g.user_id = user.id
+            membership, response, status = get_game_membership('not-an-id')
+            payload = response.get_json()
+
+        assert membership is None
+        assert status == 400
+        assert payload == {'success': False, 'message': 'Invalid game ID'}
+
+
 class TestGetUsers:
     def test_get_users_returns_others(self, client, two_users):
         u1, u2 = two_users

@@ -579,7 +579,11 @@ class GameScreen(Screen):
         if self._poller_data_version == self.state.game._game_data_version:
             self.state.game.apply_server_data(result)
         else:
-            logger.warning(
+            # This is expected when a direct action response wins a race with
+            # an in-flight background poll.  Cache invalidation below ensures
+            # the next current snapshot is delivered, so it is diagnostic
+            # detail rather than a user-actionable warning.
+            logger.debug(
                 f"[POLLER] Discarding stale result (poll v{self._poller_data_version} "
                 f"vs current v{self.state.game._game_data_version})")
             poller.invalidate_cache()

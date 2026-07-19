@@ -172,10 +172,35 @@ def verify_player_ownership(player_id):
 
 def get_game_membership(game_id):
     """Return the authenticated player's row for a game, or an error tuple."""
-    game = db.session.get(Game, game_id)
+    # Query-string values arrive as text unless every caller explicitly asks
+    # Flask to coerce them.  SQLite accepts comparisons such as
+    # ``INTEGER = "3"``, but PostgreSQL rejects the resulting
+    # ``integer = character varying`` expression.  Normalize at this shared
+    # authorization boundary so a missed route-level conversion cannot turn
+    # an ownership check into a server error.
+    if isinstance(game_id, bool):
+        normalized_game_id = None
+    elif isinstance(game_id, int):
+        normalized_game_id = game_id
+    elif isinstance(game_id, str) and game_id.strip().isdigit():
+        normalized_game_id = int(game_id.strip())
+    else:
+        normalized_game_id = None
+
+    if normalized_game_id is None or normalized_game_id <= 0:
+        return (
+            None,
+            jsonify({'success': False, 'message': 'Invalid game ID'}),
+            400,
+        )
+
+    game = db.session.get(Game, normalized_game_id)
     if not game:
         return None, jsonify({'success': False, 'message': 'Game not found'}), 404
-    player = Player.query.filter_by(game_id=game_id, user_id=g.user_id).first()
+    player = Player.query.filter_by(
+        game_id=normalized_game_id,
+        user_id=g.user_id,
+    ).first()
     if not player:
         return None, jsonify({'success': False, 'message': 'Forbidden'}), 403
     return player, None, None
