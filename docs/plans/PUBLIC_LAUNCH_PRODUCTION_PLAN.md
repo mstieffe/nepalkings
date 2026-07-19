@@ -507,13 +507,13 @@ Verification:
 Priority: **P0**
 
 - [x] Add `psycopg` and production connection settings.
-- [ ] Add PostgreSQL to CI.
-- [ ] Audit every raw DDL operation and migration for PostgreSQL.
-- [ ] Decide whether to harden the custom runner or adopt Alembic.
+- [x] Add PostgreSQL to CI.
+- [x] Audit every raw DDL operation and migration for PostgreSQL.
+- [x] Decide whether to harden the custom runner or adopt Alembic.
 - [ ] Test JSON, timestamps, indexes, unique constraints, and row locking.
-- [ ] Build a repeatable SQLite-to-PostgreSQL importer.
-- [ ] Preserve IDs and reset PostgreSQL sequences.
-- [ ] Validate row counts and foreign keys.
+- [x] Build a repeatable SQLite-to-PostgreSQL importer.
+- [x] Preserve IDs and reset PostgreSQL sequences.
+- [x] Validate row counts and foreign keys.
 - [ ] Validate collections, open games, configurations, kingdoms, regions, and
   land ownership.
 - [ ] Rehearse twice against recent backup copies.
