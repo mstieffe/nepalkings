@@ -371,36 +371,12 @@ python main.py --server-url http://localhost:5000
 
 ### First-time PythonAnywhere setup
 
-1. **Create a free account** at [pythonanywhere.com](https://www.pythonanywhere.com) (username: `nepalkings`)
+The public-launch server uses the paid EU account, Python 3.11, PostgreSQL,
+private environment files, and explicit database preparation. Follow
+[the PythonAnywhere EU runbook](deploy/pythonanywhere/README.md).
 
-2. **Get your API token**: Go to Account → API Token → Create/copy it
-
-3. **Save the token locally**:
-   ```bash
-   echo "your-token-here" > ~/.nepalkings_pa_token
-   ```
-
-4. **Run initial setup** (creates virtualenv, installs deps, configures the web app):
-   ```bash
-   ./setup_pythonanywhere.sh
-   ```
-
-5. **On PythonAnywhere**, configure the web app:
-   - Go to Web tab → Add a new web app → Manual configuration → Python 3.10
-   - Set source code directory: `/home/nepalkings/nepalkings`
-   - Set virtualenv: `/home/nepalkings/.virtualenvs/nepalkings`
-   - Set WSGI file to point to: `/home/nepalkings/nepalkings/pythonanywhere_wsgi.py`
-
-6. **Set production environment values in `pythonanywhere_wsgi.py`**:
-   - `FLASK_ENV='production'`
-   - `SECRET_KEY='<long random secret>'`
-   - `DROP_TABLES_ON_STARTUP='False'`
-   - `CORS_ORIGINS='https://mstieffe.github.io'` (GitHub Pages origin)
-
-   If your web URL is `https://mstieffe.github.io/nepalkings/`, the CORS
-   origin is still just `https://mstieffe.github.io` (origin-level match).
-
-   See [docs/deployment.md](docs/deployment.md) for the full hardened example.
+The tested pre-upgrade free-plan layout is preserved on
+`backup/pythonanywhere-free-eu-2026-07-19`.
 
 ### Deploying updates
 
@@ -410,13 +386,9 @@ After making changes to the `server/` directory, deploy with a single command:
 ./deploy_server.sh
 ```
 
-**What this does:**
-1. Zips `server/` (excluding caches)
-2. Uploads to PythonAnywhere via API
-3. Unzips on the server (overwrites existing files)
-4. Reloads the web app so changes take effect
-
-**The whole process takes ~5 seconds.**
+The deploy script uploads the server-only subset using the PythonAnywhere API.
+Production releases must also follow the runbook's backup, dependency,
+explicit migration, reload, readiness, and rollback sequence.
 
 > **Note:** Only server code is deployed. Client changes don't need server deployment — they're built into the installer or run locally.
 

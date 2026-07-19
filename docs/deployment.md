@@ -1,95 +1,26 @@
 # Nepal Kings — Deployment Guide
 
-## Server Deployment (PythonAnywhere)
+## Server deployment (PythonAnywhere EU)
 
-### 1. Create your account
-- Go to [pythonanywhere.com](https://www.pythonanywhere.com) and sign up (free tier works)
-- Note your username — your server will be at `https://USERNAME.pythonanywhere.com`
+The public-launch layout uses the paid PythonAnywhere EU account, managed WSGI
+workers, PostgreSQL, a separate staging database, private environment files,
+and explicit pre-reload migrations. Follow the authoritative runbook:
 
-### 2. Upload the code
-Open a **Bash console** on PythonAnywhere:
-```bash
-cd ~
-git clone <your-repo-url> nepalkings
-# Or upload a .zip and unzip it
-```
+[PythonAnywhere EU production layout](../deploy/pythonanywhere/README.md)
 
-### 3. Create a virtual environment
-```bash
-mkvirtualenv nepalkings --python=python3.10
-pip install -r ~/nepalkings/server/requirements.txt
-```
+Important boundaries:
 
-### 4. Configure the Web App
-- Go to the **Web** tab → **Add a new web app**
-- Choose **Manual configuration** → **Python 3.10**
-- Set **Source code** to: `/home/USERNAME/nepalkings/server`
-- Set **Virtualenv** to: `/home/USERNAME/.virtualenvs/nepalkings`
+- Use Python 3.11 for the server.
+- Do not install packages or migrate the schema during a WSGI import.
+- Do not put secrets in the repository or provider WSGI file.
+- Do not use SQLite for staging or production.
+- Allow the GitHub Pages origin as `https://mstieffe.github.io`; CORS origins
+  never contain the `/nepalkings/` path.
+- Check both `/healthz` and `/readyz` after every reload.
 
-### 5. Edit the WSGI configuration file
-PythonAnywhere gives you a WSGI file to edit. Replace its contents with:
-```python
-import sys
-import os
-
-path = '/home/USERNAME/nepalkings/server'
-if path not in sys.path:
-    sys.path.insert(0, path)
-
-os.environ['FLASK_ENV'] = 'production'
-# REQUIRED in production. Generate one with:
-#   python -c "import secrets; print(secrets.token_hex(32))"
-os.environ['SECRET_KEY'] = 'PASTE_A_LONG_RANDOM_SECRET_HERE'
-os.environ['DROP_TABLES_ON_STARTUP'] = 'False'
-os.environ['DB_URL'] = f'sqlite:///{path}/instance/nepalkings.db'
-os.environ['SERVER_URL'] = 'https://USERNAME.pythonanywhere.com'
-
-# If your web client is hosted on GitHub Pages, allow that origin here.
-# Replace USERNAME with your GitHub username.
-os.environ['CORS_ORIGINS'] = 'https://USERNAME.github.io'
-
-from wsgi import application
-```
-Replace `USERNAME` with your PythonAnywhere username.
-
-If your GitHub Pages site is a project page like
-`https://USERNAME.github.io/nepalkings`, the allowed CORS origin is still
-just `https://USERNAME.github.io` because CORS works at the origin level,
-not the path level.
-
-### 6. Create the database directory
-```bash
-mkdir -p ~/nepalkings/server/instance
-```
-
-### 7. Initialize the database (first time only)
-Open a Bash console:
-```bash
-workon nepalkings
-cd ~/nepalkings/server
-DROP_TABLES_ON_STARTUP=True python -c "from wsgi import application"
-```
-This creates the tables. They persist across reloads.
-
-### 8. Reload and test
-- Click **Reload** on the Web tab
-- Visit `https://USERNAME.pythonanywhere.com/auth/login` — should return a JSON response
-
-### 9. GitHub Pages web client
-If you host the web client on GitHub Pages and the API on PythonAnywhere,
-you must allow the GitHub Pages origin in `CORS_ORIGINS` as shown above.
-Otherwise browser requests from the web client will fail with a CORS error
-even though direct API requests still work.
-
-Examples:
-
-```python
-os.environ['CORS_ORIGINS'] = 'https://USERNAME.github.io'
-```
-
-```python
-os.environ['CORS_ORIGINS'] = 'https://USERNAME.github.io,https://www.example.com'
-```
+The exact pre-upgrade single-worker SQLite deployment remains available on
+`backup/pythonanywhere-free-eu-2026-07-19` as an emergency free-plan fallback.
+Its database is not interchangeable with the new PostgreSQL database.
 
 ---
 

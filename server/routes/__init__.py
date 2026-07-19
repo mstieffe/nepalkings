@@ -12,3 +12,4 @@ from .collection import collection
 from .kingdom import kingdom
 from .onboarding import onboarding
 from .legal import legal
+from .ops import ops

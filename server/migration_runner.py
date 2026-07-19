@@ -23,9 +23,10 @@ Adding a migration:
    kingdom_service.py: inspect the table, ``ALTER TABLE ... ADD COLUMN``
    only when missing.
 
-Production: ``deploy_server.sh`` backs up the live database before every
-deploy, and this runner executes at import time on PythonAnywhere reload.
-NEVER "migrate" production by resetting the database.
+Production: back up the live database, upload/install the release, then run
+``python manage.py prepare-database`` before reloading the PythonAnywhere web
+app. WSGI imports never run this migration path. NEVER "migrate" production by
+resetting the database.
 """
 
 import logging
@@ -82,7 +83,7 @@ def _m_user_legal_columns():
 
 
 def _add_column_if_missing(table, column, ddl_type):
-    """ALTER TABLE helper, safe on SQLite and MySQL. Returns True if added."""
+    """Portable ALTER TABLE helper. Returns True when a column is added."""
     from sqlalchemy import inspect as sa_inspect
     inspector = sa_inspect(db.engine)
     if table not in inspector.get_table_names():
@@ -96,9 +97,17 @@ def _add_column_if_missing(table, column, ddl_type):
     return True
 
 
+def _boolean_column_ddl(*, default):
+    if db.engine.dialect.name.startswith('postgres'):
+        default_value = 'TRUE' if default else 'FALSE'
+    else:
+        default_value = '1' if default else '0'
+    return f'BOOLEAN NOT NULL DEFAULT {default_value}'
+
+
 def _m_user_notify_emails_enabled():
     _add_column_if_missing('user', 'notify_emails_enabled',
-                           'BOOLEAN NOT NULL DEFAULT 1')
+                           _boolean_column_ddl(default=True))
 
 
 def _m_game_turn_email_log():
@@ -116,7 +125,7 @@ def _m_duel_turn_time_limit_columns():
 
 def _m_figure_is_clone_column():
     _add_column_if_missing('figure', 'is_clone',
-                           'BOOLEAN NOT NULL DEFAULT 0')
+                           _boolean_column_ddl(default=False))
 
 
 def _m_regenerate_kingdom_map_into_regions():
@@ -360,6 +369,8 @@ MIGRATIONS = [
     (14, 'regenerate kingdom map into historic regions',
      _m_regenerate_kingdom_map_into_regions),
 ]
+
+CURRENT_SCHEMA_VERSION = max(version for version, _description, _fn in MIGRATIONS)
 
 
 # ── Runner ─────────────────────────────────────────────────────────

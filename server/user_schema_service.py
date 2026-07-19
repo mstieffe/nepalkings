@@ -11,18 +11,23 @@ def ensure_user_legal_columns():
     inspector = inspect(db.engine)
     existing = {col['name'] for col in inspector.get_columns('user')}
     added = []
+    is_postgres = db.engine.dialect.name.startswith('postgres')
+    false_default = 'FALSE' if is_postgres else '0'
+    datetime_type = 'TIMESTAMP' if is_postgres else 'DATETIME'
     columns = {
-        'age_confirmed': 'BOOLEAN DEFAULT 0 NOT NULL',
-        'age_confirmed_at': 'DATETIME',
+        'age_confirmed': f'BOOLEAN DEFAULT {false_default} NOT NULL',
+        'age_confirmed_at': datetime_type,
         'terms_version': 'VARCHAR(32)',
-        'terms_accepted_at': 'DATETIME',
+        'terms_accepted_at': datetime_type,
         'privacy_version': 'VARCHAR(32)',
-        'privacy_accepted_at': 'DATETIME',
+        'privacy_accepted_at': datetime_type,
     }
     for name, ddl in columns.items():
         if name in existing:
             continue
-        db.session.execute(text(f'ALTER TABLE user ADD COLUMN {name} {ddl}'))
+        db.session.execute(text(
+            f'ALTER TABLE "user" ADD COLUMN {name} {ddl}'
+        ))
         added.append(name)
     if added:
         db.session.commit()

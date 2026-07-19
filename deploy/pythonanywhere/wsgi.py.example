@@ -1,0 +1,22 @@
+# PythonAnywhere provider-owned WSGI configuration for Nepal Kings.
+#
+# Replace USERNAME and ENVIRONMENT, then paste this into the WSGI file linked
+# from the PythonAnywhere Web tab. No secret belongs in this file.
+
+import os
+import sys
+
+
+USERNAME = 'USERNAME'
+ENVIRONMENT = 'production'  # or: staging
+SERVER_DIRECTORY = f'/home/{USERNAME}/nepalkings/server'
+ENV_FILE = (
+    f'/home/{USERNAME}/.config/nepalkings/{ENVIRONMENT}.env'
+)
+
+if SERVER_DIRECTORY not in sys.path:
+    sys.path.insert(0, SERVER_DIRECTORY)
+
+os.environ['NEPAL_KINGS_ENV_FILE'] = ENV_FILE
+
+from wsgi import application  # noqa: E402,F401

@@ -2,7 +2,7 @@
 
 Last updated: 2026-07-19
 
-Status: Ready to execute; hosting decision gate in progress
+Status: Execution in progress; PythonAnywhere EU selected
 
 Launch framing: staged public beta before a 1.0 claim
 
@@ -23,6 +23,18 @@ Priority:
 - **P2**: useful after the public beta is stable.
 
 ## Current baseline
+
+Execution checkpoint (2026-07-19):
+
+- The exact pre-production/free-plan state is preserved and pushed as
+  `backup/pythonanywhere-free-eu-2026-07-19` at commit
+  `7c85e83ca31223982fdbce0d3925247f9407a847`.
+- That branch passed all 2,609 tests and was deployed/smoke-tested on the EU
+  one-worker SQLite app before production work began.
+- Production work stays on `develop`; the fallback branch must not receive
+  PostgreSQL or multi-worker changes.
+- PythonAnywhere EU is selected for the staged public beta. GitHub Pages
+  remains the static client host.
 
 Already present:
 
@@ -80,7 +92,7 @@ state is out of scope.
 
 ## Gate H0 — Choose the hosting platform
 
-Decision status: **Regional latency gate passed; final provider decision open**
+Decision status: **Complete — PythonAnywhere EU selected**
 
 Current candidates:
 
@@ -90,15 +102,16 @@ Current candidates:
 4. DigitalOcean App Platform Frankfurt.
 5. Hetzner Germany only if self-managed operations are explicitly accepted.
 
-Current default recommendation:
+Selected layout:
 
 - Keep the static client on GitHub Pages.
-- Treat PythonAnywhere EU as the preferred low-change candidate now that it
-  has passed the regional latency gate.
-- Keep Render Frankfurt as the operational benchmark because its managed
-  PostgreSQL and background-worker model may still reduce launch risk.
-- Do not upgrade the current US PythonAnywhere account until the EU comparison
-  is complete.
+- Run staging and production APIs on the upgraded PythonAnywhere EU account.
+- Use the PythonAnywhere PostgreSQL add-on with separate staging and production
+  databases/users.
+- Use managed WSGI web workers plus a dedicated always-on task when the durable
+  job queue is ready.
+- Keep Render Frankfurt as the documented exit option if PostgreSQL, worker,
+  backup, or support testing fails a release gate.
 
 ### H0.1 What the free PythonAnywhere EU test can prove
 
@@ -464,26 +477,28 @@ Still required before making the final hosting commitment:
 
 Priority: **P0**
 
-- [ ] Add a production `Dockerfile` or provider-specific deployment manifest.
-- [ ] Add Gunicorn to runtime dependencies.
-- [ ] Pin one supported server Python version across local development, CI, and
+- [x] Add a production `Dockerfile` or provider-specific deployment manifest.
+- [x] Use PythonAnywhere's managed WSGI workers; Gunicorn is not user-managed
+  on the selected provider.
+- [x] Pin one supported server Python version across local development, CI, and
   hosting.
-- [ ] Remove dependency installation from WSGI import.
+- [x] Remove dependency installation from WSGI import.
 - [ ] Create separate staging and production environments.
-- [ ] Store secrets only in provider-managed environment variables.
-- [ ] Configure TLS and force HTTPS.
-- [ ] Configure exact CORS origins.
-- [ ] Add `/healthz` without a database dependency.
-- [ ] Add `/readyz` with database and schema-version checks.
-- [ ] Add build metadata: commit SHA, API version, and minimum client version.
+- [x] Store secrets in private provider-side environment files outside the
+  repository; deployment templates contain placeholders only.
+- [x] Configure TLS and force HTTPS.
+- [ ] Configure and live-verify exact CORS origins for both environments.
+- [x] Add `/healthz` without a database dependency.
+- [x] Add `/readyz` with database and schema-version checks.
+- [x] Add build metadata: commit SHA, API version, and minimum client version.
 - [ ] Create canonical API DNS.
-- [ ] Document deployment and rollback commands.
+- [x] Document deployment and rollback commands.
 
 Verification:
 
 - [ ] Fresh staging deployment succeeds from an empty environment.
-- [ ] Health and readiness fail correctly when dependencies are unavailable.
-- [ ] No package installation or schema mutation occurs in a web-worker import.
+- [x] Health and readiness fail correctly when dependencies are unavailable.
+- [x] No package installation or schema mutation occurs in a web-worker import.
 
 ---
 
@@ -491,7 +506,7 @@ Verification:
 
 Priority: **P0**
 
-- [ ] Add `psycopg` and production connection settings.
+- [x] Add `psycopg` and production connection settings.
 - [ ] Add PostgreSQL to CI.
 - [ ] Audit every raw DDL operation and migration for PostgreSQL.
 - [ ] Decide whether to harden the custom runner or adopt Alembic.
@@ -854,6 +869,8 @@ Part-time expectation: approximately two to three months.
 | 2026-07-19 | Keep GitHub Pages during hosting test | Static delivery was not the measured API bottleneck | Compare API/database hosts only |
 | 2026-07-19 | Test PythonAnywhere EU free account | Current US path showed high Europe-to-host transit | Free test decides regional latency only |
 | 2026-07-19 | PythonAnywhere EU passes the regional latency gate | Warm p95 37.0 ms versus 478.3 ms US; CORS pair p95 80.6 ms versus 798.0 ms US; authenticated Conquer API pair p95 157.7 ms | EU becomes the preferred low-change candidate; paid operations still decide the provider, while the 4,800-land map becomes a separate app optimization |
-| TBD | Hosting provider and region | H0 benchmark CSVs, access logs, browser timings, cost | Locks Phases 1–3 topology |
-| TBD | PostgreSQL plan | Provider quote and load/migration tests | Locks backup and connection design |
+| 2026-07-19 | PythonAnywhere EU paid account for staged public beta | EU latency benchmark passed and the account was upgraded | Use managed WSGI workers, PA PostgreSQL, and always-on tasks; retain Render Frankfurt as exit option |
+| 2026-07-19 | Preserve the free-plan deployment before production changes | Pushed and live-tested `backup/pythonanywhere-free-eu-2026-07-19` at `7c85e83` | SQLite/single-worker fallback remains reproducible but requires its matching database snapshot |
+| 2026-07-19 | Harden the existing migration runner for PostgreSQL instead of adopting Alembic before beta | Only 14 ordered migrations exist; changing frameworks during the database cutover adds avoidable migration-state risk | Add PostgreSQL CI, portability tests, and explicit pre-reload execution now; reconsider Alembic after beta |
+| 2026-07-19 | PostgreSQL plan | Separate least-privilege staging/production DB owners on PythonAnywhere; 1 GiB initial allocation | Locks backup and connection design; live credentials still need provider-side creation |
 | TBD | Background job design | Multi-worker correctness prototype | Locks worker/Redis requirements |

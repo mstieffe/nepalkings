@@ -12,7 +12,8 @@ import signal
 import sys
 
 import server_settings as settings
-from routes import games, challenges, auth, msg, figures, spells, battle_shop, collection, kingdom, onboarding, legal
+from routes import (auth, battle_shop, challenges, collection, figures, games,
+                    kingdom, legal, msg, onboarding, ops, spells)
 
 games.settings = settings
 challenges.settings = settings
@@ -34,8 +35,7 @@ app.config['MAX_CONTENT_LENGTH'] = settings.MAX_CONTENT_LENGTH
 # local dev but means a deploy restart silently invalidates every
 # issued token and signed cookie.
 import os as _os
-_FLASK_ENV = (_os.getenv('FLASK_ENV') or _os.getenv('ENV') or '').lower()
-_IS_DEV = _FLASK_ENV in ('development', 'dev', 'local', 'test', '')
+_IS_DEV = settings.IS_DEVELOPMENT
 if not getattr(settings, 'SECRET_KEY_FROM_ENV', False) and not _IS_DEV:
     raise RuntimeError(
         "SECRET_KEY env var must be set in non-development environments. "
@@ -45,6 +45,20 @@ if getattr(settings, 'DROP_TABLES_ON_STARTUP', False) and not _IS_DEV:
     raise RuntimeError(
         "DROP_TABLES_ON_STARTUP is True in a non-development environment. "
         "This would wipe production data. Refusing to boot."
+    )
+if not getattr(settings, 'DB_URL_FROM_ENV', False) and not _IS_DEV:
+    raise RuntimeError(
+        "DB_URL must be set explicitly in non-development environments."
+    )
+if (
+    settings.DB_URL.startswith('sqlite:')
+    and not _IS_DEV
+    and not settings.ALLOW_PRODUCTION_SQLITE
+):
+    raise RuntimeError(
+        "SQLite is disabled in non-development environments. Use PostgreSQL "
+        "or set ALLOW_PRODUCTION_SQLITE=True only for an intentional legacy "
+        "fallback deployment."
     )
 
 # ── Proxy fix (PythonAnywhere / reverse-proxy environments) ──
@@ -181,10 +195,10 @@ if _is_sqlite and ':memory:' in settings.DB_URL:
 elif _is_sqlite:
     app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
         'pool_pre_ping': True,
-        'pool_recycle': 300,
-        'pool_size': 5,           # Max persistent connections
-        'max_overflow': 2,        # Extra connections beyond pool_size
-        'pool_timeout': 10,       # Seconds to wait for a connection before error
+        'pool_recycle': settings.DB_POOL_RECYCLE_SECONDS,
+        'pool_size': settings.DB_POOL_SIZE,
+        'max_overflow': settings.DB_MAX_OVERFLOW,
+        'pool_timeout': settings.DB_POOL_TIMEOUT_SECONDS,
         'connect_args': {
             'timeout': float(settings.SQLITE_BUSY_TIMEOUT_SECONDS),
             'check_same_thread': False  # Important for SQLite with Flask
@@ -196,136 +210,25 @@ else:
     # tuning while allowing the target driver to use its native defaults.
     app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
         'pool_pre_ping': True,
-        'pool_recycle': 300,
-        'pool_size': 5,
-        'max_overflow': 2,
-        'pool_timeout': 10,
+        'pool_recycle': settings.DB_POOL_RECYCLE_SECONDS,
+        'pool_size': settings.DB_POOL_SIZE,
+        'max_overflow': settings.DB_MAX_OVERFLOW,
+        'pool_timeout': settings.DB_POOL_TIMEOUT_SECONDS,
     }
 db.init_app(app)
 
-# Initialize database tables
-with app.app_context():
-    if settings.DROP_TABLES_ON_STARTUP:
-        logger.warning("Dropping all database tables (DROP_TABLES_ON_STARTUP=True)")
-        db.drop_all()
-        logger.info("All tables dropped")
-    
-    logger.info("Creating database tables...")
-    db.create_all()
+# Local development keeps the historical convenience. Production runs this
+# command explicitly before WSGI reload:
+#   python manage.py prepare-database
+from startup import prepare_database, start_background_services
 
-    try:
-        from migration_runner import run_migrations
-        _applied = run_migrations()
-        if _applied:
-            logger.info("Applied schema migrations: %s",
-                        ', '.join(f'{v:04d}' for v in _applied))
-    except Exception as _migration_err:  # pragma: no cover — startup safety
-        logger.exception(
-            "Schema migration failed: %s — refusing to start with a partial "
-            "or incompatible schema.", _migration_err)
-        db.session.rollback()
-        raise RuntimeError(
-            'Required database migration failed; application startup aborted'
-        ) from _migration_err
-
-    logger.info("Database initialized")
-
-    # ── Orphan-lock sweep ─────────────────────────────────────────────
-    # Find CollectionCard rows whose lock_ref_id no longer points to a
-    # live LandConfigFigure / LandConfigBattleMove / LandConfig row, and
-    # release the lock.  Keeps the collection consistent across server
-    # restarts that follow crashes mid-transaction.
-    try:
-        from models import (CollectionCard, LandConfig,
-                            LandConfigFigure, LandConfigBattleMove)
-        figure_ids  = {fid for (fid,) in db.session.query(LandConfigFigure.id).all()}
-        move_ids    = {mid for (mid,) in db.session.query(LandConfigBattleMove.id).all()}
-        config_ids  = {cid for (cid,) in db.session.query(LandConfig.id).all()}
-        valid_by_lock_type = {
-            'conquer_figure':   figure_ids,
-            'defence_figure':   figure_ids,
-            'defence_draft_figure': figure_ids,
-            'conquer_move':     move_ids,
-            'defence_move':     move_ids,
-            'defence_draft_move': move_ids,
-            'conquer_modifier': config_ids,
-            'defence_modifier': config_ids,
-            'defence_draft_modifier': config_ids,
-            'conquer_spell':    config_ids,
-            'defence_spell':    config_ids,
-            'defence_draft_spell': config_ids,
-            'conquer_prelude':  config_ids,
-            'defence_prelude':  config_ids,
-            'defence_draft_prelude': config_ids,
-            'conquer_counter':  config_ids,
-            'defence_counter':  config_ids,
-            'defence_draft_counter': config_ids,
-        }
-        locked_cards = CollectionCard.query.filter_by(locked=True).all()
-        orphan_count = 0
-        for cc in locked_cards:
-            valid_set = valid_by_lock_type.get(cc.lock_type)
-            if valid_set is None or cc.lock_ref_id not in valid_set:
-                cc.locked = False
-                cc.lock_type = None
-                cc.lock_ref_id = None
-                orphan_count += 1
-        if orphan_count:
-            db.session.commit()
-            logger.warning("Orphan-lock sweep: released %d stale card lock(s)",
-                           orphan_count)
-        else:
-            logger.info("Orphan-lock sweep: no stale locks found")
-    except Exception as _olsw_err:  # pragma: no cover — safety net
-        logger.exception("Orphan-lock sweep failed: %s", _olsw_err)
-        db.session.rollback()
-
-    # Seed the kingdom hex map (idempotent — skips if already seeded)
-    from kingdom_service import seed_kingdom_map
-    seed_kingdom_map()
-    logger.info("Kingdom map seeding checked")
-    try:
-        from kingdom_service import reconcile_all_kingdoms
-        reconcile_all_kingdoms(commit=True)
-        logger.info("Persistent kingdom reconciliation checked")
-    except Exception as _kingdom_reconcile_err:  # pragma: no cover — safety net
-        logger.exception("Persistent kingdom reconciliation failed: %s", _kingdom_reconcile_err)
-        db.session.rollback()
-    if settings.RECONCILE_REGION_CHAMPIONS_ON_STARTUP:
-        try:
-            from region_service import reconcile_region_champions
-            reconcile_region_champions(commit=True)
-            logger.info("Historic region Champion reconciliation checked")
-        except Exception as _region_reconcile_err:  # pragma: no cover — safety net
-            logger.exception(
-                "Historic region Champion reconciliation failed: %s",
-                _region_reconcile_err,
-            )
-            db.session.rollback()
-    else:
-        logger.info(
-            "Historic region Champion startup reconciliation skipped"
-        )
-
-    # Create AI users if enabled
-    if settings.AI_ENABLED:
-        from ai import init_ai_users
-        init_ai_users()
-
-    # Start the stuck-conquer-game sweeper (daemon thread).  Skipped when
-    # running tests (pytest sets PYTEST_CURRENT_TEST or sys.modules has
-    # pytest) — tests call sweep_stuck_conquer_games directly when they
-    # need to exercise the sweeper.
-    import sys as _sys
-    _is_pytest = ('pytest' in _sys.modules or
-                  _os.environ.get('PYTEST_CURRENT_TEST') is not None or
-                  _os.environ.get('DISABLE_BACKGROUND_SWEEPERS') == '1')
-    if not _is_pytest:
-        try:
-            from sweepers import start_stuck_conquer_sweeper
-            start_stuck_conquer_sweeper(app)
-        except Exception:
-            logger.exception("Failed to start stuck-conquer sweeper")
+if settings.STARTUP_MAINTENANCE_ENABLED:
+    prepare_database(app)
+else:
+    logger.info(
+        'Import-time database maintenance disabled; expecting a prepared schema'
+    )
+start_background_services(app)
 
 # ── Session cleanup on every request teardown ──
 @app.teardown_appcontext
@@ -351,6 +254,7 @@ app.register_blueprint(collection, url_prefix='/collection')
 app.register_blueprint(kingdom, url_prefix='/kingdom')
 app.register_blueprint(onboarding, url_prefix='/onboarding')
 app.register_blueprint(legal, url_prefix='/legal')
+app.register_blueprint(ops)
 
 # ── Stricter rate limits for auth-sensitive endpoints ──
 limiter.limit(settings.RATE_LIMIT_LOGIN)(app.view_functions['auth.login'])
@@ -395,10 +299,6 @@ if __name__ == '__main__':
     signal.signal(signal.SIGTERM, _graceful_shutdown)
 
     try:
-        with app.app_context():
-            db.create_all()
-            from migration_runner import run_migrations
-            run_migrations()
         app.run(host='0.0.0.0', port=5000)
     except Exception as e:
         logger.error(f'Application failed to start: {e}')

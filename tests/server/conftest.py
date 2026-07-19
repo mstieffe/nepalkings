@@ -12,10 +12,16 @@ if SERVER_DIR not in sys.path:
 
 # Disable AI so tests don't spin up workers
 os.environ.setdefault('AI_ENABLED', 'False')
+os.environ.setdefault('STARTUP_MAINTENANCE_ENABLED', 'False')
+os.environ.setdefault('BACKGROUND_SERVICES_ENABLED', 'False')
 
-# Force in-memory DB BEFORE importing server — prevents the real test.db
-# from being initialised at module level when server.py runs db.init_app().
-os.environ['DB_URL'] = 'sqlite:///:memory:'
+# CI can provide a disposable PostgreSQL database for compatibility coverage.
+# Ordinary local tests remain isolated in in-memory SQLite.
+TEST_DATABASE_URL = os.environ.get(
+    'TEST_DATABASE_URL',
+    'sqlite:///:memory:',
+)
+os.environ['DB_URL'] = TEST_DATABASE_URL
 
 from server import app as flask_app  # noqa: E402
 from models import db as _db  # noqa: E402
@@ -24,10 +30,7 @@ from models import db as _db  # noqa: E402
 @pytest.fixture(scope='function')
 def app():
     flask_app.config['TESTING'] = True
-    flask_app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///:memory:'
-    flask_app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
-        'connect_args': {'check_same_thread': False}
-    }
+    flask_app.config['SQLALCHEMY_DATABASE_URI'] = TEST_DATABASE_URL
     flask_app.config['WTF_CSRF_ENABLED'] = False
     # Disable rate limiting during tests
     flask_app.config['RATELIMIT_ENABLED'] = False
