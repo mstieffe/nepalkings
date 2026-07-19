@@ -242,16 +242,16 @@ To open the settings picker first:
 ./run_local.sh -s
 ```
 
-### Remote server (legacy development PythonAnywhere)
+### Remote production server (PythonAnywhere EU)
 
-The published client currently defaults to the legacy development server at
-`https://nepalkings.pythonanywhere.com`:
+The current source checkout connects to the fresh EU production API:
 
 ```bash
 ./run_remote.sh
 ```
 
-To test the paid EU staging server instead:
+Production remains in maintenance mode until every launch gate passes. To test
+the isolated EU staging server instead:
 
 ```bash
 cd nepal_kings
@@ -265,8 +265,8 @@ The complete environment matrix and browser staging link are in
 ### Switching servers via the UI
 
 Run the client with the `-s` or `--settings` flag to open the settings picker,
-which currently lets you choose between **Local (dev)** and the legacy
-**PythonAnywhere** server:
+which currently lets you choose between **Local (dev)** and
+**Production (EU)**:
 
 ```bash
 cd nepal_kings
@@ -565,15 +565,15 @@ Stored at `~/.nepalkings/resolution.json`:
 {
   "width": 1920,
   "height": 1080,
-  "server_url": "https://nepalkings.pythonanywhere.com"
+  "server_url": "https://api-nepalkingz.eu.pythonanywhere.com"
 }
 ```
 
-The value above is still the published default, but its data is disposable and
-will not be migrated to EU production. Use
-`https://nepalkingz.eu.pythonanywhere.com` only for staging tests. See
-[`docs/environments.md`](docs/environments.md) before changing a released
-client.
+The production URL above is the source default on `develop`. The currently
+published GitHub Pages artifact remains on the legacy development server until
+the production worker and remaining launch gates pass and the approved client
+release is merged to `main`. Use `https://nepalkingz.eu.pythonanywhere.com`
+only for staging tests. See [`docs/environments.md`](docs/environments.md).
 
 Delete this file to reset all settings and show the picker on next launch.
 
@@ -587,8 +587,8 @@ The client resolves the server URL in this order (first match wins):
 1. `--server-url` CLI flag
 2. `SERVER_URL` environment variable
 3. Saved value in `~/.nepalkings/resolution.json`
-4. Baked client default: currently
-   `https://nepalkings.pythonanywhere.com`
+4. Baked source default:
+   `https://api-nepalkingz.eu.pythonanywhere.com`
 
 ---
 

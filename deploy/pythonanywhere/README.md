@@ -35,6 +35,10 @@ published client still points to the legacy US server by default; use its
 explicit staging override until the production web app and fresh database pass
 the cutover gates.
 
+The dated, append-as-you-go evidence for the initial production creation is in
+[`docs/operations/PRODUCTION_DEPLOYMENT_2026-07-19.md`](../../docs/operations/PRODUCTION_DEPLOYMENT_2026-07-19.md).
+Keep secrets out of that log.
+
 ## 1. Create PostgreSQL databases and least-privilege users
 
 Enable the PostgreSQL add-on and set the PostgreSQL administrator password on
@@ -84,17 +88,20 @@ python3.11 -c "import secrets; print(secrets.token_hex(32))"
 The private files stay outside the repository and outside the API deploy
 upload set.
 
-## 3. Prepare the Python 3.11 virtual environment
+## 3. Prepare the Python 3.11 virtual environments
 
 ```bash
-python3.11 -m venv ~/.virtualenvs/nepalkings
-~/.virtualenvs/nepalkings/bin/python -m pip install --upgrade pip
-~/.virtualenvs/nepalkings/bin/python -m pip install \
-  -r ~/nepalkings/server/requirements.txt
+python3.11 -m venv ~/.virtualenvs/nepalkings-staging
+python3.11 -m venv ~/.virtualenvs/nepalkings-production
+
+~/.virtualenvs/nepalkings-staging/bin/python -m pip install \
+  -r ~/releases/RELEASE_SHA/server/requirements.txt
+~/.virtualenvs/nepalkings-production/bin/python -m pip install \
+  -r ~/releases/RELEASE_SHA/server/requirements.txt
 ```
 
-Package installation is a deploy step. It must never happen during a web
-worker import.
+Run `python -m pip check` in each environment. Package installation is a deploy
+step. It must never happen during a web-worker import.
 
 ## 4. Prepare a database explicitly
 
@@ -102,9 +109,9 @@ Run this before the first WSGI reload and after every release that contains a
 schema migration:
 
 ```bash
-cd ~/nepalkings/server
 NEPAL_KINGS_ENV_FILE="$HOME/.config/nepalkings/staging.env" \
-  ~/.virtualenvs/nepalkings/bin/python manage.py prepare-database
+  ~/.virtualenvs/nepalkings-staging/bin/python \
+  ~/releases/RELEASE_SHA/server/manage.py prepare-database
 ```
 
 Use `production.env` only inside an approved production deployment window.
@@ -116,8 +123,10 @@ reconciliation. Back up production before running it.
 In the PythonAnywhere Web tab:
 
 1. Select manual configuration with Python 3.11.
-2. Set source code and working directory to
-   `/home/nepalkingz/nepalkings/server`.
+2. Set source code to
+   `/home/nepalkingz/releases/RELEASE_SHA/server`. The provider working
+   directory may remain the account home because the WSGI file explicitly
+   changes to the immutable release directory before importing the app.
 3. Set the virtualenv to the environment-specific path, for example
    `/home/nepalkingz/.virtualenvs/nepalkings-staging`.
 4. Copy `wsgi.py.example` into the provider WSGI file and set the username and

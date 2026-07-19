@@ -85,11 +85,11 @@ _HINT_CLR    = (140, 130, 110)
 _CHECK_CLR   = (90, 200, 110)
 
 
-_DEFAULT_SERVER_URL = 'https://nepalkings.pythonanywhere.com'
+_DEFAULT_SERVER_URL = 'https://api-nepalkingz.eu.pythonanywhere.com'
 
 _SERVER_PRESETS = [
-    ('http://localhost:5000',                     'Local (dev)'),
-    ('https://nepalkings.pythonanywhere.com',     'PythonAnywhere'),
+    ('http://localhost:5000',                             'Local (dev)'),
+    ('https://api-nepalkingz.eu.pythonanywhere.com',      'Production (EU)'),
 ]
 
 

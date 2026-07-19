@@ -15,7 +15,7 @@ full launch gate is
 | Local development | `http://localhost:5000` | Local development database | Developer-only |
 | Legacy development server | `https://nepalkings.pythonanywhere.com` | Disposable development data | Current default for the published web client and installers; not production data |
 | EU staging | `https://nepalkingz.eu.pythonanywhere.com` | Isolated `nepalkings_staging` PostgreSQL database | Integration, performance, schema/restore, and soak testing |
-| EU production | Planned: `https://api-nepalkingz.eu.pythonanywhere.com` | Fresh, isolated `nepalkings_prod` PostgreSQL database | Database exists; web app and worker are not configured yet |
+| EU production | `https://api-nepalkingz.eu.pythonanywhere.com` | Fresh, isolated `nepalkings_prod` PostgreSQL database | Web app is healthy but held in maintenance; background-worker quota is not yet available |
 
 Do not treat EU staging as production. Accounts, tokens, games, collections,
 and ownership are isolated by database and signing key. A user created on one
@@ -37,6 +37,30 @@ environment does not automatically exist on another.
 The detailed backup, concurrency, latency, and verification evidence is
 recorded in the current checkpoint of the public-launch plan.
 
+## Verified EU production state
+
+- Web app ID: `56868`.
+- Provider hostname:
+  `https://api-nepalkingz.eu.pythonanywhere.com`.
+- Immutable server release:
+  `949126c9db5fbea5f86d3b053831cb9210250bb3`.
+- Fresh PostgreSQL schema version: 17.
+- Seed data: 4,800 lands; zero users, games, collections, or kingdoms after
+  smoke-account cleanup.
+- Three WSGI workers observed in the provider server log.
+- Private production environment and virtualenv are isolated from staging.
+- Force HTTPS is enabled.
+- Maintenance mode is on.
+- Health, readiness, legal, exact CORS, registration, login, onboarding,
+  concurrent reads, and concurrent heartbeats passed.
+- No production always-on worker exists yet. The PythonAnywhere API reports
+  that the account has reached its one-task limit with the staging task, so
+  the subscription allocation must be changed to permit a second always-on
+  task.
+
+Detailed hashes, timings, cleanup evidence, and rollback boundaries are in
+[`docs/operations/PRODUCTION_DEPLOYMENT_2026-07-19.md`](operations/PRODUCTION_DEPLOYMENT_2026-07-19.md).
+
 ## What the published clients currently use
 
 The public GitHub Pages artifact and released installers still default to:
@@ -45,8 +69,9 @@ The public GitHub Pages artifact and released installers still default to:
 https://nepalkings.pythonanywhere.com
 ```
 
-This remains unchanged only until EU production exists. The old server contains
-development data and will not be migrated. The default is currently baked into:
+The old server contains development data and will not be migrated. The
+following five locations on `develop` are now prepared with the production
+URL, but those changes do not alter the already-published artifact:
 
 - `nepal_kings/main.py`;
 - `nepal_kings/config/server_settings.py`;
@@ -123,32 +148,36 @@ result in the launch plan.
 
 Do not update the public client's default server until every item below passes.
 
-1. Create the second EU web app at the temporary production hostname
+1. [x] Create the second EU web app at the temporary production hostname
    `api-nepalkingz.eu.pythonanywhere.com`. PythonAnywhere supports additional
    paid-account apps in the form
    `something-username.eu.pythonanywhere.com`, so no purchased domain or DNS
    change is required for launch.
-2. Keep `nepalkingz.eu.pythonanywhere.com` as staging. Never point both web apps
+2. [x] Keep `nepalkingz.eu.pythonanywhere.com` as staging. Never point both web apps
    at the same private environment file or database.
-3. Complete the private `production.env` with a production-only signing key,
+3. [x] Complete the private `production.env` with a production-only signing key,
    the `nepalkings_prod` database URL, the production API URL, exact CORS
    origin, and maintenance mode enabled.
-4. Allocate the four paid web workers deliberately. The launch target is three
-   production workers and one staging worker; staging temporarily uses three
-   only for concurrency testing.
-5. Initialize `nepalkings_prod` as a fresh production database. Do not import
+4. [ ] Confirm the paid web-worker allocation in the PythonAnywhere Account
+   tab. Production currently starts three workers. Set staging to one worker
+   if the account treats the configured four workers as a shared limit.
+5. [x] Initialize `nepalkings_prod` as a fresh production database. Do not import
    users, games, collections, kingdoms, or ownership from the legacy
    development server.
-6. Take and verify a PostgreSQL backup before every later production
+6. [x] Take and verify a PostgreSQL backup before initialization and before
+   every later production
    deployment that can mutate schema or data.
-7. Deploy an immutable release, install pinned dependencies, and run
+7. [x] Deploy an immutable release, install pinned dependencies, and run
    `manage.py prepare-database` against `production.env`.
-8. Configure the production WSGI file and the second always-on task. Keep web
-   workers' `AI_ENABLED` and `BACKGROUND_SERVICES_ENABLED` values false.
-9. Verify the custom domain, TLS, `/healthz`, `/readyz`, legal endpoints,
-   maintenance behavior, exact CORS origin, authenticated reads, concurrent
-   gameplay, logs, and rollback.
-10. Disable production maintenance only after the smoke gates pass.
+8. [ ] The production WSGI is configured and web-worker background services
+   are off. Increase the account limit to two always-on tasks, then create the
+   separate production worker.
+9. [ ] TLS, `/healthz`, `/readyz`, legal endpoints, maintenance behavior,
+   exact CORS origin, authenticated reads, concurrent reads/writes, and logs
+   passed. Complete a production Conquer mutation check after the worker exists
+   and finish the rollback drill.
+10. [ ] Disable production maintenance only after the worker and remaining
+    smoke gates pass.
 
 ## Add polished domains later
 
@@ -184,10 +213,9 @@ the transition where possible.
 
 ## Promote the web client to EU production
 
-After the production cutover passes, replace the legacy development URL with
-`https://api-nepalkingz.eu.pythonanywhere.com` in the five client/build
-locations listed above.
-Then:
+The five client/build locations on `develop` now use
+`https://api-nepalkingz.eu.pythonanywhere.com`. Do not merge or deploy that
+change until the production worker and remaining gates pass. Then:
 
 1. Run client tests and build the optimized web archive.
 2. Inspect `assets/main.py` inside the built archive and confirm the exact

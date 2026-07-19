@@ -24,7 +24,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR/nepal_kings"
 
 # ── Parse optional server URL override ────────────────────────────
-SERVER_URL="https://nepalkings.pythonanywhere.com"
+SERVER_URL="https://api-nepalkingz.eu.pythonanywhere.com"
 for i in "$@"; do
     if [ "$prev" = "--server-url" ]; then
         SERVER_URL="$i"

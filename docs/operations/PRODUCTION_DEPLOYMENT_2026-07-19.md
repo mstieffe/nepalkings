@@ -1,0 +1,405 @@
+# EU Production Deployment Log — 2026-07-19
+
+Status: **in progress; production is not public**
+
+This is the durable execution record for creating the first fresh Nepal Kings
+production environment on PythonAnywhere EU. It records decisions, commands,
+checks, and rollback boundaries without storing passwords, API tokens, signing
+keys, or complete database URLs.
+
+The infrastructure runbook is
+[`deploy/pythonanywhere/README.md`](../../deploy/pythonanywhere/README.md).
+Client routing and the environment matrix are in
+[`docs/environments.md`](../environments.md).
+
+## Approved scope
+
+- Keep the client on GitHub Pages for the initial launch.
+- Create production at
+  `https://api-nepalkingz.eu.pythonanywhere.com`.
+- Keep `https://nepalkingz.eu.pythonanywhere.com` as isolated staging.
+- Start `nepalkings_prod` fresh. Do not import legacy development data.
+- Use immutable server release
+  `949126c9db5fbea5f86d3b053831cb9210250bb3`.
+- Preserve `backup/pythonanywhere-free-eu-2026-07-19` as the tested
+  free-plan/SQLite fallback branch.
+- Keep production in maintenance mode until database, web, worker, CORS,
+  authentication, concurrency, isolation, and rollback checks pass.
+- Do not change the published GitHub Pages client until production passes.
+
+## Environment isolation contract
+
+| Resource | Staging | Production |
+|---|---|---|
+| API host | `nepalkingz.eu.pythonanywhere.com` | `api-nepalkingz.eu.pythonanywhere.com` |
+| PostgreSQL database | `nepalkings_staging` | `nepalkings_prod` |
+| PostgreSQL role | `nepalkings_staging` | `nepalkings_prod` |
+| Private environment | `~/.config/nepalkings/staging.env` | `~/.config/nepalkings/production.env` |
+| Virtualenv | `~/.virtualenvs/nepalkings-staging` | `~/.virtualenvs/nepalkings-production` |
+| Background worker | always-on task `35390` | separate task; not created yet |
+
+Both environments may reference the same read-only immutable release
+directory, but they must not share a database, role, signing key, environment
+file, virtualenv, web app, or background-worker task.
+
+## Evidence recorded before production creation
+
+### Local release and repository
+
+- Branch: `develop`
+- Starting commit:
+  `c7d0275cd5bda0fdfabfab4be2cfc24c346b6178`
+- Worktree at start: clean
+- Server archive:
+  `/tmp/nepalkings-server-949126c9db5fbea5f86d3b053831cb9210250bb3.tar.gz`
+- Archive SHA-256:
+  `45345150b9656992889b7b80cec91fcb342ba667ead952ae621b3518c66dfca6`
+- Matching immutable remote release directory: present
+
+### PythonAnywhere EU API audit
+
+The account initially contained exactly:
+
+- one enabled staging web app at
+  `nepalkingz.eu.pythonanywhere.com`;
+- source directory
+  `/home/nepalkingz/releases/949126c9db5fbea5f86d3b053831cb9210250bb3/server`;
+- staging virtualenv
+  `/home/nepalkingz/.virtualenvs/nepalkings-staging`;
+- force HTTPS enabled;
+- one running staging always-on task, ID `35390`, using `staging.env`,
+  the staging virtualenv, and release `949126c9...`.
+
+No production web app or production worker existed.
+
+### Private production configuration audit
+
+At the first audit:
+
+- `~/.config/nepalkings/production.env`: not yet present;
+- `~/.virtualenvs/nepalkings-production`: not yet present;
+- `~/backups/postgres-production`: not yet present.
+
+The absent production environment is a deliberate stop gate: no database
+backup, migration, WSGI reload, or worker creation may run until the
+production database password is supplied through hidden input and all
+non-secret production values pass validation.
+
+The password was subsequently supplied through hidden terminal input. The
+deployment:
+
+- validated it against database and role `nepalkings_prod`;
+- confirmed a PostgreSQL `max_connections` value of `20`;
+- generated a new 64-character production-only signing key;
+- created `~/.config/nepalkings/production.env` with mode `600`;
+- set `APP_ENVIRONMENT=production`;
+- set both server URLs to
+  `https://api-nepalkingz.eu.pythonanywhere.com`;
+- allowed only `https://mstieffe.github.io` through CORS;
+- set `DB_POOL_SIZE=1` and `DB_MAX_OVERFLOW=1`;
+- set `MAINTENANCE_MODE=True`;
+- verified the database host, external port `10371`, role, and database name;
+- verified that no `CHANGE_ME` placeholder remained;
+- removed the temporary password-only file.
+
+No password, database URL, signing key, or API token was printed or recorded.
+
+### Production virtualenv preparation
+
+Created:
+
+```text
+/home/nepalkingz/.virtualenvs/nepalkings-production
+```
+
+Installed the exact pinned requirements from the immutable release with
+Python 3.11. `pip check` reported:
+
+```text
+No broken requirements found.
+```
+
+This preparation does not connect to or modify either database.
+
+Created `~/backups/postgres-production` with owner `nepalkingz` and mode
+`700`. The verified production interpreter is Python `3.11.11`.
+
+### Pre-initialization production backup
+
+The production role saw zero public tables before initialization. A
+custom-format backup was created and validated with `pg_restore --list`:
+
+```text
+/home/nepalkingz/backups/postgres-production/production-pre-initialization-20260719T203428Z.dump
+```
+
+- Mode: `600`
+- Size: `912` bytes
+- Archive entries: `0`, as expected for the empty database
+- SHA-256:
+  `893ba8f87e5995db5bf3e385f4622948ed2576790ed549a043f5c024f3ebdea4`
+
+### Fresh database initialization
+
+`manage.py prepare-database` completed against `production.env`. It created
+the tables, applied migrations `0001` through `0017`, seeded the historic map,
+and completed reconciliation without stale locks.
+
+The verification inventory found 32 public tables:
+
+- `schema_version`: one row with version `17`;
+- `land`: `4800`;
+- `user`, `game`, `player`, `collection_card`, `kingdom`, `land_config`,
+  `figure`, and `event`: `0`;
+- every other domain table: `0`.
+
+### Production web app
+
+Created PythonAnywhere web app ID `56868` at:
+
+```text
+https://api-nepalkingz.eu.pythonanywhere.com
+```
+
+The app was disabled immediately after creation, then configured and enabled
+with:
+
+- Python `3.11`;
+- source
+  `/home/nepalkingz/releases/949126c9db5fbea5f86d3b053831cb9210250bb3/server`;
+- virtualenv
+  `/home/nepalkingz/.virtualenvs/nepalkings-production`;
+- provider WSGI
+  `/var/www/api-nepalkingz_eu_pythonanywhere_com_wsgi.py`;
+- WSGI project directory pinned to release `949126c9...`;
+- WSGI environment file pinned to `production.env`;
+- forced HTTPS;
+- web-worker background services disabled.
+
+The WSGI file passed `py_compile`. The provider API left its account-level
+working directory at `/home/nepalkingz/`; this is safe because the verified
+WSGI file changes to the immutable release directory before importing the
+application.
+
+The server log shows three production uWSGI workers. The error log remained
+empty through startup and smoke testing.
+
+### Maintenance-on web checks
+
+| Check | Result |
+|---|---|
+| HTTP redirect | `302` to the matching HTTPS URL |
+| `/healthz` | `200`; environment `production`; release `949126c9...` |
+| `/readyz` | `200`; PostgreSQL; schema `17` |
+| `/legal/versions` | `200`; terms/privacy version `2026-06-12` |
+| Protected login while maintained | JSON `503`; `Retry-After: 300` |
+| Allowed preflight | GitHub Pages origin returned the exact allow-origin |
+| Untrusted preflight | no allow-origin or CORS method/header grants |
+
+The first uncached measurements in this deployment window were approximately
+`122 ms` for health, `134 ms` for readiness, and `84 ms` for legal versions.
+These are observations, not a statistically meaningful latency benchmark.
+
+### Always-on task capacity blocker
+
+Production worker creation was attempted only after confirming there was no
+existing production task. PythonAnywhere returned:
+
+```text
+403 You have reached your always on task limit.
+```
+
+The account currently exposes one running task: staging task `35390`.
+Production needs a second task allocation before the worker can be created.
+Do not repurpose or stop the staging worker; each environment requires its own
+environment file, virtualenv, database, and leadership lock.
+
+### Authenticated and concurrent web smoke
+
+Maintenance was temporarily disabled and the web app reloaded. A generated
+account named `prodsmoke_0719204220` was used only for this test.
+
+- invalid login returned JSON `401`;
+- allowed CORS preflight returned `200` and the exact GitHub Pages origin;
+- registration, login, and onboarding state returned `200`;
+- three concurrent Collection reads and three concurrent map reads all
+  returned `200`;
+- six concurrent heartbeat writes all returned `200`;
+- Collection reads took approximately `150–503 ms`;
+- heartbeat writes took approximately `109–202 ms`;
+- map reads took approximately `805–1140 ms` and each transferred about
+  `3,340,616` bytes.
+
+The map result is a production-readiness performance finding: a roughly
+3.34 MB response is materially expensive even when the server is healthy.
+Payload reduction, conditional requests/caching, and map endpoint profiling
+remain launch-plan work.
+
+Cleanup deleted the one smoke user and its two analytics events, reset the
+empty user/event sequences, and verified:
+
+```text
+users=0 events=0 games=0 collection_cards=0 kingdoms=0 lands=4800
+```
+
+Maintenance was restored, the app reloaded, and a protected login was again
+verified as JSON `503` with `Retry-After: 300`.
+
+### Staging isolation regression
+
+- staging and production signing keys are distinct;
+- complete database URLs are distinct;
+- staging resolves to role/database `nepalkings_staging`;
+- production resolves to role/database `nepalkings_prod`;
+- staging remains out of maintenance;
+- production remains in maintenance;
+- both `/healthz`, `/readyz`, and `/legal/versions` checks return `200`;
+- both report release `949126c9...`, while their health/readiness environment
+  values correctly report `staging` and `production`.
+
+### Client routing and staged artifact
+
+The following release locations on `develop` now use the production API:
+
+- `nepal_kings/main.py`;
+- `nepal_kings/config/server_settings.py`;
+- `run_remote.sh`;
+- `build_installer.sh`;
+- `.github/workflows/build.yml`.
+
+The source picker labels the remote preset `Production (EU)`. A regression test
+requires the production URL in all five files, rejects the legacy URL there,
+and confirms that GitHub Pages still deploys only from `main`.
+
+The complete test suite passed:
+
+```text
+2629 passed, 2 skipped in 206.99s
+```
+
+An optimized web staging build produced:
+
+```text
+build/web-staging/nepal_kings/build/web/nepal_kings.tar.gz
+build/web-staging/nepal_kings/build/web/nepal_kings.apk
+```
+
+- tar.gz SHA-256:
+  `c4ed81f05b22b66a39a2a41c1fcb2fe607d7d9700d1a491fe77604ece5e632eb`;
+- APK SHA-256:
+  `3c9450a15bd3664603bf78d3355ee4c575f66ecb6d404262eb04a46866e43271`;
+- each archive is approximately `46 MB`;
+- `gzip -t` and `unzip -tq` passed;
+- both archives contain the exact production API in `assets/main.py` and
+  `assets/config/server_settings.py`;
+- neither packaged file contains the legacy API;
+- the standard custom index and 98 native Web Audio assets are present;
+- the final staged web directory is approximately `103 MB`.
+
+The local `pygbag` process finished both archives but did not exit before its
+template/index phase in the restricted execution environment. It was
+terminated by exact PID after several output-free minutes; the normal
+post-build custom index/audio steps were then applied and every artifact check
+above passed. Require a clean build exit in CI before public deployment.
+
+Nothing from `build/web-staging` was deployed. The existing Pages artifact
+continues to use the legacy development server until an approved merge to
+`main`.
+
+## Execution checklist
+
+- [x] Confirm local branch, commit, archive hash, and clean worktree.
+- [x] Audit existing EU web apps and always-on tasks.
+- [x] Confirm staging web/worker paths still point only to staging resources.
+- [x] Confirm production release directory exists.
+- [x] Create the isolated production Python 3.11 virtualenv.
+- [x] Install pinned dependencies and pass `pip check`.
+- [x] Create the private production backup directory with mode `700`.
+- [x] Securely create and validate `production.env`.
+- [x] Query and record PostgreSQL connection capacity without exposing a
+      password.
+- [x] Create and validate a pre-initialization custom-format PostgreSQL backup.
+- [x] Initialize the fresh database and verify schema/domain counts.
+- [x] Create the production web app, keep maintenance enabled, and configure
+      immutable WSGI/virtualenv paths.
+- [ ] Allocate web workers deliberately: three production, one staging.
+- [x] Verify `/healthz`, `/readyz`, legal endpoints, TLS, maintenance
+      behavior, and exact CORS origin.
+- [ ] Create exactly one production always-on worker and verify its
+      environment-specific leadership.
+- [x] Temporarily disable maintenance for authenticated/concurrency smoke,
+      clean any smoke account, and re-enable maintenance until client cutover.
+- [x] Verify staging remains healthy, isolated, and unchanged.
+- [x] Update client/build production defaults on `develop`.
+- [x] Test and inspect the built artifact; do not deploy Pages from
+      `develop`.
+- [ ] Require the release-candidate web build to exit cleanly in CI.
+- [x] Record current identifiers, hashes, counts, results, and rollback
+      command; append the production task ID when capacity is available.
+- [x] Commit and push the documentation and client-routing changes to
+      `develop`; do not merge them to `main` before the remaining gates pass.
+
+## Secret-handling rules
+
+- Never paste a password, API token, signing key, or complete `DB_URL` into
+  Git, chat, shell history, logs, screenshots, or this file.
+- Password entry uses `read -s`; the terminal must not echo the value.
+- Private directories use mode `700`; private files use mode `600`.
+- Validation output may show only the database host, port, role, database
+  name, key presence/length, and placeholder status.
+- The production signing key is generated independently from staging.
+
+## Rollback boundaries during this deployment
+
+Before public cutover, rollback means:
+
+1. leave or return production to maintenance mode;
+2. disable the production always-on task;
+3. disable the production web app;
+4. do not change or restore staging;
+5. do not restore a database automatically when rolling application code
+   back;
+6. do not merge the client URL change to `main`.
+
+The existing public client therefore continues to use its previous backend
+until the explicit client-release step.
+
+### Current pre-cutover rollback
+
+Production is already in maintenance and the public client has not been
+switched. To remove the new production web tier from service without touching
+either database or staging, disable only this web app in the PythonAnywhere
+Web tab, or use:
+
+```bash
+PA_TOKEN="$(<~/.nepalkings_pa_token)"
+curl -fsS -X POST \
+  -H "Authorization: Token ${PA_TOKEN}" \
+  https://eu.pythonanywhere.com/api/v0/user/nepalkingz/webapps/api-nepalkingz.eu.pythonanywhere.com/disable/
+unset PA_TOKEN
+```
+
+Do not delete web app `56868`, `production.env`, the immutable release,
+`nepalkings_prod`, or its backup during an application rollback. The matching
+re-enable operation is the provider `enable/` endpoint followed by `reload/`,
+after revalidating the WSGI and private environment paths.
+
+## Final evidence
+
+Complete this section as execution proceeds.
+
+| Gate | Result |
+|---|---|
+| Pre-initialization backup | passed; custom-format archive validated, SHA-256 `893ba8f...dea4` |
+| Production schema/counts | passed; schema 17, 4,800 lands, zero human/domain data |
+| Production web app ID/host | passed; ID `56868`, `api-nepalkingz.eu.pythonanywhere.com` |
+| Web-worker allocation | partial; production has three, staging allocation must be confirmed |
+| Production always-on task | blocked by provider-reported one-task account limit |
+| Health/readiness/legal/TLS | passed |
+| Exact CORS preflight | passed for GitHub Pages; untrusted origin not granted |
+| Authenticated smoke | passed |
+| Concurrency smoke | passed for six reads and six heartbeat writes; Conquer mutation pending |
+| Smoke-account cleanup | passed; fresh counts and sequences restored |
+| Staging isolation regression | passed |
+| Client artifact routing | passed in both staged archives; not deployed |
+| Production maintenance final state | on and verified |

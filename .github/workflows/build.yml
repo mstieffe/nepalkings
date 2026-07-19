@@ -49,7 +49,7 @@ jobs:
           txt = p.read_text(encoding='utf-8')
           txt = re.sub(
               r"^_DEFAULT_SERVER_URL = .*$",
-              "_DEFAULT_SERVER_URL = 'https://nepalkings.pythonanywhere.com'",
+              "_DEFAULT_SERVER_URL = 'https://api-nepalkingz.eu.pythonanywhere.com'",
               txt,
               flags=re.MULTILINE,
           )

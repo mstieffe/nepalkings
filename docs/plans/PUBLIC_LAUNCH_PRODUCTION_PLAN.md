@@ -81,9 +81,14 @@ Already present:
 
 Known launch blockers:
 
-- The production web app at the planned temporary hostname
-  `api-nepalkingz.eu.pythonanywhere.com` is not configured or cut over; only
-  staging is on PostgreSQL.
+- The production web app at
+  `api-nepalkingz.eu.pythonanywhere.com` is configured on fresh PostgreSQL and
+  has passed its web smoke, but it remains in maintenance. PythonAnywhere
+  currently reports a one-task account limit, so the separate production
+  always-on worker cannot be created until the subscription allocation allows
+  two tasks.
+- Client defaults are prepared on `develop` but are intentionally not deployed
+  from `main` while production lacks its worker.
 - EU production will intentionally start with a fresh database. Legacy US
   development users, games, collections, kingdoms, and ownership will not be
   migrated.
@@ -92,7 +97,9 @@ Known launch blockers:
   regression now passes against three web workers.
 - Job failure history/attempt limits and the remaining mutation-atomicity audit
   are incomplete.
-- Screens and game polling fan out over multiple HTTP requests.
+- Screens and game polling fan out over multiple HTTP requests. The production
+  map smoke transferred approximately 3.34 MB and took 0.81–1.14 seconds under
+  three-request concurrent load.
 - Complete application metrics and alerting are still missing.
 - Account recovery, deletion/export, and session revocation are incomplete.
 - Player reporting, blocking, suspension, and moderator tooling are missing.
@@ -858,9 +865,9 @@ At every stage:
 
 ## Final public-registration go/no-go gate
 
-- [ ] Hosting provider and region meet the measured latency target.
-- [ ] Fresh PostgreSQL production initialization is rehearsed and validated.
-- [ ] No production SQLite remains.
+- [x] Hosting provider and region meet the measured latency target.
+- [x] Fresh PostgreSQL production initialization is rehearsed and validated.
+- [x] No production SQLite remains.
 - [ ] Two web workers plus the job worker pass a 24-hour soak.
 - [ ] No correctness dependency remains process-local.
 - [ ] Restore drill meets RPO and RTO.
@@ -912,9 +919,10 @@ Part-time expectation: approximately two to three months.
 | 2026-07-19 | PythonAnywhere EU paid account for staged public beta | EU latency benchmark passed and the account was upgraded | Use managed WSGI workers, PA PostgreSQL, and always-on tasks; retain Render Frankfurt as exit option |
 | 2026-07-19 | Preserve the free-plan deployment before production changes | Pushed and live-tested `backup/pythonanywhere-free-eu-2026-07-19` at `7c85e83` | SQLite/single-worker fallback remains reproducible but requires its matching database snapshot |
 | 2026-07-19 | Harden the existing migration runner for PostgreSQL instead of adopting Alembic before beta | Only 14 ordered migrations exist; changing frameworks during the database cutover adds avoidable migration-state risk | Add PostgreSQL CI, portability tests, and explicit pre-reload execution now; reconsider Alembic after beta |
-| 2026-07-19 | PostgreSQL plan | Separate least-privilege staging/production DB owners on PythonAnywhere; 1 GiB initial allocation | Both databases/users were created and connectivity-verified; the production web app remains intentionally unconfigured |
+| 2026-07-19 | PostgreSQL plan | Separate least-privilege staging/production DB owners on PythonAnywhere; 1 GiB initial allocation | Both databases/users were created and connectivity-verified; production was initialized fresh at schema 17 |
 | 2026-07-19 | Dedicated PythonAnywhere always-on worker driven from durable game state | Three paid WSGI workers made in-process AI/sweeper startup unsafe; controlled staging worker test initialized AI, swept, and shut down cleanly | Web workers keep AI/background services disabled; PostgreSQL advisory leadership prevents duplicate task ownership; attempt limits and failure history remain before launch |
 | 2026-07-19 | PostgreSQL-backed multi-worker coordination | Release `e52611c` passed local, Python 3.11, and disposable PostgreSQL 16 tests; staging reports schema 17 with three workers | Conquer receipts, deadlines, game transaction locks, and security rate limits are shared; live gameplay and soak gates remain |
 | 2026-07-19 | Promote staging to release `949126c` after live race discovery | Validated PostgreSQL backup, green 2,627-test/CI/security gates, permanent task `35390`, six concurrent identical withdrawals with one canonical response and one durable receipt, and clean post-deploy logs | Staging is open on three workers plus one dedicated worker; next gates are restore automation, conflicting-action/two-account testing, and the 24-hour soak |
 | 2026-07-19 | Start EU production with fresh data | The old US server and its accounts were development-only | Do not run a legacy data import; initialize and verify the empty `nepalkings_prod` database before switching released clients |
 | 2026-07-19 | Launch first on provider domains | PythonAnywhere supports `something-username.eu.pythonanywhere.com` for additional paid-account apps, and GitHub Pages already hosts the client | Use `api-nepalkingz.eu.pythonanywhere.com` for initial production and add polished web/API domains later without moving PostgreSQL data |
+| 2026-07-19 | Provision the production web tier but hold public cutover | Web app `56868` passed TLS, health/readiness, CORS, authentication, three-worker concurrent reads/writes, cleanup, and staging-isolation checks; maintenance was restored | Keep GitHub Pages on its existing artifact until a second always-on task is allocated, the production worker is verified, and remaining launch gates pass |
