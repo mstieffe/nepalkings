@@ -71,6 +71,7 @@ from game_service.conquer_ownership_transfer import (
 )
 from game_service.conquer_result_serialization import (
     build_conquer_resolution_cache,
+    build_live_conquer_resolution_response,
     serialize_finished_conquer_result as _serialize_finished_conquer_result_impl,
 )
 from game_service.conquer_tactics_rules import (
@@ -7463,45 +7464,17 @@ def _resolve_conquer_battle(game, winner, requesting_player):
         and game.victory_reviewed_at is None
     )
 
-    response = {
-        'success': True,
-        'message': f'Conquer battle resolved: {result}',
-        'conquer_result': result,
-        'attacker_won': attacker_won,
-        'conquer_attacker_player_id': atk_player.id,
-        'conquer_defender_player_id': def_player.id,
-        'conquer_attacker_user_id': attacker_user.id if attacker_user else None,
-        'conquer_defender_user_id': defender_user.id if defender_user else None,
-        'land_id': game.land_id,
-        'land_gold_rate': land.gold_rate if land else 0,
-        'land_tier': land.tier if land else None,
-        'points_awarded': saved.get('points_awarded', 0),
-        'destroyed_figure_name': saved.get('destroyed_figure_name', ''),
-        'card_won_suit': card_won_suit,
-        'card_won_rank': card_won_rank,
-        'card_lost_suit': card_lost_suit,
-        'card_lost_rank': card_lost_rank,
-        'is_ai_defender': bool(is_ai_land),
-        'attacker_first_conquest': bool(attacker_first_conquest),
-        'loot_lost_cards': looted_lost_cards,
-        'loot_gained_cards': loot_gained_cards,
-        'consumed_cards': consumed_cards,
-        'defence_consumed_cards': defence_consumed_cards,
-        'cards_spent': cards_spent,
-        'kingdom_split_transfer': split_transfer_summary,
-        'victory_review_available': victory_review_available,
-        'victory_review_config_id': victory_review_config_id if victory_review_available else None,
-        'victory_review_land_id': game.land_id if victory_review_available else None,
-        'game': (
-            serialize_game_for_viewer(game, viewer_user_id)
-            if viewer_user_id is not None
-            else game.serialize()
-        ),
-    }
-    onboarding = _serialize_viewer_onboarding(viewer_user_id)
-    if onboarding is not None:
-        response['onboarding'] = onboarding
-    return response
+    return build_live_conquer_resolution_response(
+        game,
+        saved,
+        game.last_battle_result,
+        land,
+        attacker_won=attacker_won,
+        victory_review_available=victory_review_available,
+        viewer_user_id=viewer_user_id,
+        serialize_game_for_viewer=serialize_game_for_viewer,
+        serialize_viewer_onboarding=_serialize_viewer_onboarding,
+    )
 
 
 def _serialize_finished_conquer_result(game, viewer_user_id=None):

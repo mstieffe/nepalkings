@@ -64,6 +64,87 @@ def build_conquer_resolution_cache(
     return result
 
 
+def build_live_conquer_resolution_response(
+    game,
+    saved,
+    resolution_cache,
+    land,
+    *,
+    attacker_won,
+    victory_review_available,
+    viewer_user_id,
+    serialize_game_for_viewer,
+    serialize_viewer_onboarding,
+):
+    """Build the immediate resolver response from its persisted snapshot."""
+    result = 'attacker_won' if attacker_won else 'defender_won'
+    response = {
+        'success': True,
+        'message': f'Conquer battle resolved: {result}',
+        'conquer_result': result,
+        'attacker_won': attacker_won,
+        'conquer_attacker_player_id': resolution_cache.get(
+            'conquer_attacker_player_id'
+        ),
+        'conquer_defender_player_id': resolution_cache.get(
+            'conquer_defender_player_id'
+        ),
+        'conquer_attacker_user_id': resolution_cache.get(
+            'conquer_attacker_user_id'
+        ),
+        'conquer_defender_user_id': resolution_cache.get(
+            'conquer_defender_user_id'
+        ),
+        'land_id': game.land_id,
+        'land_gold_rate': land.gold_rate if land else 0,
+        'land_tier': land.tier if land else None,
+        'points_awarded': saved.get('points_awarded', 0),
+        'destroyed_figure_name': saved.get('destroyed_figure_name', ''),
+        'card_won_suit': resolution_cache.get('card_won_suit'),
+        'card_won_rank': resolution_cache.get('card_won_rank'),
+        'card_lost_suit': resolution_cache.get('card_lost_suit'),
+        'card_lost_rank': resolution_cache.get('card_lost_rank'),
+        'is_ai_defender': bool(resolution_cache.get('is_ai_defender')),
+        'attacker_first_conquest': bool(
+            resolution_cache.get('attacker_first_conquest')
+        ),
+        'loot_lost_cards': resolution_cache.get(
+            'conquer_loot_lost_cards'
+        ),
+        'loot_gained_cards': resolution_cache.get(
+            'conquer_loot_gained_cards'
+        ),
+        'consumed_cards': resolution_cache.get('conquer_consumed_cards'),
+        'defence_consumed_cards': resolution_cache.get(
+            'defence_consumed_cards'
+        ),
+        'cards_spent': resolution_cache.get('cards_spent'),
+        'kingdom_split_transfer': resolution_cache.get(
+            'kingdom_split_transfer'
+        ),
+        'victory_review_available': victory_review_available,
+        'victory_review_config_id': (
+            resolution_cache.get('victory_review_config_id')
+            if victory_review_available
+            else None
+        ),
+        'victory_review_land_id': (
+            resolution_cache.get('victory_review_land_id')
+            if victory_review_available
+            else None
+        ),
+        'game': (
+            serialize_game_for_viewer(game, viewer_user_id)
+            if viewer_user_id is not None
+            else game.serialize()
+        ),
+    }
+    onboarding = serialize_viewer_onboarding(viewer_user_id)
+    if onboarding is not None:
+        response['onboarding'] = onboarding
+    return response
+
+
 def _append_battle_score(payload, game, last_result, viewer_user_id):
     """Add canonical battle math and the viewer-oriented final total."""
     # Battle math is stored in one stable, non-viewer-specific perspective:
