@@ -36,12 +36,36 @@ Execution checkpoint (2026-07-19):
 - PythonAnywhere EU is selected for the staged public beta. GitHub Pages
   remains the static client host.
 - Staging now runs immutable release
-  `e52611c0534997f8be3c57dcebf193de29124411` on PostgreSQL schema 17 behind
-  three managed WSGI workers. It remains in maintenance mode until the
-  permanent always-on task and authenticated gameplay smoke test are complete.
-- The release passed 2,626 local tests, focused coordination tests, the
+  `949126c9db5fbea5f86d3b053831cb9210250bb3` on PostgreSQL schema 17 behind
+  three managed WSGI workers. Maintenance mode is off after successful
+  deployment and authenticated gameplay smoke tests.
+- Permanent always-on task `35390` runs the staging AI/sweeper worker from the
+  same immutable release. PostgreSQL reports exactly one worker leadership
+  lock and one AI user.
+- The release passed 2,627 local tests, focused coordination tests, the
   GitHub Python 3.11 suite, PostgreSQL 16 compatibility/concurrency tests,
   dependency audit, and secret scan.
+- A validated pre-deployment PostgreSQL custom-format backup is stored privately
+  at
+  `/home/nepalkingz/backups/postgres-staging/staging-pre-idempotency-fix-20260719T192108Z.dump`;
+  it is mode `600`, 206,706 bytes, and has SHA-256
+  `2c18062d8e7d8f1cee5e24dd4f4496932ae6e8313c66ef1d71748aef01178d3b`.
+
+Latest live staging evidence:
+
+- Five post-maintenance health probes returned release `949126c` in
+  78–92 ms. Readiness returned PostgreSQL/schema 17, legal remained available,
+  and an invalid login returned `401`.
+- The Conquer configuration and Collection dependencies returned in 162 ms and
+  83 ms respectively for the staging smoke account. The config contained three
+  figures and three battle moves.
+- Malformed authenticated JSON at `/games/conquer_withdraw` returned a clean
+  JSON `400` without a traceback.
+- Six simultaneous withdrawals with the same `client_action_id` all returned
+  `200` and the same canonical response SHA-256
+  `a075b59c21dbd00560e8a4fa1291cfc1f2660059c48119f68a04c0c654d2c9c6`.
+  PostgreSQL recorded one receipt, one additional attack log, and one finished
+  game. No new `500` or traceback appeared in the post-deployment logs.
 
 Already present:
 
@@ -59,11 +83,9 @@ Known launch blockers:
 
 - The production environment and custom API domain are not configured or
   cut over; only staging is on PostgreSQL.
-- The permanent staging always-on task still needs to be created after saving
-  a valid EU PythonAnywhere API token. Its exact command has passed a
-  controlled live startup, sweep, AI initialization, and shutdown test.
-- Multi-worker gameplay still needs an authenticated two-account smoke test
-  and 24-hour soak before public registration.
+- Multi-worker gameplay still needs authenticated two-account conflicting-action
+  tests and a 24-hour soak before public registration. The live duplicate-action
+  regression now passes against three web workers.
 - Job failure history/attempt limits and the remaining mutation-atomicity audit
   are incomplete.
 - Screens and game polling fan out over multiple HTTP requests.
@@ -367,7 +389,7 @@ PythonAnywhere EU passes the latency gate if:
 
 - [x] Warm p95 is below 800 ms from the primary audience location.
 - [x] Tiny-route EU p95 is at least 40% lower than the US result.
-- [ ] Conquer config screen-ready p95 is below 1.5 seconds after request
+- [x] Conquer config screen-ready p95 is below 1.5 seconds after request
   consolidation, or the raw regional result demonstrates that target is
   credible.
 - [x] p95 is stable and is not dominated by multi-second outliers in the first
@@ -377,9 +399,9 @@ PythonAnywhere EU passes the latency gate if:
 Choose PythonAnywhere EU only if:
 
 - [ ] Its paid PostgreSQL add-on price and backup behavior are acceptable.
-- [ ] The app can run the required dedicated background work.
+- [x] The app can run the required dedicated background work.
 - [ ] Deployment, rollback, logs, and alerting can meet the remaining gates.
-- [ ] Multi-worker state is fixed before enabling additional workers.
+- [x] Multi-worker state is fixed before enabling additional workers.
 
 Choose Render Frankfurt if:
 
@@ -392,11 +414,11 @@ Do not use the free-plan benchmark to compare concurrent throughput.
 
 Hosting decision output:
 
-- [ ] Selected provider and region recorded below.
+- [x] Selected provider and region recorded below.
 - [ ] Monthly launch budget recorded.
-- [ ] PostgreSQL plan recorded.
-- [ ] Background-worker plan recorded.
-- [ ] Staging and production topology recorded.
+- [x] PostgreSQL plan recorded.
+- [x] Background-worker plan recorded.
+- [x] Staging and production topology recorded.
 - [ ] Canonical domains recorded.
 
 ### H0.7 Measured PythonAnywhere US versus EU result
@@ -559,7 +581,9 @@ Priority: **P0**
 - [ ] Make reward, collection, ownership, and battle mutations atomic.
 - [x] Remove migration, seeding, reconciliation, and worker startup from WSGI
   import.
-- [ ] Test simultaneous duplicate and conflicting actions.
+- [x] Test simultaneous duplicate Conquer actions against the live
+  three-worker staging deployment.
+- [ ] Test simultaneous conflicting actions across Duel and Conquer.
 - [ ] Run at least two web workers plus one job worker for a 24-hour soak.
 
 Verification:
@@ -737,7 +761,7 @@ Verification:
 
 Priority: **P0**
 
-- [ ] Add SQLite/PostgreSQL test coverage during migration.
+- [x] Add SQLite/PostgreSQL test coverage during migration.
 - [ ] Add migration-from-previous-release tests.
 - [ ] Add production image/build validation.
 - [ ] Build the web client for every release candidate.
@@ -747,7 +771,7 @@ Priority: **P0**
 - [ ] Retain dependency and secret scans.
 - [ ] Auto-deploy `develop` to staging.
 - [ ] Deploy production only from an approved tag or `main`.
-- [ ] Tie immutable artifacts to a commit SHA.
+- [x] Tie immutable artifacts to a commit SHA.
 - [ ] Add post-deploy smoke tests.
 - [ ] Add schema/client compatibility checks.
 - [ ] Add maintenance mode and feature flags.
@@ -884,6 +908,7 @@ Part-time expectation: approximately two to three months.
 | 2026-07-19 | PythonAnywhere EU paid account for staged public beta | EU latency benchmark passed and the account was upgraded | Use managed WSGI workers, PA PostgreSQL, and always-on tasks; retain Render Frankfurt as exit option |
 | 2026-07-19 | Preserve the free-plan deployment before production changes | Pushed and live-tested `backup/pythonanywhere-free-eu-2026-07-19` at `7c85e83` | SQLite/single-worker fallback remains reproducible but requires its matching database snapshot |
 | 2026-07-19 | Harden the existing migration runner for PostgreSQL instead of adopting Alembic before beta | Only 14 ordered migrations exist; changing frameworks during the database cutover adds avoidable migration-state risk | Add PostgreSQL CI, portability tests, and explicit pre-reload execution now; reconsider Alembic after beta |
-| 2026-07-19 | PostgreSQL plan | Separate least-privilege staging/production DB owners on PythonAnywhere; 1 GiB initial allocation | Locks backup and connection design; live credentials still need provider-side creation |
+| 2026-07-19 | PostgreSQL plan | Separate least-privilege staging/production DB owners on PythonAnywhere; 1 GiB initial allocation | Both databases/users were created and connectivity-verified; the production web app remains intentionally unconfigured |
 | 2026-07-19 | Dedicated PythonAnywhere always-on worker driven from durable game state | Three paid WSGI workers made in-process AI/sweeper startup unsafe; controlled staging worker test initialized AI, swept, and shut down cleanly | Web workers keep AI/background services disabled; PostgreSQL advisory leadership prevents duplicate task ownership; attempt limits and failure history remain before launch |
 | 2026-07-19 | PostgreSQL-backed multi-worker coordination | Release `e52611c` passed local, Python 3.11, and disposable PostgreSQL 16 tests; staging reports schema 17 with three workers | Conquer receipts, deadlines, game transaction locks, and security rate limits are shared; live gameplay and soak gates remain |
+| 2026-07-19 | Promote staging to release `949126c` after live race discovery | Validated PostgreSQL backup, green 2,627-test/CI/security gates, permanent task `35390`, six concurrent identical withdrawals with one canonical response and one durable receipt, and clean post-deploy logs | Staging is open on three workers plus one dedicated worker; next gates are restore automation, conflicting-action/two-account testing, and the 24-hour soak |
