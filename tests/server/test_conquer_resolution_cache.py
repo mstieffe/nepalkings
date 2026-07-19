@@ -2,7 +2,7 @@
 # See LICENSE file in the project root for full license information.
 """Characterization tests for the persisted Conquer resolution cache."""
 
-from models import Game, LandAttackLog, Player
+from models import Game, KingdomLootEvent, LandAttackLog, Player
 from tests.server.test_land_battle import (
     _make_conquer_config,
     _make_defence_config,
@@ -136,4 +136,57 @@ def test_resolver_cache_preserves_prior_metadata_and_matches_live_payload(app, d
         assert isinstance(payload['game'], dict)
         assert isinstance(payload['onboarding'], dict)
 
-        assert LandAttackLog.query.filter_by(land_id=land.id).count() == 1
+        log = LandAttackLog.query.filter_by(land_id=land.id).one()
+        assert log.attacker_user_id == attacker_user.id
+        assert log.defender_user_id == defender_user.id
+        assert log.result == 'defender_won'
+        assert log.card_won_suit is None
+        assert log.card_won_rank is None
+        assert log.card_lost_suit == payload['card_lost_suit']
+        assert log.card_lost_rank == payload['card_lost_rank']
+        assert log.kingdom_deleted_id is None
+        assert log.kingdom_deleted_name is None
+        assert log.seen_by_attacker is False
+        assert log.seen_by_defender is False
+
+        loot_events = KingdomLootEvent.query.order_by(
+            KingdomLootEvent.direction
+        ).all()
+        assert len(loot_events) == 2
+        gained_event, lost_event = loot_events
+        assert gained_event.direction == 'gained'
+        assert gained_event.user_id == defender_user.id
+        assert gained_event.counterparty_user_id == attacker_user.id
+        assert gained_event.attack_log_id == log.id
+        assert gained_event.land_id == land.id
+        assert gained_event.kingdom_id == land.kingdom_id
+        assert gained_event.source == 'defender_win'
+        assert gained_event.cards == payload['loot_gained_cards']
+        assert gained_event.collected is False
+        assert gained_event.seen is False
+
+        assert lost_event.direction == 'lost'
+        assert lost_event.user_id == attacker_user.id
+        assert lost_event.counterparty_user_id == defender_user.id
+        assert lost_event.attack_log_id == log.id
+        assert lost_event.land_id == land.id
+        assert lost_event.kingdom_id is None
+        assert lost_event.source == 'defender_win'
+        assert lost_event.cards == payload['loot_gained_cards']
+        assert lost_event.collected is True
+        assert lost_event.seen is False
+
+        attacker_steps = set(
+            (attacker_user.onboarding_state or {}).get(
+                'completed_steps',
+                [],
+            )
+        )
+        defender_steps = set(
+            (defender_user.onboarding_state or {}).get(
+                'completed_steps',
+                [],
+            )
+        )
+        assert 'finish_first_conquer_battle' not in attacker_steps
+        assert 'finish_first_conquer_battle' in defender_steps
