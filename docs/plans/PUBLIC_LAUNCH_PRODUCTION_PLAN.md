@@ -1,6 +1,6 @@
 # Nepal Kings Public Launch and Production Readiness Plan
 
-Last updated: 2026-07-19
+Last updated: 2026-07-20
 
 Status: Execution in progress; PythonAnywhere EU selected
 
@@ -24,7 +24,7 @@ Priority:
 
 ## Current baseline
 
-Execution checkpoint (2026-07-19):
+Execution checkpoint (2026-07-20):
 
 - The exact pre-production/free-plan state is preserved and pushed as
   `backup/pythonanywhere-free-eu-2026-07-19` at commit
@@ -35,13 +35,13 @@ Execution checkpoint (2026-07-19):
   PostgreSQL or multi-worker changes.
 - PythonAnywhere EU is selected for the staged public beta. GitHub Pages
   remains the static client host.
-- Staging now runs immutable release
-  `949126c9db5fbea5f86d3b053831cb9210250bb3` on PostgreSQL schema 17 behind
-  three managed WSGI workers. Maintenance mode is off after successful
-  deployment and authenticated gameplay smoke tests.
-- Permanent always-on task `35390` runs the staging AI/sweeper worker from the
-  same immutable release. PostgreSQL reports exactly one worker leadership
-  lock and one AI user.
+- Staging and maintained production now run immutable release
+  `90bfa02fa5b00b5d59998bb2b558ac19201595c1` on isolated PostgreSQL schema
+  17 databases, each behind three managed WSGI workers.
+- Permanent always-on tasks `35390` and `35394` run the isolated staging and
+  production AI/sweeper workers from the same immutable release. PostgreSQL
+  reports exactly one environment-specific leadership lock per database and
+  one AI user per database.
 - The release passed 2,627 local tests, focused coordination tests, the
   GitHub Python 3.11 suite, PostgreSQL 16 compatibility/concurrency tests,
   dependency audit, and secret scan.
@@ -50,6 +50,10 @@ Execution checkpoint (2026-07-19):
   `/home/nepalkingz/backups/postgres-staging/staging-pre-idempotency-fix-20260719T192108Z.dump`;
   it is mode `600`, 206,706 bytes, and has SHA-256
   `2c18062d8e7d8f1cee5e24dd4f4496932ae6e8313c66ef1d71748aef01178d3b`.
+- Production application rollback, authenticated Conquer mutation, exact
+  baseline restore, and smoke-account cleanup passed. A verified production
+  dump is also encrypted off-provider with CMS AES-256-GCM; the daily schedule
+  and second independent storage destination remain open.
 
 Latest live staging evidence:
 
@@ -83,30 +87,34 @@ Known launch blockers:
 
 - The production web app at
   `api-nepalkingz.eu.pythonanywhere.com` is configured on fresh PostgreSQL and
-  has passed its web smoke, but it remains in maintenance. PythonAnywhere
-  currently reports a one-task account limit, so the separate production
-  always-on worker cannot be created until the subscription allocation allows
-  two tasks.
+  has passed web, worker, mutation, rollback, and restore gates, but it remains
+  intentionally in maintenance until the remaining launch gates pass.
 - Client defaults are prepared on `develop` but are intentionally not deployed
-  from `main` while production lacks its worker.
+  from `main` until the remaining public-registration gates pass.
 - EU production will intentionally start with a fresh database. Legacy US
   development users, games, collections, kingdoms, and ownership will not be
   migrated.
-- Multi-worker gameplay still needs authenticated two-account conflicting-action
-  tests and a 24-hour soak before public registration. The live duplicate-action
-  regression now passes against three web workers.
+- Multi-worker gameplay still needs authenticated two-account
+  conflicting-action tests and completion of the 24-hour soak before public
+  registration. Approximately ten hours of worker continuity had passed
+  without suspicious errors at the 2026-07-20 07:55 UTC checkpoint.
 - Job failure history/attempt limits and the remaining mutation-atomicity audit
   are incomplete.
 - Screens and game polling fan out over multiple HTTP requests. The production
   map smoke transferred approximately 3.34 MB and took 0.81–1.14 seconds under
   three-request concurrent load.
-- Complete application metrics and alerting are still missing.
+- A standard-library external contract/latency probe and scheduled GitHub
+  workflow now exist on `develop`, and the first live cycle passed. The
+  schedule becomes active from the default branch; centralized application
+  metrics, exception reporting, backup-age alerts, and a status page are still
+  missing.
 - Account recovery, deletion/export, and session revocation are incomplete.
 - Player reporting, blocking, suspension, and moderator tooling are missing.
 - Legal operator/contact details, retention specifics, and final attribution
   are incomplete.
 - The staged browser archive is approximately 45 MiB.
-- CI does not yet exercise production builds or load tests.
+- CI does not yet exercise release-candidate production builds or gameplay load
+  tests.
 
 ## Release contract
 
@@ -557,11 +565,14 @@ Priority: **P0**
 - [x] Validate row counts and foreign keys.
 - [x] Validate the fresh production bootstrap: schema version, one AI user,
   4,800 lands, region/champion seeds, and zero human accounts/games/ownership.
-- [ ] Rehearse fresh production initialization and application rollback twice.
+- [ ] Rehearse fresh production initialization and application rollback twice
+  (one complete rehearsal has passed).
 - [x] Add maintenance/read-only mode for the cutover.
 - [ ] Enable managed backups and PITR.
-- [ ] Add one encrypted daily backup outside the primary provider.
-- [ ] Perform and time a complete restore drill.
+- [ ] Add one encrypted daily backup outside the primary provider (initial
+  encrypted round-trip-verified copy passed; recurrence and second-store
+  replication remain).
+- [x] Perform and time a complete restore drill.
 - [x] Document fresh initialization, optional import, and application rollback.
 
 Verification:
@@ -672,7 +683,11 @@ Priority: **P0**
 - [ ] Measure p50/p95/p99 latency by route.
 - [ ] Measure request/error rate, workers, DB pool, slow queries, job age,
   retries, stuck games, active games, and notification failures.
-- [ ] Add external uptime monitoring.
+- [ ] Activate external uptime monitoring from the default branch and
+  stage-fail it to verify maintainer notifications.
+- [x] Add an external health/readiness/legal/latency probe and scheduled
+  GitHub workflow; activate and stage-fail the schedule from the default
+  branch before launch.
 - [ ] Alert on health, 5xx, latency, storage, backup failure, and job backlog.
 - [ ] Redact tokens, passwords, emails, and hidden gameplay state.
 - [ ] Define log-retention periods.
@@ -926,3 +941,6 @@ Part-time expectation: approximately two to three months.
 | 2026-07-19 | Start EU production with fresh data | The old US server and its accounts were development-only | Do not run a legacy data import; initialize and verify the empty `nepalkings_prod` database before switching released clients |
 | 2026-07-19 | Launch first on provider domains | PythonAnywhere supports `something-username.eu.pythonanywhere.com` for additional paid-account apps, and GitHub Pages already hosts the client | Use `api-nepalkingz.eu.pythonanywhere.com` for initial production and add polished web/API domains later without moving PostgreSQL data |
 | 2026-07-19 | Provision the production web tier but hold public cutover | Web app `56868` passed TLS, health/readiness, CORS, authentication, three-worker concurrent reads/writes, cleanup, and staging-isolation checks; maintenance was restored | Keep GitHub Pages on its existing artifact until a second always-on task is allocated, the production worker is verified, and remaining launch gates pass |
+| 2026-07-20 | Keep production maintained while the runtime soak continues | Tasks `35390` and `35394` remained on isolated release/environment/database paths; the ten-hour checkpoint showed continuous minute sweeps, exact advisory locks, and no suspicious worker lines | Do not treat the 24-hour gate as passed before its full checkpoint |
+| 2026-07-20 | Use encrypted provider-independent database copies | The first production dump passed provider catalog/hash validation, local hash equality, CMS AES-256-GCM encryption, two decryption hash checks, and plaintext cleanup | Replicate archive plus manifest to a second independent store, protect a recovery-key copy, and automate daily execution before opening registration |
+| 2026-07-20 | Add an external launch-contract probe | A three-sample live cycle passed production and staging health, readiness, PostgreSQL schema, legal discovery, release consistency, and 2-second p95 ceiling | Scheduled GitHub monitoring activates from the default branch; advanced metrics and alert destinations remain separate launch work |

@@ -27,6 +27,14 @@ Local diagnostics. Never deploy these.
 | `poll_ai_debug.py` | Live-poll the AI debug endpoint during a game. |
 | `print_database.py` | Print contents of the local SQLite DB. |
 
+## Production verification
+
+| Script | Purpose |
+|---|---|
+| `encrypt_postgres_backup.py` | Encrypt a PostgreSQL custom-format dump with AES-256-GCM, round-trip verify it, and write a recovery manifest. |
+| `probe_launch_endpoints.py` | Probe production/staging health, readiness, PostgreSQL schema, release consistency, legal discovery, and latency from outside PythonAnywhere. |
+| `smoke_conquer_api.py` | Run a controlled authenticated Conquer API smoke against a maintained environment with an operator-managed database rollback. |
+
 ## Deploy / ops scripts (kept at repo root)
 
 `deploy_server.sh`, `fetch_logs.sh`, `run_local.sh`, `run_remote.sh`,

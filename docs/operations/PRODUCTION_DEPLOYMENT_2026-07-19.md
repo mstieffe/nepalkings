@@ -583,3 +583,63 @@ Complete this section as execution proceeds.
 | Staging PostgreSQL message polling | passed on release `90bfa02...`; both game `3` endpoints return `200` |
 | Client artifact routing | passed in both staged archives; not deployed |
 | Production maintenance final state | on and verified |
+| Ten-hour worker checkpoint | passed at 2026-07-20 07:55 UTC; continuous minute sweeps, exact environment locks, no suspicious worker lines |
+| First encrypted off-provider backup | passed; AES-256-GCM CMS archive decrypts to production dump SHA-256 `a6c87778...8e8a0` |
+| External launch probe | passed at 2026-07-20 08:05 UTC; both environments met contract and 2-second p95 ceiling |
+
+## Post-deployment hardening checkpoint — 2026-07-20
+
+### Runtime soak in progress
+
+Both always-on tasks remained `Running` on release `90bfa02...`. Production
+recorded 610 sweep cycles and staging 789 at the checkpoint; the most recent
+entries retained one-minute continuity. Production had three nonzero-candidate
+sweeps from the controlled smoke and staging had one. Neither worker log
+contained a traceback, unhandled exception, lock-loss loop, database error, or
+wrong-environment marker.
+
+PostgreSQL still reported the exact production and staging advisory leadership
+locks under their corresponding roles. With `max_connections=20`, production
+showed one active and four idle connections and the account showed nine total,
+leaving eleven connections of headroom at the observation point.
+
+This is evidence for an in-progress soak, not completion of the required
+24-hour gate. The completion checkpoint is no earlier than approximately
+2026-07-20 21:50 UTC.
+
+### Encrypted provider-independent copy
+
+The clean production baseline dump
+`production-pre-conquer-smoke-20260719T214323Z.dump` was revalidated on
+PythonAnywhere with `pg_restore --list`, downloaded to a protected temporary
+file, and matched against provider SHA-256
+`a6c87778def031e4c2b0d97aef45ce5c01c4ff9a0825dcad32993cfb4768e8a0`.
+
+`scripts/encrypt_postgres_backup.py` encrypted it as CMS EnvelopedData with
+AES-256-GCM, decrypted it back to a hash stream twice, wrote a mode-`600`
+manifest, and removed the local plaintext. The encrypted archive is 198,820
+bytes with SHA-256
+`23d5ed6787756ddf9e5e3224df17ba1941348e71f37b5921efd3a05d9cd8915d`.
+It is stored under ignored local path `backups/off-provider/production/`.
+
+The procedure, key fingerprint, retention target, verification command, and
+recovery steps are documented in `OFFSITE_POSTGRES_BACKUPS.md`. A second
+independent encrypted copy, an independently protected recovery-key copy, and
+daily automation remain required before launch.
+
+### External contract probe
+
+`scripts/probe_launch_endpoints.py` now validates both public environments
+without game dependencies. Its first three-sample live cycle completed at
+2026-07-20 08:05 UTC with no errors:
+
+| Environment | Health p95 | Readiness p95 | Legal p95 |
+|---|---:|---:|---:|
+| Production | 127.5 ms | 137.4 ms | 86.7 ms |
+| Staging | 83.0 ms | 131.8 ms | 96.6 ms |
+
+Both environments returned the exact release `90bfa02...`, PostgreSQL schema
+17, and valid Terms/Privacy discovery. `.github/workflows/uptime.yml` schedules
+the probe every 15 minutes and retains each JSONL report for 30 days after the
+workflow reaches the default branch. It does not replace centralized
+exceptions, route metrics, backup-age alerts, or a public status page.

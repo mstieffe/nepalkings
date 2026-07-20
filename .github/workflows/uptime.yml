@@ -1,0 +1,44 @@
+name: External uptime probe
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: external-uptime-probe
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    name: Production and staging contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Check out release
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Probe launch endpoints
+        run: |
+          python scripts/probe_launch_endpoints.py \
+            --samples 3 \
+            --max-p95-ms 2000 \
+            --output uptime-probe.jsonl
+
+      - name: Upload probe evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: uptime-probe-${{ github.run_id }}
+          path: uptime-probe.jsonl
+          if-no-files-found: warn
+          retention-days: 30
