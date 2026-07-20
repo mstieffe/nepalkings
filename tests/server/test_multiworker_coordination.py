@@ -10,7 +10,7 @@ import background_worker
 from game_service.conquer_tactics_idempotency import (
     acquire_game_transaction_lock,
 )
-from models import db
+from models import Figure, Game, LogEntry, Player, db
 from security_rate_limits import consume_rate_limit
 
 
@@ -225,3 +225,162 @@ def test_postgres_concurrent_challenge_acceptance_creates_one_game(
         assert challenge.game_id == Game.query.one().id
         assert refreshed_user1.gold == original_gold[0] - challenge.stake
         assert refreshed_user2.gold == original_gold[1] - challenge.stake
+
+
+def test_concurrent_conquer_advances_apply_exactly_one_action(
+    app,
+    two_users,
+    auth_headers_user1,
+):
+    """Two requests cannot both advance against the same turn snapshot."""
+    user1, user2 = two_users
+    with app.app_context():
+        game = Game(mode='conquer', state='open', ceasefire_active=False)
+        db.session.add(game)
+        db.session.flush()
+        attacker = Player(
+            game_id=game.id,
+            user_id=user1.id,
+            turns_left=1,
+        )
+        defender = Player(
+            game_id=game.id,
+            user_id=user2.id,
+            turns_left=0,
+        )
+        db.session.add_all([attacker, defender])
+        db.session.flush()
+        figures = [
+            Figure(
+                game_id=game.id,
+                player_id=attacker.id,
+                family_name=f'Test Attacker {index}',
+                field='military',
+                color='offensive',
+                name=f'Test Attacker {index}',
+                suit='Hearts',
+            )
+            for index in (1, 2)
+        ]
+        defender_figure = Figure(
+            game_id=game.id,
+            player_id=defender.id,
+            family_name='Test Defender',
+            field='military',
+            color='defensive',
+            name='Test Defender',
+            suit='Spades',
+        )
+        db.session.add_all([*figures, defender_figure])
+        db.session.flush()
+        game.turn_player_id = attacker.id
+        game.invader_player_id = attacker.id
+        db.session.commit()
+        game_id = game.id
+        attacker_id = attacker.id
+        defender_id = defender.id
+        figure_ids = [figure.id for figure in figures]
+
+    start = threading.Barrier(3)
+    responses = []
+    failures = []
+
+    def _advance(figure_id):
+        try:
+            with app.test_client() as thread_client:
+                start.wait(timeout=5)
+                response = thread_client.post(
+                    '/games/advance_figure',
+                    json={
+                        'game_id': game_id,
+                        'player_id': attacker_id,
+                        'figure_id': figure_id,
+                    },
+                    headers=auth_headers_user1,
+                )
+                responses.append((response.status_code, response.get_json()))
+        except Exception as exc:  # pragma: no cover - surfaced below
+            failures.append(exc)
+
+    first = threading.Thread(target=_advance, args=(figure_ids[0],))
+    second = threading.Thread(target=_advance, args=(figure_ids[1],))
+    first.start()
+    second.start()
+    start.wait(timeout=5)
+    first.join(timeout=15)
+    second.join(timeout=15)
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert failures == []
+    assert sorted(status for status, _payload in responses) == [200, 400], responses
+    assert sum(
+        payload.get('success') is True
+        for _status, payload in responses
+    ) == 1
+
+    with app.app_context():
+        db.session.remove()
+        game = db.session.get(Game, game_id)
+        attacker = db.session.get(Player, attacker_id)
+        defender = db.session.get(Player, defender_id)
+        assert game.advancing_figure_id in figure_ids
+        assert game.turn_player_id == defender_id
+        assert attacker.turns_left == 0
+        assert defender.turns_left == 1
+        assert LogEntry.query.filter_by(
+            game_id=game_id,
+            type='advance',
+        ).count() == 1
+
+
+def test_finished_game_rejects_new_advance(
+    app,
+    two_users,
+    auth_headers_user1,
+):
+    """A stale client cannot mutate a Conquer game after another action ends it."""
+    user1, user2 = two_users
+    with app.app_context():
+        game = Game(mode='conquer', state='finished')
+        db.session.add(game)
+        db.session.flush()
+        attacker = Player(
+            game_id=game.id,
+            user_id=user1.id,
+            turns_left=1,
+        )
+        defender = Player(
+            game_id=game.id,
+            user_id=user2.id,
+            turns_left=0,
+        )
+        db.session.add_all([attacker, defender])
+        db.session.flush()
+        figure = Figure(
+            game_id=game.id,
+            player_id=attacker.id,
+            family_name='Late Attacker',
+            field='military',
+            color='offensive',
+            name='Late Attacker',
+            suit='Hearts',
+        )
+        db.session.add(figure)
+        db.session.flush()
+        game.turn_player_id = attacker.id
+        db.session.commit()
+        payload = {
+            'game_id': game.id,
+            'player_id': attacker.id,
+            'figure_id': figure.id,
+        }
+
+    response = app.test_client().post(
+        '/games/advance_figure',
+        json=payload,
+        headers=auth_headers_user1,
+    )
+
+    assert response.status_code == 409
+    assert response.get_json()['message'] == 'Game is already finished'

@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import pytest
 
-from scripts.smoke_conquer_api import _request_json, _safe_payload
+from scripts.smoke_conquer_api import (
+    _assert_advance_race,
+    _request_json,
+    _safe_payload,
+)
 
 
 class _Response:
@@ -63,3 +67,18 @@ def test_safe_payload_redacts_credentials_and_summarizes_large_lists():
     assert safe['token'] == '<redacted>'
     assert safe['nested']['password'] == '<redacted>'
     assert safe['lands'] == '<21 items>'
+
+
+def test_advance_race_requires_one_success_and_one_rejection():
+    _assert_advance_race([
+        {'status_code': 200, 'payload': {'success': True}},
+        {'status_code': 400, 'payload': {'success': False}},
+    ])
+
+
+def test_advance_race_rejects_two_successes():
+    with pytest.raises(RuntimeError, match='did not serialize'):
+        _assert_advance_race([
+            {'status_code': 200, 'payload': {'success': True}},
+            {'status_code': 200, 'payload': {'success': True}},
+        ])

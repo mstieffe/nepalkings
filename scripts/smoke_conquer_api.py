@@ -14,9 +14,11 @@ normalized base URL.  It never prints the generated password or bearer token.
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 import json
 import secrets
+import threading
 import time
 from typing import Any
 
@@ -81,11 +83,102 @@ def _request_json(
     return payload, elapsed_ms
 
 
+def _request_json_result(
+    method: str,
+    url: str,
+    *,
+    token: str,
+    timeout: float,
+    json_payload: dict[str, Any],
+    start: threading.Barrier,
+) -> dict[str, Any]:
+    """Issue one synchronized request without treating an expected 4xx as fatal."""
+    session = requests.Session()
+    start.wait(timeout=timeout)
+    started = time.perf_counter()
+    response = session.request(
+        method,
+        url,
+        headers={'Authorization': f'Bearer {token}'},
+        timeout=timeout,
+        json=json_payload,
+    )
+    elapsed_ms = (time.perf_counter() - started) * 1000
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise RuntimeError(
+            f'{method} {url} returned HTTP {response.status_code} '
+            'with a non-JSON body'
+        ) from exc
+    return {
+        'status_code': response.status_code,
+        'elapsed_ms': round(elapsed_ms, 1),
+        'payload': _safe_payload(payload),
+    }
+
+
+def _assert_advance_race(results: list[dict[str, Any]]) -> None:
+    """Require one committed advance and one rejection from the stale request."""
+    statuses = sorted(int(result['status_code']) for result in results)
+    successes = sum(
+        result.get('payload', {}).get('success') is True
+        for result in results
+    )
+    if statuses != [200, 400] or successes != 1:
+        raise RuntimeError(
+            'Concurrent advances did not serialize to one success and one '
+            f'rejection: {_safe_payload(results)}'
+        )
+
+
+def _run_advance_race(
+    base_url: str,
+    *,
+    token: str,
+    game_id: int,
+    player_id: int,
+    figure_ids: list[int],
+    timeout: float,
+) -> list[dict[str, Any]]:
+    if len(figure_ids) < 2:
+        raise RuntimeError(
+            'Conquer concurrency smoke requires two candidate attacker figures'
+        )
+    start = threading.Barrier(3)
+    url = f'{base_url}/games/advance_figure'
+
+    def _request(figure_id: int) -> dict[str, Any]:
+        return _request_json_result(
+            'POST',
+            url,
+            token=token,
+            timeout=timeout,
+            json_payload={
+                'game_id': game_id,
+                'player_id': player_id,
+                'figure_id': figure_id,
+            },
+            start=start,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [
+            executor.submit(_request, figure_id)
+            for figure_id in figure_ids[:2]
+        ]
+        start.wait(timeout=timeout)
+        results = [future.result(timeout=timeout + 5) for future in futures]
+    _assert_advance_race(results)
+    return results
+
+
 def run_smoke(
     base_url: str,
     *,
     expected_environment: str,
     timeout: float,
+    race_advances: bool = False,
 ) -> dict[str, Any]:
     base_url = base_url.rstrip('/')
     session = requests.Session()
@@ -210,6 +303,44 @@ def run_smoke(
     if int(game['game']['id']) != game_id:
         raise RuntimeError('Game read returned the wrong game ID')
 
+    advance_race = None
+    if race_advances:
+        game_data = game['game']
+        attacker = next(
+            (
+                player
+                for player in game_data.get('players', [])
+                if int(player.get('user_id', -1)) == user_id
+            ),
+            None,
+        )
+        if attacker is None:
+            raise RuntimeError('Could not identify the human Conquer player')
+        player_id = int(attacker['id'])
+        figure_ids = [
+            int(figure['id'])
+            for figure in attacker.get('figures', [])
+            if int(figure['id']) not in set(
+                game_data.get('resting_figure_ids') or []
+            )
+        ]
+        advance_race = _run_advance_race(
+            base_url,
+            token=token,
+            game_id=game_id,
+            player_id=player_id,
+            figure_ids=figure_ids,
+            timeout=timeout,
+        )
+        game, timings['post_race_game_read_ms'] = _request_json(
+            session,
+            'GET',
+            f'{base_url}/games/get_game',
+            token=token,
+            timeout=timeout,
+            params={'game_id': game_id},
+        )
+
     logs, timings['log_entries_ms'] = _request_json(
         session,
         'GET',
@@ -218,6 +349,22 @@ def run_smoke(
         timeout=timeout,
         params={'game_id': game_id},
     )
+    if race_advances:
+        advancing_logs = [
+            entry
+            for entry in logs.get('log_entries', [])
+            if entry.get('type') == 'advance'
+        ]
+        if len(advancing_logs) != 1:
+            raise RuntimeError(
+                'Expected exactly one committed advance log after race, got '
+                f'{len(advancing_logs)}'
+            )
+        advancing_figure_id = game['game'].get('advancing_figure_id')
+        if advancing_figure_id not in figure_ids[:2]:
+            raise RuntimeError(
+                'Post-race game state does not contain the winning advance'
+            )
     chats, timings['chat_messages_ms'] = _request_json(
         session,
         'GET',
@@ -237,6 +384,7 @@ def run_smoke(
         'game_id': game_id,
         'log_entry_count': len(logs.get('log_entries', [])),
         'chat_message_count': len(chats.get('chat_messages', [])),
+        'advance_race': advance_race,
         'timings_ms': {
             key: round(value, 1)
             for key, value in timings.items()
@@ -254,6 +402,13 @@ def main() -> int:
         help='Must exactly match --base-url after trailing-slash removal.',
     )
     parser.add_argument('--timeout', type=float, default=30.0)
+    parser.add_argument(
+        '--race-advances',
+        action='store_true',
+        help=(
+            'Race two legal initial advances and require exactly one to commit.'
+        ),
+    )
     args = parser.parse_args()
 
     base_url = args.base_url.rstrip('/')
@@ -266,6 +421,7 @@ def main() -> int:
         base_url,
         expected_environment=args.expected_environment,
         timeout=max(1.0, args.timeout),
+        race_advances=args.race_advances,
     )
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0

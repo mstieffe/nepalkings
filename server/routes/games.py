@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
 # See LICENSE file in the project root for full license information.
 from flask import Blueprint, request, jsonify, current_app, g
+from functools import wraps
 from sqlalchemy.orm import joinedload
 from sqlalchemy.orm.attributes import flag_modified
 import random
@@ -117,6 +118,29 @@ from routes.serialization import serialize_game_for_viewer, serialize_spell_for_
 from analytics import track
 from ai.defence.config import AI_DEFENCE_RANK_VALUES
 from ai.defence.generator import get_ai_defence_template_for_land
+
+
+def _serialized_game_mutation(handler):
+    """Serialize one game's state transition across WSGI workers.
+
+    The endpoint remains responsible for validating ``game_id``.  This wrapper
+    only extracts a usable identifier early enough to acquire the shared
+    PostgreSQL advisory lock before the endpoint reads mutable game state.
+    """
+    @wraps(handler)
+    def wrapped(*args, **kwargs):
+        payload = request.get_json(silent=True)
+        game_id = payload.get('game_id') if isinstance(payload, dict) else None
+        if game_id is None:
+            game_id = request.form.get('game_id') or request.args.get('game_id')
+        try:
+            lock_id = int(game_id)
+        except (TypeError, ValueError):
+            # Preserve the endpoint's existing validation/error response.
+            return handler(*args, **kwargs)
+        with _conquer_game_lock(lock_id):
+            return handler(*args, **kwargs)
+    return wrapped
 
 import server_settings as settings
 
@@ -3011,6 +3035,7 @@ def update_points():
 
 @games.route('/conquer_defender_counter_spell', methods=['POST'])
 @require_token
+@_serialized_game_mutation
 def conquer_defender_counter_spell():
     """Execute the player-owned land defender's configured conquer counter spell.
 
@@ -3198,6 +3223,7 @@ def conquer_defender_counter_spell():
 
 @games.route('/advance_figure', methods=['POST'])
 @require_token
+@_serialized_game_mutation
 def advance_figure():
     """
     Player advances a figure toward battle. This sets the advancing figure
@@ -3217,6 +3243,11 @@ def advance_figure():
         game = db.session.get(Game, game_id)
         if not game:
             return jsonify({'success': False, 'message': 'Game not found'}), 404
+        if game.state == 'finished':
+            return jsonify({
+                'success': False,
+                'message': 'Game is already finished',
+            }), 409
 
         player = db.session.get(Player, player_id)
         if not player:
@@ -3482,6 +3513,7 @@ def advance_figure():
 
 @games.route('/select_defender', methods=['POST'])
 @require_token
+@_serialized_game_mutation
 def select_defender():
     """
     The advancing player selects a defending figure from the OPPONENT's figures.
@@ -3501,6 +3533,11 @@ def select_defender():
         game = db.session.get(Game, game_id)
         if not game:
             return jsonify({'success': False, 'message': 'Game not found'}), 404
+        if game.state == 'finished':
+            return jsonify({
+                'success': False,
+                'message': 'Game is already finished',
+            }), 409
         player = db.session.get(Player, player_id)
         if not player:
             return jsonify({'success': False, 'message': 'Player not found'}), 404
@@ -3680,6 +3717,7 @@ def select_defender():
 
 @games.route('/skip_civil_war_second', methods=['POST'])
 @require_token
+@_serialized_game_mutation
 def skip_civil_war_second():
     """
     Player skips selecting a second Civil War figure.
@@ -3756,6 +3794,7 @@ def skip_civil_war_second():
 
 @games.route('/conquer_select_own_defender', methods=['POST'])
 @require_token
+@_serialized_game_mutation
 def conquer_select_own_defender():
     """After a conquer Invader Swap, the original conquerer (now defender)
     selects one of their own figures to defend against the automated invader's
@@ -4127,6 +4166,7 @@ def conquer_withdraw():
 
 @games.route('/cannot_advance_loss', methods=['POST'])
 @require_token
+@_serialized_game_mutation
 def cannot_advance_loss():
     """
     Handle the case where a player cannot advance any figure (e.g., all figures
@@ -4267,6 +4307,7 @@ def cannot_advance_loss():
 
 @games.route('/defender_no_figures_loss', methods=['POST'])
 @require_token
+@_serialized_game_mutation
 def defender_no_figures_loss():
     """
     Handle the case where the defender has no valid figures for battle selection.
@@ -4408,6 +4449,7 @@ def defender_no_figures_loss():
 
 @games.route('/battle_decision', methods=['POST'])
 @require_token
+@_serialized_game_mutation
 def battle_decision():
     """
     Record a player's battle decision (fight or fold), sequential order.
@@ -6177,6 +6219,7 @@ def dismantle_conquer_tactic():
 
 @games.route('/play_battle_move', methods=['POST'])
 @require_token
+@_serialized_game_mutation
 def play_battle_move():
     """Record a player playing one battle move in the current battle round.
 
@@ -6479,6 +6522,7 @@ def get_battle_state():
 
 @games.route('/skip_battle_turn', methods=['POST'])
 @require_token
+@_serialized_game_mutation
 def skip_battle_turn():
     """Auto-skip a player's battle turn when they have no moves left.
 
@@ -6627,6 +6671,7 @@ def skip_battle_turn():
 
 @games.route('/finish_battle', methods=['POST'])
 @require_token
+@_serialized_game_mutation
 def finish_battle():
     """Resolve a 3-round battle and return result + returnable cards.
 
@@ -7440,6 +7485,7 @@ def _consume_config_figure_cards(cfg, exclude_card_ids=None):
 
 @games.route('/finish_battle_pick_card', methods=['POST'])
 @require_token
+@_serialized_game_mutation
 def finish_battle_pick_card():
     """Winner picks one card from the returnable pool, rest go to deck.
 
@@ -7616,6 +7662,7 @@ def finish_battle_pick_card():
 
 @games.route('/finish_battle_draw', methods=['POST'])
 @require_token
+@_serialized_game_mutation
 def finish_battle_draw():
     """Handle the defender's choice after a draw.
 
@@ -8004,6 +8051,7 @@ def _default_draw_choice_after_timeout(game, requester):
 
 @games.route('/resolve_pending_battle_choice', methods=['POST'])
 @require_token
+@_serialized_game_mutation
 def resolve_pending_battle_choice():
     """Apply the configured default after a post-battle choice timeout."""
     data = request.json or {}
