@@ -34,22 +34,29 @@ environment does not automatically exist on another.
   worker log containing the invalid credential was cleared. Production was
   not involved.
 - Immutable server release:
-  `4660f75c1473368957c989d103058c2d2f32079a`.
+  `3952bb4611cb9a708365e607f29a0e37e7e856a5`.
 - PostgreSQL schema version: 17.
 - Three PythonAnywhere WSGI workers.
-- Always-on AI/sweeper task: `35390` (`Running` after credential recovery).
+- Always-on AI/sweeper task: `35390` (`Running` on the same immutable
+  release).
 - Private environment file:
   `/home/nepalkingz/.config/nepalkings/staging.env`.
 - Maintenance mode: off after the deployment smoke test.
 - GitHub Pages is the only allowed browser origin:
   `https://mstieffe.github.io`.
-- Final 100-active-user read gate: 1,129/1,129 HTTP `200`, zero errors,
-  128.7 ms overall p95, 135.7 ms Conquer-config p95, and 891.7 ms full-map
-  p95. PythonAnywhere gzip reduced the mean map wire body from 3,341,221
-  decoded bytes to 122,140 bytes.
-- The prior soak started at 2026-07-20 12:19:34 UTC but is invalidated by the
-  credential-response pause. Restart it after recovery and the next final
-  release deployment.
+- Conquer and Defence setup responses now include their SQL-grouped Collection
+  snapshot. The new client path avoids a second authenticated request and
+  preflight. A 20-sample browser A/B measured the new Conquer setup request at
+  92.4 ms p50, 171.4 ms p95, and 107.5 ms mean, versus 98.7/171.1/113.2 ms
+  for the earlier two-request screen path.
+- Final 100-active-user read gate on `3952bb4`: 1,128/1,128 HTTP `200`, zero
+  errors, 185.2 ms overall p95, 185.3 ms Conquer-config p95, and 526.0 ms
+  full-map p95. Sparse map serialization reduced the decoded map from
+  3,341,221 to 735,722 bytes and its mean gzip wire body from 122,140 to
+  61,459 bytes.
+- The release-candidate soak restarted with the worker's clean
+  2026-07-20 14:12:15 UTC start. Do not close the 24-hour gate before the full
+  interval passes.
 
 The detailed backup, concurrency, latency, and verification evidence is
 recorded in the current checkpoint of the public-launch plan.

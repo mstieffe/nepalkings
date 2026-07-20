@@ -1089,3 +1089,140 @@ accessed, reloaded, or changed.
 
 Credential recovery is closed. The pre-`980be93` backup must use the new
 tested `scripts/create_postgres_backup.py` helper before staging deployment.
+
+### Combined config bootstrap — staging release `116a88b`
+
+Release `116a88b3e2ab1be145400bc8e3558374ffee0351` combines the initial
+Conquer and Defence configuration with the SQL-grouped Collection snapshot
+that those screens require. Browser clients use that single response; desktop
+clients retain a fallback to `/collection/cards` for compatibility with older
+servers.
+
+Before the staging switch:
+
+- the complete local suite passed with 2,681 tests and 3
+  environment-specific skips;
+- the secret-safe helper created and validated:
+
+  ```text
+  /home/nepalkingz/backups/postgres-staging/
+  staging-pre-116a88b-20260720T134619Z.dump
+  ```
+
+- the backup was 223,318 bytes with SHA-256
+  `ff5b31585eb99d6cd124b714c3105ec18c0e093a145d7bffb13422748367f7e3`;
+- the server archive SHA-256 was
+  `944680fa5a56d2ca40f5d066841e3a2e92af3ab513b36851f050c46b441f8f97`;
+- remote compilation, pinned installation, `pip check`, and
+  `prepare-database` passed.
+
+The staging WSGI, provider source directory, private `RELEASE_SHA`, and task
+`35390` command all moved to the same immutable release. Health/readiness
+reported staging, PostgreSQL, schema 17, and `116a88b`; the worker reached
+`Running`, completed a clean sweep, and held exactly the expected namespace
+`20044`, environment-key `1763288915` advisory lock. Production stayed on
+`90bfa02...` in maintenance.
+
+A real-browser, 20-sample A/B from the GitHub Pages origin measured:
+
+| Path | p50 | p95 | Mean |
+|---|---:|---:|---:|
+| Earlier two-request Conquer setup | 98.7 ms | 171.1 ms | 113.2 ms |
+| Combined config-only setup | 92.4 ms | 171.4 ms | 107.5 ms |
+
+The combined path reduced median and mean wait by approximately 6% and 5%;
+the p95 was effectively unchanged. The more important deterministic result is
+that the screen no longer makes a second authenticated request and its
+associated cross-origin preflight path. The embedded Collection object was
+also compared with `/collection/cards` for a synthetic user and matched.
+
+Two bounded 100-active-user confirmation runs returned 1,125/1,125 HTTP
+`200` with zero errors. Overall p95 was 175.0 and 176.1 ms; Conquer-config
+p95 was 182.3 and 172.3 ms. Their full-map p95 values were 1,585.4 and
+1,635.5 ms, respectively, so the combined-config release passed while the
+map-specific 1.5-second launch gate remained open.
+
+### Sparse kingdom map — staging release `3952bb4`
+
+Profiling confirmed that `/kingdom/map` used the general-purpose
+`Land.serialize()` representation for all 4,800 rows. It repeated false,
+zero, null, internal AI, and configuration-only fields that `HexTile` either
+does not consume or already defaults safely. Release
+`3952bb4611cb9a708365e607f29a0e37e7e856a5` now:
+
+- emits the stable map identity/economy fields for every land;
+- bulk-loads owner usernames instead of relying on relationship access;
+- emits owner, connected-component, persistent-kingdom, shield, tutorial,
+  cooldown, and defence state only where meaningful;
+- omits map-unused AI template/name and defence-configuration identifiers;
+- preserves compatibility with the existing browser and desktop `HexTile`
+  defaults.
+
+Verification before deployment:
+
+- focused server/client map matrix: 150 passed;
+- complete local suite: 2,682 passed, 3 environment-specific skips;
+- GitHub Python 3.11, PostgreSQL compatibility/concurrency, dependency audit,
+  and secret scan: passed;
+- the backup and worker-verification helpers were copied from the same commit
+  into private immutable path
+  `/home/nepalkingz/ops/3952bb4611cb9a708365e607f29a0e37e7e856a5/scripts/`;
+  their remote/local SHA-256 values matched
+  `f99844e8...fc57` and `ecc744f2...1f22`, respectively;
+- immutable archive size: 368,204 bytes;
+- archive SHA-256:
+  `85946946f54ac6646a2dff17a0c06a4fbaa93c1430aa81da32cd55933a65d732`;
+- remote compilation, pinned requirements, `pip check`, and
+  `prepare-database`: passed.
+
+The secret-safe pre-deploy backup is:
+
+```text
+/home/nepalkingz/backups/postgres-staging/
+staging-pre-3952bb4-20260720T140826Z.dump
+```
+
+- size/mode: 225,070 bytes; `600`;
+- SHA-256:
+  `a5f2bf07b7f22740a3b0f8bf9030e26762400749f392cc14d6280a6eb2d5e93e`;
+- `pg_restore --list`: passed.
+
+The staging web app and task stopped before the backup and switch. The WSGI,
+provider source directory, private `RELEASE_SHA`, and task command were then
+pinned to the same immutable release. Health/readiness/legal discovery passed
+with staging, PostgreSQL, schema 17, and `3952bb4`. Task `35390` reached
+`Running`, started cleanly at 2026-07-20 14:12:15 UTC, completed its first
+sweep at 14:12:16 UTC, and held exactly one expected staging leadership lock.
+Production was neither reloaded nor changed and remains on `90bfa02...` in
+maintenance.
+
+The 25-user smoke returned 143/143 HTTP `200` with zero errors. The final
+100-active-user, five-second-think-time, ten-second-ramp, 60-second run
+reported:
+
+| Metric | Result |
+|---|---:|
+| Requests/errors | 1,128 / 0 |
+| HTTP statuses | 1,128 × `200` |
+| Throughput | 18.80 requests/s |
+| Overall p50/p95/p99 | 55.5 / 185.2 / 438.9 ms |
+| Collection p95 | 117.4 ms |
+| Conquer config p95 | 185.3 ms |
+| Game-list p95 | 118.4 ms |
+| Map requests | 23 |
+| Map decoded/wire mean | 735,722 / 61,459 bytes |
+| Map p50/p95/p99 | 438.9 / 526.0 / 2,041.1 ms |
+
+Relative to the earlier full representation, decoded map size fell 78.0% and
+gzip wire size fell 49.7%. Relative to the two immediately preceding
+`116a88b` capacity runs, map p95 fell from 1,585.4–1,635.5 ms to 526.0 ms.
+One map request remained a 2.0-second p99 outlier, so versioned caching remains
+worthwhile, but the explicit 1.5-second map p95 gate is closed.
+
+A five-sample post-load external probe passed health, readiness, legal
+discovery, release consistency, PostgreSQL/schema validation, and the
+two-second ceiling for both staging and maintained production. Staging
+health/readiness p95 was 96.1/99.4 ms. The latest 500 web-error lines and 300
+worker-log lines contained zero traceback, SQLAlchemy/psycopg, deadlock,
+duplicate-key, database/pool, or leadership-loss matches. The candidate's
+24-hour soak begins at the clean 14:12:15 UTC worker start.

@@ -73,11 +73,18 @@ complete `DB_URL` in subprocess arguments:
 
 ```bash
 /home/nepalkingz/.virtualenvs/nepalkings-production/bin/python \
-  /home/nepalkingz/releases/CURRENT_RELEASE/scripts/create_postgres_backup.py \
+  /home/nepalkingz/ops/CURRENT_OPS_RELEASE/scripts/create_postgres_backup.py \
   --env-file /home/nepalkingz/.config/nepalkings/production.env \
   --output \
   /home/nepalkingz/backups/postgres-production/production-YYYYMMDDTHHMMSSZ.dump
 ```
+
+The application releases under `~/releases/` are intentionally server-only
+and do not contain operational scripts. Upload the helper from the same
+committed candidate into a private, versioned `~/ops/FULL_COMMIT_SHA/scripts/`
+directory, verify its SHA-256 against the local repository copy, and use that
+immutable ops path. The currently verified ops release is
+`3952bb4611cb9a708365e607f29a0e37e7e856a5`.
 
 Production archives belong in:
 

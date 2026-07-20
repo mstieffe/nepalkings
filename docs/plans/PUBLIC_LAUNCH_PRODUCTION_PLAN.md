@@ -36,27 +36,24 @@ Execution checkpoint (2026-07-20):
 - PythonAnywhere EU is selected for the staged public beta. GitHub Pages
   remains the static client host.
 - Staging runs immutable release
-  `4660f75c1473368957c989d103058c2d2f32079a`; maintained production remains
+  `3952bb4611cb9a708365e607f29a0e37e7e856a5`; maintained production remains
   on `90bfa02fa5b00b5d59998bb2b558ac19201595c1`. Both use isolated PostgreSQL
   schema 17 databases behind three managed WSGI workers.
 - Production task `35394` remains on its isolated production release.
-  Staging task `35390` was deliberately disabled on 2026-07-20 after a
-  staging-only database credential appeared in a failed backup command's
-  traceback. Treat that staging credential as compromised and do not resume
-  the task or staging deployment until the password is rotated and the private
-  environment is reloaded. The production credential and environment were not
-  involved.
-- The current staging candidate passed the GitHub Python 3.11 suite
-  (2,649 passed, 4 skipped), PostgreSQL 16 compatibility/concurrency tests,
-  dependency audit, and security scan. Its server tree is identical to the
-  locally verified `df69ece` Conquer candidate; `4660f75` retains only the
-  corrected provider-compression/load-harness changes on top.
+  Staging credential recovery is closed: the third password and helper-built
+  URL passed login verification, the two exposed replacements are invalid,
+  and the stale logs were cleared. Task `35390` is `Running` on `3952bb4`
+  with exactly one staging advisory leadership lock. The production
+  credential and environment were never involved.
+- The current staging candidate passed 2,682 local tests with 3
+  environment-specific skips. GitHub's Python 3.11, PostgreSQL compatibility,
+  dependency-audit, and secret-scan jobs also passed.
 - A validated pre-deployment PostgreSQL custom-format backup is stored privately
   at
-  `/home/nepalkingz/backups/postgres-staging/staging-pre-4660f75-20260720T121436Z.dump`;
-  it is mode `600`, 222,603 bytes, passed `pg_restore --list`, and has
+  `/home/nepalkingz/backups/postgres-staging/staging-pre-3952bb4-20260720T140826Z.dump`;
+  it is mode `600`, 225,070 bytes, passed `pg_restore --list`, and has
   SHA-256
-  `80385619d44f7f9c0dbf02274878bbe9e532d6e1cd97f24ebfc6420210f200ff`.
+  `a5f2bf07b7f22740a3b0f8bf9030e26762400749f392cc14d6280a6eb2d5e93e`.
 - Production application rollback, authenticated Conquer mutation, exact
   baseline restore, and smoke-account cleanup passed. A verified production
   dump is also encrypted off-provider with CMS AES-256-GCM; the daily schedule
@@ -64,17 +61,23 @@ Execution checkpoint (2026-07-20):
 
 Latest live staging evidence:
 
-- Health and readiness return release `4660f75`, PostgreSQL, and schema 17.
+- Health and readiness return release `3952bb4`, PostgreSQL, and schema 17.
   The worker is `Running` on the same release; both isolated environment
   leadership locks remain present.
-- The final provider-gzip 100-user run completed 1,129 authenticated reads
-  with 1,129 HTTP `200` responses, zero errors, 128.7 ms overall p95, and
-  135.7 ms Conquer-config p95. Its 23 full-map reads measured 3,341,221
-  decoded bytes, 122,140 mean wire bytes, and 891.7 ms p95.
+- The final 100-user run completed 1,128 authenticated reads with 1,128 HTTP
+  `200` responses, zero errors, 185.2 ms overall p95, and 185.3 ms
+  Conquer-config p95. Its 23 full-map reads measured 735,722 decoded bytes,
+  61,459 mean gzip wire bytes, and 526.0 ms p95. This closes the map-specific
+  1.5-second read gate.
 - A five-sample post-load external probe passed health, readiness, legal
   discovery, release consistency, schema, and latency for both staging and
   maintained production. The web and worker logs show no post-load crash,
   traceback, or restart.
+- The combined Conquer/Collection bootstrap was verified live. The new screen
+  path uses one config request; a 20-sample browser A/B measured 92.4 ms p50,
+  171.4 ms p95, and 107.5 ms mean versus 98.7/171.1/113.2 ms for the earlier
+  two-request path. The p95 was effectively unchanged, while one request and
+  its preflight were removed.
 - A phase-aware Conquer smoke resolved a randomly required Health Boost
   prelude, then sent two different legal advances simultaneously through the
   three-worker deployment. One returned `200` in 203.0 ms and committed
@@ -101,20 +104,13 @@ Already present:
 - Security headers, dependency auditing, and secret scanning.
 - Versioned Terms and Privacy acceptance.
 - SQLite backup-before-deploy tooling and a restore script.
+- Secret-safe PostgreSQL backup and worker-lock verification helpers; the
+  staging credential/deployment incident is closed.
 - Analytics/funnel events.
 - Rule-based AI opponents.
 
 Known launch blockers:
 
-- **Staging deployment gate:** the credential incident is closed. A third
-  staging-only rotation applied by the no-echo setter passed database
-  authentication, `/healthz`, `/readyz`, schema 17, a clean task `35390`
-  start/sweep, and exactly one role-owned staging advisory lock. The two
-  superseded credentials are invalid and the stale worker log was cleared.
-  Before deploying `980be93`, use the tested
-  `scripts/create_postgres_backup.py` path to create and validate a
-  pre-deployment dump without placing `DB_URL` or its password in subprocess
-  arguments or error output.
 - The production web app at
   `api-nepalkingz.eu.pythonanywhere.com` is configured on fresh PostgreSQL and
   has passed web, worker, mutation, rollback, and restore gates, but it remains
@@ -127,21 +123,19 @@ Known launch blockers:
 - Atomic two-account Duel challenge acceptance and deliberately conflicting
   Conquer advances now pass locally, in PostgreSQL CI, and against the three
   live staging workers. The staging release-candidate soak clock restarted
-  with final candidate `4660f75` at 2026-07-20 12:19:34 UTC; the longer
+  with candidate `3952bb4` at 2026-07-20 14:12:15 UTC; the longer
   production infrastructure soak continues on `90bfa02`.
 - Job failure history/attempt limits and the remaining mutation-atomicity audit
   are incomplete.
-- Screens and game polling fan out over multiple HTTP requests. The map
-  decodes to approximately 3.34 MB but PythonAnywhere gzip reduces it to about
-  122 KB on the wire. The final staging 100-active-user read mix passed
-  without errors, but map construction/serialization remained the slow
-  outlier at 891.7 ms p95.
-- `develop` now embeds a SQL-grouped collection snapshot in the Conquer and
-  Defence config responses, and updated clients use one initial config request
-  instead of a second `/collection/cards` request. The complete local suite
-  passed with 2,668 tests and 3 environment-specific skips; staging
-  latency/request-count verification is still required before treating this
-  optimization as live.
+- Map responses are now sparse and omit client-default/internal configuration
+  fields. The decoded payload is 735,722 bytes and provider-gzip wire body is
+  about 61 KB; the 100-active-user run measured 526.0 ms map p95. Versioned
+  caching remains useful, but map construction/serialization is no longer a
+  blocker for the current read gate.
+- The SQL-grouped Collection snapshot in Conquer and Defence config is live.
+  Updated clients use one initial config request instead of a second
+  `/collection/cards` request; desktop retains an old-server fallback. The
+  browser A/B and two zero-error 100-user runs verified the combined endpoint.
 - A standard-library external contract/latency probe and scheduled GitHub
   workflow now exist on `develop`, and the first live cycle passed. The
   schedule becomes active from the default branch; centralized application
@@ -552,9 +546,10 @@ Still required before making the final hosting commitment:
   routes.
 - [ ] Measure full Pygbag Conquer screen-ready time, not just its API pair.
 - [ ] Measure one representative duel polling cycle.
-- [ ] Optimize or cache the 4,800-land map snapshot and set an explicit payload
-  and server-time budget.
-- [ ] Confirm paid PostgreSQL price, backups, background-worker support, and
+- [x] Optimize the 4,800-land map snapshot and set explicit payload and
+  latency budgets. Sparse serialization reduced the live decoded/wire payload
+  to 735,722/61,459 bytes and passed the 1.5-second map gate at 526.0 ms p95.
+- [x] Confirm paid PostgreSQL price, backups, background-worker support, and
   rollback expectations.
 - [ ] Compare those operational requirements with a concrete Render Frankfurt
   configuration and monthly price.
@@ -670,6 +665,8 @@ Priority: **P0**
   config response (SQL-grouped snapshot; new browser clients issue only the
   combined initial request, while desktop retains an old-server fallback).
 - [ ] Cache collection state by collection version.
+- [x] Remove map-unused/internal fields and omit client-safe default values
+  from the 4,800-land response.
 - [ ] Cache kingdom/map state by map version.
 - [ ] Add `ETag` or numeric version cursors.
 - [ ] Add CORS preflight caching.
@@ -693,9 +690,9 @@ Priority: **P0**
 Verification:
 
 - [ ] Target screen/API p95 and error-rate objectives pass at 2x launch load
-  (the final provider-gzip 100-active-user read mix passed with 1,129/1,129
-  HTTP `200`, zero errors, 128.7 ms overall p95, 135.7 ms Conquer-config p95,
-  and 891.7 ms map p95; gameplay mutations and the full screen matrix remain).
+  (the `3952bb4` 100-active-user read mix passed with 1,128/1,128 HTTP `200`,
+  zero errors, 185.2 ms overall p95, 185.3 ms Conquer-config p95, and
+  526.0 ms map p95; gameplay mutations and the full screen matrix remain).
 - [ ] Database pool and worker saturation retain operational headroom.
 
 ---
@@ -1002,3 +999,5 @@ Part-time expectation: approximately two to three months.
 | 2026-07-20 | Rely on verified PythonAnywhere gzip instead of duplicating compression in Flask | A live A/B measured 122,140 bytes with application gzip and 122,141 bytes with it disabled for the same 3,341,221-byte map JSON; both responses were gzip encoded | Remove redundant application gzip, retain wire-size measurement, and focus map work on construction/serialization plus versioned caching |
 | 2026-07-20 | Promote the provider-gzip release `4660f75` as the staging candidate | Immutable artifact and backup checks passed; all CI/security jobs were green; its final 100-user run returned 1,129/1,129 HTTP `200` with 128.7 ms overall p95 and 891.7 ms map p95; post-load probes and logs were clean | Restart the release-candidate soak at the worker's clean 12:19:34 UTC start; production stays on `90bfa02` in maintenance |
 | 2026-07-20 | Combine configuration and collection bootstrap reads | Conquer and Defence setup now embed one SQL-grouped collection snapshot; browser loaders request only the combined endpoint, desktop clients retain an old-server fallback, and 2,668 local tests passed | Remove one authenticated request/preflight path from each initial setup-screen load; deploy to staging and measure before recording a live gain |
+| 2026-07-20 | Close staging credential recovery with secret-safe database tooling | The third rotation passed a no-echo structural/login verifier; `create_postgres_backup.py` produced and catalog-validated a mode-600 dump without putting a URL/password in subprocess arguments; superseded credentials are invalid and stale logs were cleared | Use the secret-safe backup and worker-verification helpers for every PostgreSQL deployment; never pass SQLAlchemy URLs directly to libpq commands |
+| 2026-07-20 | Promote sparse-map release `3952bb4` as the staging candidate | 2,682 local tests, GitHub Python/PostgreSQL/dependency/security jobs, immutable backup/deploy, 1,128/1,128 zero-error 100-user reads, 526.0 ms map p95, external probes, and post-load logs passed | Map decoded/wire size fell from 3,341,221/122,140 to 735,722/61,459 bytes; restart the 24-hour release-candidate soak at the clean 14:12:15 UTC worker start while production stays maintained |

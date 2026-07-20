@@ -178,7 +178,10 @@ maintenance mode.
 ## Deploy order
 
 1. Confirm the target branch, clean worktree, and immutable commit SHA.
-2. Take and verify a PostgreSQL backup.
+2. Stop the target always-on task and web app, then take and verify a
+   PostgreSQL backup with the versioned
+   `scripts/create_postgres_backup.py` helper. Never pass `DB_URL` directly to
+   `pg_dump` or print a failed database connection URL.
 3. Upload the server-only release.
 4. Install the pinned requirements.
 5. Set `RELEASE_SHA` in the target private environment file.
@@ -193,6 +196,19 @@ maintenance mode.
 layout. It remains a legacy mutable-directory/SQLite helper that defaults to
 the old US account. Use the order above until a PostgreSQL-aware immutable
 deployment command replaces it.
+
+The application archive is server-only. Keep operational helpers separately
+under a private immutable path:
+
+```text
+/home/nepalkingz/ops/FULL_COMMIT_SHA/scripts/
+```
+
+Upload `create_postgres_backup.py` and `verify_postgres_worker.py` from the
+same candidate commit, set the directory and files to owner-only access, and
+verify their remote SHA-256 values against the local committed copies. Use the
+first helper for every pre-deploy backup and the second after the worker
+returns to `Running`.
 
 ## Optional SQLite-to-PostgreSQL import
 
