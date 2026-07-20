@@ -31,9 +31,8 @@ custom domain can replace that hostname later.
 Current verified state and instructions for routing browser/desktop clients
 are documented in
 [`docs/environments.md`](../../docs/environments.md). In particular, the
-published client still points to the legacy US server by default; use its
-explicit staging override until the production web app and fresh database pass
-the cutover gates.
+published client now points to the EU production API by default. Use its
+explicit query-string override only for intentional staging tests.
 
 The dated, append-as-you-go evidence for the initial production creation is in
 [`docs/operations/PRODUCTION_DEPLOYMENT_2026-07-19.md`](../../docs/operations/PRODUCTION_DEPLOYMENT_2026-07-19.md).
@@ -217,6 +216,20 @@ same candidate commit, set the directory and files to owner-only access, and
 verify their remote SHA-256 values against the local committed copies. Use the
 first helper for every pre-deploy backup and the second after the worker
 returns to `Running`.
+
+## Daily production backup
+
+The tracked scheduled-task wrapper is
+[`production_daily_backup.sh`](production_daily_backup.sh). Its deployed copy
+is `/home/nepalkingz/ops/production_daily_backup.sh`; keep it mode `700` and
+verify its SHA-256 against the committed file after changing it.
+
+PythonAnywhere scheduled task `22971` runs the wrapper daily at 03:15 UTC.
+The wrapper creates and validates a mode-`600` custom-format PostgreSQL dump
+without exposing `DB_URL`. It retains fourteen `production-daily-*` archives
+and deliberately does not delete pre-deployment or manually named recovery
+dumps. Check `/var/log/schedule-log-22971.log` and the newest archive during
+the daily beta routine.
 
 ## Optional SQLite-to-PostgreSQL import
 

@@ -2,7 +2,7 @@
 
 Last updated: 2026-07-20
 
-Status: Release candidate verified locally; production deployment in progress
+Status: Public beta live on the provider hostnames
 
 This is the active checklist for launching Nepal Kings as a small public beta.
 The former exhaustive plan is preserved at
@@ -32,61 +32,63 @@ Detailed deployment evidence remains in
 - [x] Final browser bundle builds and stays below the 52 MiB archive and
   15 MiB external-audio budgets.
 - [x] Settings uses four peer tabs: Resolution, Preferences, Account, Safety.
-- [ ] Commit and push one immutable release SHA.
-- [ ] Confirm GitHub CI and security jobs for that SHA.
+- [x] Commit and push immutable release
+  `70e9259200f08e309fdad60b2a7a1aff48d30254`.
+- [x] Confirm GitHub CI and security jobs for that SHA.
 
 ### 2. Staging deployment
 
-- [ ] Take and validate a pre-deployment PostgreSQL backup.
-- [ ] Deploy the immutable release and migrate staging to schema 19.
-- [ ] Reload the web app and restart the staging worker on the same SHA.
-- [ ] Verify health, readiness, legal versions, exact CORS, request IDs, and
+- [x] Take and validate a pre-deployment PostgreSQL backup.
+- [x] Deploy the immutable release and migrate staging to schema 19.
+- [x] Reload the web app and restart the staging worker on the same SHA.
+- [x] Verify health, readiness, legal versions, exact CORS, request IDs, and
   clean logs.
-- [ ] Run registration/login, account lifecycle, report/block/moderation, and
+- [x] Run registration/login, account lifecycle, report/block/moderation, and
   one representative Duel/Conquer smoke.
 
 ### 3. Production deployment
 
-- [ ] Take and validate a pre-deployment production PostgreSQL backup.
-- [ ] Deploy the same immutable SHA and migrate production to schema 19.
-- [ ] Point the production web app and worker at that same release.
-- [ ] Verify the production database is fresh and isolated from staging.
-- [ ] Verify health, readiness, legal versions, TLS/HSTS/CORS, request IDs,
+- [x] Take and validate a pre-deployment production PostgreSQL backup.
+- [x] Deploy the same immutable SHA and migrate production to schema 19.
+- [x] Point the production web app and worker at that same release.
+- [x] Verify the production database is fresh and isolated from staging.
+- [x] Verify health, readiness, legal versions, TLS/HSTS/CORS, request IDs,
   worker leadership, and clean logs.
-- [ ] Run one synthetic registration/login/onboarding/account-safety smoke and
+- [x] Run one synthetic registration/login/onboarding/account-safety smoke and
   remove the synthetic account.
-- [ ] Turn maintenance off after the checks pass.
-- [ ] Keep registration independently switchable for incident containment.
+- [x] Turn maintenance off after the checks pass.
+- [x] Keep registration independently switchable for incident containment.
 
 ### 4. Public client and operations
 
-- [ ] Publish the tested web artifact with the production API as its default.
-- [ ] Verify the live browser can register, log in, open Collection, open
+- [x] Publish the tested web artifact with the production API as its default.
+- [x] Verify the live browser can register, log in, open Collection, open
   Conquer configuration, and load the kingdom map.
-- [ ] Confirm the GitHub Issues support path and workflow-failure notifications
-  are monitored.
-- [ ] Create a daily provider-side PostgreSQL dump; keep the existing encrypted
+- [x] Publish the GitHub Issues support path and retain normal GitHub
+  Issues/Actions repository notifications for beta operations.
+- [x] Create a daily provider-side PostgreSQL dump; keep the existing encrypted
   off-provider recovery copy and perform another copy before material beta
   expansion.
-- [ ] Record the live SHA, schema, worker IDs, backup, smoke results, and
+- [x] Record the live SHA, schema, worker IDs, backup, smoke results, and
   rollback target in the deployment log.
 
 ## Launch go/no-go
 
 Open the beta only when all of these are true:
 
-- [ ] The same committed SHA is green locally, in CI, on staging, and in
+- [x] The same committed SHA is green locally, in CI, on staging, and in
   production.
-- [ ] Both databases report PostgreSQL schema 19 and remain isolated.
-- [ ] Production backup, rollback, and restore procedures are documented and
+- [x] Both databases report PostgreSQL schema 19 and remain isolated.
+- [x] Production backup, rollback, and restore procedures are documented and
   have already passed at least one rehearsal.
-- [ ] Core browser and gameplay smoke paths pass without a server error.
-- [ ] Account password/session/export/deletion and player report/block controls
+- [x] Core browser and gameplay smoke paths pass without a server error.
+- [x] Account password/session/export/deletion and player report/block controls
   work on the deployed candidate.
-- [ ] Logs contain request IDs and no new traceback, credential, or repeated
+- [x] Logs contain request IDs and no new traceback, credential, or repeated
   `5xx` line.
-- [ ] Production maintenance is off and external probes pass.
-- [ ] Support issues are monitored and the kill switches are documented.
+- [x] Production maintenance is off and external probes pass.
+- [x] Support issues use the repository templates and the kill switches are
+  documented.
 
 If a check fails, keep production in maintenance, fix or roll back, and repeat
 only the affected checks.

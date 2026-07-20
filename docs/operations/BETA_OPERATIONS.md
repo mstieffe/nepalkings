@@ -25,8 +25,9 @@ supplements the detailed
      moderation-list --status open
    ```
 
-6. Confirm the newest production PostgreSQL dump passed `pg_restore --list`
-   and the latest encrypted off-provider copy is no more than 26 hours old.
+6. Confirm scheduled task `22971` ran at 03:15 UTC, its log has no failure,
+   and the newest production dump passed `pg_restore --list`. Make another
+   encrypted off-provider copy before materially expanding the beta.
 7. Check new GitHub support issues without copying private game data into a
    public comment.
 

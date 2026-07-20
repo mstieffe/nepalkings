@@ -13,9 +13,9 @@ full launch gate is
 | Environment | API URL | Data | Current role |
 |---|---|---|---|
 | Local development | `http://localhost:5000` | Local development database | Developer-only |
-| Legacy development server | `https://nepalkings.pythonanywhere.com` | Disposable development data | Current default for the published web client and installers; not production data |
+| Legacy development server | `https://nepalkings.pythonanywhere.com` | Disposable development data | Preserved fallback only; not production data |
 | EU staging | `https://nepalkingz.eu.pythonanywhere.com` | Isolated `nepalkings_staging` PostgreSQL database | Integration, performance, schema/restore, and soak testing |
-| EU production | `https://api-nepalkingz.eu.pythonanywhere.com` | Fresh, isolated `nepalkings_prod` PostgreSQL database | Web app and worker are healthy, but public routes remain in maintenance until launch gates pass |
+| EU production | `https://api-nepalkingz.eu.pythonanywhere.com` | Fresh, isolated `nepalkings_prod` PostgreSQL database | Live public-beta API; maintenance off and registration enabled |
 
 Do not treat EU staging as production. Accounts, tokens, games, collections,
 and ownership are isolated by database and signing key. A user created on one
@@ -34,8 +34,8 @@ environment does not automatically exist on another.
   worker log containing the invalid credential was cleared. Production was
   not involved.
 - Immutable server release:
-  `3952bb4611cb9a708365e607f29a0e37e7e856a5`.
-- PostgreSQL schema version: 17.
+  `70e9259200f08e309fdad60b2a7a1aff48d30254`.
+- PostgreSQL schema version: 19.
 - Three PythonAnywhere WSGI workers.
 - Always-on AI/sweeper task: `35390` (`Running` on the same immutable
   release).
@@ -54,9 +54,8 @@ environment does not automatically exist on another.
   full-map p95. Sparse map serialization reduced the decoded map from
   3,341,221 to 735,722 bytes and its mean gzip wire body from 122,140 to
   61,459 bytes.
-- The release-candidate soak restarted with the worker's clean
-  2026-07-20 14:12:15 UTC start. Do not close the 24-hour gate before the full
-  interval passes.
+- The final external probe after production cutover passed on the same release;
+  staging health/readiness p95 was 119.6/150.1 ms over the confirmation sample.
 
 The detailed backup, concurrency, latency, and verification evidence is
 recorded in the current checkpoint of the public-launch plan.
@@ -67,34 +66,40 @@ recorded in the current checkpoint of the public-launch plan.
 - Provider hostname:
   `https://api-nepalkingz.eu.pythonanywhere.com`.
 - Immutable server release:
-  `90bfa02fa5b00b5d59998bb2b558ac19201595c1`.
-- Fresh PostgreSQL schema version: 17.
+  `70e9259200f08e309fdad60b2a7a1aff48d30254`.
+- Fresh PostgreSQL schema version: 19.
 - Seed data: 4,800 lands and one isolated AI user; zero human users, games,
-  players, collections, or kingdoms after the exact backup restore.
+  players, collections, kingdoms, events, reports, or configurations after
+  the launch-smoke cleanup.
 - Three WSGI workers observed in the provider server log.
 - Private production environment and virtualenv are isolated from staging.
 - Force HTTPS is enabled.
-- Maintenance mode is on.
+- Maintenance mode is off; registration is enabled and independently
+  switchable.
 - Health, readiness, legal, exact CORS, registration, login, onboarding,
-  concurrent reads, and concurrent heartbeats passed.
+  Collection, Conquer configuration, kingdom-map, account, and safety smokes
+  passed.
 - Production always-on AI/sweeper task `35394` is running from the production
   release and private environment. PostgreSQL advisory leadership keeps it
   isolated from staging task `35390`.
+- Scheduled task `22971` runs the validated provider-side PostgreSQL backup at
+  03:15 UTC daily and retains fourteen daily archives.
 
 Detailed hashes, timings, cleanup evidence, and rollback boundaries are in
 [`docs/operations/PRODUCTION_DEPLOYMENT_2026-07-19.md`](operations/PRODUCTION_DEPLOYMENT_2026-07-19.md).
 
 ## What the published clients currently use
 
-The public GitHub Pages artifact and released installers still default to:
+The public GitHub Pages artifact and current source default to:
 
 ```text
-https://nepalkings.pythonanywhere.com
+https://api-nepalkingz.eu.pythonanywhere.com
 ```
 
-The old server contains development data and will not be migrated. The
-following five locations on `develop` are now prepared with the production
-URL, but those changes do not alter the already-published artifact:
+The published archive was downloaded after deployment and its embedded
+`assets/main.py` was verified to contain that exact production default. The
+old server contains development data and will not be migrated. Production
+routing is defined in:
 
 - `nepal_kings/main.py`;
 - `nepal_kings/config/server_settings.py`;
@@ -102,9 +107,9 @@ URL, but those changes do not alter the already-published artifact:
 - `build_installer.sh`;
 - `.github/workflows/build.yml`.
 
-The GitHub Pages workflow builds from `main`. Pushing server work to `develop`
-does not update the browser client, and deploying a backend does not rebuild
-GitHub Pages.
+The GitHub Pages workflow still builds only relevant client changes from
+`main`. Pushing server work to `develop` does not update the browser client,
+and deploying a backend does not rebuild GitHub Pages.
 
 ## Use EU staging now
 

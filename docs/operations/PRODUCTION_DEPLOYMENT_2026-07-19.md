@@ -1,6 +1,6 @@
 # EU Production Deployment Log — 2026-07-19
 
-Status: **in progress; production is not public**
+Status: **complete; provider-hosted public beta is live**
 
 This is the durable execution record for creating the first fresh Nepal Kings
 production environment on PythonAnywhere EU. It records decisions, commands,
@@ -561,9 +561,7 @@ Do not delete web app `56868`, `production.env`, the immutable release,
 re-enable operation is the provider `enable/` endpoint followed by `reload/`,
 after revalidating the WSGI and private environment paths.
 
-## Final evidence
-
-Complete this section as execution proceeds.
+## Pre-cutover foundation evidence
 
 | Gate | Result |
 |---|---|
@@ -582,8 +580,8 @@ Complete this section as execution proceeds.
 | Smoke-account cleanup | passed; fresh counts and sequences restored |
 | Staging isolation regression | passed |
 | Staging PostgreSQL message polling | passed on release `90bfa02...`; both game `3` endpoints return `200` |
-| Client artifact routing | passed in both staged archives; not deployed |
-| Production maintenance final state | on and verified |
+| Client artifact routing | passed in both staged archives; deployment completed in the public-beta cutover below |
+| Production maintenance at this checkpoint | on and verified; disabled after the final cutover below |
 | Ten-hour worker checkpoint | passed at 2026-07-20 07:55 UTC; continuous minute sweeps, exact environment locks, no suspicious worker lines |
 | First encrypted off-provider backup | passed; AES-256-GCM CMS archive decrypts to production dump SHA-256 `a6c87778...8e8a0` |
 | External launch probe | passed at 2026-07-20 08:05 UTC; both environments met contract and 2-second p95 ceiling |
@@ -1226,3 +1224,132 @@ health/readiness p95 was 96.1/99.4 ms. The latest 500 web-error lines and 300
 worker-log lines contained zero traceback, SQLAlchemy/psycopg, deadlock,
 duplicate-key, database/pool, or leadership-loss matches. The candidate's
 24-hour soak begins at the clean 14:12:15 UTC worker start.
+
+## Public-beta cutover — release `70e9259`
+
+The lean public-beta cutover completed on 2026-07-20. The exact release is:
+
+```text
+70e9259200f08e309fdad60b2a7a1aff48d30254
+```
+
+The same commit is retained on both `develop` and `main`. Local verification
+reported 2,714 passed tests and three environment-specific skips. GitHub
+Actions run `29760154812` passed both the complete Python 3.11/dependency-audit
+job and the PostgreSQL compatibility job. Security run `29760154513` and web
+deployment run `29760154564` also passed.
+
+### Staging promotion
+
+The staging web app and task stopped before the database backup and release
+switch. The secret-safe backup is:
+
+```text
+/home/nepalkingz/backups/postgres-staging/
+staging-pre-70e9259-20260720T161011Z.dump
+```
+
+- mode/size: `600`, 226,262 bytes;
+- SHA-256:
+  `72fe28d1c6ce7401f4654118a69135497a627caf3c82c07406e72c51c189f481`;
+- `pg_restore --list`: passed.
+
+The release archive SHA-256 was
+`a7c0a2cbc16887cebc6a85453223b81af0709abef4f56e1318355cbf6403866c`.
+The immutable release, WSGI source, private `RELEASE_SHA`, and task `35390`
+all moved to `70e9259`. Migrations 18 and 19 applied and readiness reported
+PostgreSQL schema 19. The task returned to `Running` with exactly one staging
+advisory lock. Health, readiness, legal version `2026-07-20`, HSTS, CSP, CORS,
+request IDs, the account/safety lifecycle, and audited report closure passed.
+The user's first Conquer tutorial smoke had already passed on staging.
+
+### Production promotion and cutover
+
+Only production task `35394` and web app `56868` were stopped. The validated
+pre-deployment backup is:
+
+```text
+/home/nepalkingz/backups/postgres-production/
+production-pre-70e9259-20260720T162239Z.dump
+```
+
+- mode/size: `600`, 197,876 bytes;
+- SHA-256:
+  `c0ffdbb075b4071b8775770bdeedb5d3157c0612e4c8260679992783aeb47ade`;
+- `pg_restore --list`: passed.
+
+Pinned dependency installation and `pip check` passed. Migrations 18 and 19
+applied, and the WSGI file, provider source directory, private release
+metadata, and worker task all moved to the exact candidate. Maintenance
+remained enabled during startup. Readiness reported production, PostgreSQL,
+schema 19, and `70e9259`; protected registration correctly returned `503`.
+Task `35394` reached `Running` and held exactly one production leadership lock
+under database/role `nepalkings_prod`, independently from staging.
+
+Maintenance was then disabled and registration enabled. Two disposable live
+smokes passed:
+
+- account registration, report, block, blocked challenge, export, password
+  change, token revocation, account deletion, and audited report closure;
+- registration, explicit login, starter onboarding, Collection, the full
+  4,800-land kingdom map, Conquer configuration, game-list polling, export,
+  and account deletion from the GitHub Pages origin.
+
+The exact synthetic users, events, report/action, rate-limit counters, starter
+cards, configuration figures/moves, and draft configuration were removed
+after verification. The final database audit reported one AI user, 4,800
+lands, schema 19, and zero human users, games, players, Collections,
+kingdoms, configurations, events, reports, actions, or blocks.
+
+A five-sample external production probe completed with zero errors:
+
+| Endpoint | p95 |
+|---|---:|
+| `/healthz` | 113.1 ms |
+| `/readyz` | 130.9 ms |
+| `/legal/versions` | 98.7 ms |
+
+TLS/HSTS, CSP, exact browser CORS, request IDs, release consistency, legal
+versions, and the schema requirement passed. A post-cutover staging probe
+also passed on `70e9259` and schema 19.
+
+### Public web client and backups
+
+GitHub Pages deployment `29760154564` completed successfully. The published
+archive at `https://mstieffe.github.io/nepalkings/nepal_kings.apk` was
+downloaded after deployment:
+
+- SHA-256:
+  `11992f1d7038bdadb5657deae5998d3991f681f050943b3e5181fcbbceb6fa99`;
+- embedded default:
+  `https://api-nepalkingz.eu.pythonanywhere.com`.
+
+The first provider-side daily archive is:
+
+```text
+/home/nepalkingz/backups/postgres-production/
+production-daily-20260720T163728Z.dump
+```
+
+- mode/size: `600`, 211,385 bytes;
+- SHA-256:
+  `606abaab80d50d9ec9b57c4236c931eb8bd62adb91b101ac680da135a3c61b5a`;
+- custom-format catalog validation: passed.
+
+Scheduled task `22971` runs
+`/home/nepalkingz/ops/production_daily_backup.sh` at 03:15 UTC daily. It uses
+the no-secret backup helper and deletes only `production-daily-*` files older
+than thirteen full days; pre-deployment and manually named recovery archives
+are excluded. The already verified encrypted off-provider recovery copy
+remains available. Replication to a second independent store stays in the
+optional follow-up backlog rather than blocking this small beta.
+
+### Current rollback boundary
+
+The application rollback target is the immutable pre-cutover release
+`90bfa02fa5b00b5d59998bb2b558ac19201595c1`, with the pre-cutover production
+dump above retained separately. Rollback starts by enabling maintenance and
+stopping production task `35394`; staging is not modified. Because migrations
+18 and 19 add account/safety structures, do not restore the old dump merely
+to roll application code back. Use the documented restore procedure only for
+data recovery or a schema-incompatible rollback.
