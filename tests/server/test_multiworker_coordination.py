@@ -148,3 +148,80 @@ def test_postgres_game_transaction_lock_serializes_sessions(app):
     assert not first.is_alive()
     assert not second.is_alive()
     assert failures == []
+
+
+def test_postgres_concurrent_challenge_acceptance_creates_one_game(
+    app,
+    client,
+    db,
+    two_users,
+    auth_headers_user1,
+):
+    """Concurrent accepts return one game and charge each user once."""
+    from models import Challenge, Game, User
+
+    with app.app_context():
+        if db.engine.dialect.name != 'postgresql':
+            pytest.skip('PostgreSQL-only challenge row-lock assertion')
+
+    user1, user2 = two_users
+    user1_id, user2_id = user1.id, user2.id
+    original_gold = (user1.gold, user2.gold)
+    challenge_response = client.post(
+        '/challenges/create_challenge',
+        data={
+            'challenger': user1.username,
+            'opponent': user2.username,
+            'stake': '10',
+        },
+        headers=auth_headers_user1,
+    )
+    assert challenge_response.status_code == 200
+    with app.app_context():
+        challenge_id = Challenge.query.one().id
+
+    start = threading.Barrier(3)
+    responses = []
+    failures = []
+
+    def _accept():
+        try:
+            with app.test_client() as thread_client:
+                start.wait(timeout=5)
+                response = thread_client.post(
+                    '/games/create_game',
+                    data={'challenge_id': str(challenge_id)},
+                    headers=auth_headers_user1,
+                )
+                responses.append((response.status_code, response.get_json()))
+        except Exception as exc:  # pragma: no cover - surfaced below
+            failures.append(exc)
+
+    first = threading.Thread(target=_accept)
+    second = threading.Thread(target=_accept)
+    first.start()
+    second.start()
+    start.wait(timeout=5)
+    first.join(timeout=15)
+    second.join(timeout=15)
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert failures == []
+    assert len(responses) == 2
+    assert {status for status, _payload in responses} == {200}
+    assert all(payload['success'] is True for _status, payload in responses)
+    assert len({
+        payload['game']['id']
+        for _status, payload in responses
+    }) == 1
+
+    with app.app_context():
+        db.session.remove()
+        challenge = db.session.get(Challenge, challenge_id)
+        refreshed_user1 = db.session.get(User, user1_id)
+        refreshed_user2 = db.session.get(User, user2_id)
+        assert Game.query.count() == 1
+        assert challenge.game_id == Game.query.one().id
+        assert refreshed_user1.gold == original_gold[0] - challenge.stake
+        assert refreshed_user2.gold == original_gold[1] - challenge.stake

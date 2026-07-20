@@ -109,6 +109,9 @@ from game_service.post_battle_choice import (
     serialize_battle_card as _serialize_battle_card_impl,
     set_post_battle_pending_choice as _set_post_battle_pending_choice_impl,
 )
+from game_service.challenge_coordination import (
+    locked_challenge_for_game_creation,
+)
 from routes.auth import get_game_membership, require_token, verify_game_membership, verify_player_ownership
 from routes.serialization import serialize_game_for_viewer, serialize_spell_for_viewer, viewer_has_all_seeing_eye
 from analytics import track
@@ -2488,15 +2491,51 @@ def start_turn():
 @games.route('/create_game', methods=['POST'])
 @require_token
 def create_game():
+    challenge_id = request.form.get('challenge_id')
     try:
-        challenge_id = request.form.get('challenge_id')
-        challenge = db.session.get(Challenge, challenge_id)
+        with locked_challenge_for_game_creation(challenge_id) as challenge:
+            return _create_game_from_locked_challenge(challenge)
+    except Exception:
+        db.session.rollback()
+        logger.exception('Failed to lock challenge for game creation')
+        return jsonify({
+            'success': False,
+            'message': 'Failed to create game',
+        }), 400
 
+
+def _create_game_from_locked_challenge(challenge):
+    try:
         if not challenge:
             return jsonify({'success': False, 'message': 'Challenge not found'}), 400
 
         if g.user_id not in (challenge.challenger_id, challenge.challenged_id):
             return jsonify({'success': False, 'message': 'Forbidden'}), 403
+
+        if (
+            challenge.status == ChallengeStatus.ACCEPTED
+            and challenge.game_id is not None
+        ):
+            existing_game = db.session.get(Game, challenge.game_id)
+            if existing_game is None:
+                return jsonify({
+                    'success': False,
+                    'message': 'Accepted challenge game not found',
+                }), 409
+            return jsonify({
+                'success': True,
+                'message': 'Game already created',
+                'game': serialize_game_for_viewer(
+                    existing_game,
+                    g.user_id,
+                ),
+            })
+
+        if challenge.status != ChallengeStatus.OPEN:
+            return jsonify({
+                'success': False,
+                'message': 'Challenge is no longer open',
+            }), 409
 
         # Get the users from the challenge
         user1 = db.session.get(User, challenge.challenger_id)
@@ -2534,14 +2573,14 @@ def create_game():
             ai_seed=secrets.randbits(31),
         )
         db.session.add(game)
-        db.session.commit()
+        db.session.flush()
 
         # Create new Player instances for the users (start with defender turns)
         player1 = Player(user_id=user1.id, game_id=game.id, turns_left=settings.INITIAL_TURNS_DEFENDER, points=0)
         player2 = Player(user_id=user2.id, game_id=game.id, turns_left=settings.INITIAL_TURNS_DEFENDER, points=0)
         db.session.add(player1)
         db.session.add(player2)
-        db.session.commit()
+        db.session.flush()
 
         # Set the first invader !!!!!!!!!!!!! temporary fix
         #game.invader_player_id = player1.id 
@@ -2549,15 +2588,18 @@ def create_game():
         #db.session.commit()
 
         # Create and shuffle deck, and deal cards using DeckManager
-        DeckManager.create_and_shuffle_deck(game)
-
-        db.session.commit()
+        DeckManager.create_and_shuffle_deck(game, commit=False)
 
         # put player in random order
         players = [player1, player2]
         random.shuffle(players)
         for player, color in zip(players, ['black', 'red']):
-            maharaja_card = DeckManager.draw_maharaja(game, color, player)
+            maharaja_card = DeckManager.draw_maharaja(
+                game,
+                color,
+                player,
+                commit=False,
+            )
             
 
             if color == 'red':##
@@ -2620,14 +2662,14 @@ def create_game():
             )
             db.session.add(card_to_figure)
 
-        db.session.commit()
+        db.session.flush()
 
         DeckManager.deal_cards_to_players(game, [player1, player2], 
                                           num_main_cards=settings.NUM_MAIN_CARDS_START, 
-                                          num_side_cards=settings.NUM_SIDE_CARDS_START)
+                                          num_side_cards=settings.NUM_SIDE_CARDS_START,
+                                          commit=False)
 
         # Mark the challenge as accepted and link to the created game
-        db.session.expire(challenge)          # ensure fresh read before update
         challenge.status = ChallengeStatus.ACCEPTED
         challenge.game_id = game.id
         track('game_started', user_id=g.user_id, game_id=game.id, mode='duel',

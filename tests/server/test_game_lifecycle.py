@@ -61,6 +61,84 @@ class TestCreateGame:
         assert challenge.status.value == ChallengeStatus.ACCEPTED.value
         assert challenge.game_id == data['game']['id']
 
+    def test_repeated_accept_returns_same_game_and_deducts_gold_once(
+        self,
+        client,
+        db,
+        two_users_with_challenge,
+        auth_headers_user1,
+    ):
+        from models import Game
+
+        user1, user2, challenge = two_users_with_challenge
+        original_gold = (user1.gold, user2.gold)
+
+        first = client.post(
+            '/games/create_game',
+            data={'challenge_id': str(challenge.id)},
+            headers=auth_headers_user1,
+        )
+        second = client.post(
+            '/games/create_game',
+            data={'challenge_id': str(challenge.id)},
+            headers=auth_headers_user1,
+        )
+
+        assert first.status_code == 200
+        assert second.status_code == 200
+        first_data = first.get_json()
+        second_data = second.get_json()
+        assert first_data['success'] is True
+        assert second_data['success'] is True
+        assert first_data['game']['id'] == second_data['game']['id']
+        assert second_data['message'] == 'Game already created'
+        assert Game.query.count() == 1
+
+        db.session.refresh(user1)
+        db.session.refresh(user2)
+        assert user1.gold == original_gold[0] - challenge.stake
+        assert user2.gold == original_gold[1] - challenge.stake
+
+    def test_game_creation_failure_rolls_back_all_state(
+        self,
+        client,
+        db,
+        two_users_with_challenge,
+        auth_headers_user1,
+        monkeypatch,
+    ):
+        from game_service.deck_manager import DeckManager
+        from models import ChallengeStatus, Game, Player
+
+        user1, user2, challenge = two_users_with_challenge
+        original_gold = (user1.gold, user2.gold)
+
+        def fail_deck_creation(_game, *, commit=True):
+            raise RuntimeError('synthetic deck failure')
+
+        monkeypatch.setattr(
+            DeckManager,
+            'create_and_shuffle_deck',
+            fail_deck_creation,
+        )
+        response = client.post(
+            '/games/create_game',
+            data={'challenge_id': str(challenge.id)},
+            headers=auth_headers_user1,
+        )
+
+        assert response.status_code == 400
+        assert response.get_json()['success'] is False
+        assert Game.query.count() == 0
+        assert Player.query.count() == 0
+
+        db.session.refresh(user1)
+        db.session.refresh(user2)
+        db.session.refresh(challenge)
+        assert (user1.gold, user2.gold) == original_gold
+        assert challenge.status == ChallengeStatus.OPEN
+        assert challenge.game_id is None
+
     def test_create_game_initializes_deck(self, app, db, created_game):
         from models import MainCard, SideCard
         game_id = created_game['id']

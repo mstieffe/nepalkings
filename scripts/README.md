@@ -34,6 +34,7 @@ Local diagnostics. Never deploy these.
 | `encrypt_postgres_backup.py` | Encrypt a PostgreSQL custom-format dump with AES-256-GCM, round-trip verify it, and write a recovery manifest. |
 | `probe_launch_endpoints.py` | Probe production/staging health, readiness, PostgreSQL schema, release consistency, legal discovery, and latency from outside PythonAnywhere. |
 | `smoke_conquer_api.py` | Run a controlled authenticated Conquer API smoke against a maintained environment with an operator-managed database rollback. |
+| `smoke_duel_concurrency.py` | Create two synthetic staging users and prove simultaneous Duel challenge acceptance resolves to one canonical game. |
 
 ## Deploy / ops scripts (kept at repo root)
 

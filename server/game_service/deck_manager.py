@@ -11,17 +11,29 @@ class DeckManager:
         return Deck(game)
 
     @staticmethod
-    def create_and_shuffle_deck(game):
+    def create_and_shuffle_deck(game, *, commit=True):
         """Create a new deck, shuffle it, and store the cards in the database."""
         deck = DeckManager.get_deck_for_game(game)
-        deck.create()  # Create the deck in the database
-        deck.shuffle()  # Shuffle the cards
+        deck.create(commit=commit)  # Create the deck in the database
+        deck.shuffle(commit=commit)  # Shuffle the cards
 
     @staticmethod
-    def deal_cards_to_players(game, players, num_main_cards, num_side_cards):
+    def deal_cards_to_players(
+        game,
+        players,
+        num_main_cards,
+        num_side_cards,
+        *,
+        commit=True,
+    ):
         """Deal the specified number of cards to the players."""
         deck = DeckManager.get_deck_for_game(game)
-        deck.deal_cards(players, num_main_cards, num_side_cards)
+        deck.deal_cards(
+            players,
+            num_main_cards,
+            num_side_cards,
+            commit=commit,
+        )
 
     @staticmethod
     def return_card_to_deck(card):
@@ -100,7 +112,7 @@ class DeckManager:
         deck.delete()
 
     @staticmethod
-    def draw_maharaja(game, color, player):
+    def draw_maharaja(game, color, player, *, commit=True):
         """Draw the Maharaja card from the deck."""
         deck = DeckManager.get_deck_for_game(game)
-        return deck.draw_maharaja(color, player)
+        return deck.draw_maharaja(color, player, commit=commit)

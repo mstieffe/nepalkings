@@ -6,11 +6,19 @@ import random
 
 logger = logging.getLogger('nepalkings.game_service.deck')
 
+
+def _persist(*, commit):
+    if commit:
+        db.session.commit()
+    else:
+        db.session.flush()
+
+
 class Deck:
     def __init__(self, game):
         self.game = game
 
-    def create(self):
+    def create(self, *, commit=True):
         """Create main and side cards and store them in the database."""
         main_ranks = ['7', '8', '9', '10', 'J', 'Q', 'K', 'A']
         side_ranks = ['2', '3', '4', '5', '6']
@@ -57,9 +65,9 @@ class Deck:
                     )
                     db.session.add(card)
 
-        db.session.commit()
+        _persist(commit=commit)
 
-    def shuffle(self):
+    def shuffle(self, *, commit=True):
         """Shuffle the deck by randomizing the deck_position field in the database."""
         # Fetch all available cards from the database
         main_cards = MainCard.query.filter_by(game_id=self.game.id, in_deck=True).all()
@@ -76,9 +84,16 @@ class Deck:
         for index, card in enumerate(side_cards):
             card.deck_position = index + 1  # Start positions at 1
 
-        db.session.commit()
+        _persist(commit=commit)
 
-    def deal_cards(self, players, num_main_cards, num_side_cards):
+    def deal_cards(
+        self,
+        players,
+        num_main_cards,
+        num_side_cards,
+        *,
+        commit=True,
+    ):
         """Deal a specified number of main and side cards to each player."""
         for player in players:
             # Deal main cards
@@ -93,7 +108,7 @@ class Deck:
                 card.player_id = player.id
                 card.in_deck = False
 
-            db.session.commit()
+            _persist(commit=commit)
 
     def draw_cards(self, player, num_cards, card_type="main"):
         """Draw a batch of cards from the deck for the player."""
@@ -166,7 +181,13 @@ class Deck:
 
         db.session.commit()
 
-    def draw_maharaja(self, color="black", player=None):
+    def draw_maharaja(
+        self,
+        color="black",
+        player=None,
+        *,
+        commit=True,
+    ):
         """Draw a random king of the specified color from the deck."""
         try:
             # Map color to suit(s)
@@ -216,7 +237,7 @@ class Deck:
             if player:
                 king.player_id = player.id
 
-            db.session.commit()
+            _persist(commit=commit)
             return king
 
         except Exception as e:
