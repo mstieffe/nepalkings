@@ -586,6 +586,7 @@ Complete this section as execution proceeds.
 | Ten-hour worker checkpoint | passed at 2026-07-20 07:55 UTC; continuous minute sweeps, exact environment locks, no suspicious worker lines |
 | First encrypted off-provider backup | passed; AES-256-GCM CMS archive decrypts to production dump SHA-256 `a6c87778...8e8a0` |
 | External launch probe | passed at 2026-07-20 08:05 UTC; both environments met contract and 2-second p95 ceiling |
+| Atomic Duel acceptance | passed on staging release `636364d`; two simultaneous accounts returned one game, a complete deck, and one charge each |
 
 ## Post-deployment hardening checkpoint — 2026-07-20
 
@@ -643,3 +644,73 @@ Both environments returned the exact release `90bfa02...`, PostgreSQL schema
 the probe every 15 minutes and retains each JSONL report for 30 days after the
 workflow reaches the default branch. It does not replace centralized
 exceptions, route metrics, backup-age alerts, or a public status page.
+
+### Atomic two-account Duel acceptance — staging release `636364d`
+
+The mutation-atomicity audit found that `/games/create_game` could commit the
+game, players, deck, figures, cards, and gold in separate transactions before
+marking the challenge accepted. Two WSGI workers could therefore accept one
+human challenge concurrently, and a mid-build exception could leave partial
+state.
+
+Release `636364d32aa570ef093dcfa596746a75484f4e6e` now:
+
+- takes a PostgreSQL `FOR UPDATE` lock on the challenge row, with a local mutex
+  fallback for SQLite development;
+- rejects non-open challenges unless they already link a canonical game;
+- returns that canonical game for safe acceptance retries;
+- builds the game, players, deck, Maharaja figures, dealt hands, gold changes,
+  analytics event, and challenge link in one transaction;
+- rolls back the whole mutation when deck construction fails.
+
+The release passed 2,645 local tests with three environment-specific skips,
+the complete GitHub Python 3.11 suite, PostgreSQL concurrency/compatibility CI,
+dependency audit, and security scans.
+
+Before the staging switch, this custom-format PostgreSQL backup passed
+`pg_restore --list`:
+
+```text
+/home/nepalkingz/backups/postgres-staging/
+staging-pre-636364d-20260720T105217Z.dump
+```
+
+- size/mode: 211,153 bytes; `600`;
+- SHA-256:
+  `5a974b0d2facd44d3b14dcfdb7ab6ed7aa030666c9387917f3b79280e598d91e`.
+
+The immutable release archive SHA-256 was
+`8f73005afb9c470352943f69d2b45ce8e7ba8e4d52fa940d12fb28c798855723`.
+Remote hashes for `games.py`, `challenge_coordination.py`, `deck.py`, and
+`requirements.txt` matched the Git commit. Compilation, idempotent database
+preparation, and `pip check` passed before the WSGI pointer moved.
+
+Staging health/readiness then returned release `636364d`, PostgreSQL, and
+schema 17. Task `35390` stopped cleanly, restarted from the same release at
+10:58:40 UTC, and reached `Running`. PostgreSQL reported the exact staging
+leadership lock (`classid=20044`, environment key `1763288915`) under
+`nepalkings_staging`, alongside the unchanged production lock.
+
+The reusable `scripts/smoke_duel_concurrency.py` test created two synthetic
+staging users and accepted one challenge concurrently as both accounts:
+
+| Observation | Result |
+|---|---|
+| Concurrent responses | both HTTP `200`; 594.7 ms and 597.8 ms |
+| Returned game IDs | both `4` |
+| Retry response | HTTP `200`, canonical game `4`, 67.1 ms |
+| Viewer reads | both HTTP `200` |
+| Challenge row | one accepted challenge linked to game `4` |
+| Game/player counts | one game; two players |
+| Deck counts | 64 main cards; 40 side cards |
+| Gold | both users `100 → 90`; one stake deduction each |
+| Error-log regression | no traceback, database error, deadlock, or duplicate-key line |
+
+The first harness preflight created two unused, clearly named zero-gold
+synthetic accounts and stopped before challenge creation. The successful
+synthetic accounts and game are intentionally retained as staging evidence;
+none contains an email or real player data.
+
+Because staging changed releases, its release-candidate 24-hour soak starts at
+2026-07-20 10:58 UTC. Production remains on `90bfa02...` in maintenance and
+was not reloaded or mutated.

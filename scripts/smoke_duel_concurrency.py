@@ -14,15 +14,22 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import secrets
+import subprocess
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 import requests
+
+
+STAGING_BASE_URL = "https://nepalkingz.eu.pythonanywhere.com"
+SYNTHETIC_USERNAME_RE = re.compile(r"^nkduel_[ab]_[0-9]{10}_[0-9a-f]{4}$")
 
 
 @dataclass(frozen=True)
@@ -107,7 +114,63 @@ def _register(
     return token
 
 
-def run_smoke(base_url: str, timeout: float) -> dict[str, Any]:
+def _bootstrap_staging_gold(
+    usernames: Sequence[str],
+    *,
+    ssh_identity: Path,
+    known_hosts: Path,
+    gold: int = 100,
+) -> None:
+    if (
+        len(usernames) != 2
+        or any(not SYNTHETIC_USERNAME_RE.fullmatch(name) for name in usernames)
+    ):
+        raise RuntimeError("refusing to top up non-synthetic usernames")
+    if gold < 1:
+        raise RuntimeError("staging gold bootstrap must be positive")
+
+    quoted_names = ", ".join(f"'{name}'" for name in usernames)
+    remote_command = (
+        "set -a; "
+        ". /home/nepalkingz/.config/nepalkings/staging.env; "
+        "set +a; "
+        "db_url=${DB_URL/postgresql+psycopg:/postgresql:}; "
+        f"psql \"$db_url\" --set ON_ERROR_STOP=1 --command="
+        f"\"UPDATE \\\"user\\\" SET gold = {gold} "
+        f"WHERE username IN ({quoted_names});\"; "
+        "unset db_url DB_URL"
+    )
+    result = subprocess.run(
+        [
+            "ssh",
+            "-i",
+            str(ssh_identity.expanduser()),
+            "-o",
+            f"UserKnownHostsFile={known_hosts.expanduser()}",
+            "nepalkingz@ssh.eu.pythonanywhere.com",
+            remote_command,
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=30,
+    )
+    if result.returncode != 0 or "UPDATE 2" not in result.stdout:
+        detail = result.stderr.strip() or result.stdout.strip()
+        raise RuntimeError(
+            f"staging synthetic-gold bootstrap failed: {detail}"
+        )
+
+
+def run_smoke(
+    base_url: str,
+    timeout: float,
+    *,
+    bootstrap_staging_gold: bool = False,
+    ssh_identity: Path = Path("~/.ssh/nepalkings_pythonanywhere_eu"),
+    known_hosts: Path = Path("/tmp/nepalkings_pa_eu_known_hosts"),
+) -> dict[str, Any]:
     session = requests.Session()
     session.headers["User-Agent"] = "NepalKings-Duel-Concurrency-Smoke/1.0"
     suffix = datetime.now(timezone.utc).strftime("%m%d%H%M%S")
@@ -117,6 +180,16 @@ def run_smoke(base_url: str, timeout: float) -> dict[str, Any]:
     password2 = secrets.token_urlsafe(24)
     token1 = _register(session, base_url, username1, password1, timeout)
     token2 = _register(session, base_url, username2, password2, timeout)
+    if bootstrap_staging_gold:
+        if base_url != STAGING_BASE_URL:
+            raise RuntimeError(
+                "--bootstrap-staging-gold requires the exact staging URL"
+            )
+        _bootstrap_staging_gold(
+            [username1, username2],
+            ssh_identity=ssh_identity,
+            known_hosts=known_hosts,
+        )
 
     response, payload, _elapsed_ms = _request_json(
         session,
@@ -268,6 +341,24 @@ def _parser() -> argparse.ArgumentParser:
         default="https://nepalkingz.eu.pythonanywhere.com",
     )
     parser.add_argument("--timeout-seconds", type=float, default=30.0)
+    parser.add_argument(
+        "--bootstrap-staging-gold",
+        action="store_true",
+        help=(
+            "top up only the freshly generated synthetic accounts through "
+            "the private staging PostgreSQL connection"
+        ),
+    )
+    parser.add_argument(
+        "--ssh-identity",
+        type=Path,
+        default=Path("~/.ssh/nepalkings_pythonanywhere_eu"),
+    )
+    parser.add_argument(
+        "--known-hosts",
+        type=Path,
+        default=Path("/tmp/nepalkings_pa_eu_known_hosts"),
+    )
     parser.add_argument("--allow-production", action="store_true")
     return parser
 
@@ -285,7 +376,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 2
     try:
-        result = run_smoke(base_url, args.timeout_seconds)
+        result = run_smoke(
+            base_url,
+            args.timeout_seconds,
+            bootstrap_staging_gold=args.bootstrap_staging_gold,
+            ssh_identity=args.ssh_identity,
+            known_hosts=args.known_hosts,
+        )
     except Exception as exc:
         print(json.dumps({"error": str(exc), "ok": False}, sort_keys=True))
         return 1

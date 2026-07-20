@@ -35,16 +35,17 @@ Execution checkpoint (2026-07-20):
   PostgreSQL or multi-worker changes.
 - PythonAnywhere EU is selected for the staged public beta. GitHub Pages
   remains the static client host.
-- Staging and maintained production now run immutable release
-  `90bfa02fa5b00b5d59998bb2b558ac19201595c1` on isolated PostgreSQL schema
-  17 databases, each behind three managed WSGI workers.
+- Staging runs immutable release
+  `636364d32aa570ef093dcfa596746a75484f4e6e`; maintained production remains
+  on `90bfa02fa5b00b5d59998bb2b558ac19201595c1`. Both use isolated PostgreSQL
+  schema 17 databases behind three managed WSGI workers.
 - Permanent always-on tasks `35390` and `35394` run the isolated staging and
-  production AI/sweeper workers from the same immutable release. PostgreSQL
-  reports exactly one environment-specific leadership lock per database and
-  one AI user per database.
-- The release passed 2,627 local tests, focused coordination tests, the
-  GitHub Python 3.11 suite, PostgreSQL 16 compatibility/concurrency tests,
-  dependency audit, and secret scan.
+  production AI/sweeper workers from their corresponding immutable releases.
+  PostgreSQL reports exactly one environment-specific leadership lock per
+  database and one AI user per database.
+- The current staging candidate passed 2,645 local tests, the GitHub Python
+  3.11 suite, PostgreSQL 16 compatibility/concurrency tests, dependency audit,
+  and security scan.
 - A validated pre-deployment PostgreSQL custom-format backup is stored privately
   at
   `/home/nepalkingz/backups/postgres-staging/staging-pre-idempotency-fix-20260719T192108Z.dump`;
@@ -94,10 +95,11 @@ Known launch blockers:
 - EU production will intentionally start with a fresh database. Legacy US
   development users, games, collections, kingdoms, and ownership will not be
   migrated.
-- Multi-worker gameplay still needs authenticated two-account
-  conflicting-action tests and completion of the 24-hour soak before public
-  registration. Approximately ten hours of worker continuity had passed
-  without suspicious errors at the 2026-07-20 07:55 UTC checkpoint.
+- Atomic two-account Duel challenge acceptance now passes locally, in
+  PostgreSQL CI, and against the three live staging workers. Conquer still
+  needs a deliberately conflicting cross-action test. The staging
+  release-candidate soak clock restarted with `636364d` at 2026-07-20 10:58
+  UTC; the longer production infrastructure soak continues on `90bfa02`.
 - Job failure history/attempt limits and the remaining mutation-atomicity audit
   are incomplete.
 - Screens and game polling fan out over multiple HTTP requests. The production
@@ -601,11 +603,14 @@ Priority: **P0**
 - [x] Use shared rate-limit counters for login, registration, and kingdom
   rename.
 - [ ] Make reward, collection, ownership, and battle mutations atomic.
+- [x] Make Duel challenge acceptance/game/deck/gold creation atomic and
+  idempotent across workers.
 - [x] Remove migration, seeding, reconciliation, and worker startup from WSGI
   import.
 - [x] Test simultaneous duplicate Conquer actions against the live
   three-worker staging deployment.
-- [ ] Test simultaneous conflicting actions across Duel and Conquer.
+- [ ] Test simultaneous conflicting actions across Duel and Conquer (Duel
+  challenge acceptance passed; Conquer cross-action conflict remains).
 - [ ] Run at least two web workers plus one job worker for a 24-hour soak.
 
 Verification:
@@ -944,3 +949,4 @@ Part-time expectation: approximately two to three months.
 | 2026-07-20 | Keep production maintained while the runtime soak continues | Tasks `35390` and `35394` remained on isolated release/environment/database paths; the ten-hour checkpoint showed continuous minute sweeps, exact advisory locks, and no suspicious worker lines | Do not treat the 24-hour gate as passed before its full checkpoint |
 | 2026-07-20 | Use encrypted provider-independent database copies | The first production dump passed provider catalog/hash validation, local hash equality, CMS AES-256-GCM encryption, two decryption hash checks, and plaintext cleanup | Replicate archive plus manifest to a second independent store, protect a recovery-key copy, and automate daily execution before opening registration |
 | 2026-07-20 | Add an external launch-contract probe | A three-sample live cycle passed production and staging health, readiness, PostgreSQL schema, legal discovery, release consistency, and 2-second p95 ceiling | Scheduled GitHub monitoring activates from the default branch; advanced metrics and alert destinations remain separate launch work |
+| 2026-07-20 | Serialize and atomically commit Duel challenge acceptance | The audit found partial commits and no accepted-status guard in `create_game`; release `636364d` passed 2,645 local tests, PostgreSQL CI, security scans, and a live two-account simultaneous accept with one game/deck and one charge per user | Staging advanced to `636364d`; Conquer conflicting-action and final-release soak gates remain |
