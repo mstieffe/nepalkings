@@ -23,11 +23,18 @@ environment does not automatically exist on another.
 
 ## Verified EU staging state
 
+- **Temporarily paused:** task `35390` was disabled on 2026-07-20 after the
+  staging PostgreSQL URL appeared in a failed backup-command traceback.
+  The first manual replacement URL was malformed and exposed its replacement
+  password as part of the invalid hostname. The staging web app and worker are
+  now both disabled. Rotate the staging-only password again, replace the whole
+  `DB_URL` from the operations-runbook template, and complete the recovery
+  checks before enabling either service. Production was not involved.
 - Immutable server release:
   `4660f75c1473368957c989d103058c2d2f32079a`.
 - PostgreSQL schema version: 17.
 - Three PythonAnywhere WSGI workers.
-- Always-on AI/sweeper task: `35390`.
+- Always-on AI/sweeper task: `35390` (disabled pending credential rotation).
 - Private environment file:
   `/home/nepalkingz/.config/nepalkings/staging.env`.
 - Maintenance mode: off after the deployment smoke test.
@@ -37,8 +44,9 @@ environment does not automatically exist on another.
   128.7 ms overall p95, 135.7 ms Conquer-config p95, and 891.7 ms full-map
   p95. PythonAnywhere gzip reduced the mean map wire body from 3,341,221
   decoded bytes to 122,140 bytes.
-- The final-candidate 24-hour soak started with the worker's clean
-  2026-07-20 12:19:34 UTC start.
+- The prior soak started at 2026-07-20 12:19:34 UTC but is invalidated by the
+  credential-response pause. Restart it after recovery and the next final
+  release deployment.
 
 The detailed backup, concurrency, latency, and verification evidence is
 recorded in the current checkpoint of the public-launch plan.

@@ -959,3 +959,66 @@ through the load.
 The staging release-candidate 24-hour soak therefore starts at the final
 worker start, 2026-07-20 12:19:34 UTC. This closes the provider-gzip
 100-active-user read gate, not the mutation-heavy/full-screen load gate.
+
+### Staging credential incident and deployment hold
+
+At approximately 2026-07-20 12:45 UTC, the pre-`980be93` backup command passed
+the SQLAlchemy-form `DB_URL` directly to `pg_dump`. `pg_dump` rejected the
+`postgresql+psycopg://` scheme, and the resulting subprocess traceback
+included the staging connection argument. The secret itself is intentionally
+not reproduced here. The production database URL, password, environment file,
+and task were not used or exposed.
+
+Response taken:
+
+- staging task `35390` was disabled through the PythonAnywhere API before it
+  could open more connections with the old credential;
+- the first rotation helper returned a sanitized PostgreSQL
+  `ProgrammingError` and made no environment-file change;
+- a second diagnostic/rotation attempt was blocked by the execution
+  environment's external-action approval limit;
+- a staging web-app disable request then failed locally at DNS resolution and
+  was not retried around that control;
+- release `980be93` was not uploaded or deployed;
+- the existing staging release remains `4660f75`; production remains
+  `90bfa02...` in maintenance.
+
+Required recovery before any further staging use:
+
+1. Disable the staging web app in the PythonAnywhere Web tab.
+2. In an administrator PostgreSQL console, run
+   `\password nepalkings_staging` and set a new unique URL-safe password.
+3. Replace only the password component of `DB_URL` in the private
+   `/home/nepalkingz/.config/nepalkings/staging.env`; keep mode `600`.
+4. Re-enable/reload the staging web app and task `35390`.
+5. Verify `/healthz`, `/readyz`, PostgreSQL schema 17, environment
+   `staging`, release `4660f75`, and exactly one staging leadership lock.
+6. Create the pre-`980be93` backup using a driver-aware URL conversion that
+   never includes a complete connection URL in exception output.
+
+The staging candidate soak is invalidated by the paused worker and must restart
+after credential recovery and the next final release deployment.
+
+At 2026-07-20 13:10 UTC, verification of the first manual recovery found:
+
+- the private directory/file protections remained correct (`700` and `600`);
+- Git ignored `.env` and `.env.*`, and no real environment file was tracked;
+- `/healthz` returned release `4660f75`, but `/readyz` returned
+  `503 database_unavailable`;
+- task `35390` was enabled but remained `Starting`;
+- the replacement `DB_URL` was malformed because its password/hostname
+  separator was missing;
+- the replacement password consequently appeared as part of the unresolved
+  hostname in a diagnostic and must also be treated as exposed.
+
+Task `35390` and the staging web app were then disabled successfully through
+the PythonAnywhere API. Rotate the staging role password a second time and set
+this exact structure as one complete line, substituting only a new URL-safe
+password:
+
+```text
+DB_URL=postgresql+psycopg://nepalkings_staging:NEW_URL_SAFE_PASSWORD@nepalkingz-371.postgres.eu.pythonanywhere-services.com:10371/nepalkings_staging
+```
+
+Keep both staging services disabled until a no-secret-output connection test
+passes. Production remained on `90bfa02...` in maintenance throughout.

@@ -39,10 +39,13 @@ Execution checkpoint (2026-07-20):
   `4660f75c1473368957c989d103058c2d2f32079a`; maintained production remains
   on `90bfa02fa5b00b5d59998bb2b558ac19201595c1`. Both use isolated PostgreSQL
   schema 17 databases behind three managed WSGI workers.
-- Permanent always-on tasks `35390` and `35394` run the isolated staging and
-  production AI/sweeper workers from their corresponding immutable releases.
-  PostgreSQL reports exactly one environment-specific leadership lock per
-  database and one AI user per database.
+- Production task `35394` remains on its isolated production release.
+  Staging task `35390` was deliberately disabled on 2026-07-20 after a
+  staging-only database credential appeared in a failed backup command's
+  traceback. Treat that staging credential as compromised and do not resume
+  the task or staging deployment until the password is rotated and the private
+  environment is reloaded. The production credential and environment were not
+  involved.
 - The current staging candidate passed the GitHub Python 3.11 suite
   (2,649 passed, 4 skipped), PostgreSQL 16 compatibility/concurrency tests,
   dependency audit, and security scan. Its server tree is identical to the
@@ -103,6 +106,15 @@ Already present:
 
 Known launch blockers:
 
+- **Immediate staging hold:** rotate the `nepalkings_staging` PostgreSQL
+  password, replace only the private staging `DB_URL`, reload/re-enable the
+  staging web app and task `35390`, and re-run readiness plus exact leadership
+  lock checks. The first manual replacement omitted the separator before the
+  database hostname; readiness stayed `503`, and a diagnostic exposed that
+  replacement credential as part of the malformed hostname. The staging web
+  app and worker are now disabled. Rotate the staging password again and set
+  the complete URL from the documented template before verification. Do not
+  deploy `980be93` until this recovery gate passes.
 - The production web app at
   `api-nepalkingz.eu.pythonanywhere.com` is configured on fresh PostgreSQL and
   has passed web, worker, mutation, rollback, and restore gates, but it remains
