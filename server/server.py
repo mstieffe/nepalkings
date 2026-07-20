@@ -6,7 +6,6 @@ from flask_cors import CORS
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from models import db
-import gzip
 import logging
 from logging.handlers import RotatingFileHandler
 import signal
@@ -170,36 +169,6 @@ def _set_security_headers(response):
         response.headers['Strict-Transport-Security'] = (
             'max-age=31536000; includeSubDomains'
         )
-    return response
-
-
-@app.after_request
-def _compress_large_map_response(response):
-    """Gzip the multi-megabyte map snapshot when the client supports it."""
-    if not settings.RESPONSE_COMPRESSION_ENABLED:
-        return response
-    if request.method != 'GET' or request.path != '/kingdom/map':
-        return response
-    if response.status_code != 200 or response.direct_passthrough:
-        return response
-    if response.headers.get('Content-Encoding'):
-        return response
-    if request.accept_encodings['gzip'] <= 0:
-        return response
-    if not response.mimetype or response.mimetype != 'application/json':
-        return response
-
-    body = response.get_data()
-    if len(body) < settings.RESPONSE_COMPRESSION_MIN_BYTES:
-        return response
-    compressed = gzip.compress(body, compresslevel=5, mtime=0)
-    if len(compressed) >= len(body):
-        return response
-
-    response.set_data(compressed)
-    response.headers['Content-Encoding'] = 'gzip'
-    response.headers['Content-Length'] = str(len(compressed))
-    response.vary.add('Accept-Encoding')
     return response
 
 # ── Logging configuration ──

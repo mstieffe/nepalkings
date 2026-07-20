@@ -227,13 +227,14 @@ account named `prodsmoke_0719204220` was used only for this test.
 - six concurrent heartbeat writes all returned `200`;
 - Collection reads took approximately `150–503 ms`;
 - heartbeat writes took approximately `109–202 ms`;
-- map reads took approximately `805–1140 ms` and each transferred about
+- map reads took approximately `805–1140 ms` and each decoded to about
   `3,340,616` bytes.
 
-The map result is a production-readiness performance finding: a roughly
-3.34 MB response is materially expensive even when the server is healthy.
-Payload reduction, conditional requests/caching, and map endpoint profiling
-remain launch-plan work.
+The map result is a production-readiness performance finding: PythonAnywhere
+gzip reduces the response to about 122 KB on the wire, but building and
+serializing the 3.34 MB decoded snapshot remains materially expensive.
+Conditional requests/caching and map endpoint profiling remain launch-plan
+work.
 
 Cleanup deleted the one smoke user and its two analytics events, reset the
 empty user/event sequences, and verified:
@@ -738,7 +739,7 @@ five-second ramp, and 30 seconds total:
 | Collection p95 | 105.5 ms |
 | Conquer config p95 | 178.7 ms |
 | Game-list p95 | 118.4 ms |
-| 3.34 MB map p95 | 956.9 ms |
+| 3.34 MB decoded map p95 | 956.9 ms |
 
 The launch-capacity run used 100 active users, five-second think time, a
 ten-second ramp, and 60 seconds total. This models twice the initial target of
@@ -754,7 +755,7 @@ millisecond:
 | Collection p95 | 122.7 ms |
 | Conquer config p95 | 163.2 ms |
 | Game-list p95 | 118.3 ms |
-| 3.34 MB map p50/p95/p99 | 718.5 / 1,264.8 / 1,608.9 ms |
+| 3.34 MB decoded map p50/p95/p99 | 718.5 / 1,264.8 / 1,608.9 ms |
 
 The post-load error log contained no traceback, SQLAlchemy/psycopg error,
 deadlock, duplicate-key, or pool error. PostgreSQL settled to one active and
@@ -765,8 +766,8 @@ both environments; staging health/readiness p95 was 106.2/106.1 ms.
 This closes the 100-active-user authenticated read-capacity gate only. It does
 not close the full launch load gate: Defence, Duel turns, chat/log polling,
 long-running games, and mutation-heavy mixes remain. The full kingdom map also
-remains an optimization target; its payload is approximately 3.34 MB even when
-server queueing is healthy.
+remains an optimization target; its decoded JSON is approximately 3.34 MB even
+when server queueing is healthy.
 
 ### Serialized Conquer battle mutations — staging release `df69ece`
 
@@ -856,3 +857,31 @@ shared lock first and returned `200` with the canonical defender-win result in
   `nepalkings_staging/1763288915` and
   `nepalkings_prod/730732783`;
 - zero suspicious matches in the post-race error and worker log windows.
+
+### Kingdom-map compression A/B
+
+The authenticated load harness now records both decoded response bytes and
+compressed wire-body bytes instead of treating `requests.Response.content`
+as network transfer. The first 25-user run on release `be60a47` completed 144
+requests with zero errors and measured five map responses:
+
+| Map metric | Result |
+|---|---:|
+| Decoded JSON | 3,341,221 bytes |
+| Gzip wire body | 122,140 bytes |
+| Reduction | 96.3% |
+| p50 / p95 | 685.2 / 956.0 ms |
+
+The same run stayed at 184.9 ms overall p95. Collection and Conquer config
+also arrived with `Content-Encoding: gzip`, showing that the PythonAnywhere
+proxy already compresses dynamic JSON.
+
+A controlled staging A/B then disabled the candidate application compressor
+and reloaded only the staging web app. With application compression disabled,
+PythonAnywhere still returned `Content-Encoding: gzip`; raw streaming measured
+a 122,141-byte map body for the same 3,341,221-byte decoded JSON. The enabled
+and disabled wire sizes differ by one byte, so application gzip has no network
+benefit and only duplicates provider work. The application compressor was
+removed from the next candidate; provider gzip remains the selected launch
+configuration. Map construction/serialization and cache invalidation, not
+transfer compression, are the remaining optimization targets.

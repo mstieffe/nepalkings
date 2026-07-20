@@ -109,11 +109,11 @@ Known launch blockers:
   soak continues on `90bfa02`.
 - Job failure history/attempt limits and the remaining mutation-atomicity audit
   are incomplete.
-- Screens and game polling fan out over multiple HTTP requests. The production
-  map smoke transferred approximately 3.34 MB and took 0.81–1.14 seconds under
-  three-request concurrent load. The staging 100-active-user read mix passed
-  without errors, but its 3.34 MB map remained the slow outlier at 1.265
-  seconds p95.
+- Screens and game polling fan out over multiple HTTP requests. The map
+  decodes to approximately 3.34 MB but PythonAnywhere gzip reduces it to about
+  122 KB on the wire. The staging 100-active-user read mix passed without
+  errors, but map construction/serialization remained the slow outlier at
+  1.265 seconds p95.
 - A standard-library external contract/latency probe and scheduled GitHub
   workflow now exist on `develop`, and the first live cycle passed. The
   schedule becomes active from the default branch; centralized application
@@ -644,7 +644,9 @@ Priority: **P0**
 - [ ] Cache kingdom/map state by map version.
 - [ ] Add `ETag` or numeric version cursors.
 - [ ] Add CORS preflight caching.
-- [ ] Enable response compression.
+- [x] Verify response compression: a live application-on/off A/B confirmed
+  PythonAnywhere already gzip-compresses the 3.34 MB map JSON to about 122 KB;
+  redundant application gzip was removed.
 - [ ] Pause polling when the tab is hidden.
 - [ ] Add adaptive polling and exponential error backoff.
 - [ ] Add jitter to polling intervals.
@@ -652,7 +654,8 @@ Priority: **P0**
 - [ ] Profile real PostgreSQL queries.
 - [ ] Add indexes based on query plans.
 - [ ] Remove N+1 query paths.
-- [ ] Record response payload sizes.
+- [x] Record decoded and compressed wire-body sizes in the authenticated load
+  harness.
 - [ ] Add k6 or Locust scenarios for login, menus, map, Conquer, defence, duel,
   and simultaneous actions.
 - [x] Add and run a reproducible authenticated read-load scenario for
@@ -966,3 +969,4 @@ Part-time expectation: approximately two to three months.
 | 2026-07-20 | Serialize and atomically commit Duel challenge acceptance | The audit found partial commits and no accepted-status guard in `create_game`; release `636364d` passed 2,645 local tests, PostgreSQL CI, security scans, and a live two-account simultaneous accept with one game/deck and one charge per user | Staging advanced to `636364d`; Conquer conflicting-action and final-release soak gates remain |
 | 2026-07-20 | Model 2x launch read load as 100 active users with five-second think time | The live staging run completed 1,126 authenticated reads at 18.77 requests/second with zero errors, 163.2 ms overall p95, 163.2 ms Conquer-config p95, and 1,264.8 ms map p95 | Read capacity has headroom; retain the map-specific 1.5-second budget and continue with mutation/polling scenarios before closing the full load gate |
 | 2026-07-20 | Verify and harden Conquer battle serialization | The existing application-wide PostgreSQL lock plus release `df69ece` route-local fallback/finished-state guards passed 2,655 local tests, full CI, PostgreSQL CI, security scanning, a one-of-two advance race, and a cross-endpoint advance/withdraw race | The deliberately conflicting Conquer gate is closed; restart the final-candidate soak at 11:39 UTC and continue the wider mutation-atomicity audit |
+| 2026-07-20 | Rely on verified PythonAnywhere gzip instead of duplicating compression in Flask | A live A/B measured 122,140 bytes with application gzip and 122,141 bytes with it disabled for the same 3,341,221-byte map JSON; both responses were gzip encoded | Remove redundant application gzip, retain wire-size measurement, and focus map work on construction/serialization plus versioned caching |

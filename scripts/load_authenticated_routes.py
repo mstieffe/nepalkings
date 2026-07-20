@@ -17,6 +17,7 @@ accounts. No gameplay mutation runs after setup.
 from __future__ import annotations
 
 import argparse
+import gzip
 import json
 import math
 import random
@@ -219,6 +220,12 @@ def _route_path(route: str, username: str, land_id: int) -> str:
     raise ValueError(f"unknown load route: {route}")
 
 
+def _decode_wire_body(wire_body: bytes, content_encoding: str) -> bytes:
+    if content_encoding.lower() == "gzip":
+        return gzip.decompress(wire_body)
+    return wire_body
+
+
 def _run_load(
     *,
     base_url: str,
@@ -243,6 +250,7 @@ def _run_load(
         rng = random.Random(seed + user_index)
         session = requests.Session()
         session.headers.update({
+            "Accept-Encoding": "gzip",
             "Authorization": f"Bearer {token}",
             "Cache-Control": "no-cache",
             "User-Agent": "NepalKings-Authenticated-Load/1.0",
@@ -272,25 +280,26 @@ def _run_load(
                 response = session.get(
                     f"{base_url}{path}",
                     timeout=timeout_seconds,
+                    stream=True,
                 )
                 status = response.status_code
-                byte_count = len(response.content)
                 content_encoding = response.headers.get(
                     "Content-Encoding",
                     "",
                 )
-                try:
-                    wire_byte_count = int(
-                        response.headers.get("Content-Length", byte_count)
-                    )
-                except (TypeError, ValueError):
-                    wire_byte_count = byte_count
+                wire_body = response.raw.read(decode_content=False)
+                wire_byte_count = len(wire_body)
+                decoded_body = _decode_wire_body(
+                    wire_body,
+                    content_encoding,
+                )
+                byte_count = len(decoded_body)
                 if not 200 <= response.status_code < 300:
                     error = f"HTTP {response.status_code}"
                 else:
                     try:
-                        payload = response.json()
-                    except ValueError as exc:
+                        payload = json.loads(decoded_body)
+                    except (UnicodeDecodeError, ValueError) as exc:
                         error = f"invalid JSON: {exc}"
                     else:
                         if (

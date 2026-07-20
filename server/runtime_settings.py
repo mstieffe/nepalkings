@@ -35,18 +35,6 @@ MIN_CLIENT_VERSION = (
     os.getenv('MIN_CLIENT_VERSION', '0.0.0').strip() or '0.0.0'
 )
 
-# Compress the large authenticated map snapshot at the application boundary.
-# PythonAnywhere does not guarantee dynamic-response compression, and the
-# uncompressed 4,800-land JSON is several megabytes.
-RESPONSE_COMPRESSION_ENABLED = _boolean(
-    'RESPONSE_COMPRESSION_ENABLED',
-    True,
-)
-RESPONSE_COMPRESSION_MIN_BYTES = max(
-    1024,
-    int(os.getenv('RESPONSE_COMPRESSION_MIN_BYTES', '1024')),
-)
-
 # Development keeps the historical import-time convenience. Production must
 # run ``python manage.py prepare-database`` explicitly before reloading WSGI.
 STARTUP_MAINTENANCE_ENABLED = _boolean(

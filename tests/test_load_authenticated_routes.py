@@ -1,5 +1,8 @@
+import gzip
+
 from scripts.load_authenticated_routes import (
     Sample,
+    _decode_wire_body,
     _nearest_rank,
     _route_path,
     _summarize,
@@ -11,6 +14,13 @@ def test_nearest_rank_percentile() -> None:
     assert _nearest_rank(values, 0.50) == 300
     assert _nearest_rank(values, 0.95) == 500
     assert _nearest_rank([], 0.95) == 0
+
+
+def test_wire_body_decoder_handles_provider_gzip() -> None:
+    body = b'{"lands":[1,2,3]}'
+
+    assert _decode_wire_body(gzip.compress(body), "gzip") == body
+    assert _decode_wire_body(body, "") == body
 
 
 def test_route_paths_are_scoped_to_synthetic_viewer() -> None:
