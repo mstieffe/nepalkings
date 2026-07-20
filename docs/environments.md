@@ -1,6 +1,6 @@
 # Nepal Kings Environments and Client Routing
 
-Last verified: 2026-07-19
+Last verified: 2026-07-20
 
 This is the authoritative guide for deciding which backend a Nepal Kings
 client uses. The PythonAnywhere infrastructure runbook is
@@ -15,7 +15,7 @@ full launch gate is
 | Local development | `http://localhost:5000` | Local development database | Developer-only |
 | Legacy development server | `https://nepalkings.pythonanywhere.com` | Disposable development data | Current default for the published web client and installers; not production data |
 | EU staging | `https://nepalkingz.eu.pythonanywhere.com` | Isolated `nepalkings_staging` PostgreSQL database | Integration, performance, schema/restore, and soak testing |
-| EU production | `https://api-nepalkingz.eu.pythonanywhere.com` | Fresh, isolated `nepalkings_prod` PostgreSQL database | Web app is healthy but held in maintenance; background-worker quota is not yet available |
+| EU production | `https://api-nepalkingz.eu.pythonanywhere.com` | Fresh, isolated `nepalkings_prod` PostgreSQL database | Web app and worker are healthy, but public routes remain in maintenance until launch gates pass |
 
 Do not treat EU staging as production. Accounts, tokens, games, collections,
 and ownership are isolated by database and signing key. A user created on one
@@ -24,7 +24,7 @@ environment does not automatically exist on another.
 ## Verified EU staging state
 
 - Immutable server release:
-  `949126c9db5fbea5f86d3b053831cb9210250bb3`.
+  `df69ece7bf5916d335185752afc2c33656bb2a7e`.
 - PostgreSQL schema version: 17.
 - Three PythonAnywhere WSGI workers.
 - Always-on AI/sweeper task: `35390`.
@@ -43,20 +43,19 @@ recorded in the current checkpoint of the public-launch plan.
 - Provider hostname:
   `https://api-nepalkingz.eu.pythonanywhere.com`.
 - Immutable server release:
-  `949126c9db5fbea5f86d3b053831cb9210250bb3`.
+  `90bfa02fa5b00b5d59998bb2b558ac19201595c1`.
 - Fresh PostgreSQL schema version: 17.
-- Seed data: 4,800 lands; zero users, games, collections, or kingdoms after
-  smoke-account cleanup.
+- Seed data: 4,800 lands and one isolated AI user; zero human users, games,
+  players, collections, or kingdoms after the exact backup restore.
 - Three WSGI workers observed in the provider server log.
 - Private production environment and virtualenv are isolated from staging.
 - Force HTTPS is enabled.
 - Maintenance mode is on.
 - Health, readiness, legal, exact CORS, registration, login, onboarding,
   concurrent reads, and concurrent heartbeats passed.
-- No production always-on worker exists yet. The PythonAnywhere API reports
-  that the account has reached its one-task limit with the staging task, so
-  the subscription allocation must be changed to permit a second always-on
-  task.
+- Production always-on AI/sweeper task `35394` is running from the production
+  release and private environment. PostgreSQL advisory leadership keeps it
+  isolated from staging task `35390`.
 
 Detailed hashes, timings, cleanup evidence, and rollback boundaries are in
 [`docs/operations/PRODUCTION_DEPLOYMENT_2026-07-19.md`](operations/PRODUCTION_DEPLOYMENT_2026-07-19.md).

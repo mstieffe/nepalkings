@@ -6,7 +6,9 @@ import pytest
 
 from scripts.smoke_conquer_api import (
     _assert_advance_race,
+    _assert_advance_withdraw_race,
     _request_json,
+    _request_json_result,
     _safe_payload,
 )
 
@@ -81,4 +83,68 @@ def test_advance_race_rejects_two_successes():
         _assert_advance_race([
             {'status_code': 200, 'payload': {'success': True}},
             {'status_code': 200, 'payload': {'success': True}},
+        ])
+
+
+def test_race_result_omits_full_game_snapshot(monkeypatch):
+    response = _Response({
+        'success': True,
+        'figure_name': 'Test King',
+        'game': {'players': [{'main_hand': list(range(100))}]},
+    })
+    session = _Session(response)
+    monkeypatch.setattr(
+        'scripts.smoke_conquer_api.requests.Session',
+        lambda: session,
+    )
+
+    class _Start:
+        @staticmethod
+        def wait(timeout):
+            assert timeout == 5
+
+    result = _request_json_result(
+        'POST',
+        'https://example.invalid/games/advance_figure',
+        token='secret',
+        timeout=5,
+        json_payload={'game_id': 1},
+        start=_Start(),
+    )
+
+    assert result['payload'] == {
+        'success': True,
+        'figure_name': 'Test King',
+    }
+
+
+@pytest.mark.parametrize('advance_status', [200, 409])
+def test_advance_withdraw_race_accepts_both_lock_orders(advance_status):
+    _assert_advance_withdraw_race([
+        {
+            'action': 'advance',
+            'status_code': advance_status,
+            'payload': {'success': advance_status == 200},
+        },
+        {
+            'action': 'withdraw',
+            'status_code': 200,
+            'payload': {'success': True},
+        },
+    ])
+
+
+def test_advance_withdraw_race_requires_successful_withdrawal():
+    with pytest.raises(RuntimeError, match='serialized outcome'):
+        _assert_advance_withdraw_race([
+            {
+                'action': 'advance',
+                'status_code': 200,
+                'payload': {'success': True},
+            },
+            {
+                'action': 'withdraw',
+                'status_code': 500,
+                'payload': {'success': False},
+            },
         ])

@@ -36,21 +36,22 @@ Execution checkpoint (2026-07-20):
 - PythonAnywhere EU is selected for the staged public beta. GitHub Pages
   remains the static client host.
 - Staging runs immutable release
-  `636364d32aa570ef093dcfa596746a75484f4e6e`; maintained production remains
+  `df69ece7bf5916d335185752afc2c33656bb2a7e`; maintained production remains
   on `90bfa02fa5b00b5d59998bb2b558ac19201595c1`. Both use isolated PostgreSQL
   schema 17 databases behind three managed WSGI workers.
 - Permanent always-on tasks `35390` and `35394` run the isolated staging and
   production AI/sweeper workers from their corresponding immutable releases.
   PostgreSQL reports exactly one environment-specific leadership lock per
   database and one AI user per database.
-- The current staging candidate passed 2,645 local tests, the GitHub Python
+- The current staging candidate passed 2,655 local tests, the GitHub Python
   3.11 suite, PostgreSQL 16 compatibility/concurrency tests, dependency audit,
   and security scan.
 - A validated pre-deployment PostgreSQL custom-format backup is stored privately
   at
-  `/home/nepalkingz/backups/postgres-staging/staging-pre-idempotency-fix-20260719T192108Z.dump`;
-  it is mode `600`, 206,706 bytes, and has SHA-256
-  `2c18062d8e7d8f1cee5e24dd4f4496932ae6e8313c66ef1d71748aef01178d3b`.
+  `/home/nepalkingz/backups/postgres-staging/staging-pre-df69ece-20260720T113345Z.dump`;
+  it is mode `600`, 215,064 bytes, passed `pg_restore --list`, and has
+  SHA-256
+  `39330f4461f7de4cb26e5180a9b6456beab584557c238bd73a2054af62ddc7b3`.
 - Production application rollback, authenticated Conquer mutation, exact
   baseline restore, and smoke-account cleanup passed. A verified production
   dump is also encrypted off-provider with CMS AES-256-GCM; the daily schedule
@@ -58,14 +59,20 @@ Execution checkpoint (2026-07-20):
 
 Latest live staging evidence:
 
-- Five post-maintenance health probes returned release `949126c` in
-  78–92 ms. Readiness returned PostgreSQL/schema 17, legal remained available,
-  and an invalid login returned `401`.
-- The Conquer configuration and Collection dependencies returned in 162 ms and
-  83 ms respectively for the staging smoke account. The config contained three
-  figures and three battle moves.
-- Malformed authenticated JSON at `/games/conquer_withdraw` returned a clean
-  JSON `400` without a traceback.
+- Health and readiness return release `df69ece`, PostgreSQL, and schema 17.
+  The worker is `Running` on the same release; both isolated environment
+  leadership locks remain present.
+- A phase-aware Conquer smoke resolved a randomly required Health Boost
+  prelude, then sent two different legal advances simultaneously through the
+  three-worker deployment. One returned `200` in 203.0 ms and committed
+  Djungle King; the stale request returned `400` in 150.9 ms.
+- A stricter cross-endpoint race sent advance and withdrawal simultaneously.
+  Withdrawal won the lock, finished game `8`, and returned the canonical
+  defender-win result; the queued advance re-read the finished game and
+  returned `409`. PostgreSQL contains one withdrawal result/log and no advance.
+- PostgreSQL game `7` contains the one winning advancing figure and exactly
+  one `advance` log. The error and worker logs contain no traceback, deadlock,
+  duplicate-key, or database-error line after deployment.
 - Six simultaneous withdrawals with the same `client_action_id` all returned
   `200` and the same canonical response SHA-256
   `a075b59c21dbd00560e8a4fa1291cfc1f2660059c48119f68a04c0c654d2c9c6`.
@@ -95,11 +102,11 @@ Known launch blockers:
 - EU production will intentionally start with a fresh database. Legacy US
   development users, games, collections, kingdoms, and ownership will not be
   migrated.
-- Atomic two-account Duel challenge acceptance now passes locally, in
-  PostgreSQL CI, and against the three live staging workers. Conquer still
-  needs a deliberately conflicting cross-action test. The staging
-  release-candidate soak clock restarted with `636364d` at 2026-07-20 10:58
-  UTC; the longer production infrastructure soak continues on `90bfa02`.
+- Atomic two-account Duel challenge acceptance and deliberately conflicting
+  Conquer advances now pass locally, in PostgreSQL CI, and against the three
+  live staging workers. The staging release-candidate soak clock restarted
+  with `df69ece` at 2026-07-20 11:39 UTC; the longer production infrastructure
+  soak continues on `90bfa02`.
 - Job failure history/attempt limits and the remaining mutation-atomicity audit
   are incomplete.
 - Screens and game polling fan out over multiple HTTP requests. The production
@@ -611,8 +618,9 @@ Priority: **P0**
   import.
 - [x] Test simultaneous duplicate Conquer actions against the live
   three-worker staging deployment.
-- [ ] Test simultaneous conflicting actions across Duel and Conquer (Duel
-  challenge acceptance passed; Conquer cross-action conflict remains).
+- [x] Test simultaneous conflicting actions across Duel and Conquer (one
+  canonical Duel acceptance; exactly one of two competing Conquer advances;
+  and a cross-endpoint advance/withdraw race all passed on live staging).
 - [ ] Run at least two web workers plus one job worker for a 24-hour soak.
 
 Verification:
@@ -957,3 +965,4 @@ Part-time expectation: approximately two to three months.
 | 2026-07-20 | Add an external launch-contract probe | A three-sample live cycle passed production and staging health, readiness, PostgreSQL schema, legal discovery, release consistency, and 2-second p95 ceiling | Scheduled GitHub monitoring activates from the default branch; advanced metrics and alert destinations remain separate launch work |
 | 2026-07-20 | Serialize and atomically commit Duel challenge acceptance | The audit found partial commits and no accepted-status guard in `create_game`; release `636364d` passed 2,645 local tests, PostgreSQL CI, security scans, and a live two-account simultaneous accept with one game/deck and one charge per user | Staging advanced to `636364d`; Conquer conflicting-action and final-release soak gates remain |
 | 2026-07-20 | Model 2x launch read load as 100 active users with five-second think time | The live staging run completed 1,126 authenticated reads at 18.77 requests/second with zero errors, 163.2 ms overall p95, 163.2 ms Conquer-config p95, and 1,264.8 ms map p95 | Read capacity has headroom; retain the map-specific 1.5-second budget and continue with mutation/polling scenarios before closing the full load gate |
+| 2026-07-20 | Serialize every Conquer battle mutation by game | Release `df69ece` passed 2,655 local tests, full CI, PostgreSQL CI, security scanning, a one-of-two advance race, and a cross-endpoint advance/withdraw race with one canonical finished result | The deliberately conflicting Conquer gate is closed; restart the final-candidate soak at 11:39 UTC and continue the wider mutation-atomicity audit |

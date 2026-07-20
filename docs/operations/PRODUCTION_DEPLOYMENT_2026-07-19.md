@@ -763,7 +763,94 @@ exact, and the worker continued its sweeps. A post-load external probe passed
 both environments; staging health/readiness p95 was 106.2/106.1 ms.
 
 This closes the 100-active-user authenticated read-capacity gate only. It does
-not close the full launch load gate: simultaneous Conquer cross-actions,
-Defence, Duel turns, chat/log polling, long-running games, and mutation-heavy
-mixes remain. The full kingdom map also remains an optimization target; its
-payload is approximately 3.34 MB even when server queueing is healthy.
+not close the full launch load gate: Defence, Duel turns, chat/log polling,
+long-running games, and mutation-heavy mixes remain. The full kingdom map also
+remains an optimization target; its payload is approximately 3.34 MB even when
+server queueing is healthy.
+
+### Serialized Conquer battle mutations — staging release `df69ece`
+
+The mutation audit found that early Conquer actions such as
+`/games/advance_figure` and `/games/select_defender` read and wrote mutable
+game state without acquiring the PostgreSQL per-game advisory lock used by the
+newer tactic endpoints. Two WSGI workers could therefore validate against the
+same turn snapshot. Release
+`df69ece7bf5916d335185752afc2c33656bb2a7e` now:
+
+- acquires the cross-worker game lock before every Conquer battle mutation
+  reads game state;
+- covers counter spells, advances, defender selection, Civil War selection,
+  fight/fold, legacy battle moves, battle finish, and post-battle choices;
+- rejects stale advance and defender-selection requests after a game is
+  finished;
+- includes a concurrent endpoint regression that requires exactly one of two
+  different advances to commit;
+- extends the authenticated Conquer smoke with an optional live advance race
+  and phase-aware prelude resolution.
+
+Verification before deployment:
+
+- local suite: 2,655 passed, 3 environment-specific skips;
+- GitHub Python 3.11 suite and dependency audit: passed;
+- disposable PostgreSQL 16 compatibility/concurrency job: passed;
+- security/secret scan: passed;
+- immutable server artifact: 367,894 bytes, SHA-256
+  `98fc28e4bd3bf87f75bfcc6986c1ef0b7709b3da880049ebc0174ee044aea226`;
+- remote source hashes matched the committed `games.py`, `manage.py`, and
+  `requirements.txt`;
+- compilation, `prepare-database`, and `pip check` passed.
+
+The pre-deploy custom-format backup is:
+
+```text
+/home/nepalkingz/backups/postgres-staging/
+staging-pre-df69ece-20260720T113345Z.dump
+```
+
+- size/mode: 215,064 bytes; `600`;
+- SHA-256:
+  `39330f4461f7de4cb26e5180a9b6456beab584557c238bd73a2054af62ddc7b3`;
+- `pg_restore --list`: passed.
+
+Task `35390` stopped cleanly, then the staging WSGI, provider source
+directory, private `RELEASE_SHA`, and task command moved to the same immutable
+release. Health/readiness returned `df69ece`, PostgreSQL, and schema 17.
+Production remained on `90bfa02...` in maintenance and was not reloaded.
+The task returned to `Running`; the worker log records a clean signal-15 stop
+and a clean 11:39:12 UTC start.
+
+The first concurrency-smoke setup produced a valid battle whose Health Boost
+prelude still required a target. Both attempted advances correctly returned
+`400 pending_prelude_target` and no advance was committed. The harness was
+then made phase-aware and the repeated live smoke:
+
+- created synthetic user `prodsmoke_0720114043_cd5b`, game `7`, land `2337`;
+- resolved Health Boost on figure `28`;
+- raced two different attacker figures;
+- received one `200` in 203.0 ms and one stale-turn `400` in 150.9 ms;
+- persisted advancing figure `28`, advancing player `13`, and turn player
+  `14`;
+- persisted exactly one `advance` log and one expected `game_start` log;
+- left the game open and internally consistent.
+
+The last 300 error-log and worker-log lines contain zero traceback, deadlock,
+duplicate-key, or database-error matches. Both staging and production
+environment leadership locks remain present. Because the runtime release
+changed, the final staging candidate's 24-hour soak begins at 2026-07-20
+11:39 UTC.
+
+A second, stricter live test raced two different endpoints on fresh game `8`:
+initial advance versus `/games/conquer_withdraw`. Withdrawal acquired the
+shared lock first and returned `200` with the canonical defender-win result in
+400.0 ms. The queued advance then re-read the finished game and returned
+`409 Game is already finished` in 342.0 ms. PostgreSQL confirms:
+
+- state `finished`, winner player `16`, and `auto_loss_reason=withdraw`;
+- cleared advancing-player and advancing-figure fields;
+- exactly one withdrawal `auto_loss` log and no advance log;
+- exactly one `land_attack_log` result, `defender_won`, for the synthetic
+  attacker and land;
+- exact leadership-lock owners:
+  `nepalkings_staging/1763288915` and
+  `nepalkings_prod/730732783`;
+- zero suspicious matches in the post-race error and worker log windows.

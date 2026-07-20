@@ -111,10 +111,26 @@ def _request_json_result(
             f'{method} {url} returned HTTP {response.status_code} '
             'with a non-JSON body'
         ) from exc
+    safe_payload = _safe_payload(payload)
+    if isinstance(safe_payload, dict):
+        # Action responses can contain a complete multi-megabyte game
+        # snapshot. Keep operational output concise and avoid persisting
+        # unrelated gameplay state in CI/log artifacts.
+        safe_payload = {
+            key: safe_payload[key]
+            for key in (
+                'success',
+                'message',
+                'reason',
+                'figure_name',
+                'is_counter_advance',
+            )
+            if key in safe_payload
+        }
     return {
         'status_code': response.status_code,
         'elapsed_ms': round(elapsed_ms, 1),
-        'payload': _safe_payload(payload),
+        'payload': safe_payload,
     }
 
 
@@ -129,6 +145,40 @@ def _assert_advance_race(results: list[dict[str, Any]]) -> None:
         raise RuntimeError(
             'Concurrent advances did not serialize to one success and one '
             f'rejection: {_safe_payload(results)}'
+        )
+
+
+def _assert_advance_withdraw_race(results: list[dict[str, Any]]) -> None:
+    """Require withdrawal to win canonically against a concurrent advance."""
+    by_action = {
+        str(result.get('action')): result
+        for result in results
+    }
+    advance = by_action.get('advance')
+    withdraw = by_action.get('withdraw')
+    if advance is None or withdraw is None:
+        raise RuntimeError(
+            f'Cross-action race is missing a result: {_safe_payload(results)}'
+        )
+    withdraw_success = (
+        int(withdraw['status_code']) == 200
+        and withdraw.get('payload', {}).get('success') is True
+    )
+    advance_status = int(advance['status_code'])
+    advance_consistent = (
+        (
+            advance_status == 200
+            and advance.get('payload', {}).get('success') is True
+        )
+        or (
+            advance_status == 409
+            and advance.get('payload', {}).get('success') is False
+        )
+    )
+    if not withdraw_success or not advance_consistent:
+        raise RuntimeError(
+            'Concurrent advance/withdraw did not produce a serialized '
+            f'outcome: {_safe_payload(results)}'
         )
 
 
@@ -173,12 +223,61 @@ def _run_advance_race(
     return results
 
 
+def _run_advance_withdraw_race(
+    base_url: str,
+    *,
+    token: str,
+    game_id: int,
+    player_id: int,
+    figure_id: int,
+    timeout: float,
+) -> list[dict[str, Any]]:
+    start = threading.Barrier(3)
+
+    def _request(action: str) -> dict[str, Any]:
+        if action == 'advance':
+            url = f'{base_url}/games/advance_figure'
+            payload = {
+                'game_id': game_id,
+                'player_id': player_id,
+                'figure_id': figure_id,
+            }
+        else:
+            url = f'{base_url}/games/conquer_withdraw'
+            payload = {
+                'game_id': game_id,
+                'player_id': player_id,
+                'client_action_id': f'cross-race-{secrets.token_hex(8)}',
+            }
+        result = _request_json_result(
+            'POST',
+            url,
+            token=token,
+            timeout=timeout,
+            json_payload=payload,
+            start=start,
+        )
+        result['action'] = action
+        return result
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [
+            executor.submit(_request, action)
+            for action in ('advance', 'withdraw')
+        ]
+        start.wait(timeout=timeout)
+        results = [future.result(timeout=timeout + 5) for future in futures]
+    _assert_advance_withdraw_race(results)
+    return results
+
+
 def run_smoke(
     base_url: str,
     *,
     expected_environment: str,
     timeout: float,
     race_advances: bool = False,
+    race_advance_withdraw: bool = False,
 ) -> dict[str, Any]:
     base_url = base_url.rstrip('/')
     session = requests.Session()
@@ -304,7 +403,8 @@ def run_smoke(
         raise RuntimeError('Game read returned the wrong game ID')
 
     advance_race = None
-    if race_advances:
+    prelude_resolution = None
+    if race_advances or race_advance_withdraw:
         game_data = game['game']
         attacker = next(
             (
@@ -317,6 +417,55 @@ def run_smoke(
         if attacker is None:
             raise RuntimeError('Could not identify the human Conquer player')
         player_id = int(attacker['id'])
+
+        turn_start, timings['race_start_turn_ms'] = _request_json(
+            session,
+            'POST',
+            f'{base_url}/games/start_turn',
+            token=token,
+            timeout=timeout,
+            json={'game_id': game_id, 'player_id': player_id},
+        )
+        turn_summary = turn_start.get('opponent_turn_summary') or {}
+        pending_prelude = turn_summary.get('pending_prelude_target') or {}
+        if pending_prelude:
+            valid_target_ids = [
+                int(target_id)
+                for target_id in pending_prelude.get('valid_target_ids', [])
+            ]
+            if not valid_target_ids:
+                raise RuntimeError(
+                    'Pending Conquer prelude did not expose a valid target'
+                )
+            resolved, timings['race_resolve_prelude_ms'] = _request_json(
+                session,
+                'POST',
+                f'{base_url}/kingdom/conquer/resolve_prelude_target',
+                token=token,
+                timeout=timeout,
+                json={
+                    'game_id': game_id,
+                    'spell_id': int(pending_prelude['spell_id']),
+                    'target_figure_id': valid_target_ids[0],
+                },
+            )
+            game_data = resolved['game']
+            prelude_resolution = {
+                'spell_name': pending_prelude.get('spell_name'),
+                'target_figure_id': valid_target_ids[0],
+            }
+            attacker = next(
+                (
+                    player
+                    for player in game_data.get('players', [])
+                    if int(player.get('user_id', -1)) == user_id
+                ),
+                None,
+            )
+            if attacker is None:
+                raise RuntimeError(
+                    'Prelude resolution lost the human Conquer player'
+                )
         figure_ids = [
             int(figure['id'])
             for figure in attacker.get('figures', [])
@@ -324,14 +473,24 @@ def run_smoke(
                 game_data.get('resting_figure_ids') or []
             )
         ]
-        advance_race = _run_advance_race(
-            base_url,
-            token=token,
-            game_id=game_id,
-            player_id=player_id,
-            figure_ids=figure_ids,
-            timeout=timeout,
-        )
+        if race_advances:
+            advance_race = _run_advance_race(
+                base_url,
+                token=token,
+                game_id=game_id,
+                player_id=player_id,
+                figure_ids=figure_ids,
+                timeout=timeout,
+            )
+        else:
+            advance_race = _run_advance_withdraw_race(
+                base_url,
+                token=token,
+                game_id=game_id,
+                player_id=player_id,
+                figure_id=figure_ids[0],
+                timeout=timeout,
+            )
         game, timings['post_race_game_read_ms'] = _request_json(
             session,
             'GET',
@@ -365,6 +524,22 @@ def run_smoke(
             raise RuntimeError(
                 'Post-race game state does not contain the winning advance'
             )
+    elif race_advance_withdraw:
+        if game['game'].get('state') != 'finished':
+            raise RuntimeError(
+                'Concurrent advance/withdraw did not finish the Conquer game'
+            )
+        withdraw_logs = [
+            entry
+            for entry in logs.get('log_entries', [])
+            if entry.get('type') == 'auto_loss'
+            and 'withdrew from the conquest' in entry.get('message', '')
+        ]
+        if len(withdraw_logs) != 1:
+            raise RuntimeError(
+                'Expected exactly one committed Conquer withdrawal log, got '
+                f'{len(withdraw_logs)}'
+            )
     chats, timings['chat_messages_ms'] = _request_json(
         session,
         'GET',
@@ -384,6 +559,7 @@ def run_smoke(
         'game_id': game_id,
         'log_entry_count': len(logs.get('log_entries', [])),
         'chat_message_count': len(chats.get('chat_messages', [])),
+        'prelude_resolution': prelude_resolution,
         'advance_race': advance_race,
         'timings_ms': {
             key: round(value, 1)
@@ -409,6 +585,14 @@ def main() -> int:
             'Race two legal initial advances and require exactly one to commit.'
         ),
     )
+    parser.add_argument(
+        '--race-advance-withdraw',
+        action='store_true',
+        help=(
+            'Race an initial advance against withdrawal and require one '
+            'canonical finished result.'
+        ),
+    )
     args = parser.parse_args()
 
     base_url = args.base_url.rstrip('/')
@@ -416,12 +600,17 @@ def main() -> int:
         parser.error(
             '--confirm-mutation must exactly match the normalized --base-url'
         )
+    if args.race_advances and args.race_advance_withdraw:
+        parser.error(
+            '--race-advances and --race-advance-withdraw are mutually exclusive'
+        )
 
     result = run_smoke(
         base_url,
         expected_environment=args.expected_environment,
         timeout=max(1.0, args.timeout),
         race_advances=args.race_advances,
+        race_advance_withdraw=args.race_advance_withdraw,
     )
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0
