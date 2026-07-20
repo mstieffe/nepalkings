@@ -770,15 +770,17 @@ server queueing is healthy.
 
 ### Serialized Conquer battle mutations — staging release `df69ece`
 
-The mutation audit found that early Conquer actions such as
-`/games/advance_figure` and `/games/select_defender` read and wrote mutable
-game state without acquiring the PostgreSQL per-game advisory lock used by the
-newer tactic endpoints. Two WSGI workers could therefore validate against the
-same turn snapshot. Release
+The mutation audit confirmed that the application-wide `before_request`
+boundary already acquires a PostgreSQL per-game advisory lock for every game
+mutation. Early Conquer routes such as `/games/advance_figure` and
+`/games/select_defender` did not also have the route-local lock/fallback used
+by the newer tactic endpoints, however, and they did not reject stale requests
+after a game reached `finished`. Release
 `df69ece7bf5916d335185752afc2c33656bb2a7e` now:
 
-- acquires the cross-worker game lock before every Conquer battle mutation
-  reads game state;
+- keeps the application-wide PostgreSQL boundary as the primary cross-worker
+  lock and adds a route-local defence-in-depth lock around every Conquer
+  battle mutation;
 - covers counter spells, advances, defender selection, Civil War selection,
   fight/fold, legacy battle moves, battle finish, and post-battle choices;
 - rejects stale advance and defender-selection requests after a game is

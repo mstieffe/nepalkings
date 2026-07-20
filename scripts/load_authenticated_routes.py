@@ -52,6 +52,8 @@ class Sample:
     route: str
     status: int
     virtual_user: int
+    content_encoding: str = ""
+    wire_bytes: int = 0
 
     @property
     def ok(self) -> bool:
@@ -263,6 +265,8 @@ def _run_load(
             started = time.perf_counter()
             status = 0
             byte_count = 0
+            wire_byte_count = 0
+            content_encoding = ""
             error = ""
             try:
                 response = session.get(
@@ -271,6 +275,16 @@ def _run_load(
                 )
                 status = response.status_code
                 byte_count = len(response.content)
+                content_encoding = response.headers.get(
+                    "Content-Encoding",
+                    "",
+                )
+                try:
+                    wire_byte_count = int(
+                        response.headers.get("Content-Length", byte_count)
+                    )
+                except (TypeError, ValueError):
+                    wire_byte_count = byte_count
                 if not 200 <= response.status_code < 300:
                     error = f"HTTP {response.status_code}"
                 else:
@@ -295,6 +309,8 @@ def _run_load(
                     route=route,
                     status=status,
                     virtual_user=user_index,
+                    content_encoding=content_encoding,
+                    wire_bytes=wire_byte_count,
                 ))
 
             remaining = deadline - time.monotonic()
@@ -346,11 +362,26 @@ def _summarize(
                 if successful
                 else 0
             ),
+            "gzip_responses": sum(
+                sample.content_encoding == "gzip"
+                for sample in successful
+            ),
             "errors": len(route_samples) - len(successful),
             "p50_ms": round(_nearest_rank(latencies, 0.50), 1),
             "p95_ms": route_p95_ms,
             "p99_ms": round(_nearest_rank(latencies, 0.99), 1),
             "requests": len(route_samples),
+            "wire_bytes_mean": (
+                round(
+                    statistics.mean(
+                        sample.wire_bytes or sample.bytes
+                        for sample in successful
+                    ),
+                    1,
+                )
+                if successful
+                else 0
+            ),
         }
 
     successful = [sample for sample in samples if sample.ok]

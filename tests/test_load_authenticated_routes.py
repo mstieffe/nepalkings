@@ -92,3 +92,29 @@ def test_summary_uses_explicit_heavy_map_budget() -> None:
     )
     assert report["ok"] is False
     assert "kingdom_map p95" in report["failures"][0]
+
+
+def test_summary_reports_compressed_wire_size() -> None:
+    sample = Sample(
+        bytes=3_341_221,
+        content_encoding="gzip",
+        elapsed_ms=500,
+        error="",
+        route="kingdom_map",
+        status=200,
+        virtual_user=1,
+        wire_bytes=250_000,
+    )
+
+    report = _summarize(
+        [sample],
+        duration_seconds=1,
+        max_p95_ms=800,
+        max_map_p95_ms=1500,
+        max_error_rate=0.005,
+    )
+
+    route = report["routes"]["kingdom_map"]
+    assert route["bytes_mean"] == 3_341_221
+    assert route["wire_bytes_mean"] == 250_000
+    assert route["gzip_responses"] == 1
