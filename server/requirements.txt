@@ -8,7 +8,7 @@ SQLAlchemy==2.0.50
 SQLAlchemy-Utils==0.42.1
 Werkzeug==3.1.8
 blinker==1.9.0
-click==8.4.1
+click==8.4.2
 itsdangerous==2.2.0
 Jinja2==3.1.6
 MarkupSafe==3.0.3
