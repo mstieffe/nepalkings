@@ -3,6 +3,11 @@
 from flask import Blueprint, request, jsonify, g
 from sqlalchemy.orm import joinedload
 from models import db, LogEntry, ChatMessage, Player
+from moderation_service import (
+    active_chat_mute,
+    blocked_user_ids,
+    direct_contact_blocked,
+)
 import logging
 
 import server_settings as settings
@@ -113,7 +118,25 @@ def add_chat_message():
             or not receiver or receiver.game_id != game_id
         ):
             return jsonify({'success': False, 'message': 'Player not found in this game'}), 403
+        if active_chat_mute(g.current_user):
+            return jsonify({
+                'success': False,
+                'message': 'Chat is temporarily unavailable for this account.',
+                'reason': 'chat_muted',
+                'muted_until': g.current_user.chat_muted_until.isoformat(),
+            }), 403
+        if direct_contact_blocked(sender.user_id, receiver.user_id):
+            return jsonify({
+                'success': False,
+                'message': 'Direct chat with this player is unavailable.',
+                'reason': 'player_blocked',
+            }), 403
         message = data['message'][:_MAX_CHAT_MESSAGE] if data.get('message') else ''
+        if not message.strip():
+            return jsonify({
+                'success': False,
+                'message': 'Message is required',
+            }), 400
 
         chat_message = ChatMessage(
             game_id=game_id,
@@ -148,7 +171,19 @@ def get_chat_messages():
         if membership_err:
             return membership_err
 
-        chat_messages = ChatMessage.query.filter_by(game_id=game_id).order_by(ChatMessage.timestamp).all()
+        query = ChatMessage.query.filter_by(game_id=game_id)
+        hidden_user_ids = blocked_user_ids(g.user_id)
+        if hidden_user_ids:
+            hidden_player_ids = [
+                player_id for (player_id,) in db.session.query(Player.id).filter(
+                    Player.game_id == game_id,
+                    Player.user_id.in_(hidden_user_ids),
+                ).all()
+            ]
+            if hidden_player_ids:
+                query = query.filter(
+                    ChatMessage.sender_id.notin_(hidden_player_ids))
+        chat_messages = query.order_by(ChatMessage.timestamp).all()
 
         return jsonify({'success': True, 'chat_messages': [message.serialize() for message in chat_messages]})
 

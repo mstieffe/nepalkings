@@ -63,3 +63,17 @@ MAINTENANCE_RETRY_AFTER_SECONDS = max(
     1,
     int(os.getenv('MAINTENANCE_RETRY_AFTER_SECONDS', '300')),
 )
+
+# Lightweight incident switches. They leave reads and existing games
+# available while stopping only the affected source of new writes.
+REGISTRATION_ENABLED = _boolean('REGISTRATION_ENABLED', True)
+CHAT_ENABLED = _boolean('CHAT_ENABLED', True)
+NEW_GAMES_ENABLED = _boolean('NEW_GAMES_ENABLED', True)
+CONQUER_ENABLED = _boolean('CONQUER_ENABLED', True)
+AI_JOBS_ENABLED = _boolean('AI_JOBS_ENABLED', True)
+
+# Browsers may cache an approved CORS preflight for this many seconds.
+CORS_PREFLIGHT_MAX_AGE_SECONDS = max(
+    0,
+    int(os.getenv('CORS_PREFLIGHT_MAX_AGE_SECONDS', '600')),
+)

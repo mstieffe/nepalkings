@@ -192,13 +192,12 @@ Do not update the public client's default server until every item below passes.
    deployment that can mutate schema or data.
 7. [x] Deploy an immutable release, install pinned dependencies, and run
    `manage.py prepare-database` against `production.env`.
-8. [ ] The production WSGI is configured and web-worker background services
-   are off. Increase the account limit to two always-on tasks, then create the
-   separate production worker.
-9. [ ] TLS, `/healthz`, `/readyz`, legal endpoints, maintenance behavior,
+8. [x] The production WSGI has web-worker background services off, and the
+   second always-on allocation now runs isolated production task `35394`.
+9. [x] TLS, `/healthz`, `/readyz`, legal endpoints, maintenance behavior,
    exact CORS origin, authenticated reads, concurrent reads/writes, and logs
-   passed. Complete a production Conquer mutation check after the worker exists
-   and finish the rollback drill.
+   passed. The production Conquer mutation, cleanup, application rollback, and
+   exact database restore drills also passed after the worker was created.
 10. [ ] Disable production maintenance only after the worker and remaining
     smoke gates pass.
 

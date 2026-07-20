@@ -587,6 +587,8 @@ class MenuScreenMixin:
         response = self._logout_dialogue.update(events)
         if response == 'yes':
             self._logout_dialogue = None
+            from utils import http_compat as _http
+            _http.clear_auth_token()
             self.state.screen = 'login'
             self.reset_action()
             self.state.user = None

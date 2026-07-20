@@ -6,14 +6,18 @@ from flask_cors import CORS
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from models import db
+import json
 import logging
 from logging.handlers import RotatingFileHandler
 import signal
 import sys
+import time
+import uuid
 
 import server_settings as settings
+from observability import JsonLogFormatter, configure_logging
 from routes import (auth, battle_shop, challenges, collection, figures, games,
-                    kingdom, legal, msg, onboarding, ops, spells)
+                    kingdom, legal, msg, onboarding, ops, safety, spells)
 
 games.settings = settings
 challenges.settings = settings
@@ -71,7 +75,13 @@ app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1)
 cors_origins = settings.CORS_ORIGINS
 if cors_origins != '*':
     cors_origins = [o.strip() for o in cors_origins.split(',')]
-CORS(app, origins=cors_origins, allow_headers=['Content-Type', 'Authorization'])
+CORS(
+    app,
+    origins=cors_origins,
+    allow_headers=['Content-Type', 'Authorization', 'X-Request-ID'],
+    expose_headers=['X-Request-ID'],
+    max_age=settings.CORS_PREFLIGHT_MAX_AGE_SECONDS,
+)
 
 # ── Rate limiting ──
 limiter = Limiter(
@@ -85,6 +95,20 @@ limiter = Limiter(
 )
 
 # ── Maintenance and request-size guards ──
+@app.before_request
+def _start_request_observability():
+    supplied = request.headers.get('X-Request-ID', '').strip()
+    if (
+        supplied
+        and len(supplied) <= 64
+        and all(ch.isalnum() or ch in '-_.' for ch in supplied)
+    ):
+        g.request_id = supplied
+    else:
+        g.request_id = uuid.uuid4().hex
+    g.request_started_at = time.perf_counter()
+
+
 @app.before_request
 def _enforce_maintenance_mode():
     if not settings.MAINTENANCE_MODE:
@@ -108,6 +132,57 @@ def _enforce_maintenance_mode():
     return response
 
 
+@app.before_request
+def _enforce_feature_switches():
+    switches = {
+        'auth.register': (
+            settings.REGISTRATION_ENABLED,
+            'registration_disabled',
+            'New registrations are temporarily paused.',
+        ),
+        'msg.add_chat_message': (
+            settings.CHAT_ENABLED,
+            'chat_disabled',
+            'Chat is temporarily paused.',
+        ),
+        'kingdom.kingdom_messages_send': (
+            settings.CHAT_ENABLED,
+            'chat_disabled',
+            'Kingdom messages are temporarily paused.',
+        ),
+        'challenges.create_challenge': (
+            settings.NEW_GAMES_ENABLED,
+            'new_games_disabled',
+            'Starting new games is temporarily paused.',
+        ),
+        'games.create_game': (
+            settings.NEW_GAMES_ENABLED,
+            'new_games_disabled',
+            'Starting new games is temporarily paused.',
+        ),
+        'kingdom.conquer_start_battle': (
+            settings.CONQUER_ENABLED,
+            'conquer_disabled',
+            'Starting Conquer battles is temporarily paused.',
+        ),
+    }
+    configured = switches.get(request.endpoint)
+    if configured is None or configured[0]:
+        return None
+    response = jsonify({
+        'success': False,
+        'message': configured[2],
+        'reason': configured[1],
+        'retryable': True,
+    })
+    response.status_code = 503
+    response.headers['Retry-After'] = str(
+        settings.MAINTENANCE_RETRY_AFTER_SECONDS
+    )
+    response.headers['Cache-Control'] = 'no-store'
+    return response
+
+
 # Werkzeug only raises 413 lazily when a view reads the body, where the
 # routes' blanket except-blocks would turn it into a 500 — so reject
 # based on the declared Content-Length before any view runs.
@@ -121,6 +196,16 @@ def _reject_oversized_body():
 @app.errorhandler(413)
 def _request_too_large(_e):
     return jsonify({'success': False, 'message': 'Request too large'}), 413
+
+
+@app.errorhandler(404)
+def _route_not_found(_e):
+    return jsonify({'success': False, 'message': 'Route not found'}), 404
+
+
+@app.errorhandler(405)
+def _method_not_allowed(_e):
+    return jsonify({'success': False, 'message': 'Method not allowed'}), 405
 
 # ── Async-play email notifications ──
 @app.after_request
@@ -146,6 +231,40 @@ def _turn_notification_hook(response):
                     game_id, requester_user_id=getattr(g, 'user_id', None))
     except Exception:
         logging.getLogger('nepalkings').exception('turn notification hook failed')
+    return response
+
+
+@app.after_request
+def _record_request(response):
+    request_id = getattr(g, 'request_id', None)
+    if request_id:
+        response.headers['X-Request-ID'] = request_id
+        if response.status_code >= 400 and response.is_json:
+            payload = response.get_json(silent=True)
+            if isinstance(payload, dict) and 'request_id' not in payload:
+                payload['request_id'] = request_id
+                response.set_data(json.dumps(
+                    payload,
+                    separators=(',', ':'),
+                    ensure_ascii=False,
+                ))
+    started = getattr(g, 'request_started_at', None)
+    duration_ms = (
+        round((time.perf_counter() - started) * 1000, 1)
+        if started is not None else None
+    )
+    logging.getLogger('nepalkings.request').info(
+        'request_complete',
+        extra={
+            'event': 'request_complete',
+            'method': request.method,
+            'path': request.path,
+            'endpoint': request.endpoint,
+            'status': response.status_code,
+            'duration_ms': duration_ms,
+            'user_id': getattr(g, 'user_id', None),
+        },
+    )
     return response
 
 
@@ -175,10 +294,10 @@ def _set_security_headers(response):
 # Central logging setup.  All server modules use named loggers under the
 # 'nepalkings' hierarchy so that every line carries a timestamp, level,
 # and the originating module — making production log analysis much easier.
-logging.basicConfig(
-    level=logging.DEBUG if settings.DEBUG_ENABLED else logging.INFO,
-    format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S',
+configure_logging(
+    environment=settings.APP_ENVIRONMENT,
+    release_sha=settings.RELEASE_SHA,
+    debug=settings.DEBUG_ENABLED,
 )
 logger = logging.getLogger('nepalkings')
 
@@ -191,9 +310,9 @@ if settings.DEBUG_LOG_TO_FILE:
         )
         file_handler.setLevel(logging.DEBUG if settings.DEBUG_ENABLED else logging.INFO)
         file_handler.setFormatter(
-            logging.Formatter(
-                '%(asctime)s [%(levelname)s] %(name)s: %(message)s',
-                datefmt='%Y-%m-%d %H:%M:%S',
+            JsonLogFormatter(
+                environment=settings.APP_ENVIRONMENT,
+                release_sha=settings.RELEASE_SHA,
             )
         )
         logging.getLogger().addHandler(file_handler)
@@ -351,6 +470,7 @@ app.register_blueprint(collection, url_prefix='/collection')
 app.register_blueprint(kingdom, url_prefix='/kingdom')
 app.register_blueprint(onboarding, url_prefix='/onboarding')
 app.register_blueprint(legal, url_prefix='/legal')
+app.register_blueprint(safety, url_prefix='/safety')
 app.register_blueprint(ops)
 
 # ── Stricter rate limits for auth-sensitive endpoints ──
@@ -369,6 +489,18 @@ for _view_name in _lookup_views:
     _view_fn = app.view_functions.get(_view_name)
     if _view_fn is not None:
         limiter.limit(settings.RATE_LIMIT_LOOKUP)(_view_fn)
+
+for _view_name in (
+    'msg.add_chat_message',
+    'kingdom.kingdom_messages_send',
+):
+    _view_fn = app.view_functions.get(_view_name)
+    if _view_fn is not None:
+        limiter.limit(settings.RATE_LIMIT_CHAT)(_view_fn)
+
+_report_view = app.view_functions.get('safety.create_report')
+if _report_view is not None:
+    limiter.limit(settings.RATE_LIMIT_REPORT)(_report_view)
 
 # ── Per-user rate limits for kingdom mutation endpoints ──
 _kingdom_mutate_views = (

@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Player report or block
+    url: https://github.com/mstieffe/nepalkings/blob/main/SUPPORT.md#player-reports-and-blocking
+    about: Use the private in-game Account & Safety flow for another player's conduct.
+  - name: Security report
+    url: https://github.com/mstieffe/nepalkings/blob/main/SECURITY.md
+    about: Read the private-contact instructions before disclosing a vulnerability.

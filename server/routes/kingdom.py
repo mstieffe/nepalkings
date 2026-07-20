@@ -19,6 +19,11 @@ from models import (db, User, Land, LandAttackLog, KingdomMessage,
                     CardToFigure, ActiveSpell,
                     MainCard, SideCard, Suit, MainRank, CardRole)
 from routes.auth import require_token
+from moderation_service import (
+    active_chat_mute,
+    blocked_user_ids,
+    direct_contact_blocked,
+)
 from routes.serialization import (
     redact_payload_for_viewer,
     serialize_game_for_viewer,
@@ -6709,16 +6714,35 @@ def kingdom_messages():
     except Exception as exc:
         logger.warning('reconcile failed in /messages: %s', exc)
     limit = max(1, min(request.args.get('limit', 30, type=int), 50))
-    messages = KingdomMessage.query.filter(
+    hidden_user_ids = blocked_user_ids(g.user_id)
+    query = KingdomMessage.query.filter(
         db.or_(
             KingdomMessage.sender_user_id == g.user_id,
             KingdomMessage.recipient_user_id == g.user_id,
         )
-    ).order_by(KingdomMessage.timestamp.desc()).limit(limit).all()
-    unread_count = KingdomMessage.query.filter_by(
+    )
+    unread_query = KingdomMessage.query.filter_by(
         recipient_user_id=g.user_id,
         seen_by_recipient=False,
-    ).count()
+    )
+    if hidden_user_ids:
+        query = query.filter(
+            db.or_(
+                db.and_(
+                    KingdomMessage.sender_user_id == g.user_id,
+                    KingdomMessage.recipient_user_id.notin_(hidden_user_ids),
+                ),
+                db.and_(
+                    KingdomMessage.recipient_user_id == g.user_id,
+                    KingdomMessage.sender_user_id.notin_(hidden_user_ids),
+                ),
+            )
+        )
+        unread_query = unread_query.filter(
+            KingdomMessage.sender_user_id.notin_(hidden_user_ids))
+    messages = query.order_by(
+        KingdomMessage.timestamp.desc()).limit(limit).all()
+    unread_count = unread_query.count()
     return jsonify({
         'success': True,
         'messages': [_serialize_kingdom_message_activity(m, g.user_id) for m in messages],
@@ -6752,6 +6776,25 @@ def kingdom_messages_send():
         return jsonify({'success': False, 'message': 'Cannot message yourself'}), 400
     if recipient.is_ai:
         return jsonify({'success': False, 'message': 'Cannot message AI defenders'}), 400
+    if (recipient.account_status or 'active').lower() != 'active':
+        return jsonify({
+            'success': False,
+            'message': 'This player is unavailable for direct messages.',
+            'reason': 'player_unavailable',
+        }), 403
+    if active_chat_mute(g.current_user):
+        return jsonify({
+            'success': False,
+            'message': 'Chat is temporarily unavailable for this account.',
+            'reason': 'chat_muted',
+            'muted_until': g.current_user.chat_muted_until.isoformat(),
+        }), 403
+    if direct_contact_blocked(g.user_id, recipient.id):
+        return jsonify({
+            'success': False,
+            'message': 'Direct messages with this player are unavailable.',
+            'reason': 'player_blocked',
+        }), 403
 
     land_id = data.get('land_id')
     if land_id in ('', None):
@@ -6813,12 +6856,27 @@ def kingdom_messages_mark_all_seen():
 @require_token
 def kingdom_messages_conversations():
     """Return one row per conversation partner with latest-message summary."""
-    rows = KingdomMessage.query.filter(
+    hidden_user_ids = blocked_user_ids(g.user_id)
+    query = KingdomMessage.query.filter(
         db.or_(
             KingdomMessage.sender_user_id == g.user_id,
             KingdomMessage.recipient_user_id == g.user_id,
         )
-    ).order_by(KingdomMessage.timestamp.desc()).all()
+    )
+    if hidden_user_ids:
+        query = query.filter(
+            db.or_(
+                db.and_(
+                    KingdomMessage.sender_user_id == g.user_id,
+                    KingdomMessage.recipient_user_id.notin_(hidden_user_ids),
+                ),
+                db.and_(
+                    KingdomMessage.recipient_user_id == g.user_id,
+                    KingdomMessage.sender_user_id.notin_(hidden_user_ids),
+                ),
+            )
+        )
+    rows = query.order_by(KingdomMessage.timestamp.desc()).all()
 
     convos = {}
     for m in rows:
@@ -6870,6 +6928,15 @@ def kingdom_messages_thread():
     other = db.session.get(User, other_id)
     if not other:
         return jsonify({'success': False, 'message': 'User not found'}), 404
+    if other_id in blocked_user_ids(g.user_id):
+        return jsonify({
+            'success': True,
+            'other_user_id': other.id,
+            'other_username': other.username,
+            'is_ai': bool(other.is_ai),
+            'messages': [],
+            'blocked': True,
+        })
     limit = max(1, min(request.args.get('limit', 200, type=int), 500))
     messages = KingdomMessage.query.filter(
         db.or_(
@@ -6906,6 +6973,12 @@ def kingdom_users_lookup():
     if user.is_ai:
         return jsonify({'success': False,
                         'message': 'Cannot message AI defenders'}), 400
+    if (user.account_status or 'active').lower() != 'active':
+        return jsonify({
+            'success': False,
+            'message': 'This player is unavailable.',
+            'reason': 'player_unavailable',
+        }), 404
     return jsonify({
         'success': True,
         'user_id': user.id,

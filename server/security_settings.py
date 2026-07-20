@@ -40,11 +40,13 @@ RATE_LIMIT_DEFAULT = os.getenv('RATE_LIMIT_DEFAULT', '600 per minute')
 RATE_LIMIT_LOGIN = os.getenv('RATE_LIMIT_LOGIN', '10 per minute')
 RATE_LIMIT_REGISTER = os.getenv('RATE_LIMIT_REGISTER', '5 per minute')
 RATE_LIMIT_LOOKUP = os.getenv('RATE_LIMIT_LOOKUP', '60 per minute')
+RATE_LIMIT_CHAT = os.getenv('RATE_LIMIT_CHAT', '12 per minute')
+RATE_LIMIT_REPORT = os.getenv('RATE_LIMIT_REPORT', '5 per hour')
 
 # ── Auth token settings ───────────────────────────────────────────
 # Signed user tokens expire after TOKEN_EXPIRY_SECONDS (default 24 hours).
 TOKEN_EXPIRY_SECONDS = int(os.getenv('TOKEN_EXPIRY_SECONDS', '86400'))
 
 # ── Legal acceptance versions ─────────────────────────────────────
-LEGAL_TERMS_VERSION = os.getenv('LEGAL_TERMS_VERSION', '2026-06-12')
-LEGAL_PRIVACY_VERSION = os.getenv('LEGAL_PRIVACY_VERSION', '2026-06-12')
+LEGAL_TERMS_VERSION = os.getenv('LEGAL_TERMS_VERSION', '2026-07-20')
+LEGAL_PRIVACY_VERSION = os.getenv('LEGAL_PRIVACY_VERSION', '2026-07-20')

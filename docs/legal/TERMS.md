@@ -1,6 +1,6 @@
 # Nepal Kings Terms of Service
 
-Version: 2026-06-12
+Version: 2026-07-20
 
 These Terms govern access to the public Nepal Kings game service.
 
@@ -30,7 +30,9 @@ The service may be interrupted for maintenance, bugs, abuse response, infrastruc
 
 ## Termination
 
-We may restrict or terminate access for violations of these Terms, security abuse, illegal activity, or conduct that harms other players or the service.
+We may mute chat, temporarily suspend, or terminate access for violations of
+these Terms, security abuse, illegal activity, or conduct that harms other
+players or the service. Players may request review through the support channel.
 
 ## No Warranty
 
@@ -46,4 +48,7 @@ We may update these Terms. Material updates should receive a new version date. C
 
 ## Contact
 
-For legal or safety concerns, contact the operator listed on the public project or deployment page.
+For ordinary player conduct, use **Settings → Safety**.
+For legal concerns or a moderation appeal, use
+<https://github.com/mstieffe/nepalkings/issues/new> without posting private
+messages, credentials, or other personal data publicly.

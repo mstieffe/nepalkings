@@ -88,6 +88,28 @@ class User(db.Model):
     email_verified = db.Column(db.Boolean, nullable=False, default=False)
     email_verification_token = db.Column(db.String(128), nullable=True)
     email_verification_sent_at = db.Column(db.DateTime, nullable=True)
+    # Human session revocation and proportional moderation controls.
+    token_version = db.Column(
+        db.Integer,
+        nullable=False,
+        default=0,
+        server_default='0',
+    )
+    account_status = db.Column(
+        db.String(20),
+        nullable=False,
+        default='active',
+        server_default='active',
+    )
+    suspended_until = db.Column(db.DateTime, nullable=True)
+    chat_muted_until = db.Column(db.DateTime, nullable=True)
+    deleted_at = db.Column(db.DateTime, nullable=True)
+    is_moderator = db.Column(
+        db.Boolean,
+        nullable=False,
+        default=False,
+        server_default=false(),
+    )
     # Opt-out for gameplay notification emails (your-turn / challenge / result)
     notify_emails_enabled = db.Column(
         db.Boolean,
@@ -130,6 +152,7 @@ class User(db.Model):
             'email_verified': self.email_verified,
             'has_email': bool(self.email),
             'notify_emails_enabled': bool(self.notify_emails_enabled),
+            'account_status': self.account_status or 'active',
             'booster_packs': self.booster_packs,
             'booster_packs_side': self.booster_packs_side,
             'maps': int(self.maps or 0),
@@ -149,6 +172,97 @@ class User(db.Model):
 
     def check_password(self, password):
         return check_password_hash(self.password_hash, password)
+
+
+class UserBlock(db.Model):
+    """One player's request to hide direct contact from another player."""
+    __tablename__ = 'user_block'
+
+    id = db.Column(db.Integer, primary_key=True)
+    blocker_user_id = db.Column(
+        db.Integer, db.ForeignKey('user.id'), nullable=False, index=True)
+    blocked_user_id = db.Column(
+        db.Integer, db.ForeignKey('user.id'), nullable=False, index=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=_utcnow)
+
+    blocker = db.relationship('User', foreign_keys=[blocker_user_id])
+    blocked = db.relationship('User', foreign_keys=[blocked_user_id])
+
+    __table_args__ = (
+        db.UniqueConstraint(
+            'blocker_user_id',
+            'blocked_user_id',
+            name='uq_user_block_pair',
+        ),
+        db.CheckConstraint(
+            'blocker_user_id <> blocked_user_id',
+            name='ck_user_block_not_self',
+        ),
+    )
+
+
+class SafetyReport(db.Model):
+    """Small, evidence-preserving player report queue for beta operations."""
+    __tablename__ = 'safety_report'
+
+    id = db.Column(db.Integer, primary_key=True)
+    reporter_user_id = db.Column(
+        db.Integer, db.ForeignKey('user.id'), nullable=False, index=True)
+    reported_user_id = db.Column(
+        db.Integer, db.ForeignKey('user.id'), nullable=False, index=True)
+    reason = db.Column(db.String(40), nullable=False)
+    details = db.Column(db.String(1000), nullable=True)
+    context_type = db.Column(db.String(40), nullable=False, default='user')
+    context_id = db.Column(db.Integer, nullable=True)
+    evidence = db.Column(db.JSON, nullable=True)
+    status = db.Column(
+        db.String(20), nullable=False, default='open', server_default='open')
+    resolution = db.Column(db.String(1000), nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=_utcnow)
+    closed_at = db.Column(db.DateTime, nullable=True)
+    closed_by_user_id = db.Column(
+        db.Integer, db.ForeignKey('user.id'), nullable=True)
+
+    reporter = db.relationship('User', foreign_keys=[reporter_user_id])
+    reported = db.relationship('User', foreign_keys=[reported_user_id])
+    closed_by = db.relationship('User', foreign_keys=[closed_by_user_id])
+
+    def serialize_for_reporter(self):
+        return {
+            'id': self.id,
+            'reported_user_id': self.reported_user_id,
+            'reported_username': (
+                self.reported.username if self.reported else None),
+            'reason': self.reason,
+            'context_type': self.context_type,
+            'context_id': self.context_id,
+            'status': self.status,
+            'created_at': (
+                self.created_at.isoformat() if self.created_at else None),
+        }
+
+
+class ModerationAction(db.Model):
+    """Append-only audit record for operator actions."""
+    __tablename__ = 'moderation_action'
+
+    id = db.Column(db.Integer, primary_key=True)
+    report_id = db.Column(
+        db.Integer, db.ForeignKey('safety_report.id'), nullable=True, index=True)
+    target_user_id = db.Column(
+        db.Integer, db.ForeignKey('user.id'), nullable=False, index=True)
+    actor_user_id = db.Column(
+        db.Integer, db.ForeignKey('user.id'), nullable=True)
+    actor_label = db.Column(db.String(120), nullable=False, default='operator')
+    action = db.Column(db.String(40), nullable=False)
+    reason = db.Column(db.String(1000), nullable=True)
+    metadata_json = db.Column(db.JSON, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=_utcnow)
+
+    report = db.relationship('SafetyReport', foreign_keys=[report_id])
+    target = db.relationship('User', foreign_keys=[target_user_id])
+    actor = db.relationship('User', foreign_keys=[actor_user_id])
+
 
 class Game(db.Model):
     id = db.Column(db.Integer, primary_key=True)

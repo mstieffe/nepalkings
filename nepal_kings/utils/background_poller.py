@@ -57,6 +57,10 @@ class BackgroundPoller:
 
     def poll(self, args=None, kwargs=None):
         """Start a background fetch if one isn't already running."""
+        if _IS_EMSCRIPTEN:
+            from utils.http_compat import is_page_hidden
+            if is_page_hidden():
+                return
         with self._lock:
             if self._busy:
                 # On emscripten, check pending async requests each call

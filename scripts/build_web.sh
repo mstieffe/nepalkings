@@ -46,6 +46,7 @@ rsync -a \
     --exclude 'img/old_cards' \
     --exclude 'img/_button' \
     --exclude 'img/app_icon' \
+    --exclude 'img/figures/build_hierarchy/build_hierarchy2.png' \
     nepal_kings/ "$APP/"
 
 RAW_IMG_MB=$(du -sm "$APP/img" | cut -f1)

@@ -3,7 +3,7 @@
 """Tests for authentication routes: register, login, token validation."""
 import pytest
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from sqlalchemy.exc import OperationalError
 from werkzeug.security import generate_password_hash
 
@@ -209,6 +209,288 @@ class TestTokenDecorator:
         resp = client.post('/auth/heartbeat', headers={'Authorization': f'Bearer {token}'})
         assert resp.status_code == 200
         assert resp.get_json()['success'] is True
+
+    def test_legacy_version_zero_token_remains_valid(self, client, db):
+        import server_settings as settings
+        from itsdangerous import URLSafeTimedSerializer
+        from models import User
+
+        user = User(
+            username='legacy_token_user',
+            password_hash=generate_password_hash('pass1234'),
+        )
+        db.session.add(user)
+        db.session.commit()
+        token = URLSafeTimedSerializer(settings.SECRET_KEY).dumps(
+            user.id,
+            salt='user-auth',
+        )
+
+        response = client.post(
+            '/auth/heartbeat',
+            headers={'Authorization': f'Bearer {token}'},
+        )
+
+        assert response.status_code == 200, response.get_json()
+
+    def test_revoked_token_is_rejected(self, client, db):
+        from models import User
+        from routes.auth import generate_token
+
+        user = User(
+            username='revoked_token_user',
+            password_hash=generate_password_hash('pass1234'),
+        )
+        db.session.add(user)
+        db.session.commit()
+        token = generate_token(user.id, user.token_version)
+        user.token_version = 1
+        db.session.commit()
+
+        response = client.post(
+            '/auth/heartbeat',
+            headers={'Authorization': f'Bearer {token}'},
+        )
+
+        assert response.status_code == 401
+        assert response.get_json()['reason'] == 'session_revoked'
+
+    def test_suspended_and_banned_accounts_are_rejected(self, client, db):
+        from models import User
+        from routes.auth import generate_token
+
+        suspended = User(
+            username='suspended_user',
+            password_hash=generate_password_hash('pass1234'),
+            account_status='suspended',
+            suspended_until=datetime.now() + timedelta(hours=1),
+        )
+        banned = User(
+            username='banned_user',
+            password_hash=generate_password_hash('pass1234'),
+            account_status='banned',
+        )
+        db.session.add_all([suspended, banned])
+        db.session.commit()
+
+        suspended_response = client.post(
+            '/auth/heartbeat',
+            headers={
+                'Authorization': (
+                    f'Bearer {generate_token(suspended.id)}'
+                )
+            },
+        )
+        banned_response = client.post(
+            '/auth/heartbeat',
+            headers={
+                'Authorization': f'Bearer {generate_token(banned.id)}'
+            },
+        )
+
+        assert suspended_response.status_code == 403
+        assert suspended_response.get_json()['reason'] == 'account_suspended'
+        assert banned_response.status_code == 403
+        assert banned_response.get_json()['reason'] == 'account_banned'
+
+    def test_login_reactivates_elapsed_timed_suspension(self, client, db):
+        from models import User
+
+        user = User(
+            username='elapsed_suspension',
+            password_hash=generate_password_hash('pass1234'),
+            account_status='suspended',
+            suspended_until=(
+                datetime.now(timezone.utc).replace(tzinfo=None)
+                - timedelta(minutes=1)
+            ),
+        )
+        db.session.add(user)
+        db.session.commit()
+
+        response = client.post(
+            '/auth/login',
+            data={'username': user.username, 'password': 'pass1234'},
+        )
+
+        assert response.status_code == 200, response.get_json()
+        db.session.refresh(user)
+        assert user.account_status == 'active'
+        assert user.suspended_until is None
+
+
+class TestAccountLifecycle:
+    def _register(self, client, username='account_user', email=None):
+        data = _register_data(username, 'original-pass')
+        if email:
+            data['email'] = email
+        response = client.post('/auth/register', data=data)
+        assert response.status_code == 200
+        return response.get_json()
+
+    def test_change_password_revokes_old_token_and_returns_current_token(
+            self, client):
+        registered = self._register(client)
+        old_token = registered['token']
+
+        changed = client.post(
+            '/auth/account/change_password',
+            data={
+                'current_password': 'original-pass',
+                'new_password': 'replacement-pass',
+            },
+            headers={'Authorization': f'Bearer {old_token}'},
+        )
+
+        assert changed.status_code == 200
+        new_token = changed.get_json()['token']
+        assert client.post(
+            '/auth/heartbeat',
+            headers={'Authorization': f'Bearer {old_token}'},
+        ).status_code == 401
+        assert client.post(
+            '/auth/heartbeat',
+            headers={'Authorization': f'Bearer {new_token}'},
+        ).status_code == 200
+        assert client.post('/auth/login', data={
+            'username': 'account_user',
+            'password': 'original-pass',
+        }).status_code == 401
+        assert client.post('/auth/login', data={
+            'username': 'account_user',
+            'password': 'replacement-pass',
+        }).status_code == 200
+
+    def test_logout_all_revokes_current_token(self, client):
+        registered = self._register(client, username='logout_all_user')
+        token = registered['token']
+
+        response = client.post(
+            '/auth/account/logout_all',
+            headers={'Authorization': f'Bearer {token}'},
+        )
+
+        assert response.status_code == 200
+        assert client.post(
+            '/auth/heartbeat',
+            headers={'Authorization': f'Bearer {token}'},
+        ).status_code == 401
+
+    def test_export_returns_own_data_without_password_hash(self, client):
+        registered = self._register(
+            client,
+            username='export_user',
+            email='export@example.com',
+        )
+        self._register(client, username='export_target')
+        headers = {'Authorization': f'Bearer {registered["token"]}'}
+        assert client.post(
+            '/safety/blocks',
+            headers=headers,
+            json={'username': 'export_target'},
+        ).status_code == 200
+        assert client.post(
+            '/safety/reports',
+            headers=headers,
+            json={
+                'username': 'export_target',
+                'reason': 'spam',
+                'details': 'exported own report',
+            },
+        ).status_code == 201
+
+        response = client.get(
+            '/auth/account/export',
+            headers=headers,
+        )
+        data = response.get_json()
+
+        assert response.status_code == 200
+        assert data['export']['account']['username'] == 'export_user'
+        assert data['export']['account']['email'] == 'export@example.com'
+        assert 'password_hash' not in response.get_data(as_text=True)
+        assert response.headers['Cache-Control'] == 'no-store'
+        assert 'attachment;' in response.headers['Content-Disposition']
+        assert data['export']['player_safety']['blocks'][0][
+            'blocked_username'] == 'export_target'
+        assert data['export']['player_safety']['reports_submitted'][0][
+            'reason'] == 'spam'
+        assert data['export']['player_safety']['reports_submitted'][0][
+            'details'] == 'exported own report'
+        assert 'evidence' not in data['export']['player_safety'][
+            'reports_submitted'][0]
+
+    def test_delete_anonymizes_and_revokes_account(self, client, db):
+        from models import (
+            Challenge,
+            ChallengeStatus,
+            Event,
+            User,
+            UserBlock,
+        )
+
+        registered = self._register(
+            client,
+            username='delete_user',
+            email='delete@example.com',
+        )
+        user = User.query.filter_by(username='delete_user').first()
+        other = User(
+            username='delete_block_target',
+            password_hash=generate_password_hash('password123'),
+            gold=10,
+        )
+        db.session.add(other)
+        db.session.flush()
+        db.session.add(Event(user_id=user.id, name='signup_test'))
+        db.session.add_all([
+            Challenge(
+                challenger_id=user.id,
+                challenged_id=other.id,
+                status=ChallengeStatus.OPEN,
+                stake=1,
+                game_limit=1,
+            ),
+            UserBlock(
+                blocker_user_id=user.id,
+                blocked_user_id=other.id,
+            ),
+            UserBlock(
+                blocker_user_id=other.id,
+                blocked_user_id=user.id,
+            ),
+        ])
+        db.session.commit()
+
+        response = client.post(
+            '/auth/account/delete',
+            data={
+                'current_password': 'original-pass',
+                'confirmation': 'DELETE',
+            },
+            headers={'Authorization': f'Bearer {registered["token"]}'},
+        )
+
+        assert response.status_code == 200
+        db.session.refresh(user)
+        assert user.username.startswith('DeletedPlayer-')
+        assert user.email is None
+        assert user.account_status == 'deleted'
+        assert user.deleted_at is not None
+        assert Event.query.filter_by(user_id=user.id).count() == 0
+        assert UserBlock.query.filter(
+            (UserBlock.blocker_user_id == user.id)
+            | (UserBlock.blocked_user_id == user.id)
+        ).count() == 0
+        challenge = Challenge.query.filter_by(
+            challenger_id=user.id,
+            challenged_id=other.id,
+        ).one()
+        assert challenge.status == ChallengeStatus.REJECTED
+        assert client.post(
+            '/auth/heartbeat',
+            headers={'Authorization': f'Bearer {registered["token"]}'},
+        ).status_code == 401
 
 
 class TestGameMembership:

@@ -399,6 +399,30 @@ def _m_multiworker_conquer_coordination():
     )
 
 
+def _m_account_safety_columns():
+    """Add revocable sessions and lightweight operator controls."""
+    _add_column_if_missing('user', 'token_version',
+                           'INTEGER NOT NULL DEFAULT 0')
+    _add_column_if_missing(
+        'user',
+        'account_status',
+        "VARCHAR(20) NOT NULL DEFAULT 'active'",
+    )
+    _add_column_if_missing('user', 'suspended_until', 'TIMESTAMP')
+    _add_column_if_missing('user', 'chat_muted_until', 'TIMESTAMP')
+    _add_column_if_missing('user', 'deleted_at', 'TIMESTAMP')
+    _add_column_if_missing('user', 'is_moderator',
+                           _boolean_column_ddl(default=False))
+
+
+def _m_moderation_tables():
+    """Create the lightweight block/report/operator-audit tables."""
+    for table_name in ('user_block', 'safety_report', 'moderation_action'):
+        table = db.metadata.tables.get(table_name)
+        if table is not None:
+            table.create(bind=db.engine, checkfirst=True)
+
+
 # ── Registry ───────────────────────────────────────────────────────
 
 MIGRATIONS = [
@@ -423,6 +447,10 @@ MIGRATIONS = [
      _m_widen_password_hash_for_scrypt),
     (17, 'persist multi-worker Conquer coordination',
      _m_multiworker_conquer_coordination),
+    (18, 'account safety and moderation controls',
+     _m_account_safety_columns),
+    (19, 'player blocks, safety reports, and moderation audit',
+     _m_moderation_tables),
 ]
 
 CURRENT_SCHEMA_VERSION = max(version for version, _description, _fn in MIGRATIONS)

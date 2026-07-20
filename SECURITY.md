@@ -1,45 +1,21 @@
-# Security policy
+# Nepal Kings Security Policy
+
+## Supported version
+
+Only the currently published public-beta client and production API are
+supported. Old staging builds, local development servers, and the preserved
+free-plan fallback branch are not public services.
 
 ## Reporting a vulnerability
 
-If you believe you have found a security vulnerability in nepalkings,
-please **do not open a public issue**. Instead email the maintainer at
-the address in `LICENSE` / `pyproject` metadata with:
+Do not publish exploit details, credentials, authentication tokens, hidden
+game state, or another player's personal data.
 
-- a description of the issue,
-- steps to reproduce,
-- the affected commit / version,
-- any proof-of-concept you may have.
+Until a dedicated security mailbox or GitHub private vulnerability reporting
+is enabled, open a minimal issue at
+<https://github.com/mstieffe/nepalkings/issues/new> with the title
+`Private security contact requested`. Include only a high-level category and
+your preferred contact method. The operator will arrange a private follow-up.
 
-You will receive an acknowledgement and a coordinated disclosure plan.
-
-## Supported versions
-
-Only the `main` branch is actively patched. Tagged releases are
-best-effort.
-
-## Secret handling
-
-- Secrets (API keys, SMTP credentials, the Flask `SECRET_KEY`) MUST be
-  provided via environment variables. The repository contains no real
-  secrets; `.env` is gitignored and `.env.example` documents the keys.
-- The server refuses to boot in any non-development environment if
-  `SECRET_KEY` is not set explicitly — see `server/server.py`.
-- `DROP_TABLES_ON_STARTUP` defaults to `False`. The server refuses to
-  boot in non-development environments if this is set to `True`.
-- `CORS_ORIGINS` defaults to a locked-down localhost list. Wide-open
-  `*` must be set explicitly.
-
-## What is in scope
-
-- Authentication & session token issuance / validation.
-- Rate-limited routes and abuse protection.
-- Battle / kingdom state mutations through HTTP routes.
-- Build / deploy scripts that rsync to production.
-
-## What is not in scope
-
-- Issues that require local code execution as the user already running
-  the client.
-- Asset-pipeline scripts under `scripts/assets/` (they are dev tools
-  and never invoked by the runtime).
+For ordinary cheating, harassment, spam, or inappropriate names, use the
+in-game **Settings → Safety** report flow instead.

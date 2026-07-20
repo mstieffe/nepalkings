@@ -5,6 +5,7 @@ from models import db, User, Challenge, ChallengeStatus
 import logging
 import server_settings as settings
 from analytics import track
+from moderation_service import direct_contact_blocked
 from routes.auth import require_token
 
 challenges = Blueprint('challenges', __name__)
@@ -61,6 +62,21 @@ def create_challenge():
 
         if g.user_id != challenger_user.id:
             return jsonify({'success': False, 'message': 'Forbidden'}), 403
+        if (
+            (opponent_user.account_status or 'active').lower() != 'active'
+            and not opponent_user.is_ai
+        ):
+            return jsonify({
+                'success': False,
+                'message': 'This player is unavailable for direct challenges.',
+                'reason': 'player_unavailable',
+            }), 403
+        if direct_contact_blocked(challenger_user.id, opponent_user.id):
+            return jsonify({
+                'success': False,
+                'message': 'This player is unavailable for direct challenges.',
+                'reason': 'player_unavailable',
+            }), 403
 
         # Validate stake
         if stake < 1:

@@ -93,3 +93,89 @@ def test_maintenance_mode_blocks_gameplay_but_keeps_ops_and_legal(
 
     assert client.get('/healthz').status_code == 200
     assert client.get('/legal/versions').status_code == 200
+
+
+def test_request_id_is_echoed_and_invalid_value_is_replaced(client):
+    supplied = client.get(
+        '/healthz',
+        headers={'X-Request-ID': 'player-report-123'},
+    )
+    assert supplied.headers['X-Request-ID'] == 'player-report-123'
+
+    invalid = client.get(
+        '/healthz',
+        headers={'X-Request-ID': 'bad value with whitespace'},
+    )
+    generated = invalid.headers['X-Request-ID']
+    assert generated != 'bad value with whitespace'
+    assert len(generated) == 32
+    assert generated.isalnum()
+
+
+def test_request_id_is_in_json_errors_for_support(client):
+    response = client.get(
+        '/does-not-exist',
+        headers={'X-Request-ID': 'support-case-123'},
+    )
+
+    assert response.status_code == 404
+    assert response.headers['X-Request-ID'] == 'support-case-123'
+    assert response.get_json()['request_id'] == 'support-case-123'
+
+
+def test_cors_preflight_can_be_cached(client):
+    response = client.options(
+        '/auth/login',
+        headers={
+            'Origin': 'http://localhost',
+            'Access-Control-Request-Method': 'POST',
+            'Access-Control-Request-Headers': 'Authorization,X-Request-ID',
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers['Access-Control-Max-Age'] == '600'
+    assert 'X-Request-ID' in response.headers['Access-Control-Allow-Headers']
+
+
+def test_registration_kill_switch(client, monkeypatch):
+    import server_settings as settings
+
+    monkeypatch.setattr(settings, 'REGISTRATION_ENABLED', False)
+    response = client.post('/auth/register')
+
+    assert response.status_code == 503
+    assert response.get_json()['reason'] == 'registration_disabled'
+    assert response.headers['Cache-Control'] == 'no-store'
+
+
+def test_chat_kill_switch_blocks_both_chat_surfaces(client, monkeypatch):
+    import server_settings as settings
+
+    monkeypatch.setattr(settings, 'CHAT_ENABLED', False)
+
+    duel_chat = client.post('/msg/add_chat_message')
+    kingdom_chat = client.post('/kingdom/messages')
+
+    assert duel_chat.status_code == 503
+    assert duel_chat.get_json()['reason'] == 'chat_disabled'
+    assert kingdom_chat.status_code == 503
+    assert kingdom_chat.get_json()['reason'] == 'chat_disabled'
+
+
+def test_new_game_and_conquer_kill_switches(client, monkeypatch):
+    import server_settings as settings
+
+    monkeypatch.setattr(settings, 'NEW_GAMES_ENABLED', False)
+    monkeypatch.setattr(settings, 'CONQUER_ENABLED', False)
+
+    challenge = client.post('/challenges/create_challenge')
+    duel = client.post('/games/create_game')
+    conquer = client.post('/kingdom/conquer/start_battle')
+
+    assert challenge.status_code == 503
+    assert challenge.get_json()['reason'] == 'new_games_disabled'
+    assert duel.status_code == 503
+    assert duel.get_json()['reason'] == 'new_games_disabled'
+    assert conquer.status_code == 503
+    assert conquer.get_json()['reason'] == 'conquer_disabled'

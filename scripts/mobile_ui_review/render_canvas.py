@@ -104,6 +104,14 @@ NEW_GAME_ALIASES = {
     "new_game_selected": "selected",
 }
 
+SETTINGS_SCREEN_ALIASES = {
+    "settings": "resolution",
+    "settings_resolution": "resolution",
+    "settings_preferences": "preferences",
+    "settings_account": "account",
+    "settings_safety": "safety",
+}
+
 MAIN_RANKS = {"7", "8", "9", "10", "J", "Q", "K", "A"}
 RANK_VALUE = {
     "7": 7,
@@ -1288,6 +1296,8 @@ def populate_kingdom_config(screen, section: str) -> None:
 
 
 def canonical_screen_name(screen_name: str) -> str:
+    if screen_name in SETTINGS_SCREEN_ALIASES:
+        return "settings"
     if screen_name in CONFIG_PICKER_ALIASES:
         return CONFIG_PICKER_ALIASES[screen_name][0]
     if screen_name in COLLECTION_SCREEN_ALIASES:
@@ -1317,6 +1327,7 @@ def uses_fixture(screen_name: str) -> bool:
         or screen_name in BOOSTER_REVEAL_ALIASES
         or screen_name in COLLECTION_SCREEN_ALIASES
         or screen_name in NEW_GAME_ALIASES
+        or screen_name in SETTINGS_SCREEN_ALIASES
         or screen_name in {"conquer", "defence"}
     )
 
@@ -1452,6 +1463,11 @@ def populate_new_game_screen(screen, variant: str) -> None:
 
 
 def prepare_screen(client, screen_name: str):
+    if screen_name in SETTINGS_SCREEN_ALIASES:
+        screen = client.screens["settings"]
+        screen._tab = SETTINGS_SCREEN_ALIASES[screen_name]
+        return screen
+
     if screen_name in CONFIG_PICKER_ALIASES:
         base_name, opener_name = CONFIG_PICKER_ALIASES[screen_name]
         screen = client.screens[base_name]
@@ -1570,6 +1586,7 @@ def render_screens(width: int, height: int, ui_scale: str,
             *BOOSTER_REVEAL_ALIASES.keys(),
             *COLLECTION_SCREEN_ALIASES.keys(),
             *NEW_GAME_ALIASES.keys(),
+            *SETTINGS_SCREEN_ALIASES.keys(),
         )
         if screen_name not in known_names:
             print(f"skip {screen_name}: screen not loaded")

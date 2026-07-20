@@ -39,6 +39,12 @@ The dated, append-as-you-go evidence for the initial production creation is in
 [`docs/operations/PRODUCTION_DEPLOYMENT_2026-07-19.md`](../../docs/operations/PRODUCTION_DEPLOYMENT_2026-07-19.md).
 Keep secrets out of that log.
 
+The small recurring operator routine, incident switches, report handling, and
+failed-deploy triage are in
+[`docs/operations/BETA_OPERATIONS.md`](../../docs/operations/BETA_OPERATIONS.md).
+Use that short runbook during the beta; this file remains the detailed
+deployment/recovery reference.
+
 ## 1. Create PostgreSQL databases and least-privilege users
 
 Enable the PostgreSQL add-on and set the PostgreSQL administrator password on
@@ -160,6 +166,7 @@ always-on task per environment:
 ```bash
 NEPAL_KINGS_ENV_FILE="$HOME/.config/nepalkings/staging.env" \
 AI_ENABLED=True \
+AI_JOBS_ENABLED=True \
 "$HOME/.virtualenvs/nepalkings-staging/bin/python" \
 "$HOME/releases/RELEASE_SHA/server/manage.py" run-worker
 ```
@@ -189,7 +196,8 @@ maintenance mode.
 7. Update and restart the environment's always-on worker.
 8. Reload the target web app.
 9. Check `/healthz`, `/readyz`, legal versions, invalid login JSON, and one
-   authenticated read.
+   authenticated read. For releases touching account/moderation behavior,
+   also submit and close one synthetic report, then remove the test accounts.
 10. Watch error and access logs before promoting the client.
 
 `deploy_server.sh` is not the deploy path for this paid immutable-release

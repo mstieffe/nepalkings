@@ -2567,6 +2567,25 @@ def _create_game_from_locked_challenge(challenge):
 
         if not user1 or not user2:
             return jsonify({'success': False, 'message': 'One or both players do not exist'}), 400
+        unavailable = next(
+            (
+                user
+                for user in (user1, user2)
+                if (
+                    not user.is_ai
+                    and (user.account_status or 'active').lower() != 'active'
+                )
+            ),
+            None,
+        )
+        if unavailable is not None:
+            challenge.status = ChallengeStatus.REJECTED
+            db.session.commit()
+            return jsonify({
+                'success': False,
+                'message': 'Challenge is no longer available.',
+                'reason': 'player_unavailable',
+            }), 409
 
         # Get game stake from the challenge (gold bet) and point limit.
         game_stake = challenge.stake or settings.DEFAULT_GAME_STAKE

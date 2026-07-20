@@ -78,7 +78,42 @@ def test_worker_iteration_triggers_candidates_and_sweeper(
     assert all(worker_app is app for _game_id, worker_app in triggered)
     assert result == {
         'candidate_games': 2,
+        'ai_jobs_enabled': True,
         'swept_games': 3,
+    }
+
+
+def test_worker_ai_kill_switch_keeps_sweeper_running(app, monkeypatch):
+    import ai.ai_worker as ai_worker
+    import sweepers
+
+    monkeypatch.setattr(background_worker.settings, 'AI_JOBS_ENABLED', False)
+    monkeypatch.setattr(
+        background_worker,
+        '_candidate_game_ids',
+        lambda _app: [11],
+    )
+    trigger = monkeypatch.setattr(
+        ai_worker,
+        'trigger_ai_if_needed',
+        lambda *_args, **_kwargs: pytest.fail('AI job should be paused'),
+    )
+    monkeypatch.setattr(
+        sweepers,
+        'sweep_stuck_conquer_games',
+        lambda: 2,
+    )
+
+    result = background_worker.run_worker_iteration(
+        app,
+        run_sweeper=True,
+    )
+
+    assert trigger is None
+    assert result == {
+        'candidate_games': 1,
+        'ai_jobs_enabled': False,
+        'swept_games': 2,
     }
 
 

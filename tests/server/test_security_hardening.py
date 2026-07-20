@@ -230,7 +230,11 @@ def test_oversized_request_body_returns_json_413(client, app):
     resp = client.post('/auth/register', data={'username': oversized})
 
     assert resp.status_code == 413
-    assert resp.get_json() == {'success': False, 'message': 'Request too large'}
+    payload = resp.get_json()
+    assert payload['success'] is False
+    assert payload['message'] == 'Request too large'
+    assert len(payload['request_id']) == 32
+    assert resp.headers['X-Request-ID'] == payload['request_id']
 
 
 def test_no_route_returns_raw_exception_text():

@@ -132,6 +132,8 @@ class Screen:
                     and self.logout_button in self.control_buttons
                     and self.logout_button.collide()
                 ):
+                    from utils import http_compat as _http
+                    _http.clear_auth_token()
                     self.state.screen = "login"
                     self.reset_action()
                     self.state.user = None

@@ -24,9 +24,11 @@ from security_settings import (  # noqa: F401  (public re-export)
     CORS_ORIGINS,
     MAX_CONTENT_LENGTH,
     RATELIMIT_STORAGE_URI,
+    RATE_LIMIT_CHAT,
     RATE_LIMIT_DEFAULT,
     RATE_LIMIT_LOGIN,
     RATE_LIMIT_LOOKUP,
+    RATE_LIMIT_REPORT,
     RATE_LIMIT_REGISTER,
     TOKEN_EXPIRY_SECONDS,
     LEGAL_PRIVACY_VERSION,
@@ -44,15 +46,21 @@ from database_settings import (  # noqa: F401  (public re-export)
     SQLITE_BUSY_TIMEOUT_SECONDS,
 )
 from runtime_settings import (  # noqa: F401  (public re-export)
+    AI_JOBS_ENABLED,
     API_VERSION,
     APP_ENVIRONMENT,
     BACKGROUND_SERVICES_ENABLED,
+    CHAT_ENABLED,
+    CONQUER_ENABLED,
+    CORS_PREFLIGHT_MAX_AGE_SECONDS,
     IS_DEVELOPMENT,
     IS_PRODUCTION,
     MAINTENANCE_MESSAGE,
     MAINTENANCE_MODE,
     MAINTENANCE_RETRY_AFTER_SECONDS,
     MIN_CLIENT_VERSION,
+    NEW_GAMES_ENABLED,
+    REGISTRATION_ENABLED,
     RELEASE_SHA,
     STARTUP_MAINTENANCE_ENABLED,
 )
@@ -98,7 +106,7 @@ ANALYTICS_ENABLED = os.getenv('ANALYTICS_ENABLED', 'True').lower() == 'true'
 
 # Email verification settings
 # Set EMAIL_VERIFICATION_ENABLED=True and configure SMTP to send real emails.
-# When disabled (default), the verification URL is logged server-side instead.
+# When disabled (default), no verification message is sent.
 EMAIL_VERIFICATION_ENABLED = os.getenv('EMAIL_VERIFICATION_ENABLED', 'False').lower() == 'true'
 SMTP_HOST = os.getenv('SMTP_HOST', '')
 SMTP_PORT = int(os.getenv('SMTP_PORT', '587'))

@@ -286,6 +286,39 @@ if _sys.platform == "emscripten":
         _check_auth_response(status)
         return _Response(status, str(result["t"]), str(result["c"] or ''))
 
+    def download_json(filename, payload):
+        """Start a browser download for a JSON-serializable payload."""
+        try:
+            filename_js = _json.dumps(str(filename))
+            body_js = _json.dumps(
+                _json.dumps(payload, indent=2, sort_keys=True) + '\n')
+            _embed.js(
+                "(function(){"
+                f"var body={body_js};"
+                "var blob=new Blob([body],{type:'application/json'});"
+                "var url=URL.createObjectURL(blob);"
+                "var a=document.createElement('a');"
+                f"a.download={filename_js};"
+                "a.href=url;"
+                "document.body.appendChild(a);"
+                "a.click();"
+                "a.remove();"
+                "setTimeout(function(){URL.revokeObjectURL(url);},1000);"
+                "return true;"
+                "})()"
+            )
+            return True
+        except Exception:
+            return False
+
+    def is_page_hidden():
+        """Return True while the browser tab is not visible."""
+        try:
+            return bool(_embed.js(
+                "document.visibilityState==='hidden' || document.hidden"))
+        except Exception:
+            return False
+
 else:
     # ── Desktop: use requests with auto-injected auth ──────────────
     import requests as _requests
@@ -310,3 +343,10 @@ else:
         resp = _requests.post(url, **kwargs)
         _check_auth_response(resp.status_code)
         return resp
+
+    def download_json(filename, payload):
+        """Browser-only helper; desktop exports are saved by account_service."""
+        return False
+
+    def is_page_hidden():
+        return False

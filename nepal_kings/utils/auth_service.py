@@ -17,7 +17,7 @@ def _server_error(response, fallback):
         'success': False,
         'message': payload.get('message') or fallback,
     }
-    for key in ('reason', 'retryable'):
+    for key in ('reason', 'retryable', 'request_id'):
         if key in payload:
             result[key] = payload[key]
 

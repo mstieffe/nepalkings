@@ -139,6 +139,31 @@ class TestCreateGame:
         assert challenge.status == ChallengeStatus.OPEN
         assert challenge.game_id is None
 
+    def test_challenge_is_rejected_if_other_account_becomes_unavailable(
+        self,
+        client,
+        db,
+        two_users_with_challenge,
+        auth_headers_user1,
+    ):
+        from models import ChallengeStatus, Game
+
+        _user1, user2, challenge = two_users_with_challenge
+        user2.account_status = 'banned'
+        db.session.commit()
+
+        response = client.post(
+            '/games/create_game',
+            data={'challenge_id': str(challenge.id)},
+            headers=auth_headers_user1,
+        )
+
+        assert response.status_code == 409
+        assert response.get_json()['reason'] == 'player_unavailable'
+        db.session.refresh(challenge)
+        assert challenge.status == ChallengeStatus.REJECTED
+        assert Game.query.count() == 0
+
     def test_create_game_initializes_deck(self, app, db, created_game):
         from models import MainCard, SideCard
         game_id = created_game['id']

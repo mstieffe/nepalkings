@@ -1,8 +1,10 @@
 # Nepal Kings Attribution
 
-Version: 2026-06-12
+Version: 2026-07-20
 
-This document should list third-party assets, libraries, fonts, images, sounds, and other materials used by public deployments of Nepal Kings, together with their licenses or attribution requirements.
+This document lists recorded third-party assets, libraries, fonts, images,
+sounds, and other materials used by public deployments of Nepal Kings,
+together with their licenses or attribution requirements.
 
 ## Core Libraries
 
@@ -10,7 +12,12 @@ This document should list third-party assets, libraries, fonts, images, sounds, 
 
 ## Game Assets
 
-Add final public asset credits here before launch, including artist names, source links, and license text where required.
+The repository currently contains no complete provenance manifest for visual
+art. The project operator must confirm that every shipped visual asset is
+project-owned, commissioned, generated under commercial terms, or separately
+licensed before open registration. Add any required artist/model/source and
+license details here; this explicit launch blocker must not be treated as a
+credit waiver.
 
 ## Audio
 
@@ -34,4 +41,5 @@ subscription terms in effect at generation time.
 
 ## Contact
 
-For attribution corrections, contact the operator listed on the public project or deployment page.
+For attribution corrections, use
+<https://github.com/mstieffe/nepalkings/issues/new>.

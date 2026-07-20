@@ -36,8 +36,19 @@ jobs:
         # art untouched), then runs pygbag. See scripts/build_web.sh.
         run: bash scripts/build_web.sh
 
-      - name: Report bundle size
-        run: du -sh build/web-staging/nepal_kings/build/web
+      - name: Report and enforce bundle budgets
+        run: |
+          python scripts/report_web_bundle.py \
+            build/web-staging/nepal_kings/build/web \
+            --max-archive-mib 52 \
+            --max-audio-mib 15 \
+            --output web-bundle-report.json
+
+      - name: Upload bundle report
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-bundle-report-${{ github.sha }}
+          path: web-bundle-report.json
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3

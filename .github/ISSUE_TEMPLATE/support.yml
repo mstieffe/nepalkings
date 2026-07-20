@@ -1,0 +1,47 @@
+name: Beta support
+description: Report a bug or ask for account/gameplay help
+title: "[Support] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not post passwords, tokens, email addresses, private messages, or security exploit details. Use the in-game Account & Safety screen for player reports.
+  - type: dropdown
+    id: client
+    attributes:
+      label: Client
+      options:
+        - Browser
+        - macOS
+        - Windows
+        - Linux
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: request_id
+    attributes:
+      label: Support request ID
+      description: Optional ID shown with an error. This is not your password or token.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened?
+      description: Describe what you did, what you expected, and what happened.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction steps
+      placeholder: |
+        1. Opened …
+        2. Selected …
+        3. Saw …
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy check
+      options:
+        - label: I removed passwords, tokens, email addresses, private messages, and other personal data.
+          required: true

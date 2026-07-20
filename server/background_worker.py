@@ -50,9 +50,10 @@ def run_worker_iteration(app, *, run_sweeper=False):
     from ai.ai_worker import trigger_ai_if_needed
 
     game_ids = _candidate_game_ids(app)
-    for game_id in game_ids:
-        with app.app_context():
-            trigger_ai_if_needed(game_id, app=app)
+    if settings.AI_JOBS_ENABLED:
+        for game_id in game_ids:
+            with app.app_context():
+                trigger_ai_if_needed(game_id, app=app)
 
     swept = 0
     if run_sweeper:
@@ -62,6 +63,7 @@ def run_worker_iteration(app, *, run_sweeper=False):
             swept = sweep_stuck_conquer_games()
     return {
         'candidate_games': len(game_ids),
+        'ai_jobs_enabled': bool(settings.AI_JOBS_ENABLED),
         'swept_games': swept,
     }
 
