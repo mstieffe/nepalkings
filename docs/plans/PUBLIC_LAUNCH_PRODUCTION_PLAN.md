@@ -106,15 +106,15 @@ Already present:
 
 Known launch blockers:
 
-- **Immediate staging hold:** rotate the `nepalkings_staging` PostgreSQL
-  password, replace only the private staging `DB_URL`, reload/re-enable the
-  staging web app and task `35390`, and re-run readiness plus exact leadership
-  lock checks. The first manual replacement omitted the separator before the
-  database hostname; readiness stayed `503`, and a diagnostic exposed that
-  replacement credential as part of the malformed hostname. The staging web
-  app and worker are now disabled. Rotate the staging password again and set
-  the complete URL from the documented template before verification. Do not
-  deploy `980be93` until this recovery gate passes.
+- **Staging deployment gate:** the credential incident is closed. A third
+  staging-only rotation applied by the no-echo setter passed database
+  authentication, `/healthz`, `/readyz`, schema 17, a clean task `35390`
+  start/sweep, and exactly one role-owned staging advisory lock. The two
+  superseded credentials are invalid and the stale worker log was cleared.
+  Before deploying `980be93`, use the tested
+  `scripts/create_postgres_backup.py` path to create and validate a
+  pre-deployment dump without placing `DB_URL` or its password in subprocess
+  arguments or error output.
 - The production web app at
   `api-nepalkingz.eu.pythonanywhere.com` is configured on fresh PostgreSQL and
   has passed web, worker, mutation, rollback, and restore gates, but it remains

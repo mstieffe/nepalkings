@@ -993,8 +993,9 @@ Required recovery before any further staging use:
 4. Re-enable/reload the staging web app and task `35390`.
 5. Verify `/healthz`, `/readyz`, PostgreSQL schema 17, environment
    `staging`, release `4660f75`, and exactly one staging leadership lock.
-6. Create the pre-`980be93` backup using a driver-aware URL conversion that
-   never includes a complete connection URL in exception output.
+6. Create the pre-`980be93` backup using
+   `scripts/create_postgres_backup.py`, which never includes a password or
+   complete connection URL in subprocess arguments or exception output.
 
 The staging candidate soak is invalidated by the paused worker and must restart
 after credential recovery and the next final release deployment.
@@ -1022,3 +1023,69 @@ DB_URL=postgresql+psycopg://nepalkings_staging:NEW_URL_SAFE_PASSWORD@nepalkingz-
 
 Keep both staging services disabled until a no-secret-output connection test
 passes. Production remained on `90bfa02...` in maintenance throughout.
+
+At approximately 2026-07-20 13:30 UTC, the second manual replacement failed
+the revised structural check before any service was enabled. It repeated the
+missing password/hostname separator, and an earlier form of that check printed
+the malformed hostname. The second replacement credential must therefore also
+be treated as exposed. The staging web app and task `35390` remained disabled;
+production was not accessed or changed.
+
+To prevent another manual assembly error, two staging-only helpers were
+uploaded:
+
+- `/tmp/nk_set_staging_db_url.py` prompts twice with no terminal echo, accepts
+  only a sufficiently long URL-safe password, constructs the complete URL,
+  parses and validates every non-secret component, and atomically replaces the
+  environment entry while retaining mode `600`;
+- `/tmp/nk_verify_staging_database.py` validates the URL structure and database
+  login without printing any connection-string component when validation
+  fails.
+
+Required recovery is now:
+
+1. Rotate `nepalkings_staging` a third time in the administrator PostgreSQL
+   console.
+2. Run the no-echo setter in a PythonAnywhere Bash console:
+
+   ```bash
+   /home/nepalkingz/.virtualenvs/nepalkings-staging/bin/python \
+     /tmp/nk_set_staging_db_url.py
+   ```
+
+3. Enter the same third password at both hidden prompts. Do not manually edit
+   the URL.
+4. Keep the staging web app and task disabled until
+   `/tmp/nk_verify_staging_database.py` reports a successful connection.
+5. Only then re-enable the web app and task and run readiness, schema,
+   environment, release, and advisory-lock checks. Use
+   `scripts/verify_postgres_worker.py` for the lock check so the complete
+   connection URL cannot appear in output.
+
+No password or complete connection URL is recorded in this repository.
+
+### Staging credential recovery completed
+
+At approximately 2026-07-20 13:38 UTC, the third staging-only rotation and
+helper-generated URL passed the no-secret verifier:
+
+- the complete expected SQLAlchemy driver, role, hostname, port, and database
+  structure matched;
+- the login connected to `nepalkings_staging` as role
+  `nepalkings_staging` on PostgreSQL server version `150017`;
+- the re-enabled web app returned healthy/ready on release `4660f75`, schema
+  17, environment `staging`, and PostgreSQL;
+- task `35390` reached provider state `Running`, logged a clean
+  `environment=staging` start, and completed its first zero-candidate sweep;
+- the worker verifier found exactly one granted namespace `20044`,
+  environment-key `1763288915` leadership lock, owned by the staging role.
+
+The provider worker log still contained the earlier malformed-host traceback,
+which embedded a now-invalid replacement credential. It was truncated after
+the incident facts were preserved here in redacted form; the new worker start
+then produced a clean log. Both superseded replacement passwords are invalid.
+Production remained on its existing release in maintenance and was not
+accessed, reloaded, or changed.
+
+Credential recovery is closed. The pre-`980be93` backup must use the new
+tested `scripts/create_postgres_backup.py` helper before staging deployment.

@@ -66,15 +66,29 @@ recipient certificate alone cannot decrypt a backup.
 
 ### 1. Create and validate the provider-side dump
 
-Use the production deployment procedure to create a PostgreSQL custom-format
-archive in:
+Use the repository backup helper to create a PostgreSQL custom-format archive.
+It reads the private environment file, supplies individual connection fields
+to libpq, validates the resulting archive, and never places the password or
+complete `DB_URL` in subprocess arguments:
+
+```bash
+/home/nepalkingz/.virtualenvs/nepalkings-production/bin/python \
+  /home/nepalkingz/releases/CURRENT_RELEASE/scripts/create_postgres_backup.py \
+  --env-file /home/nepalkingz/.config/nepalkings/production.env \
+  --output \
+  /home/nepalkingz/backups/postgres-production/production-YYYYMMDDTHHMMSSZ.dump
+```
+
+Production archives belong in:
 
 ```text
 /home/nepalkingz/backups/postgres-production/
 ```
 
-Before download, record only its path, size, mode, and SHA-256. Validate its
-catalog on PythonAnywhere:
+The helper refuses broadly readable environment/output paths, writes the dump
+atomically with mode `600`, and runs `pg_restore --list` before publishing it.
+Before download, record only its path, size, mode, and SHA-256. An operator may
+repeat the catalog check on PythonAnywhere:
 
 ```bash
 pg_restore --list /home/nepalkingz/backups/postgres-production/NAME.dump \

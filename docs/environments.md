@@ -23,18 +23,21 @@ environment does not automatically exist on another.
 
 ## Verified EU staging state
 
-- **Temporarily paused:** task `35390` was disabled on 2026-07-20 after the
+- **Credential recovery completed:** task `35390` was disabled on 2026-07-20 after the
   staging PostgreSQL URL appeared in a failed backup-command traceback.
   The first manual replacement URL was malformed and exposed its replacement
-  password as part of the invalid hostname. The staging web app and worker are
-  now both disabled. Rotate the staging-only password again, replace the whole
-  `DB_URL` from the operations-runbook template, and complete the recovery
-  checks before enabling either service. Production was not involved.
+  password as part of the invalid hostname. A second manual replacement
+  repeated the missing-separator error. Both were superseded by a third
+  rotation applied with the no-echo URL setter. The database login, web
+  readiness, clean worker start, first sweep, and exactly one staging
+  leadership lock all passed before staging was returned to service. The old
+  worker log containing the invalid credential was cleared. Production was
+  not involved.
 - Immutable server release:
   `4660f75c1473368957c989d103058c2d2f32079a`.
 - PostgreSQL schema version: 17.
 - Three PythonAnywhere WSGI workers.
-- Always-on AI/sweeper task: `35390` (disabled pending credential rotation).
+- Always-on AI/sweeper task: `35390` (`Running` after credential recovery).
 - Private environment file:
   `/home/nepalkingz/.config/nepalkings/staging.env`.
 - Maintenance mode: off after the deployment smoke test.
