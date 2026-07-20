@@ -1,85 +1,91 @@
-# Fixing libpng ICC Profile Warnings
+# PNG Asset Pipeline
 
-## What the warnings mean
+This guide covers source PNG validation and maintenance. Browser-size
+optimization is separate and always operates on a staged copy.
 
-The warnings you're seeing indicate that some PNG image files have embedded ICC color profiles that don't match the actual image format:
+## Check embedded profiles
 
-```
-libpng warning: iCCP: profile 'ICC Profile': 'RGB ': RGB color space not permitted on grayscale PNG
-```
-
-This happens when:
-- A grayscale PNG has an RGB color profile embedded
-- The profile was added incorrectly during image conversion/editing
-
-**Impact:**
-- ✅ **Functionality**: Images still display correctly
-- ❌ **Performance**: Loading these images is slower
-- ❌ **Console**: Clutters terminal output
-
-## Performance Optimization
-
-I've optimized the icon caching to reduce lag during figure operations:
-
-### What was changed:
-- **Before**: Clearing entire icon cache after upgrades → all icons regenerated
-- **After**: Let `load_figures()` detect changes → only regenerate changed icons
-
-This significantly reduces lag when building/upgrading/picking up figures.
-
-## Fixing the PNG Files
-
-You have two options to eliminate the warnings:
-
-### Option 1: Python Script (Recommended)
+Some editors attach invalid or unnecessary ICC profiles that cause libpng
+warnings and add decoding overhead. Scan the committed image tree from the
+repository root:
 
 ```bash
-# Install Pillow if needed
-pip install pillow
-
-# Run the fix script
-python fix_png_profiles.py
+.venv/bin/python scripts/assets/check_png_profiles.py
 ```
 
-### Option 2: Shell Script (using ImageMagick)
+Warnings do not normally change game rules, but they clutter logs and can make
+large image sets slower to load.
+
+## Remove problematic profiles
+
+Use the Pillow implementation:
 
 ```bash
-# Install ImageMagick
-brew install imagemagick  # macOS
-# or
-apt-get install imagemagick  # Linux
-
-# Make executable and run
-chmod +x scripts/assets/fix_png_profiles.sh
-./scripts/assets/fix_png_profiles.sh
+.venv/bin/python scripts/assets/fix_png_profiles.py
 ```
 
-Both scripts will:
-1. Scan all PNG files in `nepal_kings/img/`
-2. Remove incorrect ICC profiles
-3. Report which files were fixed
+Or, with ImageMagick installed:
 
-### After running:
-- ✅ No more libpng warnings
-- ✅ Faster image loading
-- ✅ Cleaner terminal output
+```bash
+scripts/assets/fix_png_profiles.sh
+```
 
-## Technical Details
+After either command:
 
-The scripts work by:
-1. Opening each PNG file
-2. Checking for embedded ICC profiles
-3. Removing the profile if present
-4. Saving the file without the profile
+1. rerun `check_png_profiles.py`;
+2. inspect the changed images in the game;
+3. run relevant visual tests and the full suite;
+4. review `git diff --stat` before committing a large binary rewrite.
 
-This is a safe, lossless operation that doesn't affect image quality or dimensions.
+Profile removal should not change pixel dimensions or visible colour. Do not
+accept a mechanical rewrite without checking the actual output.
 
-## Troubleshooting
+## Find large or unused images
 
-**If warnings persist after running the script:**
-1. Make sure you ran the script from the project root directory
-2. Check that files in `nepal_kings/img/` were actually modified
-3. Restart the game to clear any cached images
+```bash
+.venv/bin/python scripts/assets/list_oversized_pngs.py
+.venv/bin/python scripts/assets/find_unused_pngs.py
+```
 
-**If you don't want to fix the files:**
-The warnings are harmless and can be ignored. The performance optimization (cache fix) will still help reduce lag.
+Treat the unused-image report as evidence, not permission to delete. Dynamic
+paths, data-driven names, packaging references, and documentation may not be
+visible to a simple source scan.
+
+## Source optimization
+
+`scripts/assets/optimize_pngs.py` can resize or recompress source assets. Use it
+only for an intentional source-art change with visual review. Preserve original
+masters outside the runtime tree when future editing may require them.
+
+## Browser optimization
+
+The browser build uses `scripts/assets/optimize_web_pngs.py` inside
+`scripts/build_web.sh`. It:
+
+- copies the application to `build/web-staging/`;
+- excludes legacy and non-runtime art;
+- downsizes and optionally quantizes only the staged images;
+- leaves `nepal_kings/img/` untouched;
+- enforces final bundle budgets before deployment.
+
+Build the browser artifact through [distribution.md](distribution.md). Never
+copy optimized staging output back over the source assets.
+
+## Icon generation
+
+The canonical icon assets live under `nepal_kings/img/app_icon/`. Regenerate
+platform formats with:
+
+```bash
+scripts/assets/generate_icons.sh
+```
+
+Confirm macOS, Windows, Linux, and browser outputs after changing the source
+icon; operating-system icon caches can make an old icon appear after a correct
+build.
+
+## Asset documentation
+
+When adding generated or externally sourced art, record provenance, license,
+commercial-use rights, modification rights, and any attribution requirement.
+Update [legal/ATTRIBUTION.md](legal/ATTRIBUTION.md) before distribution.

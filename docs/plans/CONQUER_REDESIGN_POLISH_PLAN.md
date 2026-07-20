@@ -9,7 +9,7 @@ Out of scope: opponent support always-visible, Double-Dagger source rank surfaci
 ## Phase 1 — Server logic hardening (highest risk, do first)
 
 ### 1.1 Fix `skip_battle_turn` available-tactic filter
-- File: [server/routes/games.py](server/routes/games.py)
+- File: [server/routes/games.py](../../server/routes/games.py)
 - Locate the tactics-hand branch of `skip_battle_turn` that queries `ConquerTactic.status='available'`.
 - Change the filter to also require `played_round IS NULL` so already-played-but-not-yet-resolved rows don't block a legitimate skip.
 - Tests:
@@ -18,26 +18,26 @@ Out of scope: opponent support always-visible, Double-Dagger source rank surfaci
 
 ### 1.2 Idempotency for tactics-hand mutating endpoints
 - Endpoints: `play_conquer_tactic`, `gamble_conquer_tactic`, `combine_conquer_tactics`, `dismantle_conquer_tactic`, `conquer_withdraw`.
-- File: [server/routes/games.py](server/routes/games.py).
+- File: [server/routes/games.py](../../server/routes/games.py).
 - Approach (minimal, no schema change):
   - Each request accepts optional `client_action_id` (uuid from client).
   - Cache the last `(game_id, player_id, client_action_id)` → serialized response in an in-process LRU (e.g. `server/game_service/conquer_tactics_idempotency.py`). On retry within TTL (e.g. 30 s) return the cached response instead of re-validating turn state.
   - For `play_conquer_tactic`: before "not your turn" rejection, check if the targeted tactic already has `played_round` set by this player in the most recent round — if so, treat as success and return current battle state.
   - For `gamble/combine/dismantle`: same `client_action_id` short-circuit.
 - Client:
-  - [nepal_kings/utils/game_service.py](nepal_kings/utils/game_service.py): generate `client_action_id` (uuid4) per user-initiated action and forward it.
+  - [nepal_kings/utils/game_service.py](../../nepal_kings/utils/game_service.py): generate `client_action_id` (uuid4) per user-initiated action and forward it.
 - Tests:
   - `tests/server/test_conquer_tactics_idempotency.py`: covers play/gamble/combine/dismantle/withdraw replay with same `client_action_id` returns identical result and does not duplicate state changes.
 
 ### 1.3 Withdraw race-condition safety (timing unchanged)
-- File: [server/routes/games.py](server/routes/games.py) `conquer_withdraw`.
+- File: [server/routes/games.py](../../server/routes/games.py) `conquer_withdraw`.
 - Per user: withdraw remains allowed any time during battle.
 - Add atomic guard: re-read `Game.conquer_result` inside the same transaction; if already non-null, return the cached resolved result (idempotent). Use `with_for_update()` on `Game` row when supported, otherwise compare a monotonically increasing `Game.action_seq` column read-modify-write.
 - Combine with 1.2 so a withdraw that arrives mid-opponent-play cannot double-resolve.
 - Tests: `tests/server/test_conquer_withdraw_race.py` simulating concurrent withdraw + play.
 
 ### 1.4 `dismantle_conquer_tactic` validates source card state
-- File: [server/routes/games.py](server/routes/games.py) dismantle handler.
+- File: [server/routes/games.py](../../server/routes/games.py) dismantle handler.
 - Before restoring a source tactic to `status='available'`, validate:
   - Source `MainCard` row still exists.
   - Card is `in_deck=False` and `part_of_figure_id IS NULL` (still part of battle hand).
@@ -46,7 +46,7 @@ Out of scope: opponent support always-visible, Double-Dagger source rank surfaci
 - Tests: extend `tests/server/test_conquer_tactics_hand.py` for spell-purged-source-during-combined case.
 
 ### 1.5 `ConquerTactic.serialize()` exposes combine lineage
-- File: [server/models.py](server/models.py) `ConquerTactic.serialize`.
+- File: [server/models.py](../../server/models.py) `ConquerTactic.serialize`.
 - Always include `source_tactic_id_a`, `source_tactic_id_b`. (No opponent leak risk: IDs already exist; values stay masked elsewhere.)
 - Tests: `tests/server/test_conquer_tactics_hand.py::test_serialize_exposes_combined_sources`.
 
@@ -56,7 +56,7 @@ Out of scope: opponent support always-visible, Double-Dagger source rank surfaci
 - Tests: `tests/server/test_conquer_tactics_math.py::test_call_tactic_zeroed_when_called_figure_destroyed`.
 
 ### 1.7 Verify legacy battle-shop endpoints reject tactics-hand games
-- File: [server/routes/battle_shop.py](server/routes/battle_shop.py) (or wherever `/battle_shop/*` is mounted).
+- File: [server/routes/battle_shop.py](../../server/routes/battle_shop.py) (or wherever `/battle_shop/*` is mounted).
 - Audit `buy`, `return`, `confirm`, `gamble`, `combine`, `dismantle`. The status doc claims gamble/combine/dismantle already gate; double-check with explicit `if game.conquer_move_model == 'tactics_hand': abort 409` at the top of each route.
 - Tests: extend `tests/server/test_battle_shop.py::TestTacticsHandBattleShopGating` to cover all six routes.
 
@@ -65,9 +65,9 @@ Out of scope: opponent support always-visible, Double-Dagger source rank surfaci
 ## Phase 2 — Client correctness fixes
 
 ### 2.1 Prevent clicking spell-purged tactics during replay
-- File: [nepal_kings/game/screens/conquer_game_screen.py](nepal_kings/game/screens/conquer_game_screen.py) `_filter_conquer_tactics_by_displayed_step`.
+- File: [nepal_kings/game/screens/conquer_game_screen.py](../../nepal_kings/game/screens/conquer_game_screen.py) `_filter_conquer_tactics_by_displayed_step`.
 - Currently mutates `status='available'` so the row renders. Replace with a transient render-only marker (e.g. tag the dict with `_render_ghost=True`) and keep `status` truthful.
-- In [nepal_kings/game/components/conquer_tactics_rail.py](nepal_kings/game/components/conquer_tactics_rail.py):
+- In [nepal_kings/game/components/conquer_tactics_rail.py](../../nepal_kings/game/components/conquer_tactics_rail.py):
   - Cells with `_render_ghost` are visually shown but mark them non-selectable / non-clickable (greyed cursor, click is a no-op with brief "Resolving spell…" hint).
 - Tests: `tests/client/test_conquer_render_smoke.py::test_spell_replay_ghost_tactic_not_clickable`.
 
@@ -83,7 +83,7 @@ Out of scope: opponent support always-visible, Double-Dagger source rank surfaci
 - Tests: `tests/client/test_conquer_game_screen.py::test_reconnect_after_auto_loss_opens_result_dialog`.
 
 ### 2.4 Action buttons disabled during flight animation
-- File: [nepal_kings/game/components/conquer_tactics_rail.py](nepal_kings/game/components/conquer_tactics_rail.py) (and the play dispatch in `conquer_game_screen.py`).
+- File: [nepal_kings/game/components/conquer_tactics_rail.py](../../nepal_kings/game/components/conquer_tactics_rail.py) (and the play dispatch in `conquer_game_screen.py`).
 - Expose `is_tactic_flight_active()` on the screen; rail action buttons (Play, Gamble, Combine, Dismantle, Skip) become non-interactive while flight is running.
 - The flight remains visually non-blocking elsewhere; only the action surface freezes.
 - Tests: `tests/client/test_conquer_render_smoke.py::test_action_buttons_disabled_during_flight`.

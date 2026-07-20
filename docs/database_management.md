@@ -1,112 +1,154 @@
 # Database Management
 
-## Schema Changes: Migrations, Not Resets
+Nepal Kings uses SQLite for local development and PostgreSQL for shared hosted
+environments. Schema changes ship as ordered migrations; production is never
+reset to avoid implementing a migration.
 
-Schema changes ship through `server/migration_runner.py` and apply
-**automatically at server startup** (locally and on PythonAnywhere reload):
+## Environment boundary
 
-- `db.create_all()` creates tables for brand-new models.
-- The ordered `MIGRATIONS` list handles everything else (added columns,
-  backfills). Applied versions are recorded in the `schema_version` table,
-  so each migration runs exactly once per database.
+| Environment | Database | Preparation policy |
+|---|---|---|
+| Local | SQLite `server/test.db` by default | Automatic convenience on server startup |
+| Staging | `nepalkings_staging` PostgreSQL | Explicit before WSGI reload |
+| Production | `nepalkings_prod` PostgreSQL | Backup, maintenance, then explicit preparation |
 
-### Adding a migration
+The free-plan fallback branch retains its historical single-worker SQLite
+layout. Its database is not interchangeable with paid staging or production.
 
-1. Append `(version, description, callable)` to `MIGRATIONS` in
-   `server/migration_runner.py`, using the next integer version.
-2. Make the callable idempotent (check before ALTER — see
-   `_add_column_if_missing()` and the `ensure_*` helpers it wraps).
-3. Never renumber, edit, or remove an entry that has shipped.
-4. Deploy normally with `./deploy_server.sh` — the migration runs when the
-   web app reloads.
+## Schema versioning
 
-### Production data safety
+`server/migration_runner.py` contains an ordered `MIGRATIONS` list. Applied
+versions are recorded in `schema_version`, making preparation idempotent.
 
-- `./deploy_server.sh` automatically downloads a timestamped snapshot of the
-  live database into `backups/` before every deploy (skip with
-  `--no-backup`, not recommended). The 14 most recent snapshots are kept.
-- Roll back with `scripts/restore_db_backup.sh backups/<file>.db` — this
-  overwrites the live DB and reloads the web app.
-- **Never reset the production database.** `server/RESET_DATABASE.sh`
-  refuses to run when `FLASK_ENV` looks like production and requires a
-  typed `RESET` confirmation.
+`server/startup.py::prepare_database()` performs the bounded preparation flow:
 
-## Resetting a Local Development Database
+1. optionally drops tables only when an explicit local destructive flag is enabled;
+2. creates missing tables for fresh databases;
+3. runs pending ordered migrations;
+4. releases orphaned Collection locks;
+5. seeds or reconciles required persistent game data;
+6. ensures the AI service account exists when AI is enabled.
 
-For local iteration a reset is often the quickest path:
+Hosted WSGI imports do not call this flow. Deployments invoke it explicitly.
+
+## Add a migration
+
+1. Choose the next integer schema version in `server/migration_runner.py`.
+2. Implement a bounded, idempotent migration callable.
+3. Append `(version, description, callable)` to `MIGRATIONS`.
+4. Never renumber, remove, or silently rewrite a migration that reached a
+   shared environment.
+5. Add tests for a fresh database and an existing database at the previous version.
+6. Add PostgreSQL coverage when SQL syntax, constraints, locking, sequences, or
+   transaction behavior may differ from SQLite.
+7. Run the full suite and the CI PostgreSQL job before deployment.
+
+Use explicit SQL or SQLAlchemy operations that can safely detect already
+applied structure. A failed migration rolls back and prevents later migrations
+from running against an unknown intermediate schema.
+
+## Prepare a local database
+
+Normal local startup prepares the default SQLite database automatically:
+
+```bash
+./run_local.sh
+```
+
+To prepare explicitly through the same management entry point used by hosted
+deployments:
 
 ```bash
 cd server
-bash RESET_DATABASE.sh        # asks for confirmation, then drops + recreates
+APP_ENVIRONMENT=development \
+  ../.venv/bin/python manage.py prepare-database
 ```
 
-or simply delete the SQLite file:
+## Reset local development data
+
+Only reset a disposable local database. Stop the local server first, verify the
+active environment and database path, then run:
 
 ```bash
 cd server
-killall python3   # kill any running server first
-rm -f test.db
-python3 server.py # tables auto-create, migrations stamp themselves
+bash RESET_DATABASE.sh
 ```
 
-## Local Gameplay Test Account
+The script requires confirmation. Production safety guards refuse destructive
+startup behavior in a non-development environment. Never bypass those guards
+to make a shared schema change easier.
 
-For development testing, create or refresh a high-gold human account with the
-maintenance helper instead of adding a public server endpoint or committing a
-plaintext password.
+## Prepare staging or production
 
-From the repository root:
+Follow the [PythonAnywhere runbook](../deploy/pythonanywhere/README.md). The
+essential command shape is:
+
 ```bash
-NK_TEST_ACCOUNT_PASSWORD='merkeltonien' .venv/bin/python scripts/debug/upsert_test_account.py --username KingMerk --gold 100000
+NEPAL_KINGS_ENV_FILE="$HOME/.config/nepalkings/ENVIRONMENT.env" \
+  "$HOME/.virtualenvs/nepalkings-ENVIRONMENT/bin/python" \
+  "$HOME/releases/FULL_COMMIT_SHA/server/manage.py" \
+  prepare-database
 ```
 
-The helper is idempotent: rerunning it updates `KingMerk` back to `100000` gold
-and hashes the password through the normal `User` model path. By default it
-refuses to run when `FLASK_ENV`/`ENV` is not a development-style environment;
-pass `--allow-non-dev` only if you intentionally need to update a non-local
-database.
+Required order:
 
-## Why Do SQLite Lock Errors Occur?
+1. stop the environment's background task and web app;
+2. create and catalog-validate a secret-safe PostgreSQL backup;
+3. install the release's pinned dependencies;
+4. point private release metadata at the candidate;
+5. run `prepare-database`;
+6. verify `/readyz` reports the expected schema before reopening traffic.
 
-SQLite database locking errors typically happen because:
+Production remains in maintenance until the worker, schema, logs, and required
+smokes pass.
 
-1. **Concurrent Access**: SQLite uses file-level locking. When multiple processes or threads try to access the database simultaneously, you get lock errors.
+## Backups and recovery
 
-2. **Incomplete Transactions**: If a process crashes or exits while holding a lock, that lock may persist until the file handle is released.
+- Pre-deployment backups use `scripts/create_postgres_backup.py`.
+- Daily provider-side production backups use scheduled task `22971` and the
+  tracked wrapper under `deploy/pythonanywhere/`.
+- Encrypted off-provider copies use `scripts/encrypt_postgres_backup.py`.
+- Backup success requires file mode, size, SHA-256, and `pg_restore --list`
+  validation—not merely the existence of a dump file.
 
-3. **Drop/Create Operations**: When you `db.drop_all()` while the database is active:
-   - The old Flask process may still have the database open
-   - The database file is being accessed while trying to delete it
-   - SQLite needs exclusive access to drop tables
+The complete encryption and recovery procedure is in
+[operations/OFFSITE_POSTGRES_BACKUPS.md](operations/OFFSITE_POSTGRES_BACKUPS.md).
+Test recovery in a disposable database before replacing live data whenever
+possible.
 
-4. **Hot Reloading**: Flask's debug mode auto-restarts the server, but the old process may not release the database immediately.
+## PostgreSQL worker coordination
 
-### Solutions We Implemented
+The hosted AI/sweeper worker holds one environment-specific PostgreSQL advisory
+lock. After a worker start or deployment, verify exactly one expected lock with:
 
-1. **SQLite Configuration** (in `server.py`):
-   ```python
-   'connect_args': {
-       'timeout': 30,  # Wait up to 30 seconds for lock
-       'check_same_thread': False  # Allow multi-threaded access
-   }
-   ```
+```bash
+python scripts/verify_postgres_worker.py \
+  --env-file /path/to/private.env \
+  --environment staging
+```
 
-2. **Connection Pooling**:
-   - `pool_pre_ping`: Verifies connections before use
-   - `pool_recycle`: Refreshes connections every 300 seconds
+Use `production` only during an approved production check. The verifier does
+not print `DB_URL`.
 
-3. **Startup Migrations**: schema changes apply in-place at startup via
-   `server/migration_runner.py`; local resets remain available for
-   development convenience only.
+## Common SQLite lock errors
 
-### Best Practices
+SQLite has file-level writer coordination, so local lock errors usually mean a
+second server, test process, or interactive script still owns the database.
 
-- **Development**: a local reset is fine when iterating on models; ship the
-  matching migration in the same change.
-- **Production**: never reset — migrations run on reload, and every deploy
-  snapshots the DB into `backups/` first.
-- **Kill Old Processes** before a local reset:
-  ```bash
-  killall python3
-  # Then: bash RESET_DATABASE.sh
-  ```
+1. Stop old local server and test processes.
+2. Confirm no process is using `server/test.db`.
+3. Retry the operation; do not repeatedly add sleeps around a real transaction bug.
+4. Reproduce concurrency-sensitive behavior on PostgreSQL before considering it fixed.
+
+SQLite timeout and connection settings improve local diagnostics, but they do
+not make SQLite a production multi-worker database.
+
+## Data-handling rules
+
+- Never copy production data into staging without an explicit privacy review.
+- Never commit databases, dumps, manifests containing private paths, or
+  plaintext recovery material.
+- Never print a complete database URL or password in a shell command, log, or issue.
+- Keep smoke users clearly synthetic and remove their exact rows after the test.
+- Preserve production audit records unless a documented synthetic cleanup owns them.
+- Record migrations, backups, restore evidence, and release metadata without secrets.

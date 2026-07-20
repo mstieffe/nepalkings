@@ -42,7 +42,7 @@ safely without a manual migration):
 Mirror the placement of the equivalent booster fields. The local SQLite DB
 auto-creates new columns on startup via the existing `db.create_all()` path;
 PythonAnywhere production DB uses the same path. Document in
-[server/RESET_DATABASE.sh](server/RESET_DATABASE.sh) only if the existing
+[server/RESET_DATABASE.sh](../../server/RESET_DATABASE.sh) only if the existing
 booster fields required a reset (they did not — same applies here).
 
 ### 2.2 Settings (`server/server_settings.py`)
@@ -67,7 +67,7 @@ DUEL_REWARD_POOL_PROBABILITIES = {
 Keep `DUEL_WINNER_BOOSTER_PACKS` / `DUEL_LOSER_BOOSTER_PACKS` /
 `DUEL_BOOSTER_REWARD_PROBABILITIES` for now, marked as **deprecated** in a
 comment (the new code path no longer reads them). Tests in
-[tests/server/test_server_settings_v2.py](tests/server/test_server_settings_v2.py)
+[tests/server/test_server_settings_v2.py](../../tests/server/test_server_settings_v2.py)
 that assert the old constants stay valid will continue to pass; new tests
 cover the new constants.
 
@@ -248,7 +248,7 @@ admins can change the constant later without hunting code).
 
 ### 3.1 Settings & icon constants
 
-[nepal_kings/config/kingdom_settings.py](nepal_kings/config/kingdom_settings.py):
+[nepal_kings/config/kingdom_settings.py](../../nepal_kings/config/kingdom_settings.py):
 
 - Add to `KINGDOM_SKILL_ICON_PATHS`:
   - `'map_production' → 'img/kingdom/skill_icons/map_production.png'`
@@ -256,12 +256,12 @@ admins can change the constant later without hunting code).
 - Add `KINGDOM_PRODUCTION_MAP_LABEL = 'Maps'` (parallel to existing booster
   labels) if such constants exist.
 
-[nepal_kings/config/game_menu_settings.py](nepal_kings/config/game_menu_settings.py)
+[nepal_kings/config/game_menu_settings.py](../../nepal_kings/config/game_menu_settings.py)
 (or whichever file holds the booster icon constant — verify with grep):
 
 - Add `GAME_MENU_MAP_ICON_PATH = 'img/dialogue_box/icons/map.png'`.
 
-### 3.2 HUD top-left ([nepal_kings/game/screens/_menu_base.py](nepal_kings/game/screens/_menu_base.py))
+### 3.2 HUD top-left ([nepal_kings/game/screens/_menu_base.py](../../nepal_kings/game/screens/_menu_base.py))
 
 In `_init_menu_chrome` / `_load_chrome_cache`, load the map icon (scaled to
 `GAME_MENU_GOLD_ICON_SZ`) and store it as `self._map_icon`.
@@ -283,7 +283,7 @@ extra changes needed beyond verifying the box doesn't run off-screen at
 the smallest supported resolution; if it does, slightly reduce
 `sep` only inside this function with a comment.
 
-### 3.3 Kingdom Production card ([nepal_kings/game/screens/kingdom_config_screen.py](nepal_kings/game/screens/kingdom_config_screen.py))
+### 3.3 Kingdom Production card ([nepal_kings/game/screens/kingdom_config_screen.py](../../nepal_kings/game/screens/kingdom_config_screen.py))
 
 `_draw_vault_panel(rect)` currently divides width by 3. Refactor:
 
@@ -324,7 +324,7 @@ codes `no_maps` / `no_cooldown` show a brief msg via the existing
 
 ### 3.6 Duel reward summary screen
 
-[nepal_kings/game/screens/game_screen.py](nepal_kings/game/screens/game_screen.py)
+[nepal_kings/game/screens/game_screen.py](../../nepal_kings/game/screens/game_screen.py)
 line ~3417 currently reads `winner_boosters` / `loser_boosters`. Update
 to prefer the new `winner_rewards` / `loser_rewards` keys (with fallback
 to legacy keys for one release). Display all four reward types: e.g.

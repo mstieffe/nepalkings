@@ -1,6 +1,6 @@
 # Nepal Kings Support
 
-Nepal Kings is an independently operated game in public-beta preparation.
+Nepal Kings is an independently operated game currently available as a public beta.
 
 ## Gameplay and account help
 

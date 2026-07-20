@@ -2,15 +2,18 @@
 
 Last updated: 2026-07-20
 
-Status: first production archive encrypted and round-trip verified; daily
-automation and a second independent storage destination are still required
-before public registration.
+Status: the provider-side daily backup is active and the first production
+archive was encrypted and round-trip verified off-provider. A second
+independent destination and automated off-provider rotation remain optional
+beta follow-ups.
 
 ## Recovery contract
 
-- PythonAnywhere keeps the live database and the provider-side custom-format
-  dump.
-- An encrypted copy must leave PythonAnywhere after every successful backup.
+- PythonAnywhere keeps the live database and fourteen validated daily
+  custom-format dumps, plus separately named pre-deployment recovery dumps.
+- Keep at least one recently verified encrypted production copy outside
+  PythonAnywhere and refresh it before materially expanding the beta or making
+  a high-risk data change.
 - Only a PostgreSQL custom-format archive that passes `pg_restore --list` is
   eligible for encryption.
 - The downloaded plaintext must match the provider-side SHA-256.
@@ -174,17 +177,21 @@ NAME.dump.cms.manifest.json
 Re-download a sample from that store and run the verification command. An
 upload alone is not a completed backup.
 
-Initial policy:
+Current beta policy:
 
-- daily production backup;
-- retain seven daily, four weekly, and six monthly archives;
-- verify every upload hash;
-- perform a complete restore drill at least monthly and before each beta
-  expansion;
-- alert when the last verified off-provider backup is more than 26 hours old.
+- create and validate a provider-side production dump every day;
+- retain fourteen daily provider archives without rotating separately named
+  pre-deployment recovery dumps;
+- refresh the encrypted off-provider copy before each material beta expansion
+  and high-risk data change;
+- verify every copied archive and manifest;
+- perform a complete restore drill before a major beta expansion and after a
+  recovery-tool change.
 
-Revise retention once the privacy-retention policy and real database growth
-are known.
+Daily off-provider replication, seven-daily/four-weekly/six-monthly rotation,
+backup-age alerts, and a second independent store are tracked as optional
+hardening. Revise retention once real database growth and player activity make
+the trade-off measurable.
 
 ## Recovery procedure
 
@@ -246,4 +253,5 @@ Evidence:
 
 The encrypted archive currently exists on the development Mac, outside
 PythonAnywhere and outside source control. Replication to a second independent
-store and the daily schedule remain open launch gates.
+store and automated off-provider rotation remain optional follow-up work; the
+provider-side daily schedule is active.

@@ -260,7 +260,7 @@ Remove: `skill_downgraded`.
   `COLLECT_FLOAT_FONT_SIZE`).
 
 ### 4.2 Kingdom config screen
-[nepal_kings/game/screens/kingdom_config_screen.py](nepal_kings/game/screens/kingdom_config_screen.py)
+[nepal_kings/game/screens/kingdom_config_screen.py](../../nepal_kings/game/screens/kingdom_config_screen.py)
 
 - **Header**: "Kingdom Level {N}" + XP progress bar
   `xp_into_level / xp_for_next_level`. Tooltip / sub-text: "Total XP: {experience}".
@@ -281,7 +281,7 @@ Remove: `skill_downgraded`.
 - **Reset button**: removed.
 
 ### 4.3 Kingdom (map) screen
-[nepal_kings/game/screens/kingdom_screen.py](nepal_kings/game/screens/kingdom_screen.py)
+[nepal_kings/game/screens/kingdom_screen.py](../../nepal_kings/game/screens/kingdom_screen.py)
 
 - **Info bar** additions:
   - Aggregate per-kingdom info already exists; extend `_draw_info_bar()` with:
@@ -331,7 +331,7 @@ a "Level Up!" floating text at the kingdom level header.
 - Parse new payload fields and update local kingdom snapshot.
 
 ### 4.6 Top-bar HUD
-[nepal_kings/game/screens/_menu_base.py](nepal_kings/game/screens/_menu_base.py)
+[nepal_kings/game/screens/_menu_base.py](../../nepal_kings/game/screens/_menu_base.py)
 - After a successful collect, animate `User.gold` increment with the FloatingText
   (`+collected` near the gold display). Existing draw stays.
 
@@ -377,19 +377,19 @@ a "Level Up!" floating text at the kingdom level header.
 
 ### 5.2 Server — update existing
 
-[tests/server/test_kingdom_config.py](tests/server/test_kingdom_config.py)
+[tests/server/test_kingdom_config.py](../../tests/server/test_kingdom_config.py)
 - Replace "skill points = land count" with "skill points = level × 3".
 - Drop reset-related assertions.
 - Rename split test: skills/level/XP **unchanged** on split.
 
-[tests/server/test_connected_kingdom.py](tests/server/test_connected_kingdom.py)
+[tests/server/test_connected_kingdom.py](../../tests/server/test_connected_kingdom.py)
 - Add merger XP + cosmetic refund + pending-gold transfer assertions.
 
 Combat tests: remove any references to deleted skill bonuses.
 
 ### 5.3 Client — update / new
 
-[tests/client/test_kingdom_config_screen.py](tests/client/test_kingdom_config_screen.py)
+[tests/client/test_kingdom_config_screen.py](../../tests/client/test_kingdom_config_screen.py)
 - Drop reset-button tests.
 - Add level header + XP bar render test.
 - Add vault widget render test (empty / partial / full states).

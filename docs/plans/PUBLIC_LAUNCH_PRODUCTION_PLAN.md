@@ -4,7 +4,8 @@ Last updated: 2026-07-20
 
 Status: Public beta live on the provider hostnames
 
-This is the active checklist for launching Nepal Kings as a small public beta.
+This is the completed core launch checklist and the current optional follow-up
+backlog for the small public beta.
 The former exhaustive plan is preserved at
 [`archive/PUBLIC_LAUNCH_PRODUCTION_PLAN_FULL_2026-07-20.md`](archive/PUBLIC_LAUNCH_PRODUCTION_PLAN_FULL_2026-07-20.md).
 Detailed deployment evidence remains in

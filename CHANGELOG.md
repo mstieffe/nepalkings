@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented in this file.
 
+Historical migration and deployment notes below describe the repository at the
+time of each change. For current procedures, use
+[`docs/database_management.md`](docs/database_management.md) and
+[`docs/deployment.md`](docs/deployment.md); never reset a shared production
+database to follow an older changelog entry.
+
 ## Unreleased — Player-experience launch prep
 
 Focused on the things between the game and real players: a faster front
@@ -45,6 +51,11 @@ and the operational safety net to keep early adopters.
 
 ### Changed
 
+- **Documentation information architecture.** Replaced the oversized root
+  README with a concise public landing page; added player, developer,
+  architecture, distribution, operations, legal, and plan indexes; rewrote
+  stale AI, database, deployment, environment, and asset guides; added an
+  authorized-contributor workflow and a CI check for local Markdown links.
 - **Broader Conquer defence counters.** Defence configurations can now use
   Draw 2 MainCards, Draw 4 MainCards, Copy Figure, and Landslide as automated
   counter responses. Counter Copy Figure mirrors the automated prelude rule

@@ -4,6 +4,14 @@ Developer and maintenance utilities. **Not** imported by the runtime.
 Run from anywhere — each script resolves the repo root from its own
 location.
 
+For the normal local workflow see [`docs/development.md`](../docs/development.md).
+For browser and desktop releases see
+[`docs/distribution.md`](../docs/distribution.md).
+
+| Script | Purpose |
+|---|---|
+| `check_markdown_links.py` | Validate repository-local links in maintained Markdown files; also runs in CI. |
+
 ## `assets/`
 PNG / icon pipeline tools.
 

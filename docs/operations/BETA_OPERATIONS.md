@@ -116,7 +116,8 @@ Appeals arrive through the support channel in [SUPPORT.md](../../SUPPORT.md).
 ## Retention targets
 
 - application/security logs: normally up to 30 days;
-- PythonAnywhere PostgreSQL dumps: 30 days;
+- PythonAnywhere PostgreSQL dumps: fourteen daily archives, plus separately
+  named pre-deployment recovery dumps until deliberately reviewed;
 - encrypted off-provider production backups: 90 days;
 - closed player-report evidence and moderation audit: up to 12 months, unless
   an active legal, safety, or abuse matter requires longer;

@@ -29,6 +29,10 @@ jobs:
           pip install -r server/requirements.txt
           pip install pytest pip-audit
 
+      - name: Check Markdown links
+        run: |
+          python scripts/check_markdown_links.py
+
       - name: Run tests
         run: |
           pytest -q
