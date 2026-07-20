@@ -32,6 +32,7 @@ Local diagnostics. Never deploy these.
 | Script | Purpose |
 |---|---|
 | `encrypt_postgres_backup.py` | Encrypt a PostgreSQL custom-format dump with AES-256-GCM, round-trip verify it, and write a recovery manifest. |
+| `load_authenticated_routes.py` | Run a bounded staging-only authenticated read workload across Collection, Conquer config, game polling, and the kingdom map. |
 | `probe_launch_endpoints.py` | Probe production/staging health, readiness, PostgreSQL schema, release consistency, legal discovery, and latency from outside PythonAnywhere. |
 | `smoke_conquer_api.py` | Run a controlled authenticated Conquer API smoke against a maintained environment with an operator-managed database rollback. |
 | `smoke_duel_concurrency.py` | Create two synthetic staging users and prove simultaneous Duel challenge acceptance resolves to one canonical game. |

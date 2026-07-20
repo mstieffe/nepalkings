@@ -104,7 +104,9 @@ Known launch blockers:
   are incomplete.
 - Screens and game polling fan out over multiple HTTP requests. The production
   map smoke transferred approximately 3.34 MB and took 0.81–1.14 seconds under
-  three-request concurrent load.
+  three-request concurrent load. The staging 100-active-user read mix passed
+  without errors, but its 3.34 MB map remained the slow outlier at 1.265
+  seconds p95.
 - A standard-library external contract/latency probe and scheduled GitHub
   workflow now exist on `develop`, and the first live cycle passed. The
   schedule becomes active from the default branch; centralized application
@@ -645,10 +647,14 @@ Priority: **P0**
 - [ ] Record response payload sizes.
 - [ ] Add k6 or Locust scenarios for login, menus, map, Conquer, defence, duel,
   and simultaneous actions.
+- [x] Add and run a reproducible authenticated read-load scenario for
+  Collection, Conquer config, game polling, and the 4,800-land map.
 
 Verification:
 
-- [ ] Target screen/API p95 and error-rate objectives pass at 2x launch load.
+- [ ] Target screen/API p95 and error-rate objectives pass at 2x launch load
+  (100-active-user read mix passed; gameplay mutations and full screen matrix
+  remain).
 - [ ] Database pool and worker saturation retain operational headroom.
 
 ---
@@ -950,3 +956,4 @@ Part-time expectation: approximately two to three months.
 | 2026-07-20 | Use encrypted provider-independent database copies | The first production dump passed provider catalog/hash validation, local hash equality, CMS AES-256-GCM encryption, two decryption hash checks, and plaintext cleanup | Replicate archive plus manifest to a second independent store, protect a recovery-key copy, and automate daily execution before opening registration |
 | 2026-07-20 | Add an external launch-contract probe | A three-sample live cycle passed production and staging health, readiness, PostgreSQL schema, legal discovery, release consistency, and 2-second p95 ceiling | Scheduled GitHub monitoring activates from the default branch; advanced metrics and alert destinations remain separate launch work |
 | 2026-07-20 | Serialize and atomically commit Duel challenge acceptance | The audit found partial commits and no accepted-status guard in `create_game`; release `636364d` passed 2,645 local tests, PostgreSQL CI, security scans, and a live two-account simultaneous accept with one game/deck and one charge per user | Staging advanced to `636364d`; Conquer conflicting-action and final-release soak gates remain |
+| 2026-07-20 | Model 2x launch read load as 100 active users with five-second think time | The live staging run completed 1,126 authenticated reads at 18.77 requests/second with zero errors, 163.2 ms overall p95, 163.2 ms Conquer-config p95, and 1,264.8 ms map p95 | Read capacity has headroom; retain the map-specific 1.5-second budget and continue with mutation/polling scenarios before closing the full load gate |

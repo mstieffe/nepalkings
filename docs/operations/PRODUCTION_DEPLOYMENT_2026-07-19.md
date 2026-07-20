@@ -587,6 +587,7 @@ Complete this section as execution proceeds.
 | First encrypted off-provider backup | passed; AES-256-GCM CMS archive decrypts to production dump SHA-256 `a6c87778...8e8a0` |
 | External launch probe | passed at 2026-07-20 08:05 UTC; both environments met contract and 2-second p95 ceiling |
 | Atomic Duel acceptance | passed on staging release `636364d`; two simultaneous accounts returned one game, a complete deck, and one charge each |
+| 100-active-user authenticated read load | passed on staging; 1,126/1,126 HTTP 200, 18.77 requests/s, 163.2 ms overall p95 |
 
 ## Post-deployment hardening checkpoint — 2026-07-20
 
@@ -714,3 +715,55 @@ none contains an email or real player data.
 Because staging changed releases, its release-candidate 24-hour soak starts at
 2026-07-20 10:58 UTC. Production remains on `90bfa02...` in maintenance and
 was not reloaded or mutated.
+
+### Authenticated 2x read-load gate
+
+`scripts/load_authenticated_routes.py` creates one clearly named synthetic
+staging account, completes only the starter Collection setup, and then gives
+each virtual user an independent HTTP session. Its fixed read-only mix is:
+
+- 45% `/collection/cards`;
+- 35% `/kingdom/conquer/config`;
+- 18% `/games/get_games`;
+- 2% `/kingdom/map`.
+
+The first bounded baseline used 25 active users, five-second think time, a
+five-second ramp, and 30 seconds total:
+
+| Metric | Result |
+|---|---:|
+| Requests/errors | 145 / 0 |
+| Throughput | 4.83 requests/s |
+| Overall p50/p95/p99 | 61.7 / 178.7 / 681.1 ms |
+| Collection p95 | 105.5 ms |
+| Conquer config p95 | 178.7 ms |
+| Game-list p95 | 118.4 ms |
+| 3.34 MB map p95 | 956.9 ms |
+
+The launch-capacity run used 100 active users, five-second think time, a
+ten-second ramp, and 60 seconds total. This models twice the initial target of
+50 simultaneously active players without pretending all 100 click at the same
+millisecond:
+
+| Metric | Result |
+|---|---:|
+| Requests/errors | 1,126 / 0 |
+| HTTP statuses | 1,126 × `200` |
+| Throughput | 18.77 requests/s |
+| Overall p50/p95/p99 | 56.0 / 163.2 / 718.5 ms |
+| Collection p95 | 122.7 ms |
+| Conquer config p95 | 163.2 ms |
+| Game-list p95 | 118.3 ms |
+| 3.34 MB map p50/p95/p99 | 718.5 / 1,264.8 / 1,608.9 ms |
+
+The post-load error log contained no traceback, SQLAlchemy/psycopg error,
+deadlock, duplicate-key, or pool error. PostgreSQL settled to one active and
+five idle staging connections, both environment leadership locks remained
+exact, and the worker continued its sweeps. A post-load external probe passed
+both environments; staging health/readiness p95 was 106.2/106.1 ms.
+
+This closes the 100-active-user authenticated read-capacity gate only. It does
+not close the full launch load gate: simultaneous Conquer cross-actions,
+Defence, Duel turns, chat/log polling, long-running games, and mutation-heavy
+mixes remain. The full kingdom map also remains an optimization target; its
+payload is approximately 3.34 MB even when server queueing is healthy.
