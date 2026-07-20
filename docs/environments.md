@@ -24,7 +24,7 @@ environment does not automatically exist on another.
 ## Verified EU staging state
 
 - Immutable server release:
-  `df69ece7bf5916d335185752afc2c33656bb2a7e`.
+  `4660f75c1473368957c989d103058c2d2f32079a`.
 - PostgreSQL schema version: 17.
 - Three PythonAnywhere WSGI workers.
 - Always-on AI/sweeper task: `35390`.
@@ -33,6 +33,12 @@ environment does not automatically exist on another.
 - Maintenance mode: off after the deployment smoke test.
 - GitHub Pages is the only allowed browser origin:
   `https://mstieffe.github.io`.
+- Final 100-active-user read gate: 1,129/1,129 HTTP `200`, zero errors,
+  128.7 ms overall p95, 135.7 ms Conquer-config p95, and 891.7 ms full-map
+  p95. PythonAnywhere gzip reduced the mean map wire body from 3,341,221
+  decoded bytes to 122,140 bytes.
+- The final-candidate 24-hour soak started with the worker's clean
+  2026-07-20 12:19:34 UTC start.
 
 The detailed backup, concurrency, latency, and verification evidence is
 recorded in the current checkpoint of the public-launch plan.

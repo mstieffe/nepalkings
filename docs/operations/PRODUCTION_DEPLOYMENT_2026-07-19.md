@@ -838,9 +838,9 @@ then made phase-aware and the repeated live smoke:
 
 The last 300 error-log and worker-log lines contain zero traceback, deadlock,
 duplicate-key, or database-error matches. Both staging and production
-environment leadership locks remain present. Because the runtime release
-changed, the final staging candidate's 24-hour soak begins at 2026-07-20
-11:39 UTC.
+environment leadership locks remain present. This release's soak began at
+2026-07-20 11:39 UTC but was superseded by the final provider-compression
+candidate described below.
 
 A second, stricter live test raced two different endpoints on fresh game `8`:
 initial advance versus `/games/conquer_withdraw`. Withdrawal acquired the
@@ -885,3 +885,77 @@ benefit and only duplicates provider work. The application compressor was
 removed from the next candidate; provider gzip remains the selected launch
 configuration. Map construction/serialization and cache invalidation, not
 transfer compression, are the remaining optimization targets.
+
+### Final provider-gzip candidate — staging release `4660f75`
+
+Release `4660f75c1473368957c989d103058c2d2f32079a` removes the redundant
+application compressor while retaining the corrected raw-wire measurement in
+the load harness. Its `server/` tree is byte-for-byte identical to the
+Conquer-hardened `df69ece` server tree. Before deployment:
+
+- GitHub Python 3.11 tests passed with 2,649 passed and 4 skipped;
+- the disposable PostgreSQL 16 job, dependency audit, and security scans
+  passed;
+- the immutable server archive was 367,915 bytes with SHA-256
+  `d1c02972ae03a1f4340c5afa584b120ed300fcc952408bda064992a5f9edebd6`;
+- remote compilation, `prepare-database`, and `pip check` passed;
+- remote `server.py` and `games.py` hashes matched the committed release.
+
+The final pre-deploy custom-format backup is:
+
+```text
+/home/nepalkingz/backups/postgres-staging/
+staging-pre-4660f75-20260720T121436Z.dump
+```
+
+- size/mode: 222,603 bytes; `600`;
+- SHA-256:
+  `80385619d44f7f9c0dbf02274878bbe9e532d6e1cd97f24ebfc6420210f200ff`;
+- `pg_restore --list`: passed.
+
+The staging WSGI, provider source directory, private `RELEASE_SHA`, and task
+`35390` command now all point to `4660f75`. Health/readiness return the same
+release, PostgreSQL, and schema 17. The web tier completed its clean final
+start at 12:16:33 UTC. The worker logged a clean stop, started from the final
+release at 12:19:34 UTC, completed its first sweep, and reached provider state
+`Running`. PostgreSQL then showed exactly the two expected granted leadership
+locks:
+
+- `nepalkings_staging`, environment key `1763288915`;
+- `nepalkings_prod`, environment key `730732783`.
+
+Production remained on `90bfa02...` in maintenance and was neither reloaded
+nor switched.
+
+The final bounded 100-active-user run used the documented five-second think
+time, ten-second ramp, 60-second duration, and provider gzip:
+
+| Metric | Result |
+|---|---:|
+| Requests/errors | 1,129 / 0 |
+| HTTP statuses | 1,129 × `200` |
+| Throughput | 18.82 requests/s |
+| Overall p50/p95/p99 | 52.5 / 128.7 / 626.6 ms |
+| Collection p95 | 101.8 ms |
+| Conquer config p95 | 135.7 ms |
+| Game-list p95 | 103.7 ms |
+| Map requests | 23 |
+| Map decoded/wire mean | 3,341,221 / 122,140 bytes |
+| Map p50/p95/p99 | 626.6 / 891.7 / 924.3 ms |
+
+All 494 Collection responses, all 404 Conquer-config responses, and all 23
+map responses were gzip encoded; the tiny 28-byte game-list response was not.
+The retained staging-only synthetic account is
+`nkload_0720122246_0907`.
+
+A five-sample post-load external probe passed health, readiness, legal
+discovery, release consistency, PostgreSQL/schema validation, and the
+two-second latency ceiling for both environments. Staging health/readiness
+p95 was 114.2/96.0 ms; maintained production was 147.8/130.7 ms. The staging
+error, server, access, and worker log tails contain no post-load traceback,
+database/pool error, crash, or unexpected restart, and worker sweeps continued
+through the load.
+
+The staging release-candidate 24-hour soak therefore starts at the final
+worker start, 2026-07-20 12:19:34 UTC. This closes the provider-gzip
+100-active-user read gate, not the mutation-heavy/full-screen load gate.
