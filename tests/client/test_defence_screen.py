@@ -1490,6 +1490,49 @@ class TestDefenceConfigPolish:
         assert screen._selecting_spell_target == 'prelude'
         assert screen._prompt_spell_target_on_next_load is False
 
+    def test_async_transform_uses_embedded_collection(self):
+        from game.screens.defence_screen import DefenceScreen
+
+        class Response:
+            status_code = 200
+
+            def json(self):
+                return {
+                    'success': True,
+                    'config': {},
+                    'collection': {
+                        'cards': [
+                            {'suit': 'Spades', 'rank': '3', 'free': 2},
+                        ],
+                    },
+                }
+
+        result = DefenceScreen._transform_config_bundle_async({
+            'config': Response(),
+        })
+
+        assert result['collection_data']['cards'] == [
+            {'suit': 'Spades', 'rank': '3', 'free': 2},
+        ]
+
+    def test_web_loader_requests_only_combined_config_endpoint(self):
+        from game.screens import defence_screen as module
+
+        class Poller:
+            busy = False
+
+            def poll(self, args=None):
+                self.args = args
+
+        screen = module.DefenceScreen(_make_state())
+        screen._land_id = 7
+        with patch.object(module, 'BackgroundPoller', return_value=Poller()) as factory:
+            screen._start_config_load()
+
+        specs = factory.call_args.kwargs['async_requests']
+        assert [spec['key'] for spec in specs] == ['config']
+        assert specs[0]['url'].endswith('/kingdom/defence/draft/open')
+
     def test_close_subscreen_uses_async_loader_and_flags_prompt(self):
         from game.screens.defence_screen import DefenceScreen
         state = _make_state()

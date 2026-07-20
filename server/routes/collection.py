@@ -7,6 +7,7 @@ import logging
 from flask import Blueprint, request, jsonify, g
 
 from models import db, User, CollectionCard
+from collection_snapshot import serialize_collection_snapshot
 from routes.auth import require_token
 import server_settings as config
 from analytics import track
@@ -116,32 +117,7 @@ def get_cards():
     if not user:
         return jsonify({'success': False, 'message': 'User not found'}), 404
 
-    all_cards = CollectionCard.query.filter_by(user_id=user.id).all()
-
-    # Group by (suit, rank)
-    grouped = {}
-    for card in all_cards:
-        key = (card.suit, card.rank)
-        if key not in grouped:
-            grouped[key] = {'suit': card.suit, 'rank': card.rank,
-                            'value': card.value, 'total': 0, 'locked': 0}
-        grouped[key]['total'] += 1
-        if card.locked:
-            grouped[key]['locked'] += 1
-
-    cards = []
-    for entry in grouped.values():
-        entry['free'] = entry['total'] - entry['locked']
-        cards.append(entry)
-
-    return jsonify({
-        'success': True,
-        'cards': cards,
-        'booster_packs': user.booster_packs,
-        'booster_packs_side': user.booster_packs_side,
-        'maps': int(user.maps or 0),
-        'gold': user.gold,
-    })
+    return jsonify(serialize_collection_snapshot(user))
 
 
 # ── POST /collection/sell_card ──────────────────────────────────────────────

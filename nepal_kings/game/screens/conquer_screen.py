@@ -581,9 +581,14 @@ class ConquerScreen(MenuScreenMixin, Screen):
         if getattr(config_resp, 'status_code', 0) != 200:
             err = cls._response_json(config_resp)
             return {'error': err.get('error', err.get('message', 'Failed to load conquer config'))}
-        result = {'config_data': cls._response_json(config_resp), 'collection_data': {}}
+        config_data = cls._response_json(config_resp)
+        result = {
+            'config_data': config_data,
+            'collection_data': config_data.get('collection') or {},
+        }
         collection_resp = (responses or {}).get('collection')
-        if collection_resp is not None and getattr(collection_resp, 'status_code', 0) == 200:
+        if (not result['collection_data'] and collection_resp is not None
+                and getattr(collection_resp, 'status_code', 0) == 200):
             result['collection_data'] = cls._response_json(collection_resp)
         return result
 
@@ -597,13 +602,15 @@ class ConquerScreen(MenuScreenMixin, Screen):
             if resp.status_code != 200:
                 err = self._response_json(resp)
                 return {'error': err.get('error', err.get('message', 'Failed to load conquer config'))}
-            collection_data = {}
-            try:
-                collection_data = collection_service.fetch_collection_cards()
-            except Exception as e:
-                logger.error(f'Collection fetch error: {e}')
+            config_data = resp.json()
+            collection_data = config_data.get('collection') or {}
+            if not collection_data:
+                try:
+                    collection_data = collection_service.fetch_collection_cards()
+                except Exception as e:
+                    logger.error(f'Collection fetch error: {e}')
             return {
-                'config_data': resp.json(),
+                'config_data': config_data,
                 'collection_data': collection_data,
             }
         except Exception as e:
@@ -620,7 +627,6 @@ class ConquerScreen(MenuScreenMixin, Screen):
                 async_requests=[
                     {'key': 'config', 'url': f'{base}/kingdom/conquer/config',
                      'params': {'land_id': 0}},
-                    {'key': 'collection', 'url': f'{base}/collection/cards'},
                 ],
                 async_transform=self._transform_config_bundle_async,
             )
@@ -678,9 +684,12 @@ class ConquerScreen(MenuScreenMixin, Screen):
             self._config = data.get('config')
             self._land = data.get('land')
             self._set_cooldown_state(data)
+            collection_data = data.get('collection') or {}
+            self._collection_cards = collection_data.get('cards', [])
             self._loading = False
             self._rebuild_figure_objects()
-            self._refresh_collection()
+            if not collection_data:
+                self._refresh_collection()
             logger.debug(f'Conquer config loaded for land {self._land_id}')
         except Exception as e:
             self._error = 'Connection error'

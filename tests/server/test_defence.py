@@ -1023,6 +1023,28 @@ def _create_complete_active_defence(client, db, user_id, headers, land):
 
 class TestDefenceDraftLifecycle:
 
+    def test_open_draft_embeds_grouped_collection_snapshot(
+            self, client, db, two_users, auth_headers_user1):
+        u1, _ = two_users
+        land = _add_land(db, owner_id=u1.id)
+        _add_collection_card(db, u1.id, 'Spades', 'Q', 12)
+
+        rv = client.post(
+            '/kingdom/defence/draft/open',
+            headers=auth_headers_user1,
+            json={'land_id': land.id},
+        )
+
+        assert rv.status_code == 200
+        snapshot = rv.get_json()['collection']
+        spades_q = next(
+            card for card in snapshot['cards']
+            if card['suit'] == 'Spades' and card['rank'] == 'Q'
+        )
+        assert spades_q['total'] == 1
+        assert spades_q['locked'] == 0
+        assert spades_q['free'] == 1
+
     def test_clear_active_removes_draft_and_active_and_unlocks_cards(
             self, client, db, two_users, auth_headers_user1):
         u1, _ = two_users

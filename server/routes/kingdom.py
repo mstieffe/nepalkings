@@ -25,6 +25,7 @@ from routes.serialization import (
     viewer_has_all_seeing_eye,
 )
 from game_service.deck_manager import DeckManager
+from collection_snapshot import serialize_collection_snapshot
 from game_service.conquer_prelude_replay_targets import (
     conquer_destroyed_replay_targets_for_prelude,
 )
@@ -2566,6 +2567,7 @@ def get_conquer_config():
         'success': True,
         'config': _serialize_config_with_deficit(cfg),
         'land': _serialize_land_context(land),
+        'collection': serialize_collection_snapshot(user),
         'conquer_cooldown_remaining': cooldown_remaining,
         'maps_available': int(user.maps or 0),
         'land_conquer_cooldown_remaining': land_cooldown_remaining,
@@ -3238,11 +3240,13 @@ def get_defence_config():
 
     cfg = _get_or_create_defence_config(g.user_id, land_id)
     db.session.commit()
+    user = db.session.get(User, g.user_id)
 
     return jsonify({
         'success': True,
         'config': _serialize_config_with_deficit(cfg),
         'land': _serialize_land_context(land),
+        'collection': serialize_collection_snapshot(user),
     })
 
 
@@ -3262,11 +3266,13 @@ def defence_draft_open():
 
     draft = _get_or_create_defence_draft(g.user_id, land_id)
     db.session.commit()
+    user = db.session.get(User, g.user_id)
     return jsonify({
         'success': True,
         'config': _serialize_defence_edit_config(draft),
         'land': _serialize_land_context(land),
         'dirty': _is_defence_draft_dirty(draft),
+        'collection': serialize_collection_snapshot(user),
     })
 
 
@@ -3284,11 +3290,13 @@ def get_defence_draft_config():
 
     draft = _get_or_create_defence_draft(g.user_id, land_id)
     db.session.commit()
+    user = db.session.get(User, g.user_id)
     return jsonify({
         'success': True,
         'config': _serialize_defence_edit_config(draft),
         'land': _serialize_land_context(land),
         'dirty': _is_defence_draft_dirty(draft),
+        'collection': serialize_collection_snapshot(user),
     })
 
 

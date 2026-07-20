@@ -143,6 +143,71 @@ class TestConquerScreenInit:
         assert screen._start_battle_fetch_game_id is None
 
 
+class TestConquerConfigLoading:
+
+    class _Response:
+        status_code = 200
+
+        def __init__(self, payload):
+            self._payload = payload
+
+        def json(self):
+            return self._payload
+
+    def test_async_transform_uses_embedded_collection(self):
+        from game.screens.conquer_screen import ConquerScreen
+
+        embedded = {'cards': [{'suit': 'Hearts', 'rank': 'K', 'free': 1}]}
+        result = ConquerScreen._transform_config_bundle_async({
+            'config': self._Response({
+                'success': True,
+                'config': {},
+                'collection': embedded,
+            }),
+        })
+
+        assert result['collection_data'] == embedded
+
+    def test_threaded_fetch_skips_second_request_when_collection_embedded(self):
+        from game.screens import conquer_screen as module
+
+        screen = object.__new__(module.ConquerScreen)
+        embedded = {'cards': [{'suit': 'Spades', 'rank': '7', 'free': 2}]}
+        response = self._Response({
+            'success': True,
+            'config': {},
+            'collection': embedded,
+        })
+
+        with patch.object(module.requests, 'get', return_value=response), \
+                patch.object(
+                    module.collection_service,
+                    'fetch_collection_cards',
+                    side_effect=AssertionError('second collection request'),
+                ):
+            result = screen._fetch_config_bundle(42)
+
+        assert result['collection_data'] == embedded
+
+    def test_web_loader_requests_only_combined_config_endpoint(self):
+        from game.screens import conquer_screen as module
+
+        class Poller:
+            busy = False
+
+            def poll(self, args=None):
+                self.args = args
+
+        screen = module.ConquerScreen(_make_state())
+        screen._land_id = 42
+        with patch.object(module, 'BackgroundPoller', return_value=Poller()) as factory:
+            screen._start_config_load()
+
+        specs = factory.call_args.kwargs['async_requests']
+        assert [spec['key'] for spec in specs] == ['config']
+        assert specs[0]['url'].endswith('/kingdom/conquer/config')
+
+
 class TestBattleReadiness:
 
     def _screen_with_config(self, figures, moves):

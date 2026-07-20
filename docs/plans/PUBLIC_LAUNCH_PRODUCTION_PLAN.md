@@ -124,6 +124,12 @@ Known launch blockers:
   122 KB on the wire. The final staging 100-active-user read mix passed
   without errors, but map construction/serialization remained the slow
   outlier at 891.7 ms p95.
+- `develop` now embeds a SQL-grouped collection snapshot in the Conquer and
+  Defence config responses, and updated clients use one initial config request
+  instead of a second `/collection/cards` request. The complete local suite
+  passed with 2,668 tests and 3 environment-specific skips; staging
+  latency/request-count verification is still required before treating this
+  optimization as live.
 - A standard-library external contract/latency probe and scheduled GitHub
   workflow now exist on `develop`, and the first live cycle passed. The
   schedule becomes active from the default branch; centralized application
@@ -648,8 +654,9 @@ Priority: **P0**
 - [ ] Add one viewer-safe game snapshot endpoint.
 - [ ] Include game, figures, active spells, versioned logs/chat, and state
   version in the snapshot.
-- [ ] Return the collection subset required by Conquer/defence config in the
-  config response.
+- [x] Return the collection subset required by Conquer/defence config in the
+  config response (SQL-grouped snapshot; new browser clients issue only the
+  combined initial request, while desktop retains an old-server fallback).
 - [ ] Cache collection state by collection version.
 - [ ] Cache kingdom/map state by map version.
 - [ ] Add `ETag` or numeric version cursors.
@@ -982,3 +989,4 @@ Part-time expectation: approximately two to three months.
 | 2026-07-20 | Verify and harden Conquer battle serialization | The existing application-wide PostgreSQL lock plus release `df69ece` route-local fallback/finished-state guards passed 2,655 local tests, full CI, PostgreSQL CI, security scanning, a one-of-two advance race, and a cross-endpoint advance/withdraw race | The deliberately conflicting Conquer gate is closed; its intermediate soak began at 11:39 UTC and was later superseded by `4660f75` |
 | 2026-07-20 | Rely on verified PythonAnywhere gzip instead of duplicating compression in Flask | A live A/B measured 122,140 bytes with application gzip and 122,141 bytes with it disabled for the same 3,341,221-byte map JSON; both responses were gzip encoded | Remove redundant application gzip, retain wire-size measurement, and focus map work on construction/serialization plus versioned caching |
 | 2026-07-20 | Promote the provider-gzip release `4660f75` as the staging candidate | Immutable artifact and backup checks passed; all CI/security jobs were green; its final 100-user run returned 1,129/1,129 HTTP `200` with 128.7 ms overall p95 and 891.7 ms map p95; post-load probes and logs were clean | Restart the release-candidate soak at the worker's clean 12:19:34 UTC start; production stays on `90bfa02` in maintenance |
+| 2026-07-20 | Combine configuration and collection bootstrap reads | Conquer and Defence setup now embed one SQL-grouped collection snapshot; browser loaders request only the combined endpoint, desktop clients retain an old-server fallback, and 2,668 local tests passed | Remove one authenticated request/preflight path from each initial setup-screen load; deploy to staging and measure before recording a live gain |

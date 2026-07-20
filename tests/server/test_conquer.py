@@ -66,6 +66,41 @@ class TestGetConquerConfig:
         assert data['maps_available'] == 2
         assert data['conquer_cooldown_remaining'] > 0
 
+    def test_config_embeds_grouped_collection_snapshot(
+            self, client, db, two_users, auth_headers_user1):
+        u1, u2 = two_users
+        land = _add_land(db, owner_id=u2.id)
+        db.session.add_all([
+            CollectionCard(
+                user_id=u1.id, suit='Hearts', rank='K', value=4,
+            ),
+            CollectionCard(
+                user_id=u1.id, suit='Hearts', rank='K', value=4,
+                locked=True,
+            ),
+        ])
+        db.session.commit()
+
+        rv = client.get(
+            f'/kingdom/conquer/config?land_id={land.id}',
+            headers=auth_headers_user1,
+        )
+
+        assert rv.status_code == 200
+        snapshot = rv.get_json()['collection']
+        hearts_k = next(
+            card for card in snapshot['cards']
+            if card['suit'] == 'Hearts' and card['rank'] == 'K'
+        )
+        assert hearts_k == {
+            'suit': 'Hearts',
+            'rank': 'K',
+            'value': 4,
+            'total': 2,
+            'locked': 1,
+            'free': 1,
+        }
+
     def test_returns_existing_config(self, client, db, two_users, auth_headers_user1):
         u1, u2 = two_users
         land = _add_land(db, owner_id=u2.id)
