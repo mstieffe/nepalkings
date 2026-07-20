@@ -149,7 +149,7 @@ class TestKingdomMap:
         data = rv.get_json()
         lands_by_id = {l['id']: l for l in data['lands']}
         assert lands_by_id[protected.id]['conquer_cooldown_remaining'] == 305
-        assert lands_by_id[expired.id]['conquer_cooldown_remaining'] == 0
+        assert lands_by_id[expired.id].get('conquer_cooldown_remaining', 0) == 0
 
     def test_land_owner_data(self, client, db, two_users, auth_headers_user1):
         """Owned lands include owner username and owned_since."""
@@ -173,6 +173,30 @@ class TestKingdomMap:
         rv = client.get('/kingdom/map', headers=auth_headers_user1)
         data = rv.get_json()
         assert data['lands'][0]['owner'] is None
+
+    def test_unclaimed_land_omits_default_and_internal_fields(
+            self, client, db, two_users, auth_headers_user1):
+        """The 4,800-row map uses client-safe sparse optional fields."""
+        _add_land(db, 0, 0)
+        _add_land(db, 1, 0)
+
+        rv = client.get('/kingdom/map', headers=auth_headers_user1)
+
+        rows = rv.get_json()['lands']
+        row = next(
+            item for item in rows
+            if not item.get('is_recommended_tutorial_land')
+        )
+        assert row['is_mine'] is False
+        assert row['owner'] is None
+        assert 'is_recommended_tutorial_land' not in row
+        assert 'conquer_cooldown_remaining' not in row
+        assert 'kingdom_component_id' not in row
+        assert 'kingdom_shield_remaining' not in row
+        assert 'kingdom_skill_effects' not in row
+        assert 'ai_name' not in row
+        assert 'ai_template_index' not in row
+        assert 'defence_config_id' not in row
 
     def test_land_serializes_tier_and_bonus(self, client, db, two_users,
                                             auth_headers_user1):
@@ -251,16 +275,21 @@ class TestKingdomMap:
 
     def test_map_read_does_not_generate_full_ai_templates(self, client, monkeypatch,
                                                           auth_headers_user1):
-        """Map serialization needs AI names, not full AI battle loadouts."""
+        """Map serialization needs neither AI names nor full battle loadouts."""
         from ai.defence import generator
 
-        def _fail_full_template_generation(_land):
-            raise AssertionError('map serialization should not generate full AI templates')
+        def _fail_ai_generation(_land):
+            raise AssertionError('map serialization should not generate AI data')
 
         monkeypatch.setattr(
             generator,
             'generate_ai_defence_template_for_land',
-            _fail_full_template_generation,
+            _fail_ai_generation,
+        )
+        monkeypatch.setattr(
+            generator,
+            'get_ai_defence_name_for_land',
+            _fail_ai_generation,
         )
 
         rv = client.get('/kingdom/map', headers=auth_headers_user1)

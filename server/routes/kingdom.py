@@ -1317,6 +1317,11 @@ def get_kingdom_map():
 
     now = _utcnow()
     lands = Land.query.order_by(Land.row, Land.col).all()
+    owner_ids = {land.owner_user_id for land in lands if land.owner_user_id}
+    owner_usernames = {
+        row.id: row.username
+        for row in User.query.filter(User.id.in_(owner_ids)).all()
+    } if owner_ids else {}
     kingdom_ids = {land.kingdom_id for land in lands if land.kingdom_id}
     kingdoms_by_id = {
         row.id: row for row in KingdomModel.query.filter(KingdomModel.id.in_(kingdom_ids)).all()
@@ -1346,20 +1351,41 @@ def get_kingdom_map():
             my_total_gold_rate += land.gold_rate
             my_lands_count += 1
 
-        land_dict = land.serialize()
-        if not land_dict.get('region'):
-            land_dict['region'] = region_for(
+        # Keep the full-map representation sparse. ``Land.serialize()`` also
+        # includes configuration/internal AI fields that the map client never
+        # consumes, and emitting every false/zero/None optional field across
+        # 4,800 rows made the JSON document more than 3.3 MB. HexTile already
+        # treats absent optional fields as their safe defaults.
+        region = land.region
+        if not region:
+            region = region_for(
                 land.col, land.row,
                 config.KINGDOM_MAP_COLS, config.KINGDOM_MAP_ROWS)
-        land_dict.update(component_info_by_land.get(land.id, {
-            'kingdom_component_id': None,
-            'kingdom_component_size': 0,
-            'kingdom_level': 0,
-            'kingdom_tier_name': None,
-            'kingdom_bonuses': {},
-            'kingdom_raw_gold_rate': 0,
-            'kingdom_effective_gold_rate': 0,
-        }))
+        owner = None
+        if land.owner_user_id:
+            owner = {
+                'user_id': land.owner_user_id,
+                'username': owner_usernames.get(land.owner_user_id),
+                'owned_since': (
+                    land.owned_since.isoformat()
+                    if land.owned_since else None
+                ),
+            }
+        land_dict = {
+            'id': land.id,
+            'col': land.col,
+            'row': land.row,
+            'region': region,
+            'tier': land.tier,
+            'gold_rate': land.gold_rate,
+            'suit_bonus_suit': land.suit_bonus_suit,
+            'suit_bonus_value': land.suit_bonus_value,
+            'owner': owner,
+            'is_mine': is_mine,
+        }
+        component_info = component_info_by_land.get(land.id)
+        if component_info:
+            land_dict.update(component_info)
         persistent_kingdom = kingdoms_by_id.get(land.kingdom_id)
         shield_remaining = 0
         shield_reason = None
@@ -1369,47 +1395,51 @@ def get_kingdom_map():
                     land, now=now)
             shield_remaining, _shield_kingdom, shield_reason = shield_status_by_kingdom[
                 persistent_kingdom.id]
-        legacy_bonuses = dict(land_dict.get('kingdom_bonuses') or {})
         if persistent_kingdom:
+            legacy_bonuses = dict(land_dict.get('kingdom_bonuses') or {})
             if persistent_kingdom.id not in skill_bonuses_by_kingdom:
                 skill_bonuses_by_kingdom[persistent_kingdom.id] = kingdom_skill_bonuses(
                     persistent_kingdom)
             legacy_bonuses.update(skill_bonuses_by_kingdom[persistent_kingdom.id])
-        land_dict['kingdom_id'] = land.kingdom_id
-        land_dict['kingdom_name'] = (
-            persistent_kingdom.name or f'Kingdom #{persistent_kingdom.id}'
-            if persistent_kingdom else None
-        )
-        land_dict['kingdom_level'] = (
-            int(persistent_kingdom.level or 1)
-            if persistent_kingdom else int(land_dict.get('kingdom_level') or 0)
-        )
-        land_dict['kingdom_bonuses'] = legacy_bonuses
-        land_dict['kingdom_skill_effects'] = describe_kingdom_bonuses(legacy_bonuses)
-        land_dict['kingdom_shield_until'] = (
-            persistent_kingdom.shield_until.isoformat()
-            if persistent_kingdom and persistent_kingdom.shield_until else None
-        )
-        land_dict['kingdom_shield_remaining'] = shield_remaining
-        land_dict['kingdom_shield_reason'] = shield_reason
-        land_dict['kingdom_is_shielded'] = bool(shield_reason)
-        if land.owner_user_id:
+            land_dict['kingdom_id'] = persistent_kingdom.id
+            land_dict['kingdom_name'] = (
+                persistent_kingdom.name or
+                f'Kingdom #{persistent_kingdom.id}'
+            )
+            land_dict['kingdom_level'] = int(persistent_kingdom.level or 1)
+            land_dict['kingdom_bonuses'] = legacy_bonuses
+            land_dict['kingdom_skill_effects'] = (
+                describe_kingdom_bonuses(legacy_bonuses)
+            )
+            if persistent_kingdom.shield_until:
+                land_dict['kingdom_shield_until'] = (
+                    persistent_kingdom.shield_until.isoformat()
+                )
+            if shield_remaining:
+                land_dict['kingdom_shield_remaining'] = shield_remaining
+            if shield_reason:
+                land_dict['kingdom_shield_reason'] = shield_reason
+                land_dict['kingdom_is_shielded'] = True
             land_dict['owner_style'] = (
                 persistent_kingdom.serialize_style()
-                if persistent_kingdom else _default_style_dict()
             )
-        land_dict['is_mine'] = is_mine
-        land_dict['is_recommended_tutorial_land'] = (
+        elif land.kingdom_id:
+            # Preserve a dangling/legacy identifier without expanding every
+            # healthy unowned row with ``kingdom_id: null``.
+            land_dict['kingdom_id'] = land.kingdom_id
+        if (
             recommended_tutorial_land_id is not None
             and land.id == recommended_tutorial_land_id
-        )
+        ):
+            land_dict['is_recommended_tutorial_land'] = True
         land_cooldown_remaining = 0
         if land.conquer_cooldown_until:
             land_cooldown_remaining = max(
                 0,
                 int((land.conquer_cooldown_until - now).total_seconds()),
             )
-        land_dict['conquer_cooldown_remaining'] = land_cooldown_remaining
+        if land_cooldown_remaining:
+            land_dict['conquer_cooldown_remaining'] = land_cooldown_remaining
         if is_mine:
             land_dict['defence_incomplete'] = defence_incomplete_by_land.get(
                 land.id, True)
