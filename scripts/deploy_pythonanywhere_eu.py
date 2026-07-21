@@ -480,13 +480,16 @@ def _task_log_path(environment: Environment) -> str:
     return f"/var/log/alwayson-log-{environment.task_id}.log"
 
 
-def _worker_start_count(log: bytes, environment: Environment, sha: str) -> int:
+def _worker_activity_count(log: bytes, environment: Environment, sha: str) -> int:
     return sum(
         1
         for line in log.splitlines()
         if sha.encode() in line
-        and f"Background worker started environment={environment.name}".encode()
-        in line
+        and f'"environment":"{environment.name}"'.encode() in line
+        and (
+            b'"message":"Background worker started ' in line
+            or b'"message":"Worker sweep complete ' in line
+        )
     )
 
 
@@ -496,7 +499,7 @@ def _canonicalize_worker(
     sha: str,
 ) -> None:
     baseline = client.get_file(_task_log_path(environment)) or b""
-    baseline_starts = _worker_start_count(baseline, environment, sha)
+    baseline_activity = _worker_activity_count(baseline, environment, sha)
     client.set_task(environment.task_id, enabled=False)
     client.wait_task_state(environment.task_id, "Stopped")
     command = _canonical_worker_command(client, environment, sha)
@@ -512,14 +515,14 @@ def _canonicalize_worker(
     deadline = time.monotonic() + 180
     while time.monotonic() < deadline:
         current = client.get_file(_task_log_path(environment)) or b""
-        if _worker_start_count(current, environment, sha) > baseline_starts:
+        if _worker_activity_count(current, environment, sha) > baseline_activity:
             print(
                 f"CANONICAL_WORKER_VERIFIED environment={environment.name} task={environment.task_id}"
             )
             return
         time.sleep(5)
     raise DeployError(
-        f"Canonical {environment.name} worker did not log a fresh successful start"
+        f"Canonical {environment.name} worker did not log fresh successful activity"
     )
 
 
@@ -852,6 +855,10 @@ def _deploy_environment(
         if helper_task_active:
             try:
                 client.set_task(environment.task_id, enabled=False)
+            except Exception:
+                pass
+            try:
+                client.disable_web(environment)
             except Exception:
                 pass
         _summarize_remote_log(client, environment, sha)

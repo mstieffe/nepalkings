@@ -216,7 +216,11 @@ console, the orchestrator temporarily reuses only the stopped target
 environment's existing always-on task to run the SHA-specific remote helper.
 It restores the immutable canonical worker command before reopening
 production. Staging must pass before production when `--environment both` is
-used.
+used. The canonical-worker gate requires new candidate-SHA activity after the
+command switch. It accepts either the startup record or a completed sweep
+because PythonAnywhere can omit the startup line during a rapid task command
+change; a sweep is emitted only after the worker has acquired leadership.
+Historical log lines cannot satisfy this gate.
 
 1. Confirm the target branch, clean worktree, and immutable commit SHA.
 2. Stop the target always-on task and web app, then take and verify a

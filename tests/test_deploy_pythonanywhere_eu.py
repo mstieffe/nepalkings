@@ -165,23 +165,77 @@ def test_staging_failure_disables_temporary_task(
     assert ("enable_web", "staging") not in client.calls
 
 
-def test_worker_start_count_requires_environment_and_release() -> None:
+def test_staging_canonicalization_failure_disables_web(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = FakeClient()
+    events: list[Any] = []
+    _patch_verifiers(monkeypatch, events)
+
+    def fail_canonical(*_args, **_kwargs):
+        raise deploy.DeployError("canonical worker was not verified")
+
+    monkeypatch.setattr(deploy, "_canonicalize_worker", fail_canonical)
+
+    with pytest.raises(deploy.DeployError, match="canonical worker"):
+        deploy._deploy_environment(
+            client,
+            deploy.ENVIRONMENTS["staging"],
+            sha=SHA,
+            archive_sha256=ARCHIVE_SHA,
+            browser_origin=deploy.DEFAULT_BROWSER_ORIGIN,
+            smoke_credentials=None,
+            allow_missing_authenticated_read=True,
+            conquer_smoke=False,
+        )
+
+    assert client.calls.count(("disable_web", "staging")) == 2
+
+
+def test_worker_activity_count_requires_environment_and_release() -> None:
     environment = deploy.ENVIRONMENTS["staging"]
     log = b"\n".join(
         (
             (
-                b'{"message":"Background worker started environment=staging",'
+                b'{"environment":"staging","message":"Background worker started environment=staging",'
                 + f'"release_sha":"{SHA}"'.encode()
                 + b"}"
             ),
-            b'{"message":"Background worker started environment=production"}',
-            b'{"message":"Worker sweep complete","release_sha":"'
+            b'{"environment":"production","message":"Background worker started environment=production"}',
+            b'{"environment":"production","message":"Worker sweep complete","release_sha":"'
             + SHA.encode()
             + b'"}',
         )
     )
 
-    assert deploy._worker_start_count(log, environment, SHA) == 1
+    assert deploy._worker_activity_count(log, environment, SHA) == 1
+
+
+def test_canonical_worker_accepts_fresh_sweep_when_start_line_is_missing() -> None:
+    client = FakeClient()
+    environment = deploy.ENVIRONMENTS["staging"]
+    log_path = deploy._task_log_path(environment)
+    start = (
+        b'{"environment":"staging","message":"Background worker started '
+        b'environment=staging","release_sha":"' + SHA.encode() + b'"}\n'
+    )
+    sweep = (
+        b'{"environment":"staging","message":"Worker sweep complete '
+        b'candidates=0 resolved=0","release_sha":"' + SHA.encode() + b'"}\n'
+    )
+    reads = iter((start, start + sweep))
+
+    def get_file(path: str) -> bytes:
+        client.calls.append(("get_file", path))
+        assert path == log_path
+        return next(reads)
+
+    client.get_file = get_file  # type: ignore[method-assign]
+
+    deploy._canonicalize_worker(client, environment, SHA)
+
+    canonical = deploy._canonical_worker_command(client, environment, SHA)
+    assert ("set_task", environment.task_id, True, canonical) in client.calls
 
 
 def test_smoke_credentials_must_be_private(tmp_path: Path) -> None:
