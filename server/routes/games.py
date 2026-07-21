@@ -416,6 +416,126 @@ def _auto_play_random_tactic_for_player(game, player):
     return chosen
 
 
+def _finalize_conquer_battle_on_timeout(game):
+    """Resolve a fully-played conquer battle server-side, without a client.
+
+    When the per-round timeout auto-plays the final tactics, the battle reaches
+    completion (all rounds played, ``battle_turn_player_id is None``) but nothing
+    is driving ``/games/finish_battle``: idle players never click it, and the
+    scripted defender worker only resolves games it is itself acting in.  The
+    game then hangs at a complete-but-unresolved state until the stuck-game
+    sweeper eventually force-forfeits it.
+
+    This mirrors the conquer win/lose/draw resolution of the ``finish_battle``
+    route so the game finalizes deterministically the moment it is complete.
+    It reuses :func:`_resolve_conquer_battle` (land transfer, loot, attack log)
+    exactly like the auto-loss resolvers do.
+
+    Idempotent and defensive: returns ``False`` (no-op) unless this is a
+    tactics-hand conquer battle that is complete, unresolved, and still has its
+    battle figures.  Returns ``True`` when it resolves the battle.
+    """
+    if not game or game.mode != 'conquer' or not _is_tactics_hand_conquer(game):
+        return False
+    if game.state == 'finished':
+        return False
+    saved_result = game.last_battle_result if isinstance(
+        game.last_battle_result, dict) else {}
+    if saved_result.get('conquer_resolved') or saved_result.get('conquer_result'):
+        return False
+    if game.battle_turn_player_id is not None or not _battle_all_rounds_complete(game):
+        return False
+
+    adv_figure = (db.session.get(Figure, game.advancing_figure_id)
+                  if game.advancing_figure_id else None)
+    def_figure = (db.session.get(Figure, game.defending_figure_id)
+                  if game.defending_figure_id else None)
+    if not adv_figure or not def_figure:
+        # Battle figures already cleared — another path resolved it.
+        return False
+
+    # Authoritative score in the advancing side's perspective (positive =
+    # advancing player wins). Must be computed BEFORE _clear_battle_state,
+    # which nulls the advancing/defending figure references.
+    server_diff, breakdown = _compute_server_total_diff(game, return_breakdown=True)
+    advancing_player_id = game.advancing_player_id
+    battle_math = {}
+    if isinstance(breakdown, dict):
+        battle_math = {
+            'fig_diff': breakdown.get('fig_diff'),
+            'round_diff': breakdown.get('round_diff'),
+            'adv_power': breakdown.get('adv_power'),
+            'def_power': breakdown.get('def_power'),
+            'battle_score_diff': server_diff,
+            'battle_score_player_id': advancing_player_id,
+        }
+
+    attacker_player = _conquer_attacker_player(game)
+
+    # Shared post-battle cleanup (same order as _resolve_conquer_auto_loss).
+    _return_unplayed_battle_move_cards(game.id)
+    _delete_all_battle_moves(game.id)
+    _deactivate_all_spells(game)
+
+    if server_diff == 0:
+        # ── DRAW ── land ownership unchanged; no loot/consumption.
+        _clear_battle_state(game)
+        game.state = 'finished'
+        game.finished_at = _utcnow()
+        game.winner_player_id = None
+        track('game_finished', game_id=game.id, mode='conquer',
+              reason='draw', duration_s=_game_duration_seconds(game))
+        atk_cfg = (db.session.get(LandConfig, game.conquer_config_id)
+                   if game.conquer_config_id else None)
+        if atk_cfg:
+            _wipe_land_config(atk_cfg)
+        game.last_battle_result = {
+            'conquer_resolved': True,
+            'conquer_result': 'draw',
+            'attacker_won': False,
+            'conquer_consumed_cards': [],
+            'conquer_loot_gained_cards': [],
+            'conquer_loot_lost_cards': [],
+            'cards_spent': 0,
+            **battle_math,
+        }
+        flag_modified(game, 'last_battle_result')
+        db.session.add(LogEntry(
+            game_id=game.id,
+            player_id=(attacker_player.id if attacker_player else None),
+            round_number=game.current_round,
+            turn_number=0,
+            message=('Conquer battle timed out in a draw. No cards were looted; '
+                     'all attack cards returned to their owners.'),
+            author='System',
+            type='battle_draw',
+        ))
+        db.session.commit()
+        logger.info('[CONQUER_TIMEOUT_RESOLVE] game=%s result=draw', game.id)
+        return True
+
+    # ── WIN / LOSE ──
+    winner_player = next(
+        (p for p in game.players if p.id == advancing_player_id), None)
+    if server_diff < 0:
+        winner_player = next(
+            (p for p in game.players if p.id != advancing_player_id), None)
+    if winner_player is None:
+        return False
+
+    _clear_battle_state(game)
+    # Stash battle math so _resolve_conquer_battle merges it into the persisted
+    # result cache (build_conquer_resolution_cache seeds from last_battle_result),
+    # letting reconnecting clients recover the final battle total.
+    game.last_battle_result = {**saved_result, **battle_math}
+    _resolve_conquer_battle(game, winner_player, attacker_player or winner_player)
+    db.session.commit()
+    logger.info(
+        '[CONQUER_TIMEOUT_RESOLVE] game=%s winner=%s diff=%s',
+        game.id, winner_player.id, server_diff)
+    return True
+
+
 def _check_conquer_round_timeout(game):
     """If the active round's deadline has elapsed, auto-finalize any pending
     human players (random available tactic, or skipped round).
@@ -423,6 +543,8 @@ def _check_conquer_round_timeout(game):
     Throttled to at most once every 2 seconds per game to keep the polling
     path cheap (was causing visible client lag when invoked on every poll).
     """
+    if game.state == 'finished':
+        return
     deadline = _conquer_round_deadline_for(game)
     if deadline is None:
         return
@@ -440,6 +562,11 @@ def _check_conquer_round_timeout(game):
             db.session.refresh(game)
             refreshed_deadline = _conquer_round_deadline_for(game)
             if refreshed_deadline is None or _time.time() < refreshed_deadline:
+                return
+            # A prior poll may have auto-played the final tactics and left the
+            # battle complete-but-unresolved. Resolve it now so it can never
+            # hang waiting on a client that already walked away.
+            if _finalize_conquer_battle_on_timeout(game):
                 return
             pending_all = _all_players_pending_in_current_round(game)
             if not pending_all:
@@ -467,6 +594,11 @@ def _check_conquer_round_timeout(game):
                     if new_round != previous_round:
                         _conquer_round_deadlines.pop(game.id, None)
                         _ensure_conquer_round_deadline(game)
+                    # If that auto-play finished the final round, resolve the
+                    # battle deterministically instead of waiting on a client
+                    # or the scripted defender worker.
+                    if _finalize_conquer_battle_on_timeout(game):
+                        return
     except Exception:
         logger.exception('Conquer round timeout finalization failed')
         return

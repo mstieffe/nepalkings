@@ -1079,3 +1079,125 @@ def test_conquer_round_timeout_does_not_auto_play_ai_uses_worker(app, db, monkey
     assert {t.player_id for t in played} == {attacker_player.id}
     # AI worker was re-triggered so its real policy can run.
     assert triggered == [game.id]
+
+
+def test_final_round_timeout_resolves_conquer_battle_server_side(
+        app, db, monkeypatch):
+    """A fully timed-out conquer battle must resolve without any client.
+
+    When every round times out (idle players, scripted-defender land), the
+    auto-play finishes all three rounds but nothing was driving finish_battle,
+    so the game used to hang complete-but-unresolved. The timeout path now
+    finalizes it server-side.
+    """
+    from routes.games import (
+        _conquer_round_deadlines,
+        _conquer_timeout_last_check,
+        _check_conquer_round_timeout,
+        _battle_all_rounds_complete,
+    )
+
+    _client, _attacker, _defender, game, attacker_player, defender_player = (
+        _start_player_owned_conquer(app, db)
+    )
+    _force_active_battle(db, game, attacker_player, defender_player)
+
+    # AI disabled in tests -> trigger_ai_if_needed is a no-op, mirroring a
+    # game whose only hope of resolving is the server itself.
+    import ai.ai_worker as ai_worker
+    monkeypatch.setattr(ai_worker, 'trigger_ai_if_needed', lambda *a, **k: None)
+
+    # Drive every round through the timeout path until the battle resolves.
+    for _ in range(8):
+        g = db.session.get(Game, game.id)
+        if g.state == 'finished':
+            break
+        _conquer_round_deadlines[game.id] = (int(g.battle_round or 0), 0.0)
+        _conquer_timeout_last_check.pop(game.id, None)
+        _check_conquer_round_timeout(g)
+        db.session.refresh(g)
+
+    g = db.session.get(Game, game.id)
+    assert g.state == 'finished', 'battle should resolve server-side on timeout'
+    assert isinstance(g.last_battle_result, dict)
+    assert g.last_battle_result.get('conquer_resolved') is True
+    # A real winner was recorded (not a draw here) and battle math persisted so
+    # reconnecting clients can recover the final total.
+    assert g.winner_player_id in {attacker_player.id, defender_player.id}
+    assert g.last_battle_result.get('battle_score_player_id') == attacker_player.id
+    assert 'battle_score_diff' in g.last_battle_result
+    # Battle state was cleared as part of resolution.
+    assert g.battle_confirmed is False
+    assert g.advancing_figure_id is None
+
+
+def test_final_round_timeout_resolves_draw_server_side(app, db, monkeypatch):
+    """A tied timed-out conquer battle resolves as a draw (no owner change)."""
+    import sys
+    from routes.games import _finalize_conquer_battle_on_timeout
+    games_module = sys.modules['routes.games']
+
+    _client, _attacker, _defender, game, attacker_player, defender_player = (
+        _start_player_owned_conquer(app, db)
+    )
+    _force_active_battle(db, game, attacker_player, defender_player)
+
+    # Mark all three rounds complete for both players (skips count as complete),
+    # so the battle is finished without needing extra tactic rows.
+    game.battle_skipped_rounds = {
+        str(attacker_player.id): [0, 1, 2],
+        str(defender_player.id): [0, 1, 2],
+    }
+    game.battle_turn_player_id = None
+    db.session.commit()
+
+    # Force a tie so the draw branch runs deterministically.
+    monkeypatch.setattr(
+        games_module, '_compute_server_total_diff',
+        lambda g, return_breakdown=False: (0, {}) if return_breakdown else 0)
+
+    resolved = _finalize_conquer_battle_on_timeout(db.session.get(Game, game.id))
+
+    assert resolved is True
+    g = db.session.get(Game, game.id)
+    assert g.state == 'finished'
+    assert g.winner_player_id is None
+    assert g.last_battle_result.get('conquer_result') == 'draw'
+
+
+def test_finalize_conquer_timeout_is_idempotent(app, db, monkeypatch):
+    """Re-running the finalizer on a resolved game is a harmless no-op."""
+    from routes.games import (
+        _conquer_round_deadlines,
+        _conquer_timeout_last_check,
+        _check_conquer_round_timeout,
+        _finalize_conquer_battle_on_timeout,
+    )
+
+    _client, _attacker, _defender, game, attacker_player, defender_player = (
+        _start_player_owned_conquer(app, db)
+    )
+    _force_active_battle(db, game, attacker_player, defender_player)
+
+    import ai.ai_worker as ai_worker
+    monkeypatch.setattr(ai_worker, 'trigger_ai_if_needed', lambda *a, **k: None)
+
+    for _ in range(8):
+        g = db.session.get(Game, game.id)
+        if g.state == 'finished':
+            break
+        _conquer_round_deadlines[game.id] = (int(g.battle_round or 0), 0.0)
+        _conquer_timeout_last_check.pop(game.id, None)
+        _check_conquer_round_timeout(g)
+        db.session.refresh(g)
+
+    g = db.session.get(Game, game.id)
+    winner_before = g.winner_player_id
+    result_before = dict(g.last_battle_result or {})
+
+    # A second finalize attempt must not change the resolved outcome.
+    assert _finalize_conquer_battle_on_timeout(g) is False
+    db.session.refresh(g)
+    assert g.winner_player_id == winner_before
+    assert g.last_battle_result.get('conquer_resolved') == result_before.get(
+        'conquer_resolved')
