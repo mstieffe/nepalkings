@@ -183,6 +183,41 @@ maintenance mode.
 
 ## Deploy order
 
+The supported automation is `scripts/deploy_pythonanywhere_eu.py`. It follows
+the order below, uses the full Git SHA as the release identity, and defaults to
+a non-mutating plan. A real promotion requires `--execute` plus the exact full
+SHA in `--confirm-sha`:
+
+```bash
+.venv/bin/python scripts/deploy_pythonanywhere_eu.py \
+  --environment both \
+  --push \
+  --execute \
+  --confirm-sha "$(git rev-parse HEAD)" \
+  --allow-missing-authenticated-read
+```
+
+Prefer private, owner-only smoke credential files over the explicit
+authenticated-read waiver:
+
+```bash
+--smoke-credentials staging=/private/staging-smoke.json \
+--smoke-credentials production=/private/production-smoke.json
+```
+
+The JSON files contain only `username` and `token` and must not be committed.
+Use `--conquer-smoke-staging` when the release needs the deliberate,
+data-retaining Conquer mutation smoke. Run the command without `--execute` to
+review its exact target/order before every first or unusual deployment.
+
+The local orchestrator uses the documented PythonAnywhere Files, web-app, and
+always-on-task APIs. Because that API does not start an unattended Bash
+console, the orchestrator temporarily reuses only the stopped target
+environment's existing always-on task to run the SHA-specific remote helper.
+It restores the immutable canonical worker command before reopening
+production. Staging must pass before production when `--environment both` is
+used.
+
 1. Confirm the target branch, clean worktree, and immutable commit SHA.
 2. Stop the target always-on task and web app, then take and verify a
    PostgreSQL backup with the versioned
@@ -201,8 +236,8 @@ maintenance mode.
 
 `deploy_server.sh` is not the deploy path for this paid immutable-release
 layout. It remains a legacy mutable-directory/SQLite helper that defaults to
-the old US account. Use the order above until a PostgreSQL-aware immutable
-deployment command replaces it.
+the old US account. Use `scripts/deploy_pythonanywhere_eu.py` for the paid EU
+staging/production pair.
 
 The application archive is server-only. Keep operational helpers separately
 under a private immutable path:

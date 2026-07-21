@@ -40,6 +40,7 @@ Local diagnostics. Never deploy these.
 | Script | Purpose |
 |---|---|
 | `create_postgres_backup.py` | Create and validate a PostgreSQL custom-format dump without placing `DB_URL` or its password in subprocess arguments or error output. |
+| `deploy_pythonanywhere_eu.py` | Promote one immutable SHA through paid EU staging and production with backups, maintenance, worker-lock verification, and external probes. Defaults to a non-mutating plan. |
 | `encrypt_postgres_backup.py` | Encrypt a PostgreSQL custom-format dump with AES-256-GCM, round-trip verify it, and write a recovery manifest. |
 | `load_authenticated_routes.py` | Run a bounded staging-only authenticated read workload across Collection, Conquer config, game polling, and the kingdom map. |
 | `probe_launch_endpoints.py` | Probe production/staging health, readiness, PostgreSQL schema, release consistency, legal discovery, and latency from outside PythonAnywhere. |

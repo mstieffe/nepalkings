@@ -35,6 +35,21 @@ environment file, web app, or background worker. See
 
 ## Server promotion
 
+The normal operator entry point is:
+
+```bash
+.venv/bin/python scripts/deploy_pythonanywhere_eu.py \
+  --environment both --push --execute \
+  --confirm-sha "$(git rev-parse HEAD)" \
+  --allow-missing-authenticated-read
+```
+
+Omit `--execute` for a read-only plan. The authenticated-read waiver is
+deliberately explicit; use private `--smoke-credentials ENV=FILE` inputs when
+maintained smoke accounts are available. The automation implements the gates
+below and leaves a failed staging deployment disabled or a failed production
+deployment disabled/in maintenance.
+
 ### 1. Verify the candidate
 
 - clean worktree and immutable commit;
