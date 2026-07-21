@@ -1058,8 +1058,57 @@ class FieldFigureIcon(FigureIcon):
         # Draw figure name and cards together in a box
         self.draw_figure_info()
 
+    @staticmethod
+    def _info_row_width(elements, spacing):
+        """Total width of a list of ``(width, height, draw_fn)`` info elements."""
+        if not elements:
+            return 0
+        return (sum(width for width, _h, _draw in elements)
+                + spacing * (len(elements) - 1))
+
+    @staticmethod
+    def _wrap_info_rows(elements, max_w, spacing):
+        """Greedily pack elements into rows no wider than ``max_w``.
+
+        An element wider than ``max_w`` on its own still gets its own row
+        (it cannot be split), but that only happens for oversized icons which
+        never occur in practice.
+        """
+        rows = []
+        current = []
+        current_w = 0
+        for element in elements:
+            width = element[0]
+            added = width if not current else spacing + width
+            if current and current_w + added > max_w:
+                rows.append(current)
+                current = [element]
+                current_w = width
+            else:
+                current.append(element)
+                current_w += added
+        if current:
+            rows.append(current)
+        return rows
+
+    def _draw_info_row(self, elements, center_y, spacing):
+        """Draw info elements as one horizontal row centred on the icon."""
+        if not elements:
+            return
+        row_w = self._info_row_width(elements, spacing)
+        x = int(self.x - row_w / 2)
+        for i, (width, _h, draw_fn) in enumerate(elements):
+            if i > 0:
+                x += spacing
+            draw_fn(x, center_y)
+            x += width
+
     def draw_figure_info(self) -> None:
-        """Draw figure name and info (power, bonus, suit, skills) in a single horizontal line."""
+        """Draw the figure name and info (power, bonus, suit, skills).
+
+        Normally a single horizontal info row; when a mobile width cap would
+        clip it, the numbers wrap onto the first line and the skills onto a
+        second so nothing is truncated."""
         # Determine text to display
         if self.is_visible:
             text = self.figure.name
@@ -1208,34 +1257,112 @@ class FieldFigureIcon(FigureIcon):
             suit_icon = self.suit_icon_big if is_big_state else self.suit_icon
             icon_size = suit_icon.get_height() if suit_icon else int(settings.FIELD_FIGURE_CARD_HEIGHT * 0.8 * scale_factor)
             
-            # Calculate total width of info row: power + buff + defence + bonus + distance penalty + enchantment + suit + skills + enchantment icons
-            info_row_width = power_surface.get_width()
+            # Build the info-row as a list of drawable elements split into a
+            # "numbers" group (power, bonuses, suit) and a "skills" group
+            # (skill + enchantment icons).  Each element is
+            # ``(width, height, draw_fn(left_x, center_y))``.  Keeping them as
+            # data lets the same row be laid out on one line (desktop) or
+            # wrapped onto two lines when the mobile width cap would otherwise
+            # clip it.
+            def _blit_element(surf):
+                def _draw(x, cy, _s=surf):
+                    self.window.blit(_s, (x, int(cy - _s.get_height() / 2)))
+                return (surf.get_width(), surf.get_height(), _draw)
+
+            def _outlined_element(surf, outline, *, strike=False):
+                def _draw(x, cy, _s=surf, _o=outline, _strike=strike):
+                    y = int(cy - _s.get_height() / 2)
+                    if _o:
+                        for ox, oy in ((-1, -1), (-1, 1), (1, -1), (1, 1)):
+                            self.window.blit(_o, (x + ox, y + oy))
+                    self.window.blit(_s, (x, y))
+                    if _strike:
+                        sy = y + _s.get_height() // 2
+                        pygame.draw.line(self.window, (220, 60, 60),
+                                         (x - 1, sy),
+                                         (x + _s.get_width() + 1, sy), 2)
+                return (surf.get_width(), surf.get_height(), _draw)
+
+            number_elements = [_blit_element(power_surface)]
             if buffs_allies_surface:
-                info_row_width += element_spacing + buffs_allies_surface.get_width()
+                number_elements.append(_blit_element(buffs_allies_surface))
             if defence_bonus_surface:
-                info_row_width += element_spacing + defence_bonus_surface.get_width()
+                number_elements.append(_blit_element(defence_bonus_surface))
             if bonus_surface:
-                info_row_width += element_spacing + bonus_surface.get_width()
+                number_elements.append(_outlined_element(
+                    bonus_surface, bonus_outline_surface, strike=bonus_blocked))
             if distance_penalty_surface:
-                info_row_width += element_spacing + distance_penalty_surface.get_width()
+                number_elements.append(_outlined_element(
+                    distance_penalty_surface, distance_penalty_outline))
             if has_enchantments and enchantment_modifier_surface:
-                info_row_width += element_spacing + enchantment_modifier_surface.get_width()
+                number_elements.append(_outlined_element(
+                    enchantment_modifier_surface, enchantment_modifier_outline))
             if suit_icon:
-                info_row_width += element_spacing + icon_size
-            if skills_to_display and skill_icon_size > 0:
-                skills_width = len(skills_to_display) * skill_icon_size + (len(skills_to_display) - 1) * element_spacing
-                info_row_width += element_spacing + skills_width
+                number_elements.append(_blit_element(suit_icon))
+
+            skill_elements = []
+            for _skill_key in skills_to_display:
+                if _skill_key in skill_icon_dict:
+                    _sk_icon = skill_icon_dict[_skill_key]
+
+                    def _draw_skill(x, cy, _ic=_sk_icon, _key=_skill_key):
+                        y = int(cy - _ic.get_height() / 2)
+                        if skill_glow:
+                            gx = x + (_ic.get_width() - skill_glow.get_width()) // 2
+                            gy = y + (_ic.get_height() - skill_glow.get_height()) // 2
+                            self.window.blit(skill_glow, (gx, gy))
+                        if adv_suit_icon and _SKILL_DEFS.get(_key, {}).get('suit_advantage', False):
+                            ax = x + (_ic.get_width() - adv_suit_icon.get_width()) // 2
+                            ay = y + (_ic.get_height() - adv_suit_icon.get_height()) // 2
+                            self.window.blit(adv_suit_icon, (ax, ay))
+                        self.window.blit(_ic, (x, y))
+                    skill_elements.append(
+                        (_sk_icon.get_width(), _sk_icon.get_height(), _draw_skill))
             if has_enchantments and enchantment_icons:
-                info_row_width += element_spacing + (len(enchantment_icons) * default_icon_size + (len(enchantment_icons) - 1) * element_spacing)
-            
-            # Info section height: single row only
+                for _en_icon in enchantment_icons:
+                    skill_elements.append(_blit_element(_en_icon))
+
+            single_row_elements = number_elements + skill_elements
+            single_row_w = self._info_row_width(single_row_elements,
+                                                element_spacing)
+
             info_padding = int(padding * settings.FIGURE_NAME_INFO_PADDING_SCALE)
-            info_height = max(power_surface.get_height(), icon_size, skill_icon_size if skill_icon_size > 0 else 0) + 2 * info_padding
-            
+            row_h = max(power_surface.get_height(), icon_size,
+                        skill_icon_size if skill_icon_size > 0 else 0)
+
+            # When a single row would be clipped by the mobile width cap, wrap
+            # onto multiple info lines: numbers first, then skills, each group
+            # flowing onto as many lines as needed so nothing is truncated.
+            if max_content_width and single_row_w > max_content_width:
+                info_rows = (
+                    self._wrap_info_rows(number_elements, max_content_width,
+                                         element_spacing)
+                    + self._wrap_info_rows(skill_elements, max_content_width,
+                                           element_spacing))
+            elif single_row_elements:
+                info_rows = [single_row_elements]
+            else:
+                info_rows = []
+
+            widest_row_w = max(
+                (self._info_row_width(r, element_spacing) for r in info_rows),
+                default=0)
+            row_count = len(info_rows)
+            info_height = (row_count * row_h + (row_count + 1) * info_padding
+                           if row_count else 0)
+
             # Calculate box width
-            box_width = max(text_surface.get_width(), info_row_width) + 2 * padding
+            box_width = max(text_surface.get_width(), widest_row_w) + 2 * padding
             if max_info_width:
                 box_width = min(box_width, max_info_width)
+            # Layout snapshot for introspection / tests.
+            self._last_info_metrics = {
+                'rows': row_count,
+                'widest_row_w': widest_row_w,
+                'single_row_w': single_row_w,
+                'inner_w': box_width - 2 * padding,
+                'info_height': info_height,
+            }
         else:
             # For hidden figures, determine what to show.
             # Village figures: hide skills (would reveal identity);
@@ -1383,117 +1510,18 @@ class FieldFigureIcon(FigureIcon):
         text_rect = text_surface.get_rect(center=(self.x, text_y))
         self.window.blit(text_surface, text_rect.topleft)
         
-        # Draw info section for visible figures - all in a single horizontal row
+        # Draw info section for visible figures.  One horizontal row normally;
+        # numbers-then-skills on two rows when the mobile cap forced a wrap.
         if self.is_visible:
-            # Calculate vertical center for the single info row
-            info_center_y = text_bg_rect.bottom + info_height // 2
-            
-            # Start from left side of the row
-            current_x = self.x - info_row_width // 2
             old_clip = self.window.get_clip()
             if info_height > 0:
                 self.window.set_clip(info_bg_rect)
-            
-            # Draw power
-            power_y = info_center_y - power_surface.get_height() // 2
-            self.window.blit(power_surface, (current_x, power_y))
-            current_x += power_surface.get_width()
 
-            # Draw buffs-allies bonus if applicable (same color as base power)
-            if buffs_allies_surface:
-                current_x += element_spacing
-                ba_y = info_center_y - buffs_allies_surface.get_height() // 2
-                self.window.blit(buffs_allies_surface, (current_x, ba_y))
-                current_x += buffs_allies_surface.get_width()
+            row_cy = text_bg_rect.bottom + info_padding + row_h // 2
+            for row in info_rows:
+                self._draw_info_row(row, row_cy, element_spacing)
+                row_cy += row_h + info_padding
 
-            # Draw buffs-allies-defence bonus if applicable (same color as base power)
-            if defence_bonus_surface:
-                current_x += element_spacing
-                db_y = info_center_y - defence_bonus_surface.get_height() // 2
-                self.window.blit(defence_bonus_surface, (current_x, db_y))
-                current_x += defence_bonus_surface.get_width()
-            
-            # Draw bonus if applicable (with outline for better contrast)
-            if bonus_surface:
-                current_x += element_spacing
-                bonus_y = info_center_y - bonus_surface.get_height() // 2
-                # Draw outline (black) in 4 directions for better visibility
-                if bonus_outline_surface:
-                    for offset_x, offset_y in [(-1, -1), (-1, 1), (1, -1), (1, 1)]:
-                        self.window.blit(bonus_outline_surface, (current_x + offset_x, bonus_y + offset_y))
-                # Draw main text on top (red if blocked, green otherwise)
-                self.window.blit(bonus_surface, (current_x, bonus_y))
-                # Draw red strikethrough line if bonus is blocked
-                if bonus_blocked:
-                    strike_y = bonus_y + bonus_surface.get_height() // 2
-                    pygame.draw.line(self.window, (220, 60, 60),
-                                     (current_x - 1, strike_y),
-                                     (current_x + bonus_surface.get_width() + 1, strike_y), 2)
-                current_x += bonus_surface.get_width()
-            
-            # Draw distance-attack penalty if applicable (orange, with outline)
-            if distance_penalty_surface:
-                current_x += element_spacing
-                dp_y = info_center_y - distance_penalty_surface.get_height() // 2
-                if distance_penalty_outline:
-                    for offset_x, offset_y in [(-1, -1), (-1, 1), (1, -1), (1, 1)]:
-                        self.window.blit(distance_penalty_outline, (current_x + offset_x, dp_y + offset_y))
-                self.window.blit(distance_penalty_surface, (current_x, dp_y))
-                current_x += distance_penalty_surface.get_width()
-            
-            # Draw enchantment modifier if applicable (purple, with outline)
-            if has_enchantments and enchantment_modifier_surface:
-                current_x += element_spacing
-                enchant_y = info_center_y - enchantment_modifier_surface.get_height() // 2
-                # Draw outline (black) in 4 directions
-                if enchantment_modifier_outline:
-                    for offset_x, offset_y in [(-1, -1), (-1, 1), (1, -1), (1, 1)]:
-                        self.window.blit(enchantment_modifier_outline, (current_x + offset_x, enchant_y + offset_y))
-                # Draw main purple text on top
-                self.window.blit(enchantment_modifier_surface, (current_x, enchant_y))
-                current_x += enchantment_modifier_surface.get_width()
-            
-            # Draw suit icon
-            if suit_icon:
-                current_x += element_spacing
-                suit_y = info_center_y - suit_icon.get_height() // 2
-                self.window.blit(suit_icon, (current_x, suit_y))
-                current_x += suit_icon.get_width()
-            
-            # Draw skill icons
-            if skills_to_display:
-                current_x += element_spacing
-                for i, skill_key in enumerate(skills_to_display):
-                    if i > 0:
-                        current_x += element_spacing
-                    
-                    if skill_key in skill_icon_dict:
-                        skill_icon = skill_icon_dict[skill_key]
-                        # No runtime scaling needed - use pre-scaled icon
-                        skill_y = info_center_y - skill_icon.get_height() // 2
-                        # Draw white glow behind skill icon
-                        if skill_glow:
-                            glow_x = current_x + (skill_icon.get_width() - skill_glow.get_width()) // 2
-                            glow_y = skill_y + (skill_icon.get_height() - skill_glow.get_height()) // 2
-                            self.window.blit(skill_glow, (glow_x, glow_y))
-                        # Draw suit advantage icon behind skill icon (background), centered
-                        if adv_suit_icon and _SKILL_DEFS.get(skill_key, {}).get('suit_advantage', False):
-                            adv_x = current_x + (skill_icon.get_width() - adv_suit_icon.get_width()) // 2
-                            adv_y = skill_y + (skill_icon.get_height() - adv_suit_icon.get_height()) // 2
-                            self.window.blit(adv_suit_icon, (adv_x, adv_y))
-                        # Draw skill icon on top
-                        self.window.blit(skill_icon, (current_x, skill_y))
-                        current_x += skill_icon.get_width()
-            
-            # Draw enchantment spell icons
-            if has_enchantments and enchantment_icons:
-                current_x += element_spacing
-                for i, enchant_icon in enumerate(enchantment_icons):
-                    if i > 0:
-                        current_x += element_spacing
-                    icon_y = info_center_y - enchant_icon.get_height() // 2
-                    self.window.blit(enchant_icon, (current_x, icon_y))
-                    current_x += enchant_icon.get_width()
             self.window.set_clip(old_clip)
         
         # Draw info row for hidden figures (card backs, skills, enchantments)
