@@ -1690,6 +1690,77 @@ def test_conquer_lane_figure_full_power_includes_modifiers():
     assert full == 12  # 8 + 4 buff
 
 
+def _setup_lane_band_screen(breakdown, total):
+    """Minimal screen wired to draw one fighter's segmented power pill."""
+    from game.screens.conquer_game_screen import ConquerGameScreen
+
+    fig = _fighter(10, 'Attacker', 8, 1, (80, 160, 210))
+    screen = ConquerGameScreen.__new__(ConquerGameScreen)
+    screen._conquer_lane_figure_rects = []
+    # Stub the heavy per-figure sub-draws so only the power pill matters.
+    screen._draw_conquer_lane_figure_art = lambda *a, **k: None
+    screen._draw_conquer_lane_figure_metadata = lambda *a, **k: None
+    screen._conquer_lane_entrance_progress = lambda *a, **k: None
+    screen._fit_text = lambda text, font, width: text
+    screen._conquer_lane_figure_power = lambda figure: breakdown[0][1]
+    screen._conquer_lane_figure_full_power = lambda figure, **k: total
+    screen._conquer_lane_figure_power_breakdown = lambda figure, **k: list(breakdown)
+    screen._conquer_receipt_label_color = lambda label: (210, 190, 120)
+    return screen, fig
+
+
+def test_conquer_power_pill_scales_to_fit_narrow_slot(monkeypatch):
+    """A multi-segment power pill must survive a narrow (mobile) slot.
+
+    It used to collapse to a lone total chip when it overflowed, hiding the
+    support/enchant piles — but only for the side (and screen width) where the
+    pill was too wide. It now scales down so every pile stays visible.
+    """
+    from config import settings
+    from game.screens.conquer_game_screen import ConquerGameScreen
+
+    breakdown = [('Base', 8), ('Support', 4), ('Spell', 5), ('Land', 3)]
+    total = 20
+
+    # Spy on smoothscale; the power pill is a wide-and-short surface, unlike
+    # the (square) figure art, so we can identify pill scaling by aspect.
+    scale_calls = []
+    orig_smoothscale = pygame.transform.smoothscale
+
+    def _spy(surface, size):
+        scale_calls.append((surface.get_width(), surface.get_height()))
+        return orig_smoothscale(surface, size)
+
+    monkeypatch.setattr(pygame.transform, 'smoothscale', _spy)
+
+    def _pill_was_scaled():
+        return any(w > 2 * h for w, h in scale_calls)
+
+    window = pygame.Surface((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+
+    # Narrow slot: the four-segment pill overflows and must be scaled to fit.
+    screen, fig = _setup_lane_band_screen(breakdown, total)
+    screen.window = window
+    narrow = pygame.Rect(0, 0, 78, 120)
+    ConquerGameScreen._draw_conquer_lane_band(
+        screen, narrow, 'YOU', [fig], is_player=True,
+        support_entries=[], enemy_support_entries=[])
+    assert _pill_was_scaled(), 'wide pill should scale to fit the narrow slot'
+    assert _rect_has_non_background_pixel(
+        window, pygame.Rect(narrow).inflate(-6, -4))
+
+    # Wide slot: the same pill fits, so it renders at natural size (no scale).
+    scale_calls.clear()
+    window.fill((0, 0, 0))
+    screen2, fig2 = _setup_lane_band_screen(breakdown, total)
+    screen2.window = window
+    wide = pygame.Rect(0, 0, 900, 160)
+    ConquerGameScreen._draw_conquer_lane_band(
+        screen2, wide, 'YOU', [fig2], is_player=True,
+        support_entries=[], enemy_support_entries=[])
+    assert not _pill_was_scaled(), 'pill should not scale when it already fits'
+
+
 def test_tutorial_starter_ledger_matches_server_final_breakdown():
     """Reproduce the first-conquest matchup from a production result.
 

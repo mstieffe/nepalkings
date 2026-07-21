@@ -6697,9 +6697,11 @@ class ConquerGameScreen(GameScreen):
             )
             # Segmented colour-coded pill (#2): [base|+buff|+spell|+sup] = total.
             # Anchored directly below the name so it no longer collides
-            # with long figure labels (#round6). Segments stay a step under
-            # the total so the full breakdown keeps fitting the slot width
-            # (overflow falls back to a lone total chip, hiding the math).
+            # with long figure labels (#round6). When the full breakdown is
+            # wider than the slot (narrow / mobile layouts, or the side with
+            # more power sources) the whole pill is scaled down to fit rather
+            # than collapsing to a lone total chip — so every pile stays
+            # visible exactly like on desktop.
             seg_font = settings.get_font(
                 max(settings.FS_CONQUER_META, int(settings.FS_TINY * 0.78)),
                 bold=True)
@@ -6720,7 +6722,9 @@ class ConquerGameScreen(GameScreen):
                 self.window.blit(value_surf, value_surf.get_rect(center=chip.center))
             else:
                 # Build segments and lay them out left-to-right with a
-                # final total chip at the right edge.
+                # final total chip at the right edge. The pill is rendered to
+                # its own surface so it can be scaled to fit a narrow slot
+                # without dropping any segment.
                 seg_surfaces = []
                 for label, value in breakdown:
                     colour = self._conquer_receipt_label_color(label)
@@ -6735,39 +6739,41 @@ class ConquerGameScreen(GameScreen):
                 pad_x = 4
                 gap = 2
                 total_w = sum(s.get_width() + 2 * pad_x for s, _ in seg_surfaces) + gap * len(seg_surfaces) + total_surf.get_width() + 2 * pad_x
-                # Anchor directly below the figure name.
                 pill_h = max(seg_font.get_height(), value_font.get_height()) + 6
-                pill = pygame.Rect(0, 0, total_w + 4, pill_h)
-                pill.midtop = (slot.centerx, pill_anchor_y)
-                if pill.bottom > power_bottom_limit:
-                    pill.bottom = power_bottom_limit
-                # Clamp horizontally inside the slot.
-                pill.left = max(slot.left + 2, min(pill.left, slot.right - pill.width - 2))
-                # If still too wide, fall back to single total chip.
-                if pill.width > slot.width - 4:
-                    value_surf = value_font.render(str(total), True, total_color)
-                    chip = value_surf.get_rect()
-                    chip.inflate_ip(14, 7)
-                    chip.midtop = (slot.centerx, pill_anchor_y)
-                    if chip.bottom > power_bottom_limit:
-                        chip.bottom = power_bottom_limit
-                    power_badge_rect = pygame.Rect(chip)
-                    pygame.draw.rect(self.window, total_bg, chip, border_radius=chip.height // 2)
-                    pygame.draw.rect(self.window, (24, 18, 12), chip, 1, border_radius=chip.height // 2)
-                    self.window.blit(value_surf, value_surf.get_rect(center=chip.center))
-                else:
-                    power_badge_rect = pygame.Rect(pill)
-                    pygame.draw.rect(self.window, (22, 18, 12), pill, border_radius=pill.height // 2)
-                    pygame.draw.rect(self.window, (24, 18, 12), pill, 1, border_radius=pill.height // 2)
-                    x = pill.left + 2
-                    for surf, colour in seg_surfaces:
-                        seg_rect = pygame.Rect(x, pill.top + 2, surf.get_width() + 2 * pad_x, pill.height - 4)
-                        pygame.draw.rect(self.window, colour, seg_rect, border_radius=seg_rect.height // 2)
-                        self.window.blit(surf, surf.get_rect(center=seg_rect.center))
-                        x = seg_rect.right + gap
-                    total_rect = pygame.Rect(x, pill.top + 2, total_surf.get_width() + 2 * pad_x, pill.height - 4)
-                    pygame.draw.rect(self.window, total_bg, total_rect, border_radius=total_rect.height // 2)
-                    self.window.blit(total_surf, total_surf.get_rect(center=total_rect.center))
+                natural_w = total_w + 4
+
+                # Render the full segmented pill onto a transparent surface at
+                # natural size, then (only if it would overflow the slot) scale
+                # it down so every pile survives on narrow/mobile layouts.
+                pill_surf = pygame.Surface((natural_w, pill_h), pygame.SRCALPHA)
+                pill_bounds = pill_surf.get_rect()
+                pygame.draw.rect(pill_surf, (22, 18, 12), pill_bounds, border_radius=pill_h // 2)
+                pygame.draw.rect(pill_surf, (24, 18, 12), pill_bounds, 1, border_radius=pill_h // 2)
+                x = 2
+                for surf, colour in seg_surfaces:
+                    seg_rect = pygame.Rect(x, 2, surf.get_width() + 2 * pad_x, pill_h - 4)
+                    pygame.draw.rect(pill_surf, colour, seg_rect, border_radius=seg_rect.height // 2)
+                    pill_surf.blit(surf, surf.get_rect(center=seg_rect.center))
+                    x = seg_rect.right + gap
+                total_rect = pygame.Rect(x, 2, total_surf.get_width() + 2 * pad_x, pill_h - 4)
+                pygame.draw.rect(pill_surf, total_bg, total_rect, border_radius=total_rect.height // 2)
+                pill_surf.blit(total_surf, total_surf.get_rect(center=total_rect.center))
+
+                avail_w = max(1, slot.width - 4)
+                if natural_w > avail_w:
+                    scale = avail_w / natural_w
+                    pill_surf = pygame.transform.smoothscale(
+                        pill_surf, (avail_w, max(1, int(round(pill_h * scale)))))
+
+                blit_rect = pill_surf.get_rect()
+                blit_rect.midtop = (slot.centerx, pill_anchor_y)
+                if blit_rect.bottom > power_bottom_limit:
+                    blit_rect.bottom = power_bottom_limit
+                blit_rect.left = max(
+                    slot.left + 2,
+                    min(blit_rect.left, slot.right - blit_rect.width - 2))
+                self.window.blit(pill_surf, blit_rect)
+                power_badge_rect = pygame.Rect(blit_rect)
             if power_badge_rect is not None:
                 metadata_top = min(
                     power_badge_rect.bottom + 1,
