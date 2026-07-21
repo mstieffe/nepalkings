@@ -39,6 +39,61 @@ def _button(box, action):
     return next(btn for name, btn in box._buttons if name == action)
 
 
+def _first_overflowing_line(box):
+    """Return the first row whose rendered text exceeds the box, or None."""
+    from config import settings
+    inner = box._box_rect.w - 2 * settings.LAND_DETAIL_PAD
+    for kind, text in box._lines:
+        if kind in ('spacer', 'tier'):
+            continue
+        width = (box._line_font(kind).size(str(text))[0]
+                 + box._line_icon_allowance(kind))
+        if width > inner:
+            return (kind, width, inner, text)
+    return None
+
+
+def _box_on_screen(box):
+    from config import settings
+    r = box._box_rect
+    return (r.x >= 0 and r.y >= 0
+            and r.right <= settings.SCREEN_WIDTH
+            and r.bottom <= settings.SCREEN_HEIGHT)
+
+
+def test_land_detail_box_grows_so_long_rows_never_overflow():
+    tile = _tile(owner_username='Averylongkingdomownerusername',
+                 kingdom_component_size=8, kingdom_bonuses={'loot_chance': 0.2})
+    box = _box(tile, on_conquer=lambda *_: None,
+               on_message=lambda *_: None)
+    assert _first_overflowing_line(box) is None
+    assert _box_on_screen(box)
+
+
+def test_land_detail_box_ellipsizes_rows_wider_than_the_viewport():
+    huge = 'Kathmandu Valley Historic Region ' * 20
+    region = {'name': huge, 'champions': [], 'champion': None,
+              'my_land_count': 0, 'lands_to_champion': 3}
+    box = _box(_tile(), on_conquer=lambda *_: None,
+               on_message=lambda *_: None, region_info=region)
+    assert _first_overflowing_line(box) is None
+    assert _box_on_screen(box)
+    region_line = next(text for kind, text in box._lines if kind == 'region')
+    assert region_line.endswith('…')
+
+
+def test_land_detail_button_widens_to_fit_its_label():
+    from config import settings
+    # 'Configure Defence' / 'Configure Kingdom' are the widest labels.
+    box = _box(_tile(is_mine=True, defence_incomplete=False),
+               on_defence=lambda *_: None, on_config=lambda *_: None)
+    defence_btn = _button(box, 'defence')
+    label_w = defence_btn.font.size('Configure Defence')[0]
+    assert defence_btn.rect.w >= label_w
+    assert defence_btn.rect.right <= box._box_rect.right - settings.LAND_DETAIL_PAD // 2 + 1
+    assert defence_btn.rect.left >= box._box_rect.left - 1
+
+
 def test_conquer_button_allows_click_during_player_cooldown(monkeypatch):
     called = []
     tile = _tile()

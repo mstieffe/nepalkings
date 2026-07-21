@@ -56,11 +56,11 @@ class _LandButton:
                     settings.DIALOGUE_BOX_GLOW_DIR + colour + '.png').convert_alpha()
                 cls._glows[colour] = pygame.transform.smoothscale(raw, (glow_w, glow_h))
 
-    def __init__(self, window, x, y, text, disabled=False):
+    def __init__(self, window, x, y, text, disabled=False, width=None):
         _LandButton._ensure_assets()
         self.window = window
         self.text = text
-        w = settings.LAND_DETAIL_BTN_W
+        w = int(width) if width else settings.LAND_DETAIL_BTN_W
         h = settings.LAND_DETAIL_BTN_H
         self.rect = pygame.Rect(x, y, w, h)
         self.font = settings.get_font(settings.LAND_DETAIL_BODY_FONT)
@@ -247,13 +247,50 @@ class LandDetailBox:
             return small_h + 2
         return body_h + 2
 
+    def _line_font(self, kind):
+        """Return the font ``render()`` uses for a given row kind."""
+        if kind == 'title':
+            return self._title_font
+        if kind in ('since', 'kingdom_bonus', 'land_cd', 'shield',
+                    'region', 'region_champion', 'region_progress',
+                    'region_tribute', 'conquest_hint'):
+            return self._small_font
+        return self._body_font
+
+    def _line_icon_allowance(self, kind):
+        """Horizontal space a row reserves for a leading icon before its text."""
+        if kind == 'gold' and self._gold_icon:
+            return self._icon_sz + 6
+        if kind == 'suit' and self._suit_icon:
+            return self._icon_sz + 6
+        if kind == 'defence_warning' and self._broken_icon:
+            return self._icon_sz + 6
+        return 0
+
+    def _ellipsize_line(self, kind, text, inner_w):
+        """Trim a row's text with an ellipsis so it never exceeds ``inner_w``."""
+        if kind in ('spacer', 'tier'):
+            return text
+        text = str(text)
+        if not text:
+            return text
+        font = self._line_font(kind)
+        avail = inner_w - self._line_icon_allowance(kind)
+        if avail <= 0 or font.size(text)[0] <= avail:
+            return text
+        ellipsis = '…'
+        trimmed = text
+        while trimmed and font.size(trimmed + ellipsis)[0] > avail:
+            trimmed = trimmed[:-1]
+        return (trimmed + ellipsis) if trimmed else text
+
     def _build_layout(self):
         tile = self.tile
         cooldown, land_cooldown = self._current_cooldowns()
         self._last_render_cooldowns = (cooldown, land_cooldown)
 
         pad = settings.LAND_DETAIL_PAD
-        w = settings.LAND_DETAIL_W
+        min_w = settings.LAND_DETAIL_W
 
         # Pre-render text lines
         self._lines = []
@@ -365,6 +402,48 @@ class LandDetailBox:
         if (land_cooldown > 0 or shield_remaining > 0 or core_protected) and not tile.is_mine:
             extra_after_conquer = int(self._body_font.get_height() * 0.8)
 
+        # ── Responsive width ───────────────────────────────────────
+        # Mobile inflates fonts ~1.5x while the base width is a fixed fraction
+        # of the screen, so long rows (region / owner / kingdom) used to spill
+        # past the border. Grow the box to fit its widest row and button label,
+        # capped to the viewport, then ellipsize whatever still cannot fit at
+        # that cap.
+        button_labels = {
+            'defence': 'Configure Defence',
+            'config': 'Configure Kingdom',
+            'conquer': 'Conquer',
+            'message': 'Message Owner',
+        }
+        max_line_w = max(
+            (self._line_font(kind).size(str(text))[0]
+             + self._line_icon_allowance(kind)
+             for kind, text in self._lines
+             if kind not in ('spacer', 'tier')),
+            default=0)
+        btn_text_pad = max(6, int(settings.LAND_DETAIL_BTN_W * 0.12))
+        max_btn_label_w = max(
+            (self._body_font.size(button_labels[action])[0]
+             for action in button_actions),
+            default=0)
+        btn_w = max(settings.LAND_DETAIL_BTN_W, max_btn_label_w + 2 * btn_text_pad)
+
+        sw, sh = settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT
+        box_margin = int(0.014 * sh)
+        if self._anchored and self._viewport_rect is not None:
+            avail_w = self._viewport_rect.width - 2 * box_margin
+        else:
+            avail_w = sw - 2 * box_margin
+        desired_w = max(min_w, max_line_w + 2 * pad, btn_w + 2 * pad)
+        w = max(1, min(desired_w, avail_w))
+        btn_w = min(btn_w, w - 2 * pad)
+
+        # Ellipsize any row that still overruns the (possibly capped) width.
+        inner_w = w - 2 * pad
+        self._lines = [
+            (kind, self._ellipsize_line(kind, text, inner_w))
+            for kind, text in self._lines
+        ]
+
         text_h = sum(self._line_height(kind) for kind, _ in self._lines)
         button_stack_h = (
             settings.LAND_DETAIL_BTN_H * btn_count
@@ -375,18 +454,19 @@ class LandDetailBox:
 
         # Position box.  Anchored mode docks a compact sheet to the bottom of
         # the map viewport (so exploration continues around it); modal mode
-        # centres it on screen.
-        sw, sh = settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT
+        # centres it on screen.  Either way the box is clamped so it stays on
+        # screen (top-aligned when it is taller than the viewport).
         if self._anchored and self._viewport_rect is not None:
             vp = self._viewport_rect
-            margin = int(0.014 * sh)
             box_x = vp.centerx - w // 2
-            box_x = max(vp.x + margin, min(box_x, vp.right - w - margin))
-            box_y = max(vp.y + margin, vp.bottom - content_h - margin)
+            box_x = max(vp.x + box_margin, min(box_x, vp.right - w - box_margin))
+            box_y = max(vp.y + box_margin, vp.bottom - content_h - box_margin)
             self._box_rect = pygame.Rect(box_x, box_y, w, content_h)
         else:
-            self._box_rect = pygame.Rect((sw - w) // 2, (sh - content_h) // 2,
-                                         w, content_h)
+            box_y = max(box_margin, (sh - content_h) // 2)
+            if box_y + content_h > sh - box_margin:
+                box_y = max(box_margin, sh - box_margin - content_h)
+            self._box_rect = pygame.Rect((sw - w) // 2, box_y, w, content_h)
 
         # X close button (top-right of box)
         _xsz = int(0.028 * sh)
@@ -397,22 +477,24 @@ class LandDetailBox:
             _xsz, _xsz)
 
         # Create buttons
-        btn_x = self._box_rect.centerx - settings.LAND_DETAIL_BTN_W // 2
+        btn_x = self._box_rect.centerx - btn_w // 2
         self._text_bottom_y = self._box_rect.y + pad + text_h
         btn_y = self._text_bottom_y + pad
 
         self._buttons = []
         if tile.is_mine:
-            btn = _LandButton(self.window, btn_x, btn_y, 'Configure Defence')
+            btn = _LandButton(self.window, btn_x, btn_y, 'Configure Defence',
+                              width=btn_w)
             self._buttons.append(('defence', btn))
             btn_y += settings.LAND_DETAIL_BTN_H + button_gap
             self._buttons.append(('config', _LandButton(
-                self.window, btn_x, btn_y, 'Configure Kingdom')))
+                self.window, btn_x, btn_y, 'Configure Kingdom', width=btn_w)))
         else:
             # Land/player cooldowns are handled by conquer setup/start battle;
             # kingdom protection still blocks opening conquer setup.
             disabled = shield_remaining > 0 or core_protected
-            btn = _LandButton(self.window, btn_x, btn_y, 'Conquer', disabled=disabled)
+            btn = _LandButton(self.window, btn_x, btn_y, 'Conquer',
+                              disabled=disabled, width=btn_w)
             if disabled:
                 if core_protected:
                     btn.sub_text = 'Core Protection active'
@@ -425,7 +507,7 @@ class LandDetailBox:
             btn_y += settings.LAND_DETAIL_BTN_H + button_gap + extra_after_conquer
             if tile.owner_user_id:
                 self._buttons.append(('message', _LandButton(
-                    self.window, btn_x, btn_y, 'Message Owner')))
+                    self.window, btn_x, btn_y, 'Message Owner', width=btn_w)))
 
     def update(self):
         if not self.tile.is_mine:
