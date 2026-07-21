@@ -1903,13 +1903,21 @@ def test_round_ledger_completed_battle_prefers_server_total():
     assert ledger.current_total_diff() == 11
 
 
-def test_round_ledger_waits_for_final_reveal_before_server_total():
+def test_round_ledger_uses_server_total_during_final_reveal():
     from game.components.conquer_round_ledger import ConquerRoundLedger
 
     stage = {'stage': 'tally', 'opp_visible': True, 'diff_factor': 0.5}
     game = SimpleNamespace(last_battle_result=None, battle_total_diff=11)
-    you_per = [_move(idx, value=5, played_round=idx) for idx in range(3)]
-    opp_per = [_move(idx + 10, value=4, played_round=idx) for idx in range(3)]
+    you_per = [
+        _move(1, value=5, played_round=0),
+        _move(2, value=5, played_round=1),
+        _move(3, value=8, played_round=2),
+    ]
+    opp_per = [
+        _move(11, value=4, played_round=0),
+        _move(12, value=4, played_round=1),
+        _move(13, value=2, played_round=2),
+    ]
     parent = SimpleNamespace(
         window=pygame.Surface((100, 100)),
         state=SimpleNamespace(game=game),
@@ -1919,10 +1927,11 @@ def test_round_ledger_waits_for_final_reveal_before_server_total():
     )
     ledger = ConquerRoundLedger(parent)
 
-    assert ledger.current_total_diff() == 3
-    stage.clear()
-    parent.conquer_round_reveal_stage = lambda _idx: None
+    # Local reveal math would transiently show 5 here (8 total minus half of
+    # round three's +6). Once the server has supplied +11, neither the reveal
+    # gate nor its count-up adjustment may replace that authoritative value.
     assert ledger.current_total_diff() == 11
+    assert ledger._reveal_total_adjustment(you_per, opp_per) == 0
 
 
 def test_round_ledger_result_breakdown_restores_defender_total():

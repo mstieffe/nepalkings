@@ -248,6 +248,73 @@ def test_play_conquer_tactic_marks_played_and_advances_round(app, db):
     assert game.battle_turn_player_id == game.invader_player_id
 
 
+def test_final_tactic_response_includes_authoritative_battle_total(app, db):
+    """The third-round mutation must not wait for a later poll to score."""
+    from routes.games import _compute_server_total_diff
+
+    client, attacker, _defender, game, attacker_player, defender_player = (
+        _start_player_owned_conquer(app, db)
+    )
+    _force_active_battle(db, game, attacker_player, defender_player)
+
+    attacker_tactics = ConquerTactic.query.filter_by(
+        game_id=game.id,
+        player_id=attacker_player.id,
+        status='available',
+    ).order_by(ConquerTactic.id).all()
+    defender_tactic = ConquerTactic.query.filter_by(
+        game_id=game.id,
+        player_id=defender_player.id,
+        status='available',
+    ).first()
+
+    # Seed rounds one and two plus the defender's final move. Duplicate
+    # defender rows are sufficient here because the regression targets the
+    # response timing/perspective, not tactic-card creation.
+    for round_idx, tactic in enumerate(attacker_tactics[:2]):
+        tactic.status = 'played'
+        tactic.played_round = round_idx
+    defender_tactic.status = 'played'
+    defender_tactic.played_round = 0
+    for round_idx in (1, 2):
+        db.session.add(ConquerTactic(
+            game_id=game.id,
+            player_id=defender_player.id,
+            card_id=defender_tactic.card_id,
+            card_type=defender_tactic.card_type,
+            family_name=defender_tactic.family_name,
+            suit=defender_tactic.suit,
+            rank=defender_tactic.rank,
+            value=defender_tactic.value,
+            source='config',
+            status='played',
+            played_round=round_idx,
+            sort_order=round_idx,
+        ))
+    game.battle_round = 2
+    game.battle_turn_player_id = attacker_player.id
+    db.session.commit()
+
+    final_tactic = attacker_tactics[2]
+    response = client.post(
+        '/games/play_conquer_tactic',
+        json={
+            'game_id': game.id,
+            'player_id': attacker_player.id,
+            'tactic_id': final_tactic.id,
+        },
+        headers=_auth_headers(app, attacker),
+    )
+
+    assert response.status_code == 200, response.get_json()
+    payload = response.get_json()
+    db.session.refresh(game)
+    expected = _compute_server_total_diff(game)
+    assert payload['battle_complete'] is True
+    assert payload['battle_total_diff'] == expected
+    assert payload['game']['battle_total_diff'] == expected
+
+
 def test_gamble_conquer_tactic_creates_replacements_without_collection_deletion(app, db):
     client, attacker, _defender, game, attacker_player, defender_player = (
         _start_player_owned_conquer(app, db)
@@ -658,6 +725,48 @@ def test_skip_allowed_when_only_played_tactics_remain(app, db):
     assert resp.status_code == 200, resp.get_json()
 
 
+def test_final_skip_response_includes_authoritative_battle_total(app, db):
+    """A round-three Skip must carry the score just like a played tactic."""
+    from routes.games import _compute_server_total_diff
+
+    client, attacker, _defender, game, attacker_player, defender_player = (
+        _start_player_owned_conquer(app, db)
+    )
+    _force_active_battle(db, game, attacker_player, defender_player)
+
+    for tactic in ConquerTactic.query.filter_by(
+            game_id=game.id, player_id=attacker_player.id).all():
+        tactic.status = 'discarded'
+    defender_tactic = ConquerTactic.query.filter_by(
+        game_id=game.id,
+        player_id=defender_player.id,
+        status='available',
+    ).first()
+    defender_tactic.status = 'played'
+    defender_tactic.played_round = 2
+    game.battle_skipped_rounds = {
+        str(attacker_player.id): [0, 1],
+        str(defender_player.id): [0, 1],
+    }
+    game.battle_round = 2
+    game.battle_turn_player_id = attacker_player.id
+    db.session.commit()
+
+    response = client.post(
+        '/games/skip_battle_turn',
+        json={'game_id': game.id, 'player_id': attacker_player.id},
+        headers=_auth_headers(app, attacker),
+    )
+
+    assert response.status_code == 200, response.get_json()
+    payload = response.get_json()
+    db.session.refresh(game)
+    expected = _compute_server_total_diff(game)
+    assert payload['battle_complete'] is True
+    assert payload['battle_total_diff'] == expected
+    assert payload['game']['battle_total_diff'] == expected
+
+
 def test_serialize_exposes_combine_lineage_always(app, db):
     """``ConquerTactic.serialize()`` always emits source ids (even None)."""
     _client, _attacker, _defender, game, attacker_player, _defender_player = (
@@ -830,6 +939,104 @@ def test_conquer_round_timeout_auto_plays_pending_players(app, db, monkeypatch):
     assert entry is not None
     assert entry[0] == 1
     assert entry[1] > 0
+
+
+def test_conquer_round_timeout_auto_play_counts_call_tactic_power(
+        app, db, monkeypatch):
+    """A timeout-played Call tactic must bind its figure before scoring.
+
+    The normal one-tap Play path chooses the best eligible Call figure.  The
+    timeout path used to mark the tactic as played without that binding, so
+    the live ledger previewed the called figure's power while the server only
+    counted the tactic card's raw value in the authoritative battle total.
+    """
+    from routes.games import (
+        _check_conquer_round_timeout,
+        _compute_server_total_diff,
+        _conquer_round_deadlines,
+        _conquer_timeout_last_check,
+    )
+
+    _client, _attacker, _defender, game, attacker_player, defender_player = (
+        _start_player_owned_conquer(app, db)
+    )
+    _force_active_battle(db, game, attacker_player, defender_player)
+
+    # Leave the attacker's original village free to be called by moving the
+    # active battle slot to a separate military figure.
+    callable_village = Figure.query.filter_by(
+        game_id=game.id,
+        player_id=attacker_player.id,
+        field='village',
+    ).first()
+    battle_figure = Figure(
+        game_id=game.id,
+        player_id=attacker_player.id,
+        family_name='Timeout Test Military',
+        field='military',
+        color='offensive',
+        name='Timeout Test Military',
+        suit='Clubs',
+        produces={},
+        requires={},
+    )
+    db.session.add(battle_figure)
+    db.session.flush()
+    game.advancing_figure_id = battle_figure.id
+
+    attacker_tactics = ConquerTactic.query.filter_by(
+        game_id=game.id,
+        player_id=attacker_player.id,
+        status='available',
+    ).order_by(ConquerTactic.id).all()
+    call_tactic = attacker_tactics[0]
+    call_tactic.family_name = 'Call Villager'
+    call_tactic.rank = 'J'
+    call_tactic.suit = 'Diamonds'
+    call_tactic.value = 1
+    call_card = db.session.get(MainCard, call_tactic.card_id)
+    call_card.rank = 'J'
+    call_card.suit = 'Diamonds'
+    call_card.value = 1
+    for tactic in attacker_tactics[1:]:
+        tactic.status = 'discarded'
+
+    # The defender has already submitted the opposing round move, leaving
+    # only the attacker for the timeout fallback to finalize.
+    defender_tactic = ConquerTactic.query.filter_by(
+        game_id=game.id,
+        player_id=defender_player.id,
+        status='available',
+    ).first()
+    defender_tactic.status = 'played'
+    defender_tactic.played_round = 0
+    db.session.commit()
+
+    _conquer_round_deadlines[game.id] = (0, 0.0)
+    _conquer_timeout_last_check.pop(game.id, None)
+    import ai.ai_worker as ai_worker
+    monkeypatch.setattr(
+        ai_worker,
+        'trigger_ai_if_needed',
+        lambda *args, **kwargs: None,
+    )
+
+    _check_conquer_round_timeout(db.session.get(Game, game.id))
+
+    db.session.refresh(call_tactic)
+    db.session.refresh(call_card)
+    assert call_tactic.status == 'played'
+    assert call_tactic.played_round == 0
+    assert call_tactic.call_figure_id == callable_village.id
+    assert call_card.in_deck is True
+
+    _total, breakdown = _compute_server_total_diff(
+        db.session.get(Game, game.id),
+        return_breakdown=True,
+    )
+    # Callable village power is 9; matching-suit Jack adds 1, opposed by the
+    # defender's 8-power Dagger: (9 + 1) - 8 = +2.
+    assert breakdown['round_diff'] == 2
 
 
 def test_conquer_round_timeout_does_not_auto_play_ai_uses_worker(app, db, monkeypatch):

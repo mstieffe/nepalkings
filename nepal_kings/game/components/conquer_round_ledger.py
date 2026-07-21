@@ -318,13 +318,6 @@ class ConquerRoundLedger:
         )
         if not rounds_complete and not last_result:
             return None
-        # Let the final reveal finish its local count-up. The authoritative
-        # value takes over on DONE, which is the exact point where the old
-        # lightweight total could otherwise remain wrong.
-        if not last_result and any(self._reveal_stage(idx) is not None
-                                   for idx in range(3)):
-            return None
-
         # The immediate finish response is already oriented to its caller.
         if (isinstance(last_result, dict)
                 and last_result.get('total_diff') is not None):
@@ -410,6 +403,11 @@ class ConquerRoundLedger:
         diff pill finishes counting. Subtracting the un-tallied share of
         that round's diff makes the total glide up in lockstep instead.
         """
+        # Once all three displayed rounds have an authoritative server total,
+        # never animate the battle total through a local approximation. The
+        # round pill can keep counting up, but the total must stay truthful.
+        if self._authoritative_total_diff(you_per, opp_per) is not None:
+            return 0
         for idx in range(min(3, len(you_per), len(opp_per))):
             stage = self._reveal_stage(idx)
             if not stage or not stage.get('opp_visible'):
