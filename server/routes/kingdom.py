@@ -5100,6 +5100,50 @@ def _build_conquer_tactics_from_config(cfg_moves, player, game,
         db.session.add(tactic)
 
 
+def _template_call_figure_id(tpl_move, template_figures, game_figures):
+    """Resolve a generated Call tactic to its intended same-suit figure."""
+    field_map = {
+        'Call Villager': 'village',
+        'Call Military': 'military',
+        'Call King': 'castle',
+    }
+    target_field = field_map.get(tpl_move.get('family_name'))
+    if not target_field or not game_figures:
+        return None
+
+    call_idx = tpl_move.get('call_figure_index')
+    if call_idx is not None:
+        try:
+            call_idx = int(call_idx)
+            template_figure = template_figures[call_idx]
+            game_figure = game_figures[call_idx]
+        except (IndexError, TypeError, ValueError):
+            pass
+        else:
+            if (
+                template_figure.get('field') == target_field
+                and game_figure.field == target_field
+                and template_figure.get('suit') == tpl_move.get('suit')
+            ):
+                return game_figure.id
+
+    if template_figures:
+        for template_figure, game_figure in zip(template_figures, game_figures):
+            if (
+                template_figure.get('field') == target_field
+                and game_figure.field == target_field
+                and template_figure.get('suit') == tpl_move.get('suit')
+            ):
+                return game_figure.id
+
+    # Backward compatibility for old/static templates without an explicit
+    # target. Their Call still resolves, even when no same-suit figure exists.
+    return next(
+        (figure.id for figure in game_figures if figure.field == target_field),
+        None,
+    )
+
+
 def _build_battle_moves_from_template(template_moves, player, game,
                                       template_figures=None, game_figures=None):
     """Create BattleMove records from AI template move dicts.
@@ -5109,20 +5153,11 @@ def _build_battle_moves_from_template(template_moves, player, game,
     by index.
     """
     for tpl_move in template_moves:
-        call_fig_id = None
-        # Resolve call figure for Call Villager/Call Military/Call King
-        if tpl_move['family_name'] in ('Call Villager', 'Call Military', 'Call King'):
-            field_map = {
-                'Call Villager': 'village',
-                'Call Military': 'military',
-                'Call King': 'castle',
-            }
-            target_field = field_map[tpl_move['family_name']]
-            if game_figures:
-                for gf in game_figures:
-                    if gf.field == target_field:
-                        call_fig_id = gf.id
-                        break
+        call_fig_id = _template_call_figure_id(
+            tpl_move,
+            template_figures,
+            game_figures,
+        )
 
         context = f"tpl_move={tpl_move.get('family_name', 'unknown')}"
         rank = _normalize_main_rank(
@@ -5169,19 +5204,11 @@ def _build_conquer_tactics_from_template(template_moves, player, game,
                                          template_figures=None, game_figures=None):
     """Create ConquerTactic records from AI template move dicts."""
     for sort_order, tpl_move in enumerate(template_moves):
-        call_fig_id = None
-        if tpl_move['family_name'] in ('Call Villager', 'Call Military', 'Call King'):
-            field_map = {
-                'Call Villager': 'village',
-                'Call Military': 'military',
-                'Call King': 'castle',
-            }
-            target_field = field_map[tpl_move['family_name']]
-            if game_figures:
-                for gf in game_figures:
-                    if gf.field == target_field:
-                        call_fig_id = gf.id
-                        break
+        call_fig_id = _template_call_figure_id(
+            tpl_move,
+            template_figures,
+            game_figures,
+        )
 
         context = f"tpl_move={tpl_move.get('family_name', 'unknown')}"
         rank = _normalize_main_rank(
@@ -5334,8 +5361,10 @@ def _has_must_be_attacked_figure(figures):
     return any(_figure_has_family_skill(fig, 'must_be_attacked') for fig in figures or [])
 
 
-def _pick_defence_prelude_target(figures, planned_modifiers=None):
-    """Pick a target for automated defence Poison/Explosion preludes.
+def _pick_defence_prelude_target(
+        figures, planned_modifiers=None, *, spell_name=None,
+        preferred_target_id=None):
+    """Pick a coherent target for an automated targeted defence prelude.
 
     Selection is fully deterministic so that defence start-of-battle
     behaviour is reproducible and unit-testable.  Tie-breakers prefer the
@@ -5351,6 +5380,35 @@ def _pick_defence_prelude_target(figures, planned_modifiers=None):
         return (-_compute_figure_base_power(fig), fig.id)
 
     modifiers = planned_modifiers if isinstance(planned_modifiers, list) else []
+    if spell_name == 'Health Boost':
+        from game_service.figure_rule_helpers import battle_required_field
+        required_field = battle_required_field(modifiers)
+        health_targets = [
+            figure for figure in figures
+            if not required_field or figure.field == required_field
+        ]
+        # A mandatory defender is the truthful target: the attacker cannot
+        # sidestep the buff by selecting somebody else. Otherwise boost the
+        # generator's planned battle figure rather than an unrelated unit.
+        forced_targets = [
+            figure for figure in health_targets
+            if _figure_has_family_skill(figure, 'must_be_attacked')
+        ]
+        if forced_targets:
+            return sorted(forced_targets, key=_rank_key)[0]
+        preferred = next(
+            (
+                figure for figure in health_targets
+                if figure.id == preferred_target_id
+            ),
+            None,
+        )
+        if preferred:
+            return preferred
+        if health_targets:
+            return sorted(health_targets, key=_rank_key)[0]
+        return None
+
     # Tier 1: target the figure pool that can actually enter this battle.
     # Royal Decree overrides Civil/Peasant War, so a stacked modifier set
     # must prioritize castle targets rather than obsolete village targets.
@@ -5432,7 +5490,7 @@ def _mark_prelude_spell_no_target(spell):
 
 def _create_prelude_spell(game, player, spell_name, spell_data, game_figures,
                           *, target_resolution='immediate', configured_target_id=None,
-                          target_modifiers=None):
+                          target_modifiers=None, preferred_target_id=None):
     """Create an ActiveSpell for a prelude spell and resolve startup behavior.
 
     For battle-modifier spells (Peasant War / Civil War / Blitzkrieg) the
@@ -5557,6 +5615,8 @@ def _create_prelude_spell(game, player, spell_name, spell_data, game_figures,
                     chosen_target = _pick_defence_prelude_target(
                         valid_targets,
                         planned_modifiers=target_modifiers,
+                        spell_name=spell_name,
+                        preferred_target_id=preferred_target_id,
                     )
                 spell.target_figure_id = chosen_target.id if chosen_target else None
             elif target_resolution == 'auto':
@@ -5883,12 +5943,18 @@ def conquer_start_battle():
 
         # ── AI prelude spell ──
         if template.get('prelude_spell_name'):
+            battle_fig_idx = int(template.get('battle_figure_index', 0) or 0)
+            preferred_prelude_target_id = (
+                def_game_figures[battle_fig_idx].id
+                if 0 <= battle_fig_idx < len(def_game_figures) else None
+            )
             _create_prelude_spell(game, def_player,
                                   template['prelude_spell_name'],
                                   template.get('prelude_spell_data'),
                                   def_game_figures,
                                   target_resolution='defence_auto',
-                                  target_modifiers=planned_modifiers)
+                                  target_modifiers=planned_modifiers,
+                                  preferred_target_id=preferred_prelude_target_id)
         elif template.get('battle_modifier'):
             # Backward compat: old template battle_modifier
             mod = template['battle_modifier']

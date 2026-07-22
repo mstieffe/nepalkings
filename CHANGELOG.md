@@ -76,6 +76,12 @@ and the operational safety net to keep early adopters.
 
 ### Fixed
 
+- **Coherent AI land defences.** Generator v8 filters scripted spells against
+  the completed roster: Landslide uses an off-bonus-suit defender, Civil War
+  requires a legal same-color village pair, and Health Boost counters require
+  a mandatory defender. Generated Call tactics now name a same-suit figure so
+  their card bonus is not silently lost, and Health Boost preludes buff the
+  planned defender.
 - **Opponent figures vanishing.** The security-hardening pass redacted
   opponent *figure* card data, but field figures are public in Nepal Kings.
   The nulled rank/suit made `CardImg` raise at draw time, so the AI's

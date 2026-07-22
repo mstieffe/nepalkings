@@ -20,6 +20,14 @@ import platform
 import json
 from pathlib import Path
 
+WEB_BUNDLE_VERSION = "__NK_WEB_BUNDLE_VERSION__"
+
+
+def versioned_bundle_url(filename):
+    """Give every published game archive a commit-specific browser URL."""
+    return f"{filename}?v={WEB_BUNDLE_VERSION}"
+
+
 # do not rename
 async def custom_site():
     import embed
@@ -39,12 +47,14 @@ async def custom_site():
     # unpack filesystem from compressed archive into work dir
     if platform.window.location.host.find('.itch.zone')>0:
         import zipfile
-        async with platform.fopen("nepal_kings.apk", "rb") as archive:
+        async with platform.fopen(
+                versioned_bundle_url("nepal_kings.apk"), "rb") as archive:
             with zipfile.ZipFile(archive) as zip_ref:
                 zip_ref.extractall(appdir.as_posix())
     else:
         import tarfile
-        async with platform.fopen("nepal_kings.tar.gz", "rb") as archive:
+        async with platform.fopen(
+                versioned_bundle_url("nepal_kings.tar.gz"), "rb") as archive:
             tar = tarfile.open(fileobj=archive, mode="r:gz")
             tar.extractall(path=appdir.as_posix(), filter='tar')
             tar.close()
@@ -409,6 +419,11 @@ function show_infobox() {
         var currentMusic = null;
         var musicGeneration = 0;
         var audioSessionType = 'unavailable';
+        var webBuildId = '__NK_WEB_BUNDLE_VERSION__';
+        var sfxManifest = [];
+        try {
+            sfxManifest = JSON.parse('__NK_WEB_SFX_MANIFEST__');
+        } catch (error) {}
         var formatProbe = document.createElement('audio');
         var supportsOgg = false;
 
@@ -524,6 +539,7 @@ function show_infobox() {
             var candidate = filenames[index];
             var url = new URL(
                 'audio/' + encodeURIComponent(candidate), document.baseURI);
+            url.searchParams.set('v', webBuildId);
             return fetch(url.toString(), {cache: 'force-cache'})
                 .then(function(response){
                     if (!response.ok) throw new Error('Audio HTTP ' + response.status);
@@ -564,6 +580,17 @@ function show_infobox() {
             console.warn('Nepal Kings audio failed:', filename, error);
         }
 
+        function preloadSfx(){
+            // iOS only permits media downloads that originate from a user
+            // action. Start every small SFX request while handling the real
+            // tap-to-start gesture so timer/server-driven cues can play later.
+            sfxManifest.forEach(function(filename){
+                loadBuffer(filename).catch(function(error){
+                    reportError(filename, error);
+                });
+            });
+        }
+
         window.nk_audio_unlock = function(){
             configureAudioSession();
             var ctx = audioContext();
@@ -571,6 +598,7 @@ function show_infobox() {
             // Starting a source and resuming synchronously within the tap
             // covers both WebKit and Chromium's mobile autoplay policies.
             primeContext(ctx);
+            preloadSfx();
             return resumeContext(ctx).then(function(running){
                 if (!running) return false;
                 // Warm the first screen's theme while Python finishes booting.
@@ -664,15 +692,18 @@ function show_infobox() {
             var ctx = audioContext();
             if (!ctx) return Promise.resolve(false);
             primeContext(ctx);
+            preloadSfx();
             return resumeContext(ctx);
         };
 
         window.nk_audio_status = function(){
             return {
                 contextState: context ? context.state : 'uninitialized',
+                buildId: webBuildId,
                 audioSessionType: audioSessionType,
                 musicFilename: currentMusic ? currentMusic.filename : null,
                 preferredExtension: preferredExtension,
+                sfxManifestCount: sfxManifest.length,
                 loaded: Object.keys(buffers),
                 pending: Object.keys(requests)
             };

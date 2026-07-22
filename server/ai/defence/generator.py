@@ -359,13 +359,111 @@ def _eligible_battle_figure_indices(
     ]
 
 
+def _selectable_forced_defender_indices(
+        figures: list[dict[str, Any]], *, required_field: str | None = None,
+) -> list[int]:
+    """Return mandatory defenders the attacker would actually have to pick."""
+    deficit_map = template_resource_deficit_map(figures)
+    return [
+        idx
+        for idx, figure in enumerate(figures)
+        if not deficit_map.get(idx, False)
+        and (not required_field or figure.get('field') == required_field)
+        and not figure.get('checkmate', False)
+        and not _template_figure_has_skill(figure, 'cannot_defend')
+        and not _template_figure_has_skill(figure, 'cannot_be_targeted')
+        and _template_figure_has_skill(figure, 'must_be_attacked')
+    ]
+
+
+def _civil_war_battle_figure_indices(
+        figures: list[dict[str, Any]],
+) -> list[int]:
+    """Return villagers that have a different, legal same-color partner."""
+    village_indices = _eligible_battle_figure_indices(
+        figures,
+        required_field='village',
+    )
+    return [
+        idx
+        for idx in village_indices
+        if any(
+            other_idx != idx
+            and _suit_color(figures[other_idx].get('suit'))
+            == _suit_color(figures[idx].get('suit'))
+            for other_idx in village_indices
+        )
+    ]
+
+
+def _strategic_battle_figure_indices(
+        figures: list[dict[str, Any]],
+        primary_suit: str,
+        prelude_spell_name: str | None,
+) -> list[int]:
+    required_field = _prelude_required_field(prelude_spell_name)
+    legal_indices = _eligible_battle_figure_indices(
+        figures,
+        required_field=required_field,
+    )
+    if prelude_spell_name == 'Civil War':
+        legal_indices = _civil_war_battle_figure_indices(figures)
+    elif prelude_spell_name == 'Landslide':
+        legal_indices = [
+            idx for idx in legal_indices
+            if figures[idx].get('suit') != primary_suit
+        ]
+    elif prelude_spell_name == 'Health Boost':
+        legal_indices = [
+            idx for idx in legal_indices
+            if not figures[idx].get('checkmate', False)
+        ]
+    return legal_indices
+
+
+def _prelude_spell_is_strategically_compatible(
+        spell_name: str | None,
+        figures: list[dict[str, Any]],
+        primary_suit: str,
+) -> bool:
+    if not spell_name:
+        return True
+    if spell_name == 'Landslide':
+        forced_indices = _selectable_forced_defender_indices(figures)
+        if forced_indices and not all(
+                figures[idx].get('suit') != primary_suit
+                for idx in forced_indices):
+            # The attacker chooses among mandatory defenders. Every possible
+            # forced choice must avoid the suit that Landslide penalizes.
+            return False
+    return bool(_strategic_battle_figure_indices(
+        figures,
+        primary_suit,
+        spell_name,
+    ))
+
+
+def _counter_spell_is_strategically_compatible(
+        spell_name: str | None,
+        figures: list[dict[str, Any]],
+) -> bool:
+    if spell_name != 'Health Boost':
+        return True
+    # A counter spell spends the defender response before the attacker picks
+    # the defender. Health Boost is useful only when it buffs a mandatory
+    # defender instead of a figure the attacker can freely avoid.
+    return bool(_selectable_forced_defender_indices(figures))
+
+
 def _prelude_required_field(prelude_spell_name: str | None) -> str | None:
     if not prelude_spell_name:
         return None
     return battle_required_field([{'type': prelude_spell_name}])
 
 
-def validate_ai_defence_template(template: dict[str, Any]) -> bool:
+def validate_ai_defence_template(
+        template: dict[str, Any], primary_suit: str | None = None,
+) -> bool:
     """Return True when a generated AI template is structurally and legally safe."""
     figures = list(template.get('figures') or [])
     moves = list(template.get('battle_moves') or [])
@@ -376,6 +474,9 @@ def validate_ai_defence_template(template: dict[str, Any]) -> bool:
     battle_idx = int(template.get('battle_figure_index', 0) or 0)
     if battle_idx < 0 or battle_idx >= len(figures):
         return False
+    if primary_suit not in AI_DEFENCE_SUITS:
+        name_prefix = str(template.get('ai_name') or '').split(' ', 1)[0]
+        primary_suit = name_prefix if name_prefix in AI_DEFENCE_SUITS else None
     # AI lands must always be able to answer an attacker-cast village-only
     # modifier. Otherwise Peasant War / Civil War becomes an automatic
     # conquest regardless of the AI template's own prelude.
@@ -385,12 +486,25 @@ def validate_ai_defence_template(template: dict[str, Any]) -> bool:
     if not _eligible_battle_figure_indices(figures, required_field='castle'):
         return False
     prelude = template.get('prelude_spell_name')
-    required_field = _prelude_required_field(prelude)
-    legal_indices = _eligible_battle_figure_indices(
-        figures,
-        required_field=required_field,
-    )
+    if primary_suit:
+        legal_indices = _strategic_battle_figure_indices(
+            figures,
+            primary_suit,
+            prelude,
+        )
+        if not _prelude_spell_is_strategically_compatible(
+                prelude, figures, primary_suit):
+            return False
+    else:
+        required_field = _prelude_required_field(prelude)
+        legal_indices = _eligible_battle_figure_indices(
+            figures,
+            required_field=required_field,
+        )
     if not legal_indices or battle_idx not in legal_indices:
+        return False
+    if not _counter_spell_is_strategically_compatible(
+            template.get('counter_spell_name'), figures):
         return False
     # Automated Health Boost preludes/counters cannot target Checkmate
     # figures. Keep at least one valid own target whenever either is selected.
@@ -409,6 +523,23 @@ def validate_ai_defence_template(template: dict[str, Any]) -> bool:
         family = move.get('family_name')
         if family in required_call_fields and required_call_fields[family] not in fields:
             return False
+        if family in required_call_fields:
+            field = required_call_fields[family]
+            call_idx = move.get('call_figure_index')
+            if call_idx is not None:
+                try:
+                    call_figure = figures[int(call_idx)]
+                except (IndexError, TypeError, ValueError):
+                    return False
+                if call_figure.get('field') != field:
+                    return False
+                if call_figure.get('suit') != move.get('suit'):
+                    return False
+            elif not any(
+                    figure.get('field') == field
+                    and figure.get('suit') == move.get('suit')
+                    for figure in figures):
+                return False
     return True
 
 
@@ -490,8 +621,8 @@ def _dagger(rank: str, suit: str, round_index: int) -> dict[str, Any]:
 
 
 def _call_move(family_name: str, rank: str, suit: str, value: int,
-               round_index: int) -> dict[str, Any]:
-    return {
+               round_index: int, call_figure_index: int | None = None) -> dict[str, Any]:
+    move = {
         'family_name': family_name,
         'rank': rank,
         'suit': suit,
@@ -499,6 +630,48 @@ def _call_move(family_name: str, rank: str, suit: str, value: int,
         'round_index': round_index,
         'card_type': 'main',
     }
+    if call_figure_index is not None:
+        move['call_figure_index'] = call_figure_index
+    return move
+
+
+def _preferred_call_figure_index(
+        figures: list[dict[str, Any]], field: str, primary_suit: str,
+) -> int | None:
+    candidates = [
+        idx for idx, figure in enumerate(figures)
+        if figure.get('field') == field
+    ]
+    if not candidates:
+        return None
+    return next(
+        (idx for idx in candidates if figures[idx].get('suit') == primary_suit),
+        candidates[0],
+    )
+
+
+def _roster_call_move(
+        figures: list[dict[str, Any]], family_name: str, rank: str,
+        value: int, round_index: int, primary_suit: str,
+) -> dict[str, Any]:
+    field = {
+        'Call King': 'castle',
+        'Call Villager': 'village',
+        'Call Military': 'military',
+    }[family_name]
+    figure_idx = _preferred_call_figure_index(figures, field, primary_suit)
+    suit = (
+        figures[figure_idx].get('suit')
+        if figure_idx is not None else primary_suit
+    )
+    return _call_move(
+        family_name,
+        rank,
+        suit,
+        value,
+        round_index,
+        call_figure_index=figure_idx,
+    )
 
 
 def _build_battle_moves(figures: list[dict[str, Any]], primary_suit: str,
@@ -510,30 +683,38 @@ def _build_battle_moves(figures: list[dict[str, Any]], primary_suit: str,
     if battle_plan == 'overlord' and {'castle', 'military'} <= fields:
         return [
             _call_move('Block', 'Q', primary_suit, 2, 0),
-            _call_move('Call Military', 'A', primary_suit, 3, 1),
-            _call_move('Call King', 'K', alt_suit, 4, 2),
+            _roster_call_move(
+                figures, 'Call Military', 'A', 3, 1, primary_suit),
+            _roster_call_move(
+                figures, 'Call King', 'K', 4, 2, primary_suit),
         ]
     if battle_plan == 'apex' and {'castle', 'military'} <= fields:
         return [
-            _call_move('Call King', 'K', primary_suit, 4, 0),
-            _call_move('Call Military', 'A', primary_suit, 3, 1),
+            _roster_call_move(
+                figures, 'Call King', 'K', 4, 0, primary_suit),
+            _roster_call_move(
+                figures, 'Call Military', 'A', 3, 1, primary_suit),
             _dagger('10', primary_suit, 2),
         ]
     if battle_plan == 'sentinel' and {'castle', 'village'} <= fields:
         return [
-            _call_move('Call King', 'K', primary_suit, 4, 0),
-            _call_move('Call Villager', 'J', alt_suit, 1, 1),
+            _roster_call_move(
+                figures, 'Call King', 'K', 4, 0, primary_suit),
+            _roster_call_move(
+                figures, 'Call Villager', 'J', 1, 1, primary_suit),
             _dagger('10', primary_suit, 2),
         ]
     if battle_plan == 'bastion' and 'military' in fields:
         return [
-            _call_move('Call Military', 'A', primary_suit, 3, 0),
+            _roster_call_move(
+                figures, 'Call Military', 'A', 3, 0, primary_suit),
             _dagger('10', primary_suit, 1),
             _dagger('9', alt_suit, 2),
         ]
     if battle_plan == 'warden' and 'castle' in fields:
         return [
-            _call_move('Call King', 'K', primary_suit, 4, 0),
+            _roster_call_move(
+                figures, 'Call King', 'K', 4, 0, primary_suit),
             _dagger('10', primary_suit, 1),
             _dagger('8', alt_suit, 2),
         ]
@@ -548,9 +729,10 @@ def _battle_figure_index(figures: list[dict[str, Any]], tier: int,
                          primary_suit: str,
                          prelude_spell_name: str | None = None) -> int:
     required_field = _prelude_required_field(prelude_spell_name)
-    legal_indices = set(_eligible_battle_figure_indices(
+    legal_indices = set(_strategic_battle_figure_indices(
         figures,
-        required_field=required_field,
+        primary_suit,
+        prelude_spell_name,
     ))
     if not legal_indices:
         return 0
@@ -574,7 +756,7 @@ def _battle_figure_index(figures: list[dict[str, Any]], tier: int,
 
 
 def _pick_scripted_spell(rules: dict[str, Any], key: str,
-                         rng: random.Random) -> str | None:
+                         rng: random.Random, *, is_compatible=None) -> str | None:
     """Pick a prelude/counter spell from a weighted pool.
 
     ``key`` is ``'prelude'`` or ``'counter'``.  Pool entries are
@@ -591,6 +773,8 @@ def _pick_scripted_spell(rules: dict[str, Any], key: str,
             name, weight = entry
             if isinstance(name, str) and name.strip().lower() == 'none':
                 name = None
+            if is_compatible is not None and not is_compatible(name):
+                continue
             normalized.append((name, weight))
         if normalized:
             return _weighted_choice(normalized, rng)
@@ -703,8 +887,25 @@ def generate_ai_defence_template_for_land(land: Any) -> dict[str, Any]:
         rng,
         str(rules.get('battle_plan') or 'border'),
     )
-    prelude_spell = _pick_scripted_spell(rules, 'prelude', rng)
-    counter_spell = _pick_scripted_spell(rules, 'counter', rng)
+    prelude_spell = _pick_scripted_spell(
+        rules,
+        'prelude',
+        rng,
+        is_compatible=lambda spell_name: _prelude_spell_is_strategically_compatible(
+            spell_name,
+            figures,
+            primary_suit,
+        ),
+    )
+    counter_spell = _pick_scripted_spell(
+        rules,
+        'counter',
+        rng,
+        is_compatible=lambda spell_name: _counter_spell_is_strategically_compatible(
+            spell_name,
+            figures,
+        ),
+    )
     template = {
         'ai_name': f'{primary_suit} {AI_DEFENCE_TIER_NAMES.get(tier, "Defenders")}',
         'figures': figures,
@@ -725,7 +926,7 @@ def generate_ai_defence_template_for_land(land: Any) -> dict[str, Any]:
         'auto_gamble_threshold': int(rules.get('auto_gamble_threshold', 10)),
     }
 
-    if validate_ai_defence_template(template):
+    if validate_ai_defence_template(template, primary_suit=primary_suit):
         return template
 
     logger.warning(

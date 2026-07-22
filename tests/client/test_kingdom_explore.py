@@ -557,13 +557,19 @@ def test_collect_reward_fx_noop_when_nothing_collected():
     assert len(s._fx._impacts) == 0
 
 
-def test_celebrate_conquests_spawns_burst_and_pulse():
+def test_celebrate_conquests_spawns_burst_pulse_and_map_gain(monkeypatch):
+    import game.screens.kingdom_screen as module
+
     s = _fx_screen()
     mine = next(t for t in s._hex_map.tiles if t.is_mine)
+    played = []
+    monkeypatch.setattr(
+        module.sound, 'play', lambda name, **kwargs: played.append(name))
     s._celebrate_conquests([mine.land_id])
     assert len(s._fx._particles) > 0            # celebratory burst
     assert len(s._fx._impacts) > 0              # border-merge pulse
     assert len(s._fx._banners) == 1             # "Land conquered!" banner
+    assert played == ['map_gain']
 
 
 def test_diff_new_conquests_ignores_first_load_then_detects():

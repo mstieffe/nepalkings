@@ -101,7 +101,38 @@ echo "🛠️  Running pygbag..."
 WEB_OUT="$APP/build/web"
 if [ -f nepal_kings/web/index.html ]; then
     cp nepal_kings/web/index.html "$WEB_OUT/index.html"
-    echo "   Applied custom index.html"
+    WEB_BUILD_ID="${GITHUB_SHA:-}"
+    if [ -z "$WEB_BUILD_ID" ]; then
+        WEB_BUILD_ID="$(git rev-parse HEAD 2>/dev/null || printf 'dev')"
+    fi
+    WEB_BUILD_ID="${WEB_BUILD_ID:0:12}"
+    WEB_SFX_MANIFEST="$("$PYTHON" -c '
+import json
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+names = sorted(
+    path.name for path in root.glob("*.ogg")
+    if not path.name.startswith("music_")
+)
+print(json.dumps(names, separators=(",", ":")))
+' "$WEB_AUDIO_STAGE")"
+    if [ "$WEB_SFX_MANIFEST" = "[]" ]; then
+        echo "Browser SFX manifest is empty" >&2
+        exit 1
+    fi
+    sed -i.bak \
+        -e "s/__NK_WEB_BUNDLE_VERSION__/${WEB_BUILD_ID}/g" \
+        -e "s/__NK_WEB_SFX_MANIFEST__/${WEB_SFX_MANIFEST}/g" \
+        "$WEB_OUT/index.html"
+    rm -f "$WEB_OUT/index.html.bak"
+    if grep -Eq '__NK_WEB_(BUNDLE_VERSION|SFX_MANIFEST)__' \
+            "$WEB_OUT/index.html"; then
+        echo "Failed to stamp web audio metadata" >&2
+        exit 1
+    fi
+    echo "   Applied custom index.html (bundle ${WEB_BUILD_ID}, SFX preloaded)"
 fi
 
 mkdir -p "$WEB_OUT/audio"

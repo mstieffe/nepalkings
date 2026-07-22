@@ -129,8 +129,11 @@ The policy can:
 - finish battles and perform post-battle card selection;
 - resolve no-legal-figure states without leaving the game deadlocked.
 
-The land-defence generator builds deterministic, feasibility-checked templates
-for all supported land tiers. A generator version bump invalidates older
+The land-defence generator builds deterministic, feasibility- and
+strategy-checked templates for all supported land tiers. Spell choices must
+fit the generated roster (for example, Landslide requires an off-land-suit
+defender and Civil War requires a same-color village pair), while Call tactics
+are bound to same-suit figures. A generator version bump invalidates older
 cached AI templates when generation rules change.
 
 ## Authentication and route execution

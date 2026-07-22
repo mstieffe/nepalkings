@@ -336,9 +336,13 @@ class TutorialWindowDialogue:
                     self._drag_moved = False
                     continue
                 if not self._btn_back.disabled and self._btn_back.collide(pos):
+                    from utils import sound
+                    sound.play('ui_back')
                     self._goto_page(self.page_index - 1)
                     return None
                 if self._btn_next.collide(pos):
+                    from utils import sound
+                    sound.play('ui_click')
                     if self._is_last:
                         return 'done'
                     self._goto_page(self.page_index + 1)
@@ -628,6 +632,9 @@ class StarterSuitRevealDialogue:
         self._phase = 'spin'   # spin -> done
         self._phase_started = self._created_at
         self._reveal_notified = False
+        # The click that opens the reel is already covered by the tutorial
+        # button. Start ticking on the first visible suit change, not at t=0.
+        self._last_reel_tick_index = 0
 
         _SW = settings.SCREEN_WIDTH
         _SH = settings.SCREEN_HEIGHT
@@ -684,10 +691,26 @@ class StarterSuitRevealDialogue:
         return y
 
     def _advance_spin(self):
-        """Promote the spin to done once the spin time has elapsed."""
+        """Advance the audible reel and settle it once its time has elapsed."""
         now = pygame.time.get_ticks()
-        if self._phase == 'spin' and now - self._phase_started >= _REEL_SPIN_MS:
+        if self._phase != 'spin':
+            return
+        elapsed = max(0, now - self._phase_started)
+        if elapsed < _REEL_SPIN_MS:
+            tick_index = elapsed // _REEL_TICK_MS
+            if tick_index > self._last_reel_tick_index:
+                self._last_reel_tick_index = tick_index
+                from utils import sound
+                sound.play('tally_tick', volume=0.35)
+            return
+        if elapsed >= _REEL_SPIN_MS:
             self._phase = 'done'
+            # Normal callers wait for the server grant before celebrating.
+            # The confirmed-by-construction mode is retained for standalone
+            # uses and tests, so it gets its landing cue here.
+            if self._grant_status == 'confirmed':
+                from utils import sound
+                sound.play('reward_reveal', volume=0.8)
 
     def _current_reel_suit(self):
         """The suit icon to show right now (cycling all four while spinning)."""
@@ -713,6 +736,8 @@ class StarterSuitRevealDialogue:
                 if self._btn.disabled or not self._btn.collide(pos):
                     continue
                 if self._phase == 'done':
+                    from utils import sound
+                    sound.play('ui_click')
                     if self._grant_status == 'failed':
                         return 'retry'
                     return 'done'
@@ -721,6 +746,9 @@ class StarterSuitRevealDialogue:
     def set_grant_result(self, success):
         """Unlock the truthful result view, or expose an explicit retry."""
         self._grant_status = 'confirmed' if success else 'failed'
+        from utils import sound
+        sound.play('reward_reveal' if success else 'error',
+                   volume=0.8 if success else 0.65)
 
     def _sized_breakdown(self, td, max_w):
         """The starter-set breakdown rendered to fill ``max_w`` so the cards and
