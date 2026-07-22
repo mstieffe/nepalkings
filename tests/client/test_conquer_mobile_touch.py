@@ -197,6 +197,12 @@ def test_chip_summary_folds_support_and_land_and_keeps_ranged_separate():
     assert by_kind['aggregate_ranged']['source_figure_ids'] == [2]
 
 
+def test_mobile_support_rail_title_describes_all_modifier_types():
+    from game.screens.conquer_game_screen import ConquerGameScreen
+
+    assert ConquerGameScreen.MOBILE_SUPPORT_RAIL_TITLE == 'MOD'
+
+
 def test_chip_summary_uses_unblocked_value_for_blocked_support():
     screen = _bare_screen()
     chips = _summary(screen, [
@@ -315,6 +321,36 @@ def test_compact_round_card_renders_chips_and_round_tag():
     # Nothing bleeds outside the card's row.
     above = pygame.Rect(rect.left, rect.top - 12, rect.width, 10)
     assert not _rect_has_non_background_pixel(window, above)
+
+
+def test_compact_round_chip_uses_icon_as_only_power_readout(
+        touch_mode, monkeypatch):
+    """The icon already owns the move-power label on mobile round cards."""
+    window = pygame.Surface((854, 480))
+    window.fill((0, 0, 0))
+    ledger, move = _compact_ledger(window)
+    rect = pygame.Rect(24, 424, 66, 36)
+    icon_calls = []
+
+    monkeypatch.setattr(
+        ledger,
+        '_draw_move_icon',
+        lambda cx, cy, size, rendered_move, ghost=False: (
+            icon_calls.append((cx, cy, size, rendered_move, ghost)) or True
+        ),
+    )
+
+    def unexpected_text(*_args, **_kwargs):
+        raise AssertionError(
+            'compact tactic chip must not render a second power/name label')
+
+    monkeypatch.setattr(_settings(), 'get_font', unexpected_text)
+
+    ledger._draw_player_chip(rect, move, is_player_self=True)
+
+    assert len(icon_calls) == 1
+    assert icon_calls[0][:2] == rect.center
+    assert icon_calls[0][2] == min(rect.height - 4, rect.width - 8)
 
 
 def test_compact_total_card_keeps_circle_legible():

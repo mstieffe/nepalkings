@@ -11,7 +11,8 @@ Sections (top → bottom, all rects come from
 
 * **top strip** — round/turn indicator + an opponent-intent hint.
 * **hand list** — scrollable column of one-row cells, one per move.
-* **selected detail** — name, suit/rank chip, source, power.
+* **selected detail** — name, suit/rank chip, source, power (desktop only;
+  mobile keeps selection feedback on the row itself).
 * **action tray** — Play / Gamble / Combine / Dismantle / Skip.
 
 Click handling is lightweight: the rail captures click events via
@@ -28,6 +29,7 @@ import pygame
 from config import settings
 from game.components.battle_moves.battle_move_icon_renderer import draw_battle_move_icon
 from game.components.conquer_layout import compute_conquer_layout
+from game.components.suit_text import fit_suit_text, render_suit_text
 
 
 # Visual constants
@@ -882,7 +884,15 @@ class ConquerTacticsRail:
                 return True
         # Cell selection
         for i, (rect, mid) in enumerate(zip(self._cell_rects, self._cell_move_ids)):
-            if self._touch_collide(rect, pos):
+            # Adjacent tactic rows are already compact touch targets.  Do not
+            # inflate them to the global full-size target: the inflated rectangles
+            # overlap vertically and make taps near a row boundary select the
+            # preceding tactic.  Compact-min preserves a generous hit area
+            # without crossing into a neighbour.
+            if self._touch_collide(
+                    rect, pos,
+                    settings.TOUCH_COMPACT_MIN,
+                    settings.TOUCH_COMPACT_MIN):
                 kind = (self._cell_kinds[i]
                         if i < len(self._cell_kinds) else 'move')
                 if kind == 'collapsed':
@@ -933,10 +943,11 @@ class ConquerTacticsRail:
         list_h = (self._dyn_hand_list_rect.height
                   if self._dyn_hand_list_rect is not None
                   else rail.hand_list_rect[3])
-        visible_cells = max(1, min(
-            rail.cells_visible,
-            max(1, list_h // max(1, rail.cell_height)),
-        ))
+        height_capacity = max(1, list_h // max(1, rail.cell_height))
+        visible_cap = rail.cells_visible
+        if settings.TOUCH_TARGET_MIN > 0:
+            visible_cap = max(visible_cap, height_capacity)
+        visible_cells = max(1, min(visible_cap, height_capacity))
         # Active removed-ghost cells share the visible budget (each one
         # steals a slot from the bottom).
         ghost_count = len(getattr(self, '_removed_ghosts', {}) or {})
@@ -1231,14 +1242,30 @@ class ConquerTacticsRail:
                 action_tray_rect.y -= grow
                 action_tray_rect.height += grow
                 hand_list_rect.height -= grow
+
+        # On touch layouts the selected-detail card repeated information
+        # already present in the highlighted row, while costing almost a full
+        # extra tactic slot.  Fold that band into the scrollable hand instead.
+        # The action tray remains the unambiguous place to act on the selected
+        # row, and desktop keeps its richer hover/detail presentation.
+        mobile_compact = settings.TOUCH_TARGET_MIN > 0
+        if mobile_compact and selected_detail_rect.height > 0:
+            hand_list_rect = hand_list_rect.union(selected_detail_rect)
+            selected_detail_rect.height = 0
         self._dyn_top_strip_rect = top_strip_rect
         self._dyn_hand_list_rect = hand_list_rect
         self._dyn_action_tray_rect = action_tray_rect
 
         self._draw_top_strip(top_strip_rect)
-        self._draw_hand_list(hand_list_rect, rail.cell_height,
-                             rail.cells_visible)
-        self._draw_selected_detail(selected_detail_rect)
+        visible_cells = rail.cells_visible
+        if mobile_compact:
+            visible_cells = max(
+                visible_cells,
+                hand_list_rect.height // max(1, rail.cell_height),
+            )
+        self._draw_hand_list(hand_list_rect, rail.cell_height, visible_cells)
+        if selected_detail_rect.height > 0:
+            self._draw_selected_detail(selected_detail_rect)
         self._draw_action_tray(action_tray_rect)
         # The All Seeing Eye gamble preview takes over the whole hand +
         # detail region so the two forecast cards have room to be legible.
@@ -1375,6 +1402,11 @@ class ConquerTacticsRail:
             hint_h = settings.get_font(
                 max(settings.FS_CONQUER_META, int(settings.FS_TINY * 0.8))).get_height()
             return 4 + len(lines) * (font.get_height() + 1) + hint_h + 7
+        if settings.TOUCH_TARGET_MIN > 0:
+            # Mobile uses one deliberately compact summary row.  Returning
+            # the natural single-line height prevents ordinary status text
+            # from stealing space from the hand list.
+            return font.get_height() + 8
         game = getattr(self._parent.state, 'game', None)
         hand_count = len(self._hand_moves())
         word = 'battle move' if hand_count == 1 else 'battle moves'
@@ -1390,6 +1422,9 @@ class ConquerTacticsRail:
     def _draw_top_strip(self, rect: pygame.Rect):
         if self._result_banner:
             self._draw_result_banner(rect)
+            return
+        if settings.TOUCH_TARGET_MIN > 0:
+            self._draw_mobile_top_strip(rect)
             return
         # Two-row strip: tactics-in-hand count + gamble status. The
         # "Action pending" hint and Round X/3 line were removed -- the
@@ -1426,6 +1461,80 @@ class ConquerTacticsRail:
             self.window.blit(surf, (rect.x + 8, y))
             y += sub.get_height() + 1
         self._draw_gamble_pips(rect, game)
+
+    def _draw_mobile_top_strip(self, rect: pygame.Rect) -> None:
+        """Draw a collision-free one-line summary for narrow touch rails."""
+        game = getattr(self._parent.state, 'game', None)
+        hand_count = len(self._hand_moves())
+        title_font = settings.get_font(
+            max(settings.FS_CONQUER_META, int(settings.FS_TINY * 0.82)),
+            bold=True,
+        )
+        badge_font = settings.get_font(
+            max(settings.FS_CONQUER_META, int(settings.FS_TINY * 0.82)),
+            bold=True,
+        )
+
+        _gamble_text, gamble_state = self._gamble_status_for_strip(game)
+        used, _used_rounds = (
+            self._gamble_counts_state(game) if game is not None else (0, [])
+        )
+        remaining = max(0, self.GAMBLE_PER_BATTLE_LIMIT - used)
+        if gamble_state == 'used':
+            badge_label = 'USED'
+        elif gamble_state == 'limit':
+            badge_label = '0'
+        else:
+            badge_label = f'×{remaining}'
+
+        badge_text = badge_font.render(badge_label, True, (26, 21, 15))
+        badge_rect = badge_text.get_rect()
+        icon_size = max(9, badge_text.get_height())
+        badge_rect.width += icon_size + 14
+        badge_rect.height += 6
+        badge_rect.right = rect.right - 6
+        badge_rect.centery = rect.centery
+        if gamble_state == 'used':
+            badge_fill = (112, 102, 84)
+        elif gamble_state == 'last':
+            badge_fill = (225, 142, 70)
+        elif gamble_state == 'limit':
+            badge_fill = (92, 76, 62)
+        else:
+            badge_fill = (200, 164, 76)
+        pygame.draw.rect(
+            self.window, badge_fill, badge_rect,
+            border_radius=max(3, badge_rect.height // 2),
+        )
+        icon_rect = pygame.Rect(0, 0, icon_size, icon_size)
+        icon_rect.midleft = (badge_rect.left + 5, badge_rect.centery)
+        self._draw_action_icon(
+            self.window, ACTION_GAMBLE, icon_rect, (38, 29, 18))
+        text_area = pygame.Rect(
+            icon_rect.right + 3, badge_rect.top,
+            badge_rect.right - icon_rect.right - 7, badge_rect.height,
+        )
+        self.window.blit(
+            badge_text,
+            badge_text.get_rect(center=text_area.center),
+        )
+
+        title_x = rect.left + 7
+        title_max_w = max(1, badge_rect.left - title_x - 4)
+        title = f'TACTICS {hand_count}'
+        title_surf = title_font.render(
+            self._fit_text(title, title_font, title_max_w),
+            True,
+            _TEXT_PRIMARY,
+        )
+        self.window.blit(title_surf, title_surf.get_rect(
+            midleft=(title_x, rect.centery)))
+        pygame.draw.line(
+            self.window, (94, 72, 46),
+            (rect.left + 4, rect.bottom - 1),
+            (rect.right - 4, rect.bottom - 1),
+            1,
+        )
 
     def _draw_gamble_pips(self, rect: pygame.Rect, game) -> None:
         """Three diamond pips, top-right of the strip: remaining gambles.
@@ -1660,7 +1769,16 @@ class ConquerTacticsRail:
                 move = item['move']
                 if hovered:
                     self._hovered_id = int(move.get('id') or 0)
-                self._draw_hand_cell(cell_rect, move, font, chip_font, hovered=hovered)
+                meta_reserve = 42 if (
+                    settings.TOUCH_TARGET_MIN > 0
+                    and item.get('can_collapse')
+                    and item.get('group_first')
+                ) else 0
+                self._draw_hand_cell(
+                    cell_rect, move, font, chip_font,
+                    hovered=hovered,
+                    meta_trailing_reserve=meta_reserve,
+                )
                 toggle_rect = None
                 if item.get('can_collapse') and item.get('group_first'):
                     toggle_rect = self._draw_expanded_group_toggle(
@@ -1682,6 +1800,9 @@ class ConquerTacticsRail:
     def _draw_expanded_group_toggle(self, rect: pygame.Rect, item: Dict[str, Any],
                                     chip_font, *, hovered: bool = False) -> pygame.Rect:
         count = int(item.get('group_count') or 1)
+        if settings.TOUCH_TARGET_MIN > 0:
+            return self._draw_mobile_group_chip(
+                rect, count, chip_font, expanded=True, hovered=hovered)
         pill_text = f'×{count}'
         pill_surf = chip_font.render(pill_text, True, (24, 18, 12))
         pill_w = pill_surf.get_width() + 24
@@ -1704,6 +1825,35 @@ class ConquerTacticsRail:
         )
         return pill_rect
 
+    def _draw_mobile_group_chip(self, rect: pygame.Rect, count: int,
+                                chip_font, *, expanded: bool,
+                                hovered: bool = False) -> pygame.Rect:
+        """Keep the group count in the metadata lane, below the name."""
+        pill_text = f'×{count}'
+        pill_surf = chip_font.render(pill_text, True, (28, 22, 14))
+        pill_w = pill_surf.get_width() + 22
+        pill_h = pill_surf.get_height() + 4
+        pill_rect = pygame.Rect(0, 0, pill_w, pill_h)
+        pill_rect.right = rect.right - 5
+        pill_rect.bottom = rect.bottom - 4
+        fill = (220, 185, 92) if hovered else (196, 154, 68)
+        pygame.draw.rect(
+            self.window, fill, pill_rect,
+            border_radius=max(3, pill_h // 2),
+        )
+        self.window.blit(
+            pill_surf,
+            pill_surf.get_rect(midleft=(pill_rect.left + 6, pill_rect.centery)),
+        )
+        cx = pill_rect.right - 8
+        cy = pill_rect.centery
+        if expanded:
+            points = [(cx - 4, cy + 2), (cx + 4, cy + 2), (cx, cy - 3)]
+        else:
+            points = [(cx - 4, cy - 2), (cx + 4, cy - 2), (cx, cy + 3)]
+        pygame.draw.polygon(self.window, (42, 31, 18), points)
+        return pill_rect
+
     def _draw_collapsed_group_cell(self, rect: pygame.Rect, item: Dict[str, Any],
                                     font, chip_font, *, hovered: bool = False) -> None:
         """Render a collapsed-group cell: representative move + ×N badge.
@@ -1716,12 +1866,21 @@ class ConquerTacticsRail:
         count = int(item.get('count') or 1)
         # Reuse the regular hand-cell renderer for the representative —
         # this keeps glow/animation behaviour consistent.
-        self._draw_hand_cell(rect, rep, font, chip_font, hovered=hovered)
+        self._draw_hand_cell(
+            rect, rep, font, chip_font,
+            hovered=hovered,
+            meta_trailing_reserve=(42 if settings.TOUCH_TARGET_MIN > 0 else 0),
+        )
         # Overlay the "×N" pill on the right edge, plus a chevron glyph
         # marking this row as expandable.
         previous_clip = self.window.get_clip()
         self.window.set_clip(rect)
         pill_font = settings.get_font(max(settings.FS_CONQUER_META, int(settings.FS_TINY * 0.85)), bold=True)
+        if settings.TOUCH_TARGET_MIN > 0:
+            self._draw_mobile_group_chip(
+                rect, count, pill_font, expanded=False, hovered=hovered)
+            self.window.set_clip(previous_clip)
+            return
         pill_text = f'×{count}'
         pill_surf = pill_font.render(pill_text, True, (24, 18, 12))
         pill_w = pill_surf.get_width() + 10
@@ -1836,7 +1995,8 @@ class ConquerTacticsRail:
         self.window.set_clip(previous_clip)
 
     def _draw_hand_cell(self, rect: pygame.Rect, move: Dict[str, Any], font, chip_font,
-                        *, hovered: bool = False):
+                        *, hovered: bool = False,
+                        meta_trailing_reserve: int = 0):
         previous_clip = self.window.get_clip()
         self.window.set_clip(rect)
         is_selected = move.get('id') == self._selected_id
@@ -1901,7 +2061,8 @@ class ConquerTacticsRail:
             self.window.blit(pulse_surf, rect.topleft)
 
         # Icon (left)
-        icon_size = max(20, int(rect.height * 0.78))
+        icon_scale = 0.68 if settings.TOUCH_TARGET_MIN > 0 else 0.78
+        icon_size = max(20, int(rect.height * icon_scale))
         # Compute gamble-flip squash factor (#8c). When the cell matches
         # the active anim, horizontally squash the icon over the duration.
         flip_scale_x = 1.0
@@ -1958,31 +2119,40 @@ class ConquerTacticsRail:
                              pygame.Rect(rect.left + 4, rect.top + 4,
                                          icon_size, icon_size), 0, border_radius=3)
 
-        # Name + suit/rank chip (right of icon)
-        text_x = rect.left + icon_size + 18
+        # Name + rank chip (right of icon).  The battle-move icon already
+        # carries the suit marker, so repeating it here only adds visual noise.
+        text_gap = 14 if settings.TOUCH_TARGET_MIN > 0 else 18
+        text_x = rect.left + icon_size + text_gap
         name = move.get('family_name', '?')
         if self._is_double_dagger(move):
             name = 'Double Dagger'
 
         # Power is already rendered inside the battle-move icon itself, so
         # we omit the duplicate right-edge number to free horizontal
-        # space for the move name + suit chip (#round5).
-        max_text_w = max(24, rect.right - text_x - 18)
+        # space for the move name + rank chip (#round5).
+        max_text_w = max(24, rect.right - text_x - 8)
 
         name_surf = font.render(self._fit_text(name, font, max_text_w), True, _TEXT_PRIMARY)
-        self.window.blit(name_surf, (text_x, rect.top + 6))
+        name_y = rect.top + (4 if settings.TOUCH_TARGET_MIN > 0 else 6)
+        self.window.blit(name_surf, (text_x, name_y))
 
-        chip_text = f"{move.get('suit', '?')[:1]} {move.get('rank', '?')}"
+        chip_text = str(move.get('rank', '?'))
+        meta_text_w = max(12, max_text_w - max(0, meta_trailing_reserve))
         chip_surf = chip_font.render(
-            self._fit_text(chip_text, chip_font, max_text_w), True, _TEXT_SECONDARY)
-        self.window.blit(chip_surf, (text_x, rect.top + 6 + name_surf.get_height() + 1))
+            self._fit_text(chip_text, chip_font, meta_text_w),
+            True,
+            _TEXT_SECONDARY,
+        )
+        chip_y = (rect.bottom - chip_surf.get_height() - 5
+                  if settings.TOUCH_TARGET_MIN > 0
+                  else name_y + name_surf.get_height() + 1)
+        self.window.blit(chip_surf, (text_x, chip_y))
 
-        # Strongest-move badge (#8d) — small star/spark glyph on the
-        # currently highest-power move.
+        # Strongest-move badge (#8d). Draw the sparkle with primitives: the
+        # mobile/browser font does not reliably contain the old ★ glyph and
+        # could render a missing-character box in this corner.
         if mid == self._strongest_move_id():
-            badge_font = settings.get_font(max(settings.FS_CONQUER_LABEL, int(settings.FS_TINY * 0.9)), bold=True)
-            badge_surf = badge_font.render('★', True, (250, 220, 110))
-            self.window.blit(badge_surf, (rect.left + 4, rect.top + 2))
+            self._draw_strongest_marker(self.window, rect)
 
         # Combine-flow position indicator (#3.2). Show "1/2" on the
         # origin and "2/2" on the partner so the player understands the
@@ -2044,6 +2214,29 @@ class ConquerTacticsRail:
 
         self.window.set_clip(previous_clip)
 
+    @staticmethod
+    def _draw_strongest_marker(surface: pygame.Surface,
+                               rect: pygame.Rect) -> None:
+        """Draw a font-independent sparkle badge in a tactic-row corner."""
+        outer = 5 if settings.TOUCH_TARGET_MIN > 0 else 6
+        inner = max(2, outer // 2)
+        cx = rect.left + outer + 3
+        cy = rect.top + outer + 3
+        pygame.draw.circle(surface, (30, 22, 14), (cx, cy), outer + 2)
+        pygame.draw.circle(surface, (126, 94, 42), (cx, cy), outer + 2, 1)
+        points = [
+            (cx, cy - outer),
+            (cx + inner, cy - inner),
+            (cx + outer, cy),
+            (cx + inner, cy + inner),
+            (cx, cy + outer),
+            (cx - inner, cy + inner),
+            (cx - outer, cy),
+            (cx - inner, cy - inner),
+        ]
+        pygame.draw.polygon(surface, (250, 220, 110), points)
+        pygame.draw.circle(surface, (255, 242, 170), (cx, cy), 1)
+
     # -- selected detail
     def _draw_selected_detail(self, rect: pygame.Rect):
         pygame.draw.rect(self.window, (24, 18, 14), rect, 0, border_radius=4)
@@ -2066,13 +2259,14 @@ class ConquerTacticsRail:
         suit_b = sel.get('suit_b')
         rank = sel.get('rank', '?')
         if settings.TOUCH_TARGET_MIN > 0:
-            suit_a_label = str(suit_a or '?')[:1]
-            suit_b_label = f"+{str(suit_b)[:1]}" if suit_b else ''
-            line = f"{suit_a_label}{suit_b_label} {rank}  P{self._power(sel)}"
+            line = f"{suit_a}{('+' + suit_b) if suit_b else ''} {rank}  P{self._power(sel)}"
         else:
             line = f"{suit_a}{('+' + suit_b) if suit_b else ''} • {rank} • Power {self._power(sel)}"
-        bs = body_font.render(
-            self._fit_text(line, body_font, rect.width - 16), True, _TEXT_SECONDARY)
+        bs = render_suit_text(
+            fit_suit_text(line, body_font, rect.width - 16),
+            body_font,
+            _TEXT_SECONDARY,
+        )
         self.window.blit(bs, (rect.left + 8, rect.top + 6 + ts.get_height() + 2))
         # Gamble stake hint — only when a gamble is actually available for
         # this tactic and there is vertical room for a third line.
@@ -2271,7 +2465,8 @@ class ConquerTacticsRail:
             # Subtle hint when no actions apply (e.g. opponent's turn,
             # nothing selected). Avoid empty-looking dead space.
             sel = self._selected_move()
-            hint = ('Pick a tactic to act' if sel is None
+            hint = (('Tap a tactic' if settings.TOUCH_TARGET_MIN > 0
+                     else 'Pick a tactic to act') if sel is None
                     else "Wait for your battle turn")
             font = settings.get_font(max(settings.FS_CONQUER_LABEL, int(settings.FS_TINY * 0.9)))
             surf = font.render(hint, True, _TEXT_MUTED)

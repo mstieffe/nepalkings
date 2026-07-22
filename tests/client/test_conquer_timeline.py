@@ -8,6 +8,59 @@ import pygame
 import pytest
 
 
+def test_inline_suit_text_replaces_full_suit_name_with_icon(monkeypatch):
+    from game.components import suit_text
+
+    pygame.font.init()
+    font = pygame.font.Font(None, 20)
+    requested = []
+
+    def fake_icon(suit, size):
+        requested.append((suit, size))
+        icon = pygame.Surface((size, size), pygame.SRCALPHA)
+        icon.fill((255, 0, 0, 255))
+        return icon
+
+    monkeypatch.setattr(
+        suit_text,
+        'load_suit_icon',
+        fake_icon,
+    )
+
+    rendered = suit_text.render_suit_text(
+        'Suit bonus: Hearts (+2)', font, (230, 220, 190))
+
+    expected_width = (
+        font.size('Suit bonus: ')[0]
+        + requested[0][1]
+        + font.size(' (+2)')[0]
+    )
+    assert requested and requested[0][0] == 'Hearts'
+    assert rendered.get_width() == expected_width
+    assert rendered.get_width() < font.size('Suit bonus: Hearts (+2)')[0]
+
+
+def test_inline_suit_text_never_leaves_a_truncated_suit_word():
+    from game.components.suit_text import fit_suit_text
+
+    pygame.font.init()
+    font = pygame.font.Font(None, 20)
+
+    fitted = fit_suit_text('Bonus Diamonds', font, font.size('Bonus…')[0])
+
+    assert fitted == 'Bonus…'
+
+
+@pytest.mark.parametrize('suit', ['Hearts', 'Diamonds', 'Clubs', 'Spades'])
+def test_all_canonical_suits_have_inline_icon_assets(suit):
+    from game.components.suit_text import load_suit_icon
+
+    icon = load_suit_icon(suit, 18)
+
+    assert icon is not None
+    assert icon.get_size() == (18, 18)
+
+
 def _make_game(**overrides):
     base = dict(
         mode='conquer',
@@ -871,6 +924,33 @@ def test_step_hover_replaces_icon_name_tooltip():
     panel._draw_hover_tooltips(SimpleNamespace())
 
     assert calls == [('step', (SimpleNamespace(), 'step', 'step-anchor'))]
+
+
+def test_conquer_figure_tooltip_hides_duel_only_instant_charge():
+    from game.components.conquer_timeline_panel import ConquerTimelinePanel
+
+    panel = ConquerTimelinePanel.__new__(ConquerTimelinePanel)
+    panel.info_body_font = pygame.font.Font(None, 14)
+    captured = []
+    panel._render_tooltip_lines = (
+        lambda lines, anchor: captured.extend(lines))
+    figure = SimpleNamespace(
+        name='Gorkha Warrior',
+        suit='Hearts',
+        get_value=lambda: 10,
+        active_enchantments=[],
+        get_active_skills=lambda: [
+            ('instant_charge', 'Instant Advance'),
+            ('distance_attack', 'Distance Attack'),
+        ],
+    )
+
+    panel._draw_figure_tooltip(
+        figure, pygame.Rect(10, 10, 20, 20), 'own')
+
+    labels = [text for text, _color in captured]
+    assert 'Skills: Distance Attack' in labels
+    assert not any('Instant' in text for text in labels)
 
 
 def test_conquer_screen_draws_timeline_hover_after_buttons():
@@ -2224,6 +2304,55 @@ def test_compact_info_box_suppresses_misplaced_field_select_hint():
     assert 'Use the field to select.' not in rendered
     # No phantom button rect leaks into the action rects for a selection step.
     assert 'next' not in screen._conquer_objective_action_rects
+
+
+def test_compact_overview_copy_omits_context_already_in_mobile_header(
+        monkeypatch):
+    from config import settings
+    from game.components.conquer_timeline_panel import ConquerTimelinePanel
+    from game.screens.conquer_flow import TimelineStep
+
+    monkeypatch.setattr(settings, 'TOUCH_TARGET_MIN', 44)
+
+    step = TimelineStep(
+        kind='overview',
+        title='Conquer Battle',
+        info_headline='Conquer Battle',
+        info_body=(
+            'You are fighting Kathmandu for conquer battle. '
+            'It produces 7.5 gold/hour. Suit bonus: Mighty (+2).'
+        ),
+    )
+
+    headline, body = ConquerTimelinePanel._compact_info_copy(
+        _info_box_screen(), step)
+
+    assert headline == 'Conquer Battle'
+    assert body == 'It produces 7.5 gold/hour. Suit bonus: Mighty (+2).'
+
+
+def test_compact_confirmation_prioritizes_actions_over_duplicate_thumbnail(
+        monkeypatch):
+    from config import settings
+    from game.components.conquer_timeline_panel import ConquerTimelinePanel
+    from game.screens.conquer_flow import TimelineStep
+
+    monkeypatch.setattr(settings, 'TOUCH_TARGET_MIN', 44)
+
+    screen = _info_box_screen()
+    screen._conquer_pending_confirmation = {'kind': 'advance'}
+    step = TimelineStep(
+        kind='attacker',
+        title='Attacking Figure',
+        info_headline='Confirm your attacker',
+        info_body='Press Confirm to commit, or Cancel to pick another figure.',
+    )
+    visual_assets = ({'kind': 'figure', 'figure': _make_figure()},)
+
+    assert ConquerTimelinePanel._compact_info_copy(screen, step) == (
+        'Confirm attacker?', '')
+    assert ConquerTimelinePanel._compact_info_visual_assets(
+        screen, step, visual_assets) == ()
 
 
 def test_full_info_box_keeps_field_select_hint():

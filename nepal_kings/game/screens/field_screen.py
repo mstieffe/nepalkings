@@ -4,6 +4,7 @@ import math
 import pygame
 from pygame.locals import *
 from config import settings
+from config.screen_settings import _IS_MOBILE as _MOBILE_UI
 from game.core.game import (
     battle_modifier_types,
     battle_required_field,
@@ -58,6 +59,7 @@ class FieldScreen(SubScreen):
         self._field_static_surface = None
         self._field_static_surface_key = None
         self._field_static_surface_pos = (0, 0)
+        self._field_board_title_tabs = {}
         # Cache of (icon, x, y) tuples for the last full figure draw — used
         # by the conquer game screen to re-blit figures on top of the duel
         # lane so figure info boxes stay in the foreground.
@@ -108,6 +110,11 @@ class FieldScreen(SubScreen):
         # Font for field titles
         self.field_title_font = settings.get_font(settings.FIELD_TITLE_FONT_SIZE)
         self.board_title_font = settings.get_font(settings.FIELD_BOARD_TITLE_FONT_SIZE, bold=True)
+        self.mobile_conquer_board_title_font = settings.get_font(
+            max(14, int(settings.FS_SMALL * 0.78)),
+            bold=True,
+            allow_small=True,
+        )
         
         # Font for target selection prompt
         self.target_prompt_font = settings.get_font(settings.FIELD_TITLE_FONT_SIZE + 4, bold=True)
@@ -3458,6 +3465,7 @@ class FieldScreen(SubScreen):
             tuple(compartment_key),
             bool(self.cached_all_seeing_eye_status),
             bool(self.cached_opponent_all_seeing_eye_status),
+            self._uses_compact_conquer_board_titles(),
         )
 
     def _field_static_bounds(self):
@@ -3493,8 +3501,15 @@ class FieldScreen(SubScreen):
                 return label
         return labels[-1]
 
+    def _uses_compact_conquer_board_titles(self):
+        return bool(
+            _MOBILE_UI
+            and getattr(getattr(self, 'game', None), 'mode', None) == 'conquer'
+        )
+
     def _draw_field_static_layer(self):
         self._refresh_all_seeing_eye_status()
+        compact_board_titles = self._uses_compact_conquer_board_titles()
         cache_key = self._field_static_layer_key()
         if self._field_static_surface_key != cache_key or self._field_static_surface is None:
             bounds = self._field_static_bounds()
@@ -3544,6 +3559,7 @@ class FieldScreen(SubScreen):
                         settings.FIELD_BORDER_WIDTH,
                     )
 
+            board_title_tabs = {}
             for player in ('self', 'opponent'):
                 castle_comp = self.compartments[player]['castle']
                 village_comp = self.compartments[player]['village']
@@ -3551,29 +3567,92 @@ class FieldScreen(SubScreen):
                 left = min(castle_comp.left, village_comp.left, military_comp.left)
                 right = max(castle_comp.right, village_comp.right, military_comp.right)
                 title_text_str = 'YOU' if player == 'self' else 'OPPONENT'
-                title_text = self.board_title_font.render(
+                title_font = (
+                    self.mobile_conquer_board_title_font
+                    if compact_board_titles else self.board_title_font
+                )
+                title_text = title_font.render(
                     title_text_str, True, settings.FIELD_BOARD_TITLE_COLOR)
                 title_rect = title_text.get_rect()
-                if player == 'self':
-                    title_rect.left = left
-                else:
-                    title_rect.right = right
-                title_rect.bottom = castle_comp.top + settings.FIELD_BOARD_TITLE_Y_OFFSET
-                title_rect.move_ip(-bounds.x, -bounds.y)
 
                 show_eye_icon = (
                     self.cached_all_seeing_eye_status if player == 'opponent'
                     else self.cached_opponent_all_seeing_eye_status
                 )
-                if show_eye_icon:
-                    eye_rect = self.all_seeing_eye_icon.get_rect()
+                if compact_board_titles:
+                    eye_surface = None
+                    eye_rect = None
+                    gap = max(3, int(settings.SCREEN_HEIGHT * 0.006))
+                    content_w = title_rect.width
+                    if show_eye_icon:
+                        eye_size = max(12, title_rect.height)
+                        eye_surface = pygame.transform.smoothscale(
+                            self.all_seeing_eye_icon, (eye_size, eye_size))
+                        eye_rect = eye_surface.get_rect()
+                        content_w += gap + eye_rect.width
+
+                    content_left = left + max(0, (right - left - content_w) // 2)
                     if player == 'self':
-                        eye_rect.left = title_rect.right + 5
+                        title_rect.left = content_left
+                        if eye_rect is not None:
+                            eye_rect.left = title_rect.right + gap
                     else:
-                        eye_rect.right = title_rect.left - 5
-                    eye_rect.centery = title_rect.centery
-                    surface.blit(self.all_seeing_eye_icon, eye_rect)
-                surface.blit(title_text, title_rect)
+                        if eye_rect is not None:
+                            eye_rect.left = content_left
+                            title_rect.left = eye_rect.right + gap
+                        else:
+                            title_rect.left = content_left
+                    title_rect.centery = castle_comp.top
+                    if eye_rect is not None:
+                        eye_rect.centery = title_rect.centery
+
+                    content_rect = title_rect.copy()
+                    if eye_rect is not None:
+                        content_rect.union_ip(eye_rect)
+                    tab_rect = content_rect.inflate(
+                        max(10, int(settings.SCREEN_WIDTH * 0.012)), 4)
+                    tab_rect.centerx = (left + right) // 2
+                    tab_local = tab_rect.move(-bounds.x, -bounds.y)
+                    pygame.draw.rect(
+                        surface, (34, 29, 23, 246), tab_local,
+                        border_radius=max(3, tab_local.height // 3))
+                    pygame.draw.rect(
+                        surface, (132, 108, 68, 235), tab_local, 1,
+                        border_radius=max(3, tab_local.height // 3))
+                    board_title_tabs[player] = tab_rect
+                    surface.blit(
+                        title_text,
+                        title_rect.move(-bounds.x, -bounds.y),
+                    )
+                    if eye_surface is not None and eye_rect is not None:
+                        surface.blit(
+                            eye_surface,
+                            eye_rect.move(-bounds.x, -bounds.y),
+                        )
+                else:
+                    if player == 'self':
+                        title_rect.left = left
+                    else:
+                        title_rect.right = right
+                    title_rect.bottom = (
+                        castle_comp.top + settings.FIELD_BOARD_TITLE_Y_OFFSET)
+                    if show_eye_icon:
+                        eye_rect = self.all_seeing_eye_icon.get_rect()
+                        if player == 'self':
+                            eye_rect.left = title_rect.right + 5
+                        else:
+                            eye_rect.right = title_rect.left - 5
+                        eye_rect.centery = title_rect.centery
+                        surface.blit(
+                            self.all_seeing_eye_icon,
+                            eye_rect.move(-bounds.x, -bounds.y),
+                        )
+                    surface.blit(
+                        title_text,
+                        title_rect.move(-bounds.x, -bounds.y),
+                    )
+
+            self._field_board_title_tabs = board_title_tabs
 
             for player in ('self', 'opponent'):
                 for field in ('castle', 'village', 'military'):
@@ -3591,6 +3670,12 @@ class FieldScreen(SubScreen):
                     else:
                         title_rect.right = compartment.right - settings.FIELD_TITLE_PADDING
                     title_rect.top = compartment.top + settings.FIELD_TITLE_PADDING
+                    if compact_board_titles and player in board_title_tabs:
+                        title_rect.top = max(
+                            title_rect.top,
+                            board_title_tabs[player].bottom
+                            + max(1, settings.FIELD_TITLE_PADDING // 2),
+                        )
                     title_rect.move_ip(-bounds.x, -bounds.y)
                     surface.blit(title_text, title_rect)
 
@@ -3687,6 +3772,10 @@ class FieldScreen(SubScreen):
                             if figure.id not in self.icon_cache:
                                 continue
                             icon = self.icon_cache[figure.id]
+                            icon.compact_info_badge = bool(
+                                settings.TOUCH_TARGET_MIN > 0
+                                and getattr(self.game, 'mode', 'duel') == 'conquer'
+                            )
                             if settings.TOUCH_TARGET_MIN > 0:
                                 icon.max_info_width = max(
                                     42,
@@ -4126,9 +4215,9 @@ class FieldScreen(SubScreen):
     def _conquer_pending_focus_figure(self):
         """Return the figure currently pending confirmation, if any.
 
-        The pending figure should keep a strong yellow ring even though it has
-        already been clicked, so the player visually links the field figure
-        with the icon shown in the conquer top panel.
+        The pending figure keeps a strong field marker even after its original
+        click state has been cleared.  This visually links the field figure to
+        the Confirm / Cancel controls in the conquer top panel.
         """
         for attr in ('_pending_advance_figure',
                      'figure_pending_defender_selection',
@@ -4231,12 +4320,48 @@ class FieldScreen(SubScreen):
         pygame.draw.polygon(surf, color, local_tri)
         self.window.blit(surf, (bx, by))
 
+    def _draw_conquer_pending_marker(self, marker, pulse):
+        """Draw an unmistakable check marker for a pending field figure."""
+        alpha = int(205 + 50 * pulse)
+        gold = (255, 218, 92, alpha)
+        self._draw_conquer_marker(marker, gold)
+
+        bar_rect = pygame.Rect(marker['bar_rect'])
+        radius = max(7, min(9, bar_rect.height // 3))
+        center = (bar_rect.centerx, bar_rect.top + radius)
+        pad = 3
+        badge = pygame.Surface(
+            ((radius + pad) * 2, (radius + pad) * 2), pygame.SRCALPHA)
+        local_center = (radius + pad, radius + pad)
+        halo_alpha = int(70 + 75 * pulse)
+        pygame.draw.circle(
+            badge, (255, 224, 112, halo_alpha), local_center, radius + pad)
+        pygame.draw.circle(
+            badge, (32, 28, 20, 245), local_center, radius + 1)
+        pygame.draw.circle(
+            badge, (255, 218, 92, 255), local_center, radius)
+        check = [
+            (local_center[0] - radius // 2,
+             local_center[1]),
+            (local_center[0] - 1,
+             local_center[1] + radius // 2),
+            (local_center[0] + radius // 2,
+             local_center[1] - radius // 2),
+        ]
+        pygame.draw.lines(badge, (38, 34, 24, 255), False, check, 2)
+        self.window.blit(
+            badge,
+            (center[0] - local_center[0], center[1] - local_center[1]),
+        )
+
     def draw_figures_overlay(self):
         """Redraw the cached figure icons on top of overlay panels.
 
         The conquer game screen calls this after rendering the duel lane so
         that figure icons (and their small info boxes) always stay in the
-        foreground, even when an HUD panel would otherwise occlude them.
+        foreground, even when an HUD panel would otherwise occlude them.  A
+        confirmation focus is preserved here: only its chosen figure may be
+        redrawn over the dim layer, followed by its checked field marker.
         """
         layout = getattr(self, '_last_drawn_figure_layout', None)
         if not layout:
@@ -4245,8 +4370,21 @@ class FieldScreen(SubScreen):
         # overlay clip (duel lane). Redrawing every figure every frame is
         # expensive and causes visible lag in the conquer screen.
         clip = getattr(self, '_figure_overlay_clip_rect', None)
+        pending_focus = self._conquer_pending_focus_figure()
+        selection_active = self._is_conquer_selection_active()
+        focus_mode = pending_focus is not None or selection_active
+        pending_key = self._figure_id_key(pending_focus)
+
+        def _is_focus_icon(icon):
+            figure = getattr(icon, 'figure', None)
+            if pending_key is not None:
+                return self._figure_id_key(figure) == pending_key
+            return (selection_active
+                    and self._icon_is_selectable_for_current_mode(icon))
 
         def _needs_redraw(icon):
+            if focus_mode and not _is_focus_icon(icon):
+                return False
             if clip is None:
                 return True
             rect = getattr(icon, 'rect_frame_big', None) or getattr(icon, 'rect_frame', None)
@@ -4254,45 +4392,83 @@ class FieldScreen(SubScreen):
                 return True
             return rect.colliderect(clip)
 
+        redrawn = []
         for icon, icon_x, icon_y in reversed(layout.get('regular') or []):
             if _needs_redraw(icon):
                 self._draw_icon_with_entrance(icon, icon_x, icon_y)
+                redrawn.append((icon, icon_x, icon_y))
         for icon, icon_x, icon_y in reversed(layout.get('selected') or []):
             if _needs_redraw(icon):
                 self._draw_icon_with_entrance(icon, icon_x, icon_y)
+                redrawn.append((icon, icon_x, icon_y))
         hovered = layout.get('hovered')
         if hovered:
             icon, icon_x, icon_y = hovered
             if _needs_redraw(icon):
                 self._draw_icon_with_entrance(icon, icon_x, icon_y)
+                redrawn.append((icon, icon_x, icon_y))
+
+        # The duel lane was painted after the field's first focus pass, so its
+        # marker must be restored at this final z-level along with the icon.
+        if focus_mode and redrawn:
+            t = pygame.time.get_ticks() / 1000.0
+            pulse = 0.5 + 0.5 * math.sin(t * 3.2)
+            alpha = int(150 + 90 * pulse)
+            gold = (245, 205, 95, alpha)
+            own_id = getattr(getattr(self, 'game', None), 'player_id', None)
+            for icon, icon_x, icon_y in redrawn:
+                figure = getattr(icon, 'figure', None)
+                marker = self._conquer_icon_marker_geometry(
+                    icon,
+                    (int(icon_x), int(icon_y)),
+                    is_own=getattr(figure, 'player_id', None) == own_id,
+                )
+                if pending_key is not None:
+                    self._draw_conquer_pending_marker(marker, pulse)
+                else:
+                    self._draw_conquer_marker(marker, gold)
 
     def _draw_conquer_selection_focus(self, drawn_icons):
-        """Dim the field and redraw selectable figure icons above it.
+        """Dim the field and redraw selectable or pending icons above it.
 
         The earlier implementation punched rounded-square cutouts through the
         dim layer, which could read as a box around each target. The current
         version draws one simple dim pass, then re-blits the whole selectable
-        field icon (frame, glow, and info box) above it before adding the
-        compact side marker.
+        field icon (frame, glow, and info box) above it.  During confirmation,
+        only the chosen figure stays bright and gains a checked gold marker;
+        cancelling returns to the normal set of selectable candidates.
         """
-        if not self._is_conquer_selection_active():
+        selection_active = self._is_conquer_selection_active()
+        pending_focus = self._conquer_pending_focus_figure()
+        if not selection_active and pending_focus is None:
             return
 
         import math
-        pending_focus = self._conquer_pending_focus_figure()
         t = pygame.time.get_ticks() / 1000.0
         pulse = 0.5 + 0.5 * math.sin(t * 3.2)
 
-        # Partition icons into selectable / non-selectable.
-        selectable_entries = []
+        # A pending confirmation is no longer a candidate-selection state:
+        # focus the exact chosen figure.  If its snapshot disappeared, fall
+        # back to the live candidate set rather than dimming every icon.
+        pending_key = self._figure_id_key(pending_focus)
+        pending_entry = None
+        candidate_entries = []
         for icon, ix, iy in drawn_icons:
             if not icon or not getattr(icon, 'figure', None):
                 continue
-            if self._icon_is_selectable_for_current_mode(icon):
-                selectable_entries.append((icon, int(ix), int(iy)))
+            entry = (icon, int(ix), int(iy))
+            if (pending_key is not None
+                    and self._figure_id_key(icon.figure) == pending_key):
+                pending_entry = entry
+            if selection_active and self._icon_is_selectable_for_current_mode(icon):
+                candidate_entries.append(entry)
+        focus_entries = ([pending_entry] if pending_entry is not None
+                         else candidate_entries)
+        if not focus_entries:
+            return
 
-        # Dim everything first. Selectable icons are redrawn above this layer,
-        # so their frame and info box stay crisp without a visible cutout box.
+        # Dim everything first. Focused icons are redrawn above this layer, so
+        # their frame and info box stay crisp without a visible cutout box.
         dim = pygame.Surface(
             (settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT), pygame.SRCALPHA)
         dim.fill((0, 0, 0, 155))
@@ -4301,7 +4477,7 @@ class FieldScreen(SubScreen):
         regular_entries = []
         selected_entries = []
         hovered_entries = []
-        for entry in selectable_entries:
+        for entry in focus_entries:
             icon = entry[0]
             if getattr(icon, 'hovered', False):
                 hovered_entries.append(entry)
@@ -4317,22 +4493,21 @@ class FieldScreen(SubScreen):
         for icon, cx, cy in hovered_entries:
             icon.draw(cx, cy)
 
-        # Pulsing gold/cyan side markers drawn on the window after the dim
-        # layer and redrawn icons. A small 3px vertical bar with an inward-
-        # pointing arrowhead replaces any full figure border.
+        # Markers are drawn after the dim layer and redrawn icons. Candidate
+        # figures keep the compact side bar; a pending confirmation gets a
+        # gold check badge so it cannot be confused with another candidate.
         alpha = int(150 + 90 * pulse)
         gold = (245, 205, 95, alpha)
-        cyan = (120, 220, 235, min(255, alpha + 40))
         own_id = getattr(getattr(self, 'game', None), 'player_id', None)
-        for icon, cx, cy in selectable_entries:
+        for icon, cx, cy in focus_entries:
             figure = getattr(icon, 'figure', None)
             is_own = getattr(figure, 'player_id', None) == own_id
-            is_pending = (pending_focus is not None
-                          and getattr(figure, 'id', None)
-                              == getattr(pending_focus, 'id', None))
             marker = self._conquer_icon_marker_geometry(
                 icon, (cx, cy), is_own=is_own)
-            self._draw_conquer_marker(marker, cyan if is_pending else gold)
+            if pending_entry is not None:
+                self._draw_conquer_pending_marker(marker, pulse)
+            else:
+                self._draw_conquer_marker(marker, gold)
 
     def _update_defender_selectable(self):
         """Mark figure icons as selectable/non-selectable for defender selection mode."""

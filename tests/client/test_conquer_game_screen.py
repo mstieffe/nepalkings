@@ -3860,6 +3860,102 @@ class TestTacticsHandRouting:
         assert ConquerGameScreen._conquer_layout_mode(screen) == 'result'
         assert ConquerGameScreen._should_use_collapsed_conquer_header(screen) is True
 
+    def test_transient_notice_centers_on_landscape_battle_lane(self):
+        from game.components.conquer_layout import compute_conquer_layout
+
+        ConquerGameScreen, screen = self._make_screen(
+            battle_turn_player_id=42,
+            battle_round=1,
+        )
+        screen.window = pygame.Surface((854, 480))
+        layout = compute_conquer_layout(854, 480, mode='battle')
+
+        center_x = ConquerGameScreen._conquer_stage_center_x(screen)
+
+        assert center_x == pygame.Rect(layout.battlefield.duel_lane.rect).centerx
+        assert center_x > screen.window.get_width() // 2
+
+    def test_mobile_transient_notice_uses_mobile_battle_lane_center(self):
+        _run_mobile_geometry_check(r'''
+import pygame
+from types import SimpleNamespace
+from game.components.conquer_layout import compute_conquer_layout
+from game.screens.conquer_game_screen import ConquerGameScreen
+
+screen = ConquerGameScreen.__new__(ConquerGameScreen)
+screen.window = pygame.Surface((854, 480))
+screen.state = SimpleNamespace(game=SimpleNamespace(
+    battle_turn_player_id=1,
+    battle_round=1,
+    last_battle_result=None,
+))
+layout = compute_conquer_layout(854, 480, mode='battle')
+center_x = screen._conquer_stage_center_x()
+assert center_x == pygame.Rect(layout.battlefield.duel_lane.rect).centerx
+assert center_x == 484
+assert center_x > 854 // 2
+''')
+
+    def test_mobile_field_side_titles_fit_as_centered_battlefield_tabs(self):
+        _run_mobile_geometry_check(r'''
+import pygame
+pygame.mouse.set_cursor = lambda *args, **kwargs: None
+from nepal_kings import Client
+from game.components.conquer_layout import compute_conquer_layout
+
+client = Client()
+client._init_perf_conquer_fixture(lambda *_args, **_kwargs: None)
+screen = client.screens['conquer_game']
+game = screen.state.game
+screen.state.screen = 'conquer_game'
+screen.state.subscreen = 'field'
+game.battle_confirmed = True
+game.in_battle_phase = True
+game.battle_turn_player_id = game.player_id
+game.battle_round = 1
+screen.render()
+
+field = screen.subscreens['field']
+tabs = field._field_board_title_tabs
+layout = compute_conquer_layout(854, 480, mode='battle')
+battlefield = pygame.Rect(layout.battlefield.rect)
+columns = layout.battlefield.columns
+groups = {
+    'self': pygame.Rect(
+        columns.you_castle[0], columns.you_castle[1],
+        columns.you_military[0] + columns.you_military[2] - columns.you_castle[0],
+        columns.you_castle[3],
+    ),
+    'opponent': pygame.Rect(
+        columns.opp_military[0], columns.opp_military[1],
+        columns.opp_castle[0] + columns.opp_castle[2] - columns.opp_military[0],
+        columns.opp_military[3],
+    ),
+}
+assert set(tabs) == {'self', 'opponent'}
+for side, group in groups.items():
+    tab = tabs[side]
+    assert battlefield.contains(tab), (side, tab, battlefield)
+    assert tab.width < group.width
+    assert abs(tab.centerx - group.centerx) <= 1
+    assert tab.centery == group.top
+pygame.quit()
+''')
+
+    def test_transient_notice_stays_battle_lane_centered_when_rail_is_stacked(self):
+        from game.components.conquer_layout import compute_conquer_layout
+
+        ConquerGameScreen, screen = self._make_screen(
+            battle_turn_player_id=42,
+            battle_round=1,
+        )
+        screen.window = pygame.Surface((480, 854))
+        layout = compute_conquer_layout(480, 854, mode='battle')
+
+        center_x = ConquerGameScreen._conquer_stage_center_x(screen)
+
+        assert center_x == pygame.Rect(layout.battlefield.duel_lane.rect).centerx
+
     def test_tactics_hand_result_dialogue_opens_without_battle_tab_route(self):
         result = {'conquer_result': 'attacker_won', 'attacker_won': True}
         ConquerGameScreen, screen = self._make_screen(last_battle_result=result)
@@ -4110,6 +4206,13 @@ assert action_tray is not None
 assert hand_list is not None
 assert hand_list.bottom <= action_tray.top
 
+# Mobile does not spend a second band repeating the selected row's name and
+# stats. The hand begins where the desktop detail card would begin, exposing
+# an extra tactic slot while selection remains visible on the highlighted row.
+layout = rail._ensure_layout().tactics_rail
+detail_rect = pygame.Rect(*layout.selected_detail_rect)
+assert hand_list.top == detail_rect.top, (tuple(hand_list), tuple(detail_rect))
+
 for key in (ACTION_PLAY, ACTION_GAMBLE):
     rect = rail._action_button_rects.get(key)
     assert rect is not None, key
@@ -4118,6 +4221,23 @@ for key in (ACTION_PLAY, ACTION_GAMBLE):
 
 assert not rail._action_button_rects[ACTION_PLAY].colliderect(
     rail._action_button_rects[ACTION_GAMBLE])
+
+# Adjacent compact rows must not inherit the global 58px touch inflation: it
+# would overlap the following row and route near-edge taps to the wrong move.
+if len(rail._cell_rects) >= 2:
+    target_index = next(
+        (index for index in range(1, len(rail._cell_rects))
+         if rail._cell_kinds[index] == 'move'),
+        None,
+    )
+    if target_index is not None:
+        target_rect = rail._cell_rects[target_index]
+        target_id = rail._cell_move_ids[target_index]
+        tap = (target_rect.centerx, target_rect.top + 2)
+        rail.handle_event(pygame.event.Event(
+            pygame.MOUSEBUTTONDOWN, button=1, pos=tap))
+        assert rail._selected_id == target_id, (
+            target_index, target_id, rail._selected_id, tap)
 
 game = screen.state.game
 assert rail._gamble_status_for_strip(game)[0] == 'Gamble ready'

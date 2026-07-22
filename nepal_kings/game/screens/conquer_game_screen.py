@@ -44,6 +44,10 @@ from game.components.figures.family_configs.skill_config import (
     get_advantage_suit,
 )
 from game.components.figures.figure_manager import FigureManager
+from game.components.figures.skill_display_filters import (
+    filter_active_skill_keys_for_display,
+)
+from game.components.suit_text import fit_suit_text, render_suit_text
 from game.screens.conquer_flow import (
     ConquerObjective,
     TimelineStep,
@@ -106,6 +110,7 @@ class ConquerGameScreen(GameScreen):
     # snap them back after this many ms.
     BATTLE_SHOP_SNAPBACK_MS = 2000
     BATTLE_STATE_POLL_MS = 850
+    MOBILE_SUPPORT_RAIL_TITLE = 'MOD'
 
     def __init__(self, state, progress_callback=None):
         Screen.__init__(self, state)
@@ -320,7 +325,10 @@ class ConquerGameScreen(GameScreen):
         # bursts, floating numbers, round banners).  See
         # ``game/components/conquer_effects.py``.
         self._conquer_effects = ConquerEffectsLayer(
-            self.window, self._lookup_conquer_figure_rect)
+            self.window,
+            self._lookup_conquer_figure_rect,
+            stage_center_x=self._conquer_stage_center_x,
+        )
         # Frame-to-frame trackers used by spell-event detection.  ``_seen_*``
         # filters dedupe events across poller ticks; ``_prev_*`` snapshots
         # enable disappearance / round-change diffs.
@@ -549,6 +557,16 @@ class ConquerGameScreen(GameScreen):
                 or getattr(game, 'battle_round', 0) in (1, 2, 3)):
             return 'battle'
         return 'pre_battle'
+
+    def _conquer_stage_center_x(self):
+        """Return the horizontal centre of Conquer's central battle lane."""
+        width, height = self.window.get_size()
+        layout = compute_conquer_layout(
+            width,
+            height,
+            mode=self._conquer_layout_mode(),
+        )
+        return pygame.Rect(layout.battlefield.duel_lane.rect).centerx
 
     def _conquer_effective_layout_mode(self):
         mode = self._conquer_layout_mode()
@@ -1446,12 +1464,13 @@ class ConquerGameScreen(GameScreen):
 
         title_font = self._conquer_header_font
         title_max_w = max(80, right_limit - top_rect.left - pad_x)
-        title = self._fit_text(
+        title = fit_suit_text(
             self._conquer_header_title(),
             title_font,
             title_max_w,
         )
-        title_surf = title_font.render(title, True, (246, 222, 170))
+        title_surf = render_suit_text(
+            title, title_font, (246, 222, 170))
         title_y = top_rect.centery - title_surf.get_height() // 2
         self.window.blit(title_surf, (top_rect.left + pad_x, title_y))
 
@@ -6130,7 +6149,8 @@ class ConquerGameScreen(GameScreen):
             try:
                 keys = [key for key in getter() or [] if key in SKILL_DEFINITIONS]
                 if keys:
-                    return keys
+                    return filter_active_skill_keys_for_display(
+                        keys, mode='conquer')
             except Exception:
                 return []
         keys = []
@@ -6139,7 +6159,7 @@ class ConquerGameScreen(GameScreen):
                 'blocks_bonus', 'distance_attack'):
             if skill_key in SKILL_DEFINITIONS and self._conquer_lane_has_skill(figure, skill_key):
                 keys.append(skill_key)
-        return keys
+        return filter_active_skill_keys_for_display(keys, mode='conquer')
 
     @staticmethod
     def _conquer_lane_number_value(figure):
@@ -7383,8 +7403,9 @@ class ConquerGameScreen(GameScreen):
                 name += f' +{len(source_names) - 2}'
             label = entry.get('label') or entry.get('kind') or 'Support'
             value = entry.get('value') or ''
-            text = self._fit_text(f'{label} {value} · {name}', font, panel.width - 16)
-            surf = font.render(text, True, (232, 220, 180))
+            text = fit_suit_text(
+                f'{label} {value} · {name}', font, panel.width - 16)
+            surf = render_suit_text(text, font, (232, 220, 180))
             self.window.blit(surf, (panel.left + 8, y))
             y += line_h
 
@@ -7528,7 +7549,11 @@ class ConquerGameScreen(GameScreen):
         in the pinned breakdown popover rather than persistent labels."""
         border = (84, 150, 132) if is_player else (160, 94, 88)
         header_font = settings.get_font(settings.FS_CONQUER_META, bold=True)
-        header_surf = header_font.render('SUP', True, border)
+        # This rail contains more than support: range penalties, blocks, and
+        # called effects can sit beside the SUP aggregate. Calling the whole
+        # rail "SUP" made the first SUP chip look like a duplicated heading.
+        header_surf = header_font.render(
+            self.MOBILE_SUPPORT_RAIL_TITLE, True, border)
         header_h = header_surf.get_height() + 4
         self.window.blit(header_surf, header_surf.get_rect(
             center=(rail.centerx, rail.top + header_h // 2)))
@@ -7536,7 +7561,7 @@ class ConquerGameScreen(GameScreen):
             self._conquer_lane_tooltips = []
         self._conquer_lane_tooltips.append({
             'rect': pygame.Rect(rail.left, rail.top, rail.width, header_h),
-            'text': 'Support on this side — tap a chip for the breakdown',
+            'text': 'Battle modifiers on this side — tap a chip for details',
         })
         chips = self._conquer_support_chip_summary(sections)
         if not chips:
@@ -7646,9 +7671,12 @@ class ConquerGameScreen(GameScreen):
             name = ', '.join(source_names[:2]) if source_names else 'Effect'
             label = row.get('label') or row.get('kind') or 'Support'
             value = row.get('value') or ''
-            text = self._fit_text(f'{label} {value} · {name}'.strip(),
-                                  font, panel.width - 16)
-            surf = font.render(text, True, (232, 220, 180))
+            text = fit_suit_text(
+                f'{label} {value} · {name}'.strip(),
+                font,
+                panel.width - 16,
+            )
+            surf = render_suit_text(text, font, (232, 220, 180))
             self.window.blit(surf, (panel.left + 8, y))
             y += line_h
 

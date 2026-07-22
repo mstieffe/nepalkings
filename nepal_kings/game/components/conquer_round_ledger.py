@@ -6,13 +6,14 @@ Renders a horizontal band along the bottom of the screen showing the
 state of all three battle rounds as pill-shaped cards plus a "total"
 card with a centred resolve circle.
 
-Each round card is laid out as ``[you chip | diff pill | opp chip]``.
+Each round card is laid out as ``[you tactic | diff pill | opp tactic]``.
 
-* "you chip" — the tactic this player committed to that round (or a
-  hollow placeholder).
+* "you tactic" — the tactic this player committed to that round (or a
+  hollow placeholder). Compact touch cards use the power-bearing tactic
+  icon as their sole readout instead of repeating its number beside it.
 * "diff pill" — colour-blind-safe direction glyph (▲ player wins, ▼
   opponent wins, = tie) plus the absolute power delta.
-* "opp chip" — the opponent's revealed tactic (or "?" if hidden).
+* "opp tactic" — the opponent's revealed tactic (or "?" if hidden).
 
 The total card sits at the right and shows a circle whose colour
 indicates the cumulative result. When the battle has resolved, the
@@ -875,28 +876,34 @@ class ConquerRoundLedger:
             ts = ph_font.render('Skip', True, _TEXT_MUTED)
             self.window.blit(ts, ts.get_rect(center=rect.center))
             return
-        # Family + power
-        name = self._move_label(move)
-        name_font = settings.get_font(
-            max(settings.FS_CONQUER_LABEL, int(settings.FS_TINY * 0.9)),
-            bold=True)
-        pwr_font = settings.get_font(
-            max(settings.FS_CONQUER_SECONDARY, int(settings.FS_SMALL * 1.1)),
-            bold=True)
-        text_col = _GHOST_BLUE if ghost else _TEXT_SECONDARY
-        power_col = _GHOST_BLUE if ghost else _TEXT_PRIMARY
-        icon_size = max(min(28, max(12, rect.height - 4)),
-                        min(rect.height - 4, int(rect.width * 0.58)))
-        icon_x = rect.left + 4 + icon_size // 2
+        # The battle-move icon already contains the move's power. Compact
+        # touch cards therefore use a centred icon as the complete tactic
+        # readout; the old family/power text squeezed beside it repeated the
+        # number and reduced the icon to an off-centre thumbnail. Full desktop
+        # cards retain their family label and richer scan path.
+        compact_icon_only = settings.TOUCH_TARGET_MIN > 0
+        if compact_icon_only:
+            icon_size = max(20, min(rect.height - 4, rect.width - 8))
+            icon_x = rect.centerx
+        else:
+            icon_size = max(min(28, max(12, rect.height - 4)),
+                            min(rect.height - 4, int(rect.width * 0.58)))
+            icon_x = rect.left + 4 + icon_size // 2
         icon_y = rect.centery
-        icon_drawn = self._draw_move_icon(icon_x, icon_y, icon_size, move, ghost=ghost)
-        text_x = rect.left + (icon_size + 9 if icon_drawn else 4)
-        max_text_w = max(14, rect.right - text_x - 4)
-        ns = name_font.render(self._fit_text(name, name_font, max_text_w), True, text_col)
-        ps = pwr_font.render(str(self._power(move)), True, power_col)
-        self.window.blit(ns, (text_x, rect.top + 2))
-        self.window.blit(ps, (rect.right - ps.get_width() - 4,
-                              rect.bottom - ps.get_height() - 2))
+        icon_drawn = self._draw_move_icon(
+            icon_x, icon_y, icon_size, move, ghost=ghost)
+        if not compact_icon_only:
+            name = self._move_label(move)
+            name_font = settings.get_font(
+                max(settings.FS_CONQUER_LABEL, int(settings.FS_TINY * 0.9)),
+                bold=True)
+            text_col = _GHOST_BLUE if ghost else _TEXT_SECONDARY
+            text_x = rect.left + (icon_size + 9 if icon_drawn else 4)
+            max_text_w = max(14, rect.right - text_x - 4)
+            ns = name_font.render(
+                self._fit_text(name, name_font, max_text_w), True, text_col)
+            self.window.blit(ns, ns.get_rect(
+                midleft=(text_x, rect.centery)))
         if blocked:
             # Red translucent tint + diagonal strike to indicate the move
             # was nullified by the opponent's Block.

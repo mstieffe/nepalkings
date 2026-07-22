@@ -228,6 +228,109 @@ def test_conquer_selection_focus_redraws_whole_selectable_icon_without_cutout_bo
     assert surface.get_at(old_cutout_only_point)[:3] != background
 
 
+def test_conquer_pending_confirmation_focuses_only_the_chosen_field_figure():
+    """Once confirmation opens, candidates dim and the exact pending figure
+    remains crisp with a checked marker, even if ordinary selection mode has
+    already ended and the icon's transient clicked state was cleared.
+    """
+    from game.screens.field_screen import FieldScreen
+
+    surface = pygame.Surface((240, 180))
+    surface.fill((60, 60, 70))
+
+    class DummyIcon:
+        def __init__(self, figure_id, frame_rect, color):
+            self.figure = SimpleNamespace(id=figure_id, player_id=1)
+            self.hovered = False
+            self.clicked = False
+            self.rect_frame = pygame.Rect(frame_rect)
+            self.rect_frame_big = pygame.Rect(frame_rect)
+            self.color = color
+            self.draw_calls = 0
+
+        def draw(self, _x, _y):
+            self.draw_calls += 1
+            pygame.draw.rect(surface, self.color, self.rect_frame)
+
+    other = DummyIcon(1, (60, 60, 32, 38), (170, 70, 70))
+    pending = DummyIcon(2, (140, 60, 32, 38), (220, 180, 70))
+    drawn_icons = [
+        (other, other.rect_frame.centerx, other.rect_frame.centery),
+        (pending, pending.rect_frame.centerx, pending.rect_frame.centery),
+    ]
+    for icon, ix, iy in drawn_icons:
+        icon.draw(ix, iy)
+
+    screen = FieldScreen.__new__(FieldScreen)
+    screen.window = surface
+    screen.game = SimpleNamespace(player_id=1)
+    screen._is_conquer_selection_active = lambda: False
+    screen._conquer_pending_focus_figure = lambda: pending.figure
+    screen._icon_is_selectable_for_current_mode = lambda _icon: True
+    markers = []
+    screen._draw_conquer_pending_marker = (
+        lambda marker, pulse: markers.append((marker, pulse)))
+
+    screen._draw_conquer_selection_focus(drawn_icons)
+
+    assert other.draw_calls == 1
+    assert pending.draw_calls == 2
+    assert surface.get_at(other.rect_frame.center)[:3] != other.color
+    assert surface.get_at(pending.rect_frame.center)[:3] == pending.color
+    assert len(markers) == 1
+    marker, pulse = markers[0]
+    assert marker['bar_rect'].left >= pending.rect_frame.right
+    assert 0.0 <= pulse <= 1.0
+
+
+def test_figure_overlay_preserves_pending_confirmation_focus_and_marker():
+    """The central lane is painted after the field, so its final figure
+    overlay must not brighten other candidates or cover the pending marker.
+    """
+    from game.screens.field_screen import FieldScreen
+
+    class DummyIcon:
+        def __init__(self, figure_id, x):
+            self.figure = SimpleNamespace(id=figure_id, player_id=1)
+            self.hovered = False
+            self.clicked = False
+            self.rect_frame = pygame.Rect(x, 60, 32, 38)
+            self.rect_frame_big = pygame.Rect(self.rect_frame)
+            self.draw_calls = 0
+
+        def draw(self, _x, _y):
+            self.draw_calls += 1
+
+    other = DummyIcon(1, 60)
+    pending = DummyIcon(2, 140)
+    screen = FieldScreen.__new__(FieldScreen)
+    screen.window = pygame.Surface((240, 180))
+    screen.game = SimpleNamespace(player_id=1)
+    screen._figure_overlay_clip_rect = None
+    screen._last_drawn_figure_layout = {
+        'regular': [
+            (other, other.rect_frame.centerx, other.rect_frame.centery),
+            (pending, pending.rect_frame.centerx, pending.rect_frame.centery),
+        ],
+        'selected': [],
+        'hovered': None,
+    }
+    screen._conquer_pending_focus_figure = lambda: pending.figure
+    screen._is_conquer_selection_active = lambda: False
+    screen._icon_is_selectable_for_current_mode = lambda _icon: True
+    screen._draw_icon_with_entrance = (
+        lambda icon, x, y: icon.draw(x, y))
+    markers = []
+    screen._draw_conquer_pending_marker = (
+        lambda marker, pulse: markers.append((marker, pulse)))
+
+    screen.draw_figures_overlay()
+
+    assert other.draw_calls == 0
+    assert pending.draw_calls == 1
+    assert len(markers) == 1
+
+
 def test_tactics_rail_draws_scrollable_long_tactics_without_blank_output():
     from config import settings
     from game.components.conquer_tactics_rail import ConquerTacticsRail
@@ -306,6 +409,25 @@ def test_tactics_rail_draws_scrollable_long_tactics_without_blank_output():
         'Very Long Tactical Dagger Name That Must Clip', font, 80)
     assert font.size(fitted)[0] <= 80
     assert fitted.endswith('...')
+
+
+def test_tactics_rail_strongest_marker_is_font_independent_vector():
+    from game.components.conquer_tactics_rail import ConquerTacticsRail
+
+    window = pygame.Surface((48, 48))
+    window.fill((0, 0, 0))
+    row = pygame.Rect(8, 8, 32, 32)
+
+    ConquerTacticsRail._draw_strongest_marker(window, row)
+
+    # The centre and four points are actual drawn pixels, with no font glyph
+    # lookup that could turn into a missing-character box in the web build.
+    cx = row.left + 9
+    cy = row.top + 9
+    assert window.get_at((cx, cy))[:3] == (255, 242, 170)
+    for point in ((cx, cy - 5), (cx + 5, cy),
+                  (cx, cy + 5), (cx - 5, cy)):
+        assert window.get_at(point)[:3] == (250, 220, 110)
 
 
 def test_tactics_rail_action_buttons_adapt_to_selected_tactic():
@@ -1616,6 +1738,12 @@ def test_conquer_lane_metadata_uses_active_skill_keys():
     figure.get_active_skill_keys = lambda: ['blocks_bonus', 'missing_skill']
     assert ConquerGameScreen._conquer_lane_active_skill_keys(screen, figure) == [
         'blocks_bonus',
+    ]
+
+    figure.get_active_skill_keys = lambda: [
+        'instant_charge', 'distance_attack']
+    assert ConquerGameScreen._conquer_lane_active_skill_keys(screen, figure) == [
+        'distance_attack',
     ]
 
 

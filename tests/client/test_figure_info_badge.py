@@ -2,27 +2,45 @@
 # See LICENSE file in the project root for full license information.
 """Field figure info-badge layout: full info stays visible on mobile."""
 
+import os
+from pathlib import Path
+import subprocess
+import sys
 from types import SimpleNamespace
 
 import pygame
 
 
-def _make_field_icon(skills, max_info_width):
+APP_DIR = Path(__file__).resolve().parents[2] / 'nepal_kings'
+
+
+def _make_field_icon(skills, max_info_width, *, compact=False,
+                     battle_bonus=0, buffs_bonus=0, defence_bonus=0,
+                     distance_penalty=0, enchantment_modifier=0,
+                     visible=True, card_count=0, field='military',
+                     game_mode='duel'):
     """Build a minimal FieldFigureIcon wired for draw_figure_info()."""
     from config import settings
     from game.components.figures.figure_icon import FieldFigureIcon
 
     icon = FieldFigureIcon.__new__(FieldFigureIcon)
     icon.window = pygame.Surface((600, 400), pygame.SRCALPHA)
+    icon.game = SimpleNamespace(mode=game_mode)
+    enchantments = ([{
+        'spell_name': 'Health Boost',
+        'spell_icon': 'health_portion.png',
+        'power_modifier': enchantment_modifier,
+    }] if enchantment_modifier else [])
     icon.figure = SimpleNamespace(
         name='Guard',
         get_value=lambda: 8,
         get_active_skill_keys=lambda: list(skills),
-        active_enchantments=[],
-        family=SimpleNamespace(field='military'),
-        cards=[],
+        active_enchantments=enchantments,
+        get_total_enchantment_modifier=lambda: enchantment_modifier,
+        family=SimpleNamespace(field=field),
+        cards=[SimpleNamespace(id=i) for i in range(card_count)],
     )
-    icon.is_visible = True
+    icon.is_visible = visible
     icon.hovered = False
     icon.clicked = False
     icon.icon_scale_factor = 1.3
@@ -30,6 +48,7 @@ def _make_field_icon(skills, max_info_width):
     icon.font = font
     icon.font_big = font
     icon.max_info_width = max_info_width
+    icon.compact_info_badge = compact
 
     def _sq(size, colour=(100, 180, 220)):
         surf = pygame.Surface((size, size), pygame.SRCALPHA)
@@ -48,13 +67,16 @@ def _make_field_icon(skills, max_info_width):
     suit = _sq(18, (200, 60, 60))
     icon.suit_icon = suit
     icon.suit_icon_big = suit
-    icon.buffs_allies_bonus = 0
-    icon.buffs_allies_defence_bonus = 0
+    card_back = _sq(16, (55, 90, 150))
+    icon._card_back_normal = card_back
+    icon._card_back_big = card_back
+    icon.buffs_allies_bonus = buffs_bonus
+    icon.buffs_allies_defence_bonus = defence_bonus
     icon.battle_bonus_blocked = False
-    icon.distance_attack_penalty = 0
+    icon.distance_attack_penalty = distance_penalty
     icon.x = 300
     icon.y = 150
-    icon._current_battle_bonus_received = lambda: 0
+    icon._current_battle_bonus_received = lambda: battle_bonus
     return icon
 
 
@@ -116,3 +138,125 @@ def test_info_badge_draw_row_lays_elements_left_to_right_centered():
     icon._draw_info_row(elements, center_y=50, spacing=4)
     # Row width = 10 + 4 + 20 = 34, centred on x=100 -> starts at 83.
     assert drawn == [('a', 83, 50), ('b', 97, 50)]
+
+
+def test_modifier_format_is_compact_only_when_requested():
+    from game.components.figures.figure_icon import FieldFigureIcon
+
+    assert FieldFigureIcon._format_info_modifier(6, compact=True) == '+6'
+    assert FieldFigureIcon._format_info_modifier(-3, compact=True) == '-3'
+    assert FieldFigureIcon._format_info_modifier(6, compact=False) == '(+6)'
+
+
+def test_compact_card_back_row_shrinks_to_inner_width():
+    from game.components.figures.figure_icon import FieldFigureIcon
+
+    size, spacing, width = FieldFigureIcon._fit_compact_card_back_row(
+        4, max_width=52, preferred_size=16, preferred_spacing=2)
+    assert (size, spacing, width) == (11, 2, 50)
+    assert width <= 52
+
+
+def test_noncompact_capped_badge_keeps_name_and_legacy_punctuation():
+    icon = _make_field_icon(
+        ['k1'], max_info_width=120, compact=False,
+        battle_bonus=2, enchantment_modifier=6)
+    icon.draw_figure_info()
+
+    metrics = icon._last_info_metrics
+    assert metrics['compact'] is False
+    assert metrics['name_visible'] is True
+    assert metrics['support_text'] == '(+2)'
+    assert metrics['enchantment_text'] == '(+6)'
+
+
+def test_field_badge_hides_instant_charge_only_in_conquer_mode():
+    skills = ['instant_charge', 'distance_attack']
+    conquer_icon = _make_field_icon(
+        skills, max_info_width=140, game_mode='conquer')
+    duel_icon = _make_field_icon(
+        skills, max_info_width=140, game_mode='duel')
+
+    conquer_icon.draw_figure_info()
+    duel_icon.draw_figure_info()
+
+    assert conquer_icon._last_info_metrics['skills'] == ('distance_attack',)
+    assert duel_icon._last_info_metrics['skills'] == (
+        'instant_charge', 'distance_attack')
+
+
+def test_mobile_conquer_badge_stress_case_is_at_most_two_rows():
+    code = r'''
+import pygame
+from tests.client.test_figure_info_badge import _make_field_icon
+
+pygame.init()
+pygame.display.set_mode((854, 480))
+icon = _make_field_icon(
+    ['k1', 'k2'], max_info_width=62, compact=True,
+    battle_bonus=2, buffs_bonus=4, enchantment_modifier=6)
+icon.draw_figure_info()
+metrics = icon._last_info_metrics
+assert metrics['rows'] == 2, metrics
+assert metrics['name_visible'] is False, metrics
+assert metrics['suit_in_metadata'] is True, metrics
+assert metrics['power_text'] == '12', metrics
+assert metrics['support_text'] == '+2', metrics
+assert metrics['enchantment_text'] == '+6', metrics
+assert metrics['widest_row_w'] <= metrics['inner_w'], metrics
+assert metrics['vertical_nudge'] == 0, metrics
+
+simple = _make_field_icon([], max_info_width=62, compact=True)
+simple.draw_figure_info()
+simple_metrics = simple._last_info_metrics
+assert simple_metrics['rows'] == 1, simple_metrics
+assert simple_metrics['vertical_nudge'] >= 4, simple_metrics
+assert simple_metrics['info_rect'].top > metrics['info_rect'].top, (
+    simple_metrics, metrics)
+
+hidden = _make_field_icon(
+    ['k1', 'k2'], max_info_width=62, compact=True,
+    visible=False, card_count=4, enchantment_modifier=6)
+hidden.draw_figure_info()
+hidden_metrics = hidden._last_info_metrics
+assert hidden_metrics['rows'] == 1, hidden_metrics
+assert hidden_metrics['name_visible'] is False, hidden_metrics
+assert hidden_metrics['hidden_card_back_only'] is True, hidden_metrics
+assert hidden_metrics['card_back_count'] == 4, hidden_metrics
+assert hidden_metrics['widest_row_w'] <= hidden_metrics['inner_w'], hidden_metrics
+assert hidden_metrics['vertical_nudge'] >= 4, hidden_metrics
+assert hidden_metrics['card_back_vertical_padding'] >= 2, hidden_metrics
+assert hidden_metrics['info_rect'].height >= (
+    hidden_metrics['card_back_size'] + 4), hidden_metrics
+
+# Hidden figures can enlarge during defender selection.  The backs must be
+# recomputed for the narrower big-state inner width rather than overflowing.
+hidden.hovered = True
+hidden.draw_figure_info()
+hover_metrics = hidden._last_info_metrics
+assert hover_metrics['card_back_size'] < hidden_metrics['card_back_size'], (
+    hover_metrics, hidden_metrics)
+assert hover_metrics['widest_row_w'] <= hover_metrics['inner_w'], hover_metrics
+assert hover_metrics['info_rect'].height >= (
+    hover_metrics['card_back_size'] + 4), hover_metrics
+'''
+    env = os.environ.copy()
+    env.update({
+        'SDL_VIDEODRIVER': 'dummy',
+        'SDL_AUDIODRIVER': 'dummy',
+        'NK_SCREEN_WIDTH': '854',
+        'NK_SCREEN_HEIGHT': '480',
+        'NK_IS_MOBILE': '1',
+        'NK_UI_SCALE': '1.6',
+        'PYTHONPATH': os.pathsep.join((str(APP_DIR.parent), str(APP_DIR))),
+    })
+    result = subprocess.run(
+        [sys.executable, '-c', code],
+        cwd=APP_DIR,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
