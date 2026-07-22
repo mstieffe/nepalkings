@@ -858,6 +858,8 @@ class Game:
         self.battle_round = game_dict.get('battle_round', 0)
         self.battle_turn_player_id = game_dict.get('battle_turn_player_id')
         self.battle_skipped_rounds = game_dict.get('battle_skipped_rounds') or {}
+        if 'battle_total_diff' in game_dict:
+            self.battle_total_diff = game_dict.get('battle_total_diff')
         self.conquer_round_deadline_ts = game_dict.get('conquer_round_deadline_ts')
         self.conquer_round_timeout_sec = game_dict.get('conquer_round_timeout_sec')
         self.conquer_resolution_step = int(game_dict.get('conquer_resolution_step', 0) or 0)
@@ -1106,6 +1108,8 @@ class Game:
         self.battle_round = game_dict.get('battle_round', 0)
         self.battle_turn_player_id = game_dict.get('battle_turn_player_id')
         self.battle_skipped_rounds = game_dict.get('battle_skipped_rounds') or {}
+        if 'battle_total_diff' in game_dict:
+            self.battle_total_diff = game_dict.get('battle_total_diff')
         # Conquer per-round 60s move deadline (unix ts) — None if no timer.
         self.conquer_round_deadline_ts = game_dict.get('conquer_round_deadline_ts')
         self.conquer_round_timeout_sec = game_dict.get('conquer_round_timeout_sec')

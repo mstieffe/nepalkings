@@ -228,6 +228,109 @@ def test_conquer_selection_focus_redraws_whole_selectable_icon_without_cutout_bo
     assert surface.get_at(old_cutout_only_point)[:3] != background
 
 
+def test_conquer_pending_confirmation_focuses_only_the_chosen_field_figure():
+    """Once confirmation opens, candidates dim and the exact pending figure
+    remains crisp with a checked marker, even if ordinary selection mode has
+    already ended and the icon's transient clicked state was cleared.
+    """
+    from game.screens.field_screen import FieldScreen
+
+    surface = pygame.Surface((240, 180))
+    surface.fill((60, 60, 70))
+
+    class DummyIcon:
+        def __init__(self, figure_id, frame_rect, color):
+            self.figure = SimpleNamespace(id=figure_id, player_id=1)
+            self.hovered = False
+            self.clicked = False
+            self.rect_frame = pygame.Rect(frame_rect)
+            self.rect_frame_big = pygame.Rect(frame_rect)
+            self.color = color
+            self.draw_calls = 0
+
+        def draw(self, _x, _y):
+            self.draw_calls += 1
+            pygame.draw.rect(surface, self.color, self.rect_frame)
+
+    other = DummyIcon(1, (60, 60, 32, 38), (170, 70, 70))
+    pending = DummyIcon(2, (140, 60, 32, 38), (220, 180, 70))
+    drawn_icons = [
+        (other, other.rect_frame.centerx, other.rect_frame.centery),
+        (pending, pending.rect_frame.centerx, pending.rect_frame.centery),
+    ]
+    for icon, ix, iy in drawn_icons:
+        icon.draw(ix, iy)
+
+    screen = FieldScreen.__new__(FieldScreen)
+    screen.window = surface
+    screen.game = SimpleNamespace(player_id=1)
+    screen._is_conquer_selection_active = lambda: False
+    screen._conquer_pending_focus_figure = lambda: pending.figure
+    screen._icon_is_selectable_for_current_mode = lambda _icon: True
+    markers = []
+    screen._draw_conquer_pending_marker = (
+        lambda marker, pulse: markers.append((marker, pulse)))
+
+    screen._draw_conquer_selection_focus(drawn_icons)
+
+    assert other.draw_calls == 1
+    assert pending.draw_calls == 2
+    assert surface.get_at(other.rect_frame.center)[:3] != other.color
+    assert surface.get_at(pending.rect_frame.center)[:3] == pending.color
+    assert len(markers) == 1
+    marker, pulse = markers[0]
+    assert marker['bar_rect'].left >= pending.rect_frame.right
+    assert 0.0 <= pulse <= 1.0
+
+
+def test_figure_overlay_preserves_pending_confirmation_focus_and_marker():
+    """The central lane is painted after the field, so its final figure
+    overlay must not brighten other candidates or cover the pending marker.
+    """
+    from game.screens.field_screen import FieldScreen
+
+    class DummyIcon:
+        def __init__(self, figure_id, x):
+            self.figure = SimpleNamespace(id=figure_id, player_id=1)
+            self.hovered = False
+            self.clicked = False
+            self.rect_frame = pygame.Rect(x, 60, 32, 38)
+            self.rect_frame_big = pygame.Rect(self.rect_frame)
+            self.draw_calls = 0
+
+        def draw(self, _x, _y):
+            self.draw_calls += 1
+
+    other = DummyIcon(1, 60)
+    pending = DummyIcon(2, 140)
+    screen = FieldScreen.__new__(FieldScreen)
+    screen.window = pygame.Surface((240, 180))
+    screen.game = SimpleNamespace(player_id=1)
+    screen._figure_overlay_clip_rect = None
+    screen._last_drawn_figure_layout = {
+        'regular': [
+            (other, other.rect_frame.centerx, other.rect_frame.centery),
+            (pending, pending.rect_frame.centerx, pending.rect_frame.centery),
+        ],
+        'selected': [],
+        'hovered': None,
+    }
+    screen._conquer_pending_focus_figure = lambda: pending.figure
+    screen._is_conquer_selection_active = lambda: False
+    screen._icon_is_selectable_for_current_mode = lambda _icon: True
+    screen._draw_icon_with_entrance = (
+        lambda icon, x, y: icon.draw(x, y))
+    markers = []
+    screen._draw_conquer_pending_marker = (
+        lambda marker, pulse: markers.append((marker, pulse)))
+
+    screen.draw_figures_overlay()
+
+    assert other.draw_calls == 0
+    assert pending.draw_calls == 1
+    assert len(markers) == 1
+
+
 def test_tactics_rail_draws_scrollable_long_tactics_without_blank_output():
     from config import settings
     from game.components.conquer_tactics_rail import ConquerTacticsRail
@@ -306,6 +409,69 @@ def test_tactics_rail_draws_scrollable_long_tactics_without_blank_output():
         'Very Long Tactical Dagger Name That Must Clip', font, 80)
     assert font.size(fitted)[0] <= 80
     assert fitted.endswith('...')
+
+
+def test_tactics_rail_strongest_marker_is_font_independent_vector():
+    from game.components.conquer_tactics_rail import ConquerTacticsRail
+
+    window = pygame.Surface((48, 48))
+    window.fill((0, 0, 0))
+    row = pygame.Rect(8, 8, 32, 32)
+
+    ConquerTacticsRail._draw_strongest_marker(window, row)
+
+    # The centre and four points are actual drawn pixels, with no font glyph
+    # lookup that could turn into a missing-character box in the web build.
+    cx = row.left + 9
+    cy = row.top + 9
+    assert window.get_at((cx, cy))[:3] == (255, 242, 170)
+    for point in ((cx, cy - 5), (cx + 5, cy),
+                  (cx, cy + 5), (cx - 5, cy)):
+        assert window.get_at(point)[:3] == (250, 220, 110)
+
+
+def test_tactics_rail_played_move_is_not_mislabeled_as_spell_removed(
+        monkeypatch):
+    from config import settings
+    from game.components.conquer_tactics_rail import ConquerTacticsRail
+
+    monkeypatch.setattr(pygame.time, 'get_ticks', lambda: 1000)
+    window = pygame.Surface((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+    game = SimpleNamespace(mode='conquer', player_id=1)
+    available = _move(1, family='Dagger', status='available')
+    parent = _ConquerUiParent(window, game, [available])
+    rail = ConquerTacticsRail(parent)
+
+    # Seed the previous playable-hand snapshot, then apply the normal state
+    # transition produced when that tactic is played.
+    rail._detect_new_moves()
+    parent._moves = [
+        _move(1, family='Dagger', status='played', played_round=0),
+    ]
+    rail._detect_new_moves()
+
+    assert rail._removed_ghosts == {}
+
+
+def test_tactics_rail_still_marks_a_genuinely_removed_tactic_as_spell_removed(
+        monkeypatch):
+    from config import settings
+    from game.components.conquer_tactics_rail import ConquerTacticsRail
+
+    monkeypatch.setattr(pygame.time, 'get_ticks', lambda: 1000)
+    window = pygame.Surface((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+    game = SimpleNamespace(mode='conquer', player_id=1)
+    available = _move(1, family='Dagger', status='available')
+    parent = _ConquerUiParent(window, game, [available])
+    rail = ConquerTacticsRail(parent)
+
+    rail._detect_new_moves()
+    parent._moves = []
+    rail._detect_new_moves()
+
+    assert rail._removed_ghosts[1]['move']['family_name'] == 'Dagger'
+    assert rail._removed_ghosts[1]['expires_at'] == (
+        1000 + rail.REMOVED_GHOST_MS)
 
 
 def test_tactics_rail_action_buttons_adapt_to_selected_tactic():
@@ -1618,6 +1784,12 @@ def test_conquer_lane_metadata_uses_active_skill_keys():
         'blocks_bonus',
     ]
 
+    figure.get_active_skill_keys = lambda: [
+        'instant_charge', 'distance_attack']
+    assert ConquerGameScreen._conquer_lane_active_skill_keys(screen, figure) == [
+        'distance_attack',
+    ]
+
 
 def test_tactic_flight_overlay_draws_nonblank_pill(monkeypatch):
     from config import settings
@@ -1688,6 +1860,77 @@ def test_conquer_lane_figure_full_power_includes_modifiers():
         screen, fighter, support_entries=p_support,
         enemy_support_entries=o_support, is_player=True)
     assert full == 12  # 8 + 4 buff
+
+
+def _setup_lane_band_screen(breakdown, total):
+    """Minimal screen wired to draw one fighter's segmented power pill."""
+    from game.screens.conquer_game_screen import ConquerGameScreen
+
+    fig = _fighter(10, 'Attacker', 8, 1, (80, 160, 210))
+    screen = ConquerGameScreen.__new__(ConquerGameScreen)
+    screen._conquer_lane_figure_rects = []
+    # Stub the heavy per-figure sub-draws so only the power pill matters.
+    screen._draw_conquer_lane_figure_art = lambda *a, **k: None
+    screen._draw_conquer_lane_figure_metadata = lambda *a, **k: None
+    screen._conquer_lane_entrance_progress = lambda *a, **k: None
+    screen._fit_text = lambda text, font, width: text
+    screen._conquer_lane_figure_power = lambda figure: breakdown[0][1]
+    screen._conquer_lane_figure_full_power = lambda figure, **k: total
+    screen._conquer_lane_figure_power_breakdown = lambda figure, **k: list(breakdown)
+    screen._conquer_receipt_label_color = lambda label: (210, 190, 120)
+    return screen, fig
+
+
+def test_conquer_power_pill_scales_to_fit_narrow_slot(monkeypatch):
+    """A multi-segment power pill must survive a narrow (mobile) slot.
+
+    It used to collapse to a lone total chip when it overflowed, hiding the
+    support/enchant piles — but only for the side (and screen width) where the
+    pill was too wide. It now scales down so every pile stays visible.
+    """
+    from config import settings
+    from game.screens.conquer_game_screen import ConquerGameScreen
+
+    breakdown = [('Base', 8), ('Support', 4), ('Spell', 5), ('Land', 3)]
+    total = 20
+
+    # Spy on smoothscale; the power pill is a wide-and-short surface, unlike
+    # the (square) figure art, so we can identify pill scaling by aspect.
+    scale_calls = []
+    orig_smoothscale = pygame.transform.smoothscale
+
+    def _spy(surface, size):
+        scale_calls.append((surface.get_width(), surface.get_height()))
+        return orig_smoothscale(surface, size)
+
+    monkeypatch.setattr(pygame.transform, 'smoothscale', _spy)
+
+    def _pill_was_scaled():
+        return any(w > 2 * h for w, h in scale_calls)
+
+    window = pygame.Surface((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+
+    # Narrow slot: the four-segment pill overflows and must be scaled to fit.
+    screen, fig = _setup_lane_band_screen(breakdown, total)
+    screen.window = window
+    narrow = pygame.Rect(0, 0, 78, 120)
+    ConquerGameScreen._draw_conquer_lane_band(
+        screen, narrow, 'YOU', [fig], is_player=True,
+        support_entries=[], enemy_support_entries=[])
+    assert _pill_was_scaled(), 'wide pill should scale to fit the narrow slot'
+    assert _rect_has_non_background_pixel(
+        window, pygame.Rect(narrow).inflate(-6, -4))
+
+    # Wide slot: the same pill fits, so it renders at natural size (no scale).
+    scale_calls.clear()
+    window.fill((0, 0, 0))
+    screen2, fig2 = _setup_lane_band_screen(breakdown, total)
+    screen2.window = window
+    wide = pygame.Rect(0, 0, 900, 160)
+    ConquerGameScreen._draw_conquer_lane_band(
+        screen2, wide, 'YOU', [fig2], is_player=True,
+        support_entries=[], enemy_support_entries=[])
+    assert not _pill_was_scaled(), 'pill should not scale when it already fits'
 
 
 def test_tutorial_starter_ledger_matches_server_final_breakdown():
@@ -1903,26 +2146,37 @@ def test_round_ledger_completed_battle_prefers_server_total():
     assert ledger.current_total_diff() == 11
 
 
-def test_round_ledger_waits_for_final_reveal_before_server_total():
+def test_round_ledger_uses_plus_one_server_total_during_final_reveal():
     from game.components.conquer_round_ledger import ConquerRoundLedger
 
     stage = {'stage': 'tally', 'opp_visible': True, 'diff_factor': 0.5}
-    game = SimpleNamespace(last_battle_result=None, battle_total_diff=11)
-    you_per = [_move(idx, value=5, played_round=idx) for idx in range(3)]
-    opp_per = [_move(idx + 10, value=4, played_round=idx) for idx in range(3)]
+    game = SimpleNamespace(last_battle_result=None, battle_total_diff=1)
+    you_per = [
+        _move(1, value=5, played_round=0),
+        _move(2, value=5, played_round=1),
+        _move(3, value=1, played_round=2),
+    ]
+    opp_per = [
+        _move(11, value=5, played_round=0),
+        _move(12, value=5, played_round=1),
+        _move(13, value=8, played_round=2),
+    ]
     parent = SimpleNamespace(
         window=pygame.Surface((100, 100)),
         state=SimpleNamespace(game=game),
-        _conquer_lane_figure_diff=lambda: 0,
+        _conquer_lane_figure_diff=lambda: 7,
         _conquer_lane_played_tactics=lambda: (you_per, opp_per),
         conquer_round_reveal_stage=lambda idx: stage if idx == 2 else None,
     )
     ledger = ConquerRoundLedger(parent)
 
-    assert ledger.current_total_diff() == 3
-    stage.clear()
-    parent.conquer_round_reveal_stage = lambda _idx: None
-    assert ledger.current_total_diff() == 11
+    # Production incident: the lightweight client arithmetic reached a draw
+    # (figures +7, tactics -7), while the server's complete DB-backed figure
+    # calculation resolved +1.  The active final reveal must not hide that
+    # already-known authoritative result behind the local zero.
+    assert ledger._total_diff(you_per, opp_per) == 0
+    assert ledger.current_total_diff() == 1
+    assert ledger._reveal_total_adjustment(you_per, opp_per) == 0
 
 
 def test_round_ledger_result_breakdown_restores_defender_total():

@@ -299,9 +299,95 @@ def _all_players_pending_in_current_round(game):
     return pending
 
 
+def _best_timeout_call_figure(game, player, tactic):
+    """Return the strongest legal figure for a timeout-played Call tactic.
+
+    Normal one-tap play binds an unassigned Call tactic to the player's best
+    eligible figure before posting it.  The server-side timeout must do the
+    same or the tactic appears to include that figure on the client while the
+    authoritative total only counts the tactic card's raw value.
+    """
+    target_field = _CONQUER_CALL_FIELD_MAP.get(tactic.family_name)
+    if not target_field:
+        return None
+
+    all_figures = Figure.query.filter_by(game_id=game.id).all()
+    battle_ids = {
+        figure_id
+        for figure_id in (
+            game.advancing_figure_id,
+            game.advancing_figure_id_2,
+            game.defending_figure_id,
+            game.defending_figure_id_2,
+        )
+        if figure_id is not None
+    }
+    called_ids = {
+        figure_id
+        for (figure_id,) in db.session.query(ConquerTactic.call_figure_id)
+        .filter_by(game_id=game.id, player_id=player.id, status='played')
+        .filter(ConquerTactic.played_round.isnot(None))
+        .filter(ConquerTactic.call_figure_id.isnot(None))
+        .all()
+    }
+    tactic_suit = tactic.suit or ''
+    tactic_is_red = tactic_suit in _CONQUER_RED_SUITS
+    tactic_is_black = tactic_suit in _CONQUER_BLACK_SUITS
+    candidates = []
+    for figure in all_figures:
+        if figure.player_id != player.id or figure.field != target_field:
+            continue
+        if figure.id in battle_ids or figure.id in called_ids:
+            continue
+        if getattr(figure, 'checkmate', False):
+            continue
+        if _figure_has_family_skill(figure, 'cannot_be_targeted'):
+            continue
+        if _check_figure_resource_deficit(figure, player.id, game.id):
+            continue
+        figure_is_red = (figure.suit or '') in _CONQUER_RED_SUITS
+        figure_is_black = (figure.suit or '') in _CONQUER_BLACK_SUITS
+        if ((tactic_is_red and not figure_is_red)
+                or (tactic_is_black and not figure_is_black)
+                or (not tactic_is_red and not tactic_is_black)):
+            continue
+        candidates.append(figure)
+
+    if not candidates:
+        return None
+
+    own_healers = _find_healer_figures(
+        player.id, all_figures, battle_ids, game.id)
+
+    def _effective_call_power(figure):
+        power = (_compute_figure_base_power(figure)
+                 + _compute_healer_buff(figure, own_healers))
+        if (figure.suit or '').lower() == tactic_suit.lower():
+            power += int(tactic.value or 0)
+        return power
+
+    return max(
+        candidates,
+        key=lambda figure: (_effective_call_power(figure), -figure.id),
+    )
+
+
+def _consume_conquer_tactic_cards(tactic):
+    """Apply the card lifecycle shared by manual and timeout tactic plays."""
+    card = _get_tactic_card(tactic)
+    if card:
+        card.in_deck = True
+    card_b = _get_tactic_card(tactic, secondary=True)
+    if card_b:
+        card_b.in_deck = True
+
+
 def _auto_play_random_tactic_for_player(game, player):
-    """Pick a random available, non-Call tactic and mark it played for the
-    given player. Falls back to recording a skipped round if none exist.
+    """Pick a random available tactic and play it for ``player``.
+
+    Call tactics are bound to the strongest eligible figure, matching the
+    normal one-tap Play path. Falls back to recording a skipped round if no
+    tactic remains.
     """
     round_idx = int(getattr(game, 'battle_round', 0) or 0)
     available = ConquerTactic.query.filter_by(
@@ -310,9 +396,7 @@ def _auto_play_random_tactic_for_player(game, player):
         status='available',
         played_round=None,
     ).all()
-    # Skip Call-style tactics in random selection — they require a target.
-    pool = [t for t in available if (t.family_name or '').lower() != 'call']
-    if not pool:
+    if not available:
         # Record this round as skipped for the player.
         skipped = dict(game.battle_skipped_rounds or {})
         rounds = list(skipped.get(str(player.id)) or [])
@@ -322,10 +406,134 @@ def _auto_play_random_tactic_for_player(game, player):
         game.battle_skipped_rounds = skipped
         flag_modified(game, 'battle_skipped_rounds')
         return None
-    chosen = random.choice(pool)
+    chosen = random.choice(available)
+    if chosen.family_name in _CONQUER_CALL_FIELD_MAP:
+        call_figure = _best_timeout_call_figure(game, player, chosen)
+        chosen.call_figure_id = call_figure.id if call_figure else None
     chosen.status = 'played'
     chosen.played_round = round_idx
+    _consume_conquer_tactic_cards(chosen)
     return chosen
+
+
+def _finalize_conquer_battle_on_timeout(game):
+    """Resolve a fully-played conquer battle server-side, without a client.
+
+    When the per-round timeout auto-plays the final tactics, the battle reaches
+    completion (all rounds played, ``battle_turn_player_id is None``) but nothing
+    is driving ``/games/finish_battle``: idle players never click it, and the
+    scripted defender worker only resolves games it is itself acting in.  The
+    game then hangs at a complete-but-unresolved state until the stuck-game
+    sweeper eventually force-forfeits it.
+
+    This mirrors the conquer win/lose/draw resolution of the ``finish_battle``
+    route so the game finalizes deterministically the moment it is complete.
+    It reuses :func:`_resolve_conquer_battle` (land transfer, loot, attack log)
+    exactly like the auto-loss resolvers do.
+
+    Idempotent and defensive: returns ``False`` (no-op) unless this is a
+    tactics-hand conquer battle that is complete, unresolved, and still has its
+    battle figures.  Returns ``True`` when it resolves the battle.
+    """
+    if not game or game.mode != 'conquer' or not _is_tactics_hand_conquer(game):
+        return False
+    if game.state == 'finished':
+        return False
+    saved_result = game.last_battle_result if isinstance(
+        game.last_battle_result, dict) else {}
+    if saved_result.get('conquer_resolved') or saved_result.get('conquer_result'):
+        return False
+    if game.battle_turn_player_id is not None or not _battle_all_rounds_complete(game):
+        return False
+
+    adv_figure = (db.session.get(Figure, game.advancing_figure_id)
+                  if game.advancing_figure_id else None)
+    def_figure = (db.session.get(Figure, game.defending_figure_id)
+                  if game.defending_figure_id else None)
+    if not adv_figure or not def_figure:
+        # Battle figures already cleared — another path resolved it.
+        return False
+
+    # Authoritative score in the advancing side's perspective (positive =
+    # advancing player wins). Must be computed BEFORE _clear_battle_state,
+    # which nulls the advancing/defending figure references.
+    server_diff, breakdown = _compute_server_total_diff(game, return_breakdown=True)
+    advancing_player_id = game.advancing_player_id
+    battle_math = {}
+    if isinstance(breakdown, dict):
+        battle_math = {
+            'fig_diff': breakdown.get('fig_diff'),
+            'round_diff': breakdown.get('round_diff'),
+            'adv_power': breakdown.get('adv_power'),
+            'def_power': breakdown.get('def_power'),
+            'battle_score_diff': server_diff,
+            'battle_score_player_id': advancing_player_id,
+        }
+
+    attacker_player = _conquer_attacker_player(game)
+
+    # Shared post-battle cleanup (same order as _resolve_conquer_auto_loss).
+    _return_unplayed_battle_move_cards(game.id)
+    _delete_all_battle_moves(game.id)
+    _deactivate_all_spells(game)
+
+    if server_diff == 0:
+        # ── DRAW ── land ownership unchanged; no loot/consumption.
+        _clear_battle_state(game)
+        game.state = 'finished'
+        game.finished_at = _utcnow()
+        game.winner_player_id = None
+        track('game_finished', game_id=game.id, mode='conquer',
+              reason='draw', duration_s=_game_duration_seconds(game))
+        atk_cfg = (db.session.get(LandConfig, game.conquer_config_id)
+                   if game.conquer_config_id else None)
+        if atk_cfg:
+            _wipe_land_config(atk_cfg)
+        game.last_battle_result = {
+            'conquer_resolved': True,
+            'conquer_result': 'draw',
+            'attacker_won': False,
+            'conquer_consumed_cards': [],
+            'conquer_loot_gained_cards': [],
+            'conquer_loot_lost_cards': [],
+            'cards_spent': 0,
+            **battle_math,
+        }
+        flag_modified(game, 'last_battle_result')
+        db.session.add(LogEntry(
+            game_id=game.id,
+            player_id=(attacker_player.id if attacker_player else None),
+            round_number=game.current_round,
+            turn_number=0,
+            message=('Conquer battle timed out in a draw. No cards were looted; '
+                     'all attack cards returned to their owners.'),
+            author='System',
+            type='battle_draw',
+        ))
+        db.session.commit()
+        logger.info('[CONQUER_TIMEOUT_RESOLVE] game=%s result=draw', game.id)
+        return True
+
+    # ── WIN / LOSE ──
+    winner_player = next(
+        (p for p in game.players if p.id == advancing_player_id), None)
+    if server_diff < 0:
+        winner_player = next(
+            (p for p in game.players if p.id != advancing_player_id), None)
+    if winner_player is None:
+        return False
+
+    _clear_battle_state(game)
+    # Stash battle math so _resolve_conquer_battle merges it into the persisted
+    # result cache (build_conquer_resolution_cache seeds from last_battle_result),
+    # letting reconnecting clients recover the final battle total.
+    game.last_battle_result = {**saved_result, **battle_math}
+    _resolve_conquer_battle(game, winner_player, attacker_player or winner_player)
+    db.session.commit()
+    logger.info(
+        '[CONQUER_TIMEOUT_RESOLVE] game=%s winner=%s diff=%s',
+        game.id, winner_player.id, server_diff)
+    return True
 
 
 def _check_conquer_round_timeout(game):
@@ -335,6 +543,8 @@ def _check_conquer_round_timeout(game):
     Throttled to at most once every 2 seconds per game to keep the polling
     path cheap (was causing visible client lag when invoked on every poll).
     """
+    if game.state == 'finished':
+        return
     deadline = _conquer_round_deadline_for(game)
     if deadline is None:
         return
@@ -352,6 +562,11 @@ def _check_conquer_round_timeout(game):
             db.session.refresh(game)
             refreshed_deadline = _conquer_round_deadline_for(game)
             if refreshed_deadline is None or _time.time() < refreshed_deadline:
+                return
+            # A prior poll may have auto-played the final tactics and left the
+            # battle complete-but-unresolved. Resolve it now so it can never
+            # hang waiting on a client that already walked away.
+            if _finalize_conquer_battle_on_timeout(game):
                 return
             pending_all = _all_players_pending_in_current_round(game)
             if not pending_all:
@@ -379,6 +594,11 @@ def _check_conquer_round_timeout(game):
                     if new_round != previous_round:
                         _conquer_round_deadlines.pop(game.id, None)
                         _ensure_conquer_round_deadline(game)
+                    # If that auto-play finished the final round, resolve the
+                    # battle deterministically instead of waiting on a client
+                    # or the scripted defender worker.
+                    if _finalize_conquer_battle_on_timeout(game):
+                        return
     except Exception:
         logger.exception('Conquer round timeout finalization failed')
         return
@@ -5498,6 +5718,21 @@ def _compute_server_total_diff(game, return_breakdown=False):
     return total
 
 
+def _completed_battle_total_for_viewer(
+        game, viewer_player_id, *, battle_complete=None):
+    """Return the authoritative completed battle total in viewer perspective."""
+    if battle_complete is None:
+        battle_complete = _battle_all_rounds_complete(game)
+    if (not battle_complete
+            or not game.advancing_figure_id
+            or not game.defending_figure_id):
+        return None
+    advancing_total = _compute_server_total_diff(game)
+    return (advancing_total
+            if str(game.advancing_player_id) == str(viewer_player_id)
+            else -advancing_total)
+
+
 def _collect_battle_move_cards(game_id):
     """Collect all cards reserved for battle moves in a game.
 
@@ -5655,6 +5890,43 @@ def _start_new_round(game, winner_player):
 
 # ─────────────────── 3-round battle turn management ───────────────────
 
+def _battle_progress_response_state(game, player_id, viewer_user_id):
+    """Return completion, viewer score, and an immediately usable snapshot."""
+    battle_complete = _battle_all_rounds_complete(game)
+    tactics_hand = _is_tactics_hand_conquer(game)
+    battle_total_diff = (
+        _completed_battle_total_for_viewer(
+            game, player_id, battle_complete=battle_complete)
+        if tactics_hand else None
+    )
+    game_payload = serialize_game_for_viewer(game, viewer_user_id)
+    if battle_complete and tactics_hand:
+        # ``battle_total_diff`` is derived rather than persisted on Game, so
+        # explicitly attach it to action snapshots consumed by Game.update.
+        game_payload['battle_total_diff'] = battle_total_diff
+    return battle_complete, battle_total_diff, game_payload
+
+
+def _conquer_tactic_play_response(game, tactic, player_id, viewer_user_id,
+                                   *, already_played=False):
+    """Build a tactic response with the final score available immediately."""
+    battle_complete, battle_total_diff, game_payload = (
+        _battle_progress_response_state(game, player_id, viewer_user_id)
+    )
+    response = {
+        'success': True,
+        'tactic': tactic.serialize(),
+        'battle_round': game.battle_round,
+        'battle_turn_player_id': game.battle_turn_player_id,
+        'battle_complete': battle_complete,
+        'battle_total_diff': battle_total_diff,
+        'game': game_payload,
+    }
+    if already_played:
+        response['already_played'] = True
+    return response
+
+
 @games.route('/play_conquer_tactic', methods=['POST'])
 @require_token
 def play_conquer_tactic():
@@ -5702,15 +5974,13 @@ def play_conquer_tactic():
         # tactic as played by this player, treat the retry as a success and
         # return current battle state instead of "not your turn".
         if tactic.status == 'played' and tactic.played_round is not None:
-            response_body = {
-                'success': True,
-                'tactic': tactic.serialize(),
-                'battle_round': game.battle_round,
-                'battle_turn_player_id': game.battle_turn_player_id,
-                'battle_complete': _battle_all_rounds_complete(game),
-                'game': serialize_game_for_viewer(game, g.user_id),
-                'already_played': True,
-            }
+            response_body = _conquer_tactic_play_response(
+                game,
+                tactic,
+                player_id,
+                g.user_id,
+                already_played=True,
+            )
             _conquer_idem_store(game_id, player_id,
                                'play_conquer_tactic', client_action_id,
                                response_body)
@@ -5735,12 +6005,7 @@ def play_conquer_tactic():
         if call_figure_id:
             tactic.call_figure_id = call_figure_id
 
-        card = _get_tactic_card(tactic)
-        if card:
-            card.in_deck = True
-        card_b = _get_tactic_card(tactic, secondary=True)
-        if card_b:
-            card_b.in_deck = True
+        _consume_conquer_tactic_cards(tactic)
 
         if not _advance_conquer_tactic_turn(game, player_id):
             return jsonify({'success': False, 'message': 'Opponent not found'}), 500
@@ -5760,14 +6025,12 @@ def play_conquer_tactic():
         db.session.add(log_entry)
         db.session.commit()
 
-        response_body = {
-            'success': True,
-            'tactic': tactic.serialize(),
-            'battle_round': game.battle_round,
-            'battle_turn_player_id': game.battle_turn_player_id,
-            'battle_complete': _battle_all_rounds_complete(game),
-            'game': serialize_game_for_viewer(game, g.user_id),
-        }
+        response_body = _conquer_tactic_play_response(
+            game,
+            tactic,
+            player_id,
+            g.user_id,
+        )
         _conquer_idem_store(game_id, player_id,
                            'play_conquer_tactic', client_action_id,
                            response_body)
@@ -6451,16 +6714,8 @@ def get_battle_state():
                         'discarded_step_index': tactic.discarded_step_index,
                     })
         battle_complete = _battle_all_rounds_complete(game)
-        battle_total_diff = None
-        if (battle_complete
-                and game.advancing_figure_id
-                and game.defending_figure_id):
-            advancing_total_diff = _compute_server_total_diff(game)
-            battle_total_diff = (
-                advancing_total_diff
-                if game.advancing_player_id == player_id
-                else -advancing_total_diff
-            )
+        battle_total_diff = _completed_battle_total_for_viewer(
+            game, player_id, battle_complete=battle_complete)
         payload = {
             'success': True,
             'battle_confirmed': bool(game.battle_confirmed),
@@ -6569,14 +6824,18 @@ def skip_battle_turn():
         return jsonify({'success': False, 'message': 'Battle is not active'}), 400
 
     if game.battle_turn_player_id is None and _battle_all_rounds_complete(game):
+        battle_complete, battle_total_diff, game_payload = (
+            _battle_progress_response_state(game, player_id, g.user_id)
+        )
         return jsonify({
             'success': True,
             'battle_round': game.battle_round,
             'battle_turn_player_id': None,
             'battle_skipped_rounds': game.battle_skipped_rounds or {},
-            'battle_complete': True,
+            'battle_complete': battle_complete,
+            'battle_total_diff': battle_total_diff,
             'already_skipped': True,
-            'game': serialize_game_for_viewer(game, g.user_id),
+            'game': game_payload,
         })
 
     if game.battle_turn_player_id != player_id:
@@ -6677,14 +6936,18 @@ def skip_battle_turn():
     logger.info(f"[BATTLE_SKIP] Player {player_id} skipped round {skip_round}. "
           f"Next turn: {game.battle_turn_player_id}, battle_round: {game.battle_round}")
 
+    battle_complete, battle_total_diff, game_payload = (
+        _battle_progress_response_state(game, player_id, g.user_id)
+    )
     return jsonify({
         'success': True,
         'battle_round': game.battle_round,
         'battle_turn_player_id': game.battle_turn_player_id,
         'battle_skipped_rounds': game.battle_skipped_rounds or {},
-        'battle_complete': _battle_all_rounds_complete(game),
+        'battle_complete': battle_complete,
+        'battle_total_diff': battle_total_diff,
         'already_skipped': already_skipped,
-        'game': serialize_game_for_viewer(game, g.user_id),
+        'game': game_payload,
     })
 
 

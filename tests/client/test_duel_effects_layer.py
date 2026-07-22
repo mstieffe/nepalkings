@@ -53,6 +53,26 @@ class TestEffectsLayerAdditions:
         layer.draw()
         assert layer.any_active() is False
 
+    def test_default_stage_center_can_follow_host_layout(self):
+        from game.components.conquer_effects import ConquerEffectsLayer
+
+        window = pygame.Surface((854, 480))
+        center_x = {'value': 520}
+        layer = ConquerEffectsLayer(
+            window,
+            lambda _id: None,
+            stage_center_x=lambda: center_x['value'],
+        )
+
+        assert layer._default_stage_center() == (520, int(480 * 0.34))
+        center_x['value'] = 610
+        assert layer._default_stage_center() == (610, int(480 * 0.34))
+
+    def test_default_stage_center_remains_window_center_without_provider(self):
+        layer = _make_layer((854, 480))
+
+        assert layer._default_stage_center() == (427, int(480 * 0.34))
+
 
 class TestApplyScreenShake:
     def test_zero_offset_leaves_surface_untouched(self):

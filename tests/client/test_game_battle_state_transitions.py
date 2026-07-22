@@ -157,6 +157,26 @@ class TestGameBattleStateTransitions:
 
         assert game.battle_skipped_rounds == {'114': [0, 2], '113': [1]}
 
+    def test_action_update_applies_authoritative_battle_total_when_present(self):
+        """The final tactic response must update the total before polling."""
+        from game.core.game import Game
+
+        game = Game(_mk_game_dict(), _mk_user_dict(), lightweight=True)
+        assert game.battle_total_diff is None
+
+        final_tactic_update = _mk_game_dict()
+        final_tactic_update['battle_round'] = 2
+        final_tactic_update['battle_turn_player_id'] = None
+        final_tactic_update['battle_total_diff'] = 11
+        game.update_from_dict(final_tactic_update)
+
+        assert game.battle_total_diff == 11
+
+        # Ordinary action snapshots omit this derived field. They must not
+        # erase a known final total while result handling catches up.
+        game.update_from_dict(_mk_game_dict())
+        assert game.battle_total_diff == 11
+
     def test_poll_transition_resets_battle_ready_after_update_from_dict_clear(self):
         """When update_from_dict clears advance first, the next poll must still reset battle-ready guards."""
         from game.core.game import Game

@@ -4,6 +4,30 @@ from copy import copy
 import re
 
 
+DUEL_ONLY_SKILL_KEYS = frozenset({'instant_charge'})
+
+
+def filter_active_skill_keys_for_display(skill_keys, *, mode=None):
+    """Return active skill keys that are meaningful in the current mode.
+
+    This is intentionally a display-only filter.  The real figure retains its
+    Duel capability, while Conquer renderers cannot accidentally reintroduce
+    it through raw fixture, replay, or locally reconstructed figure objects.
+    """
+    keys = list(skill_keys or [])
+    if str(mode or '').lower() != 'conquer':
+        return keys
+    return [key for key in keys if key not in DUEL_ONLY_SKILL_KEYS]
+
+
+def filter_active_skills_for_display(skills, *, mode=None):
+    """Filter ``(skill_key, label)`` rows using the same mode rule."""
+    rows = list(skills or [])
+    visible_keys = set(filter_active_skill_keys_for_display(
+        (row[0] for row in rows if row), mode=mode))
+    return [row for row in rows if row and row[0] in visible_keys]
+
+
 def strip_duel_only_skill_description(
     text,
     *,

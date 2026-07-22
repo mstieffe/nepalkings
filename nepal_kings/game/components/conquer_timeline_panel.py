@@ -18,6 +18,13 @@ import pygame
 
 from config import settings
 from game.components.battle_moves.battle_move_icon_renderer import draw_battle_move_icon
+from game.components.suit_text import (
+    fit_suit_text,
+    load_suit_icon,
+    render_suit_text,
+    suit_text_size,
+    wrap_suit_text,
+)
 from game.screens.conquer_flow import derive_conquer_timeline
 
 
@@ -30,6 +37,7 @@ _BUBBLE_MIN_W = 96
 _BUBBLE_MAX_W = 150
 _BUBBLE_GAP = 8 if settings.TOUCH_TARGET_MIN > 0 else 14
 _INFO_MIN_W = 292 if settings.TOUCH_TARGET_MIN > 0 else 320
+_INFO_MOBILE_W_FRAC = 0.44
 _INFO_PAD = 12
 _FIGURE_FRAME_FILL = 0.84
 _INFO_VISUAL_KINDS = {'spell', 'figure', 'tactic'}
@@ -94,6 +102,15 @@ class ConquerTimelinePanel:
             settings.FS_HEADING, bold=True)
         self.info_body_font = settings.get_font(
             max(settings.FS_CONQUER_LABEL, int(settings.FS_SMALL * 0.95)))
+        # The pre-battle info row is only ~70px high on the mobile canvas.
+        # Its regular heading tier consumed most of that height and forced
+        # both headline and instructions into premature ellipses.
+        self.compact_info_headline_font = settings.get_font(
+            max(settings.FS_CONQUER_LABEL, int(settings.FS_SMALL * 0.90)),
+            bold=True)
+        self.compact_info_body_font = settings.get_font(
+            max(settings.FS_CONQUER_META,
+                int(settings.FS_CONQUER_LABEL * 0.88)))
         self.button_font = settings.get_font(
             max(settings.FS_CONQUER_LABEL, int(settings.FS_TINY)), bold=True)
         self.tooltip_font = settings.get_font(settings.TOOLTIP_FONT_SIZE)
@@ -234,7 +251,7 @@ class ConquerTimelinePanel:
         visible_indices = [i for i, s in enumerate(steps) if s.completed or s.active]
 
         avail_w = settings.SCREEN_WIDTH - 2 * pad_x
-        info_w = max(_INFO_MIN_W, int(avail_w * 0.35)) if info_visible else 0
+        info_w = self._preferred_info_width(avail_w) if info_visible else 0
         timeline_w = avail_w - info_w - (_BUBBLE_GAP if info_visible else 0)
         visible_indices, bubble_w, hidden_steps, chip_w = (
             self._fit_bubbles_with_overflow(
@@ -321,7 +338,7 @@ class ConquerTimelinePanel:
 
         content_width = max(0, rect.width - max(0, int(right_reserve)))
         avail_w = max(0, content_width - 2 * pad_x)
-        info_w = max(_INFO_MIN_W, int(avail_w * 0.35)) if info_visible else 0
+        info_w = self._preferred_info_width(avail_w) if info_visible else 0
         if info_w >= avail_w - 80:
             # Fall back to a body-only layout when the rect is too narrow
             # to host the info box without crushing the bubbles.
@@ -390,7 +407,7 @@ class ConquerTimelinePanel:
         headline = step.info_headline or step.title or ''
         font = self.bubble_title_font
         text = self._fit(headline, font, card.right - 6 - text_left)
-        surf = font.render(text, True, (235, 222, 185))
+        surf = render_suit_text(text, font, (235, 222, 185))
         self.window.blit(surf,
                          (text_left, card.centery - surf.get_height() // 2))
         self._tap_rects.append(
@@ -491,7 +508,8 @@ class ConquerTimelinePanel:
 
         title_x = int(settings.SCREEN_WIDTH * _PAD_X)
         title_y = max(6, (title_h - self.title_font.get_height()) // 2)
-        title_surf = self.title_font.render(title, True, (246, 222, 170))
+        title_surf = render_suit_text(
+            title, self.title_font, (246, 222, 170))
         self.window.blit(title_surf, (title_x, title_y))
 
         # Withdraw button (right edge) when allowed
@@ -869,9 +887,9 @@ class ConquerTimelinePanel:
 
         # Title (top)
         title = step.title or ''
-        title_surf = self.bubble_title_font.render(
+        title_surf = render_suit_text(
             self._fit(title, self.bubble_title_font, rect.width - 2 * inner_pad),
-            True, (235, 220, 180))
+            self.bubble_title_font, (235, 220, 180))
         self.window.blit(
             title_surf,
             (rect.centerx - title_surf.get_width() // 2, cursor_y))
@@ -907,10 +925,10 @@ class ConquerTimelinePanel:
 
         # Sidenote at bottom
         if step.sidenote:
-            note_surf = self.sidenote_font.render(
+            note_surf = render_suit_text(
                 self._fit(step.sidenote, self.sidenote_font,
                           rect.width - 2 * inner_pad),
-                True, (210, 196, 156))
+                self.sidenote_font, (210, 196, 156))
             self.window.blit(
                 note_surf,
                 (rect.centerx - note_surf.get_width() // 2,
@@ -1025,9 +1043,15 @@ class ConquerTimelinePanel:
                 f'T{tier}', True, (250, 230, 180))
             self.window.blit(txt, txt.get_rect(center=(bg_rect.centerx, bg_rect.centery - 6)))
         if suit:
-            sub = self.sidenote_font.render(
-                suit[:6], True, (220, 200, 160))
-            self.window.blit(sub, sub.get_rect(center=(bg_rect.centerx, bg_rect.centery + 8)))
+            icon_size = max(10, min(
+                self.sidenote_font.get_height(), bg_rect.height // 3))
+            suit_icon = load_suit_icon(suit, icon_size)
+            if suit_icon is not None:
+                self.window.blit(
+                    suit_icon,
+                    suit_icon.get_rect(
+                        center=(bg_rect.centerx, bg_rect.centery + 9)),
+                )
 
     def _draw_spell_icon(self, screen, rect, name, sub_names):
         images = (screen._get_spell_icon_image(name)
@@ -1250,7 +1274,7 @@ class ConquerTimelinePanel:
             supporting_assets = assets
 
         for line in self._wrap(headline, self.info_headline_font, max_w, 2):
-            s = self.info_headline_font.render(line, True, border)
+            s = render_suit_text(line, self.info_headline_font, border)
             self.window.blit(s, (x, y))
             y += s.get_height() + 1
         y += 4
@@ -1271,7 +1295,8 @@ class ConquerTimelinePanel:
             for line in self._wrap(step.info_body, self.info_body_font, max_w, max_body_lines):
                 if y + self.info_body_font.get_height() > body_bottom_limit:
                     break
-                s = self.info_body_font.render(line, True, (224, 214, 188))
+                s = render_suit_text(
+                    line, self.info_body_font, (224, 214, 188))
                 self.window.blit(s, (x, y))
                 y += s.get_height() + 2
 
@@ -1310,6 +1335,20 @@ class ConquerTimelinePanel:
         )
         return rect.height < min_full_h
 
+    @staticmethod
+    def _preferred_info_width(avail_w):
+        """Reserve enough mobile width for useful, actionable guidance.
+
+        The history strip already has an overflow chip, so on narrow touch
+        layouts the active instruction deserves priority over showing one
+        additional timeline bubble at the same time.
+        """
+        fraction = (_INFO_MOBILE_W_FRAC
+                    if settings.TOUCH_TARGET_MIN > 0 else 0.35)
+        desired = max(_INFO_MIN_W, int(avail_w * fraction))
+        timeline_floor = _BUBBLE_MIN_W + _BUBBLE_GAP
+        return max(0, min(desired, max(0, avail_w - timeline_floor)))
+
     def _draw_compact_info_box(self, screen, rect, step, border):
         """Short mobile timeline rows use a side-by-side text/action layout."""
         button_rects = self._draw_active_buttons(
@@ -1329,6 +1368,8 @@ class ConquerTimelinePanel:
         visual_assets, _supporting_assets = self._split_info_assets(assets)
         if not visual_assets:
             visual_assets = self._step_visual_assets(step)
+        visual_assets = self._compact_info_visual_assets(
+            screen, step, visual_assets)
         visual_items = self._compact_info_visual_layout(
             rect, visual_assets, x, text_right)
         if visual_items:
@@ -1345,40 +1386,50 @@ class ConquerTimelinePanel:
                 self._draw_countdown(rect, countdown_ratio)
             return
 
-        headline = step.info_headline or step.title
-        line_h = self.info_headline_font.get_height()
-        body_h = self.info_body_font.get_height()
+        headline, body = self._compact_info_copy(screen, step)
+        headline_font = (getattr(
+                             self, 'compact_info_headline_font',
+                             self.info_headline_font)
+                         if settings.TOUCH_TARGET_MIN > 0
+                         else self.info_headline_font)
+        body_font = (getattr(
+                         self, 'compact_info_body_font',
+                         self.info_body_font)
+                     if settings.TOUCH_TARGET_MIN > 0
+                     else self.info_body_font)
+        line_h = headline_font.get_height()
+        body_h = body_font.get_height()
         avail_h = max(0, rect.bottom - _INFO_PAD - y)
         # Wrap instead of hard-truncating: a second headline line is granted
         # whenever the row still fits at least one body line beneath it, and
         # the body wraps into whatever height remains (up to 3 lines).
-        headline_lines = [self._fit(headline, self.info_headline_font, text_w)]
+        headline_lines = [self._fit(headline, headline_font, text_w)]
         if avail_h >= 2 * line_h + 3 + body_h:
-            wrapped = self._wrap(headline, self.info_headline_font, text_w, 2)
+            wrapped = self._wrap(headline, headline_font, text_w, 2)
             if wrapped:
                 headline_lines = wrapped
         cursor_y = y
         for line in headline_lines:
-            headline_surf = self.info_headline_font.render(line, True, border)
+            headline_surf = render_suit_text(line, headline_font, border)
             self.window.blit(headline_surf, (x, cursor_y))
             cursor_y += line_h + 1
         cursor_y += 2
 
-        if step.info_body:
+        if body:
             remaining = rect.bottom - _INFO_PAD - cursor_y
             max_body_lines = max(0, min(3, (remaining + 2) // max(1, body_h)))
             if max_body_lines >= 2:
                 body_lines = self._wrap(
-                    step.info_body, self.info_body_font, text_w,
+                    body, body_font, text_w,
                     max_body_lines)
             elif max_body_lines == 1:
                 body_lines = [self._fit(
-                    step.info_body, self.info_body_font, text_w)]
+                    body, body_font, text_w)]
             else:
                 body_lines = []
             for line in body_lines:
-                body_surf = self.info_body_font.render(
-                    line, True, (224, 214, 188))
+                body_surf = render_suit_text(
+                    line, body_font, (224, 214, 188))
                 self.window.blit(body_surf, (x, cursor_y))
                 cursor_y += body_h + 1
 
@@ -1387,6 +1438,45 @@ class ConquerTimelinePanel:
 
         if show_countdown and not button_rects:
             self._draw_countdown(rect, countdown_ratio)
+
+    @staticmethod
+    def _compact_info_copy(screen, step):
+        """Return mobile-row copy without repeating nearby visual context."""
+        headline = step.info_headline or step.title or ''
+        body = step.info_body or ''
+        if settings.TOUCH_TARGET_MIN <= 0:
+            return headline, body
+        pending = getattr(screen, '_conquer_pending_confirmation', None)
+
+        # The two labelled buttons already explain the choice, and the picked
+        # figure remains highlighted on the field below.  A short question is
+        # clearer than squeezing the desktop instruction into the remaining
+        # sliver beside those actions.
+        if pending and step.kind == 'attacker':
+            return 'Confirm attacker?', ''
+        if pending and step.kind == 'defender':
+            return 'Confirm defender?', ''
+
+        # On mobile the persistent title row already says who is being fought
+        # and what battle this is.  Keep the overview card for the information
+        # that is actually new: land income and suit modifier.
+        if step.kind == 'overview' and body.startswith('You are fighting '):
+            sentence_end = body.find('. ')
+            if sentence_end >= 0:
+                body = body[sentence_end + 2:]
+            else:
+                body = ''
+        return headline, body
+
+    @staticmethod
+    def _compact_info_visual_assets(screen, step, visual_assets):
+        """Prioritize confirmation copy/actions over a duplicate thumbnail."""
+        if settings.TOUCH_TARGET_MIN <= 0:
+            return visual_assets
+        pending = getattr(screen, '_conquer_pending_confirmation', None)
+        if pending and step.kind in ('attacker', 'defender'):
+            return ()
+        return visual_assets
 
     def _split_info_assets(self, assets):
         visual_assets = []
@@ -1721,7 +1811,7 @@ class ConquerTimelinePanel:
             label = (asset.get('label', '') if isinstance(asset, dict) else '') or ''
             value = (asset.get('value', '') if isinstance(asset, dict) else '') or ''
             text = f'{label}: {value}' if value != '' else str(label)
-            text_w = self.sidenote_font.size(text)[0] if text else 0
+            text_w = suit_text_size(text, self.sidenote_font)[0] if text else 0
             # Hug content; keep a small floor so empty/very short chips
             # still feel like chips, and never exceed the row width.
             return min(max_width, max(64, text_w + 16))
@@ -1801,9 +1891,10 @@ class ConquerTimelinePanel:
         # apply truncation as a last-resort safety when the rect is forced
         # narrower than the desired width.
         rendered_text = text
-        if self.sidenote_font.size(text)[0] > rect.width - 8:
+        if suit_text_size(text, self.sidenote_font)[0] > rect.width - 8:
             rendered_text = self._fit(text, self.sidenote_font, rect.width - 8)
-        surf = self.sidenote_font.render(rendered_text, True, (236, 224, 190))
+        surf = render_suit_text(
+            rendered_text, self.sidenote_font, (236, 224, 190))
         self.window.blit(surf, surf.get_rect(center=rect.center))
 
     @staticmethod
@@ -1866,9 +1957,15 @@ class ConquerTimelinePanel:
             btn_h = max(btn_h, int(settings.SCREEN_HEIGHT * 0.085))
         return btn_h
 
+    def _active_button_width(self, rect):
+        if (settings.TOUCH_TARGET_MIN > 0
+                and self._use_compact_info_layout(rect)):
+            return max(84, min(96, int(rect.width * 0.24)))
+        return max(96, int(rect.width * 0.30))
+
     def _active_button_total_width(self, screen, rect, step):
         pending = getattr(screen, '_conquer_pending_confirmation', None)
-        btn_w = max(96, int(rect.width * 0.30))
+        btn_w = self._active_button_width(rect)
         if pending and step.kind in ('attacker', 'defender'):
             return btn_w * 2 + 10
         if step.interactive:
@@ -1883,7 +1980,7 @@ class ConquerTimelinePanel:
                              draw_interactive_hint=True):
         pending = getattr(screen, '_conquer_pending_confirmation', None)
         btn_h = self._active_button_height()
-        btn_w = max(96, int(rect.width * 0.30))
+        btn_w = self._active_button_width(rect)
         btn_y = rect.bottom - btn_h - _INFO_PAD
         x_left = rect.left + _INFO_PAD
         if align_right:
@@ -2059,14 +2156,16 @@ class ConquerTimelinePanel:
 
         y = rect.top + pad_y
         for line in headline_lines:
-            rendered = self.info_headline_font.render(line, True, border)
+            rendered = render_suit_text(
+                line, self.info_headline_font, border)
             self.window.blit(rendered, (rect.left + pad_x, y))
             y += rendered.get_height() + line_gap
         if headline_lines:
             y += section_gap - line_gap
 
         for line in body_lines:
-            rendered = self.info_body_font.render(line, True, (224, 214, 188))
+            rendered = render_suit_text(
+                line, self.info_body_font, (224, 214, 188))
             self.window.blit(rendered, (rect.left + pad_x, y))
             y += rendered.get_height() + line_gap
         if body_lines:
@@ -2126,7 +2225,13 @@ class ConquerTimelinePanel:
         skills = []
         if hasattr(figure, 'get_active_skills'):
             try:
-                skills = [label for _key, label in figure.get_active_skills()]
+                from game.components.figures.skill_display_filters import (
+                    filter_active_skills_for_display,
+                )
+                skills = [
+                    label for _key, label in filter_active_skills_for_display(
+                        figure.get_active_skills(), mode='conquer')
+                ]
             except Exception:
                 pass
         if skills:
@@ -2137,7 +2242,10 @@ class ConquerTimelinePanel:
         pad_x = settings.TOOLTIP_PAD_X
         pad_y = settings.TOOLTIP_PAD_Y
         line_gap = 3
-        rendered = [self.info_body_font.render(t, True, c) for t, c in lines]
+        rendered = [
+            render_suit_text(t, self.info_body_font, c)
+            for t, c in lines
+        ]
         max_w = max(s.get_width() for s in rendered)
         total_h = sum(s.get_height() for s in rendered) + line_gap * (len(rendered) - 1)
         box_w = max_w + pad_x * 2
@@ -2171,35 +2279,7 @@ class ConquerTimelinePanel:
         self.window.blit(text, text.get_rect(center=rect.center))
 
     def _wrap(self, text, font, max_width, max_lines=2):
-        words = (text or '').split()
-        if not words:
-            return []
-        lines = []
-        current = ''
-        for word in words:
-            trial = word if not current else current + ' ' + word
-            if font.size(trial)[0] <= max_width:
-                current = trial
-                continue
-            if current:
-                lines.append(current)
-            current = word
-            if len(lines) >= max_lines:
-                break
-        if current and len(lines) < max_lines:
-            lines.append(current)
-        if len(lines) > max_lines:
-            lines = lines[:max_lines]
-        if len(lines) == max_lines and words:
-            lines[-1] = self._fit(lines[-1], font, max_width)
-        return lines
+        return wrap_suit_text(text, font, max_width, max_lines)
 
     def _fit(self, text, font, max_width):
-        text = text or ''
-        if font.size(text)[0] <= max_width:
-            return text
-        clipped = text
-        ellipsis = '…'
-        while clipped and font.size(clipped + ellipsis)[0] > max_width:
-            clipped = clipped[:-1]
-        return clipped + ellipsis if clipped else ellipsis
+        return fit_suit_text(text, font, max_width)

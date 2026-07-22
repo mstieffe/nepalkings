@@ -104,6 +104,10 @@ class ConquerEffectsLayer:
         rect of the figure or ``None`` if it is not currently rendered.
         ``ConquerGameScreen`` provides this by combining its duel-lane
         rect cache with the field-screen figure icons.
+    stage_center_x : callable, optional
+        Dynamic horizontal centre for unanchored banners/countdowns. Hosts
+        with asymmetric chrome can point these callouts at their playable
+        viewport while other screens retain full-window centering.
     """
 
     PROJECTILE_MS = 420
@@ -115,9 +119,19 @@ class ConquerEffectsLayer:
     COPY_MS = 1500
     MAX_PARTICLES = 400  # budget guard so stacked bursts can't sink the frame rate
 
-    def __init__(self, window: pygame.Surface, rect_lookup: Callable[[Any], Optional[pygame.Rect]]):
+    def __init__(self, window: pygame.Surface,
+                 rect_lookup: Callable[[Any], Optional[pygame.Rect]], *,
+                 stage_center_x: Optional[Callable[[], int]] = None):
         self.window = window
         self.rect_lookup = rect_lookup
+        # Unanchored, center-stage callouts (round/turn/spell banners and the
+        # battle countdown) normally use the window centre.  Conquer supplies
+        # the central duel-lane centre instead: its persistent tactics rail
+        # makes the usable stage asymmetric even though the window itself is
+        # not.
+        # Keeping this as a provider means resize/layout-mode changes are
+        # reflected on the next frame without rebuilding the effects layer.
+        self._stage_center_x = stage_center_x
         self._projectiles: List[Dict[str, Any]] = []
         self._impacts: List[Dict[str, Any]] = []
         self._particles: List[Dict[str, Any]] = []
@@ -136,6 +150,19 @@ class ConquerEffectsLayer:
         token = self._next_token
         self._next_token += 1
         return token
+
+    def _default_stage_center(self) -> Tuple[int, int]:
+        """Visual centre for transient callouts without an explicit anchor."""
+        center_x = self.window.get_width() // 2
+        if callable(self._stage_center_x):
+            try:
+                center_x = int(self._stage_center_x())
+            except Exception:
+                # Effects should remain fail-soft if their host layout is
+                # briefly unavailable during a screen transition.
+                pass
+        center_x = max(0, min(self.window.get_width(), center_x))
+        return center_x, int(self.window.get_height() * 0.34)
 
     def _resolve_target(self, target_figure_id: Any) -> Optional[pygame.Rect]:
         if target_figure_id is None:
@@ -961,8 +988,7 @@ class ConquerEffectsLayer:
             if anchor is not None:
                 center = anchor.center
             else:
-                center = (self.window.get_width() // 2,
-                          int(self.window.get_height() * 0.34))
+                center = self._default_stage_center()
             # Backing pill for legibility.
             pad_x, pad_y = 22, 10
             pill = pygame.Rect(0, 0,
@@ -1009,8 +1035,7 @@ class ConquerEffectsLayer:
             if anchor is not None:
                 center = anchor.center
             else:
-                center = (self.window.get_width() // 2,
-                          int(self.window.get_height() * 0.34))
+                center = self._default_stage_center()
 
             # Stamp-down pop: starts oversized, settles with overshoot.
             # Compact (panel-anchored) countdowns pop more gently so they

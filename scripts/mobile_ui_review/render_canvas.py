@@ -43,8 +43,13 @@ DUEL_SCREEN_ALIASES = {
 CONQUER_GAME_ALIASES = {
     "conquer_game": "field",
     "conquer_game_field": "field",
+    "conquer_game_field_badges": "field_badges",
+    "conquer_game_prebattle_overview": "prebattle_overview",
+    "conquer_game_prebattle_attacker": "prebattle_attacker",
+    "conquer_game_prebattle_confirm": "prebattle_confirm",
     "conquer_game_battle_shop": "battle_shop",
     "conquer_game_battle": "battle",
+    "conquer_game_battle_notice": "battle_notice",
     "conquer_game_battle_dagger": "battle_dagger",
     "conquer_game_battle_collapsed": "battle_collapsed",
     "conquer_game_battle_intro_1": "battle_intro_1",
@@ -860,13 +865,24 @@ def populate_duel_game(client, screen, subscreen: str) -> None:
 
 def populate_conquer_game(client, subscreen: str):
     requested_subscreen = subscreen
+    prebattle_variants = {
+        "prebattle_overview",
+        "prebattle_attacker",
+        "prebattle_confirm",
+    }
     battle_variants = {
         "battle_collapsed",
         "battle_dagger",
+        "battle_notice",
         "battle_intro_1",
         "battle_intro_2",
     }
-    subscreen = "battle" if requested_subscreen in battle_variants else subscreen
+    if requested_subscreen == "field_badges":
+        subscreen = "field"
+    elif requested_subscreen in prebattle_variants:
+        subscreen = "field"
+    elif requested_subscreen in battle_variants:
+        subscreen = "battle"
     client._init_perf_conquer_fixture(progress_noop)
     client.state.screen = "conquer_game"
     client.state.subscreen = subscreen
@@ -874,7 +890,31 @@ def populate_conquer_game(client, subscreen: str):
     game = client.state.game
     if game is not None:
         game.turn = True
-        if subscreen == "battle_shop":
+        if requested_subscreen in prebattle_variants:
+            game.battle_confirmed = False
+            game.battle_moves_phase = False
+            game.battle_moves_ready = False
+            game.both_battle_moves_ready = False
+            game.waiting_for_opponent_battle_moves = False
+            game.in_battle_phase = False
+            game.battle_turn_player_id = None
+            game.battle_round = 0
+            game.advancing_player_id = None
+            game.advancing_figure_id = None
+            game.advancing_figure_id_2 = None
+            game.defending_figure_id = None
+            game.defending_figure_id_2 = None
+            game.pending_forced_advance = False
+            game.pending_defender_selection = False
+            game.pending_conquer_own_defender_selection = False
+            game._game_start_pending = False
+            game.game_start_notification_checked = True
+            screen._conquer_acknowledged_step_kinds = set()
+            if requested_subscreen != "prebattle_overview":
+                screen._conquer_acknowledged_step_kinds.update({
+                    "overview", "prelude_own", "prelude_opp",
+                })
+        elif subscreen == "battle_shop":
             # The current tactics-hand conquer flow routes away from the
             # legacy battle shop. Keep this screenshot pointed at a real
             # populated shop by fixture-marking it as an older battle-move game.
@@ -891,9 +931,82 @@ def populate_conquer_game(client, subscreen: str):
             game.in_battle_phase = True
             game.battle_turn_player_id = game.player_id
             game.battle_round = 1
+            # The perf fixture stores both players in ``conquer_tactics``
+            # because production responses are later split into viewer-aware
+            # caches.  Its id-less screenshot path has no cache split, so make
+            # that separation explicit here and add a real same-colour Dagger
+            # pair.  The rail capture can now exercise collapse, expansion,
+            # and the full Play/Gamble/Combine tray without accidentally
+            # rendering the opponent's hidden tactics as the player's hand.
+            all_tactics = list(getattr(game, "conquer_tactics", []) or [])
+            own_tactics = [
+                tactic for tactic in all_tactics
+                if str(tactic.get("player_id")) == str(game.player_id)
+            ]
+            opponent_tactics = [
+                tactic for tactic in all_tactics
+                if str(tactic.get("player_id")) != str(game.player_id)
+            ]
+            own_tactics.extend([
+                client._perf_tactic(
+                    104, game.player_id, "Dagger", "Hearts", "9", 9,
+                    status="available"),
+                client._perf_tactic(
+                    105, game.player_id, "Block", "Spades", "Q", 0,
+                    status="available"),
+            ])
+            game.conquer_tactics = own_tactics
+            game.conquer_opponent_tactics = opponent_tactics
         for subscreen_obj in screen.subscreens.values():
             if hasattr(subscreen_obj, "game"):
                 subscreen_obj.game = game
+        if requested_subscreen == "field_badges":
+            # Stress the narrow field badge with a realistic combination of
+            # support, an enchantment, and two native Healer skills.  Keeping
+            # this as an explicit visual-review variant makes future badge
+            # regressions easy to inspect without cluttering the default field
+            # fixture.
+            field = screen.subscreens.get("field")
+            if field is not None:
+                healer = next(
+                    (figure for figure in getattr(field, "figures", [])
+                     if getattr(figure, "id", None) == 30),
+                    None,
+                )
+                if healer is not None:
+                    healer.active_enchantments = [{
+                        "spell_name": "Health Boost",
+                        "spell_icon": "health_portion.png",
+                        "power_modifier": 6,
+                    }]
+                hidden_castle = next(
+                    (figure for figure in getattr(field, "figures", [])
+                     if getattr(figure, "id", None) == 41),
+                    None,
+                )
+                if hidden_castle is not None and hidden_castle.cards:
+                    source_cards = list(hidden_castle.cards)
+                    hidden_castle.cards = [
+                        source_cards[index % len(source_cards)]
+                        for index in range(4)
+                    ]
+                if healer is not None or hidden_castle is not None:
+                    field._generate_figure_icons()
+        if requested_subscreen == "prebattle_confirm":
+            field = screen.subscreens.get("field")
+            if field is not None:
+                pending = next(
+                    (figure for figure in getattr(field, "figures", [])
+                     if str(getattr(figure, "player_id", ""))
+                     == str(game.player_id)),
+                    None,
+                )
+                if pending is not None:
+                    field._pending_advance_figure = pending
+                    screen._conquer_pending_confirmation = {
+                        "kind": "advance",
+                        "figure_id": getattr(pending, "id", None),
+                    }
         if subscreen == "battle_shop":
             shop = screen.subscreens.get("battle_shop")
             if shop is not None:
@@ -952,6 +1065,12 @@ def populate_conquer_game(client, subscreen: str):
                     if move.get("family_name") == "Dagger" and not move.get("card_id_b"):
                         rail._selected_id = move.get("id")
                         break
+        if requested_subscreen == "battle_notice":
+            # Insert this after the renderer's first settling frame: the live
+            # animation pump intentionally clears stale effects while it seeds
+            # a newly loaded fixture game.
+            screen._mobile_review_banner = (
+                "LAST TURN", (255, 211, 116), 3000)
         if requested_subscreen in {"battle_intro_1", "battle_intro_2"}:
             onboarding = client.state.user_dict.setdefault("onboarding", {})
             onboarding.setdefault("menu_hints_seen", [])
@@ -1610,6 +1729,14 @@ def render_screens(width: int, height: int, ui_scale: str,
             # buffered display can otherwise preserve rectangular fragments of
             # the prior screen in the first screenshot frame.
             screen.render()
+            banner = getattr(screen, "_mobile_review_banner", None)
+            effects = getattr(screen, "_conquer_effects", None)
+            if banner and effects is not None:
+                text, color, duration_ms = banner
+                effects.spawn_banner(text, color, duration_ms=duration_ms)
+                # Start inside the hold phase so the capture never catches the
+                # initial transparent frame.
+                effects._banners[-1]["started_at"] = effects._ms() - 1000
             screen.render()
             pygame.display.flip()
             out = OUT_DIR / f"{screen_name}-{width}x{height}.png"

@@ -27,6 +27,8 @@ class FigureDetailBox:
         :param resources_data: Optional pre-calculated resources data (to avoid recalculation)
         :param conquer_view_only: When True, suppress all action buttons (conquer mode)
         """
+        figure = self._display_figure_for_mode(
+            figure, game, conquer_view_only=conquer_view_only)
         self.conquer_view_only = conquer_view_only
         self.window = window
         self.figure = figure
@@ -128,6 +130,18 @@ class FigureDetailBox:
         
         # Track which buttons are disabled and why
         self.button_disabled_reasons = {}
+
+    @staticmethod
+    def _display_figure_for_mode(figure, game, *, conquer_view_only=False):
+        """Return a non-mutating figure view with Duel-only traits hidden."""
+        mode = getattr(game, 'mode', None)
+        if not conquer_view_only and str(mode or '').lower() != 'conquer':
+            return figure
+        from game.components.figures.skill_display_filters import (
+            filter_figure_for_display,
+        )
+        return filter_figure_for_display(
+            figure, hide_instant_charge=True)
 
     def _create_action_buttons(self):
         """Create action buttons based on figure state and type."""
@@ -330,6 +344,29 @@ class FigureDetailBox:
                     print(f"[FIGURE_DETAIL] Failed to load skill icon {skill} from {path}: {e}")
         
         return icons
+
+    def _active_skills_for_display(self):
+        """Return skill rows relevant to the current game mode."""
+        from game.components.figures.family_configs.skill_config import (
+            SKILL_DEFINITIONS,
+            SKILL_KEYS,
+        )
+        from game.components.figures.skill_display_filters import (
+            filter_active_skills_for_display,
+        )
+
+        if hasattr(self.figure, 'get_active_skills'):
+            skills = self.figure.get_active_skills()
+        else:
+            skills = [
+                (key, SKILL_DEFINITIONS[key]['name'])
+                for key in SKILL_KEYS
+                if getattr(self.figure, key, False)
+            ]
+        mode = getattr(getattr(self, 'game', None), 'mode', None)
+        if getattr(self, 'conquer_view_only', False):
+            mode = 'conquer'
+        return filter_active_skills_for_display(skills, mode=mode)
     
     def _load_advantage_suit_icon(self):
         """Load the suit icon that this figure has an advantage over, sized for overlay on skill icon."""
@@ -847,14 +884,8 @@ class FigureDetailBox:
                 right_y += warn_surface.get_height() + settings.SMALL_SPACER_Y
 
         # Draw skills section
-        from game.components.figures.family_configs.skill_config import SKILL_KEYS, SKILL_DEFINITIONS as _SKILL_DEFS
-        skills_to_display = []
-        if hasattr(self.figure, 'get_active_skills'):
-            skills_to_display = self.figure.get_active_skills()
-        else:
-            for key in SKILL_KEYS:
-                if getattr(self.figure, key, False):
-                    skills_to_display.append((key, _SKILL_DEFS[key]['name']))
+        from game.components.figures.family_configs.skill_config import SKILL_DEFINITIONS as _SKILL_DEFS
+        skills_to_display = self._active_skills_for_display()
         
         print(f"[FIGURE_DETAIL] Skills to display: {skills_to_display}")
         
