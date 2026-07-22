@@ -2924,6 +2924,7 @@ class KingdomScreen(MenuScreenMixin, Screen):
                     self._hex_map.selected_tile = tutorial_tile
                     clicked_tile = tutorial_tile
                 if clicked_tile:
+                    sound.play('land_select')
                     self._open_detail(clicked_tile)
 
         # Keyboard pan (continuous) — stays live while the anchored inspector
@@ -3015,6 +3016,7 @@ class KingdomScreen(MenuScreenMixin, Screen):
             played = True
         if played:
             fx.spawn_banner('Land conquered!', green, duration_ms=1100)
+            sound.play('map_gain')
 
     def _collect_reward_fx(self, gold_amount, main_boosters, side_boosters):
         """Stream gold orbs from owned lands toward the HUD gold widget."""

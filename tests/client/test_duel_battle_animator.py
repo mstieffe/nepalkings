@@ -121,11 +121,15 @@ class TestBattleScreenRevealWiring:
 
     def test_pump_emits_round_pulse_effects(self, monkeypatch):
         from game.screens.battle_screen import BattleScreen
+        from utils import sound
 
         screen, fx = self._bare_battle_screen()
         slot_rect = pygame.Rect(10, 10, 40, 40)
         screen._round_slot_rect = lambda side, r: pygame.Rect(slot_rect)
         screen._get_round_diff = lambda r: 4
+        played = []
+        monkeypatch.setattr(
+            sound, 'play', lambda name, **kwargs: played.append(name))
 
         # Seed empty board, then fill round 0 on both sides.
         BattleScreen._pump_slot_reveal_events(screen)
@@ -136,6 +140,25 @@ class TestBattleScreenRevealWiring:
         assert len(fx._impacts) == 2       # one pulse per slot
         assert len(fx._floats) == 1        # the +4 diff floater
         assert fx._floats[0]['text'] == '+4'
+        assert played == ['card_place', 'card_place', 'round_win']
+
+    def test_pump_uses_loss_and_tie_cues(self, monkeypatch):
+        from game.screens.battle_screen import BattleScreen
+        from utils import sound
+
+        played = []
+        monkeypatch.setattr(
+            sound, 'play', lambda name, **kwargs: played.append(name))
+        for diff, expected in ((-3, 'round_loss'), (0, 'tally_tick')):
+            screen, _fx = self._bare_battle_screen()
+            screen.state.parent_screen._fx = None
+            screen._slot_animator = SimpleNamespace(
+                note_slots=lambda *_args: [('round_complete', 0)])
+            screen._get_round_diff = lambda _r, value=diff: value
+
+            BattleScreen._pump_slot_reveal_events(screen)
+
+            assert played[-1] == expected
 
     def test_handle_battle_action_blocked_during_reveal(self, monkeypatch):
         from game.screens.battle_screen import BattleScreen

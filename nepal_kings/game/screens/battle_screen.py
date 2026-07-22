@@ -3309,17 +3309,22 @@ class BattleScreen(SubScreen):
                 sound.play('card_place', volume=0.9 if side == 'player' else 0.7)
             elif event[0] == 'round_complete':
                 _, r = event
-                sound.play('tally_tick')
+                try:
+                    diff = self._get_round_diff(r)
+                except Exception:
+                    diff = None
+                if isinstance(diff, (int, float)) and diff > 0:
+                    sound.play('round_win')
+                elif isinstance(diff, (int, float)) and diff < 0:
+                    sound.play('round_loss')
+                else:
+                    sound.play('tally_tick')
                 if fx is None:
                     continue
                 p_rect = self._round_slot_rect('player', r)
                 o_rect = self._round_slot_rect('opponent', r)
                 fx.spawn_rect_pulse(p_rect, _GOLD, duration_ms=520)
                 fx.spawn_rect_pulse(o_rect, _GOLD, duration_ms=520)
-                try:
-                    diff = self._get_round_diff(r)
-                except Exception:
-                    diff = None
                 if isinstance(diff, (int, float)) and diff:
                     mid = pygame.Rect(0, 0, p_rect.w, 24)
                     mid.center = (p_rect.centerx,

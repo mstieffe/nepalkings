@@ -1309,6 +1309,90 @@ class TestConquerStartBattle:
 class TestConquerPreludeTargeting:
     """Conquer startup prelude targeting behavior."""
 
+    def test_ai_health_boost_targets_its_planned_defender(self, app, db):
+        with app.app_context():
+            attacker = _make_user(db, username='atk_ai_health_plan')
+            land = _make_land(db, tier=1)
+            _make_conquer_config(db, attacker, land)
+            _mark_first_conquer_done(attacker)
+
+            template = _scripted_ai_template(prelude_spell_name='Health Boost')
+            # The farm has higher base power, so the old generic target
+            # heuristic chose it even though the King was the planned defender.
+            template['battle_figure_index'] = 1
+
+            client = app.test_client()
+            headers = _auth_headers(app, attacker)
+            with patch('routes.kingdom.get_ai_defence_template_for_land', return_value=template), \
+                    patch('routes.games.get_ai_defence_template_for_land', return_value=template):
+                resp = client.post('/kingdom/conquer/start_battle',
+                                   json={'land_id': land.id}, headers=headers)
+            assert resp.status_code == 200, resp.get_json()
+
+            game = db.session.get(Game, resp.get_json()['game_id'])
+            defender = next(
+                player for player in game.players
+                if player.id != game.invader_player_id
+            )
+            spell = ActiveSpell.query.filter_by(
+                game_id=game.id,
+                player_id=defender.id,
+                spell_name='Health Boost',
+            ).one()
+            target = db.session.get(Figure, spell.target_figure_id)
+
+            assert game.defending_figure_id == target.id
+            assert target.name == 'Himalaya King'
+            assert (spell.effect_data or {}).get('power_modifier') == 6
+
+    def test_ai_template_call_uses_explicit_same_suit_figure(self, app, db):
+        with app.app_context():
+            attacker = _make_user(db, username='atk_ai_call_plan')
+            land = _make_land(db, tier=1)
+            _make_conquer_config(db, attacker, land)
+            _mark_first_conquer_done(attacker)
+
+            template = _scripted_ai_template()
+            spades_king = dict(template['figures'][1])
+            spades_king['suit'] = 'Spades'
+            spades_king['cards'] = [
+                dict(card, suit='Spades')
+                for card in spades_king['cards']
+            ]
+            template['figures'].append(spades_king)
+            template['battle_moves'][0] = {
+                'family_name': 'Call King',
+                'rank': 'K',
+                'suit': 'Spades',
+                'value': 4,
+                'round_index': 0,
+                'card_type': 'main',
+                'call_figure_index': 2,
+            }
+
+            client = app.test_client()
+            headers = _auth_headers(app, attacker)
+            with patch('routes.kingdom.get_ai_defence_template_for_land', return_value=template), \
+                    patch('routes.games.get_ai_defence_template_for_land', return_value=template):
+                resp = client.post('/kingdom/conquer/start_battle',
+                                   json={'land_id': land.id}, headers=headers)
+            assert resp.status_code == 200, resp.get_json()
+
+            game = db.session.get(Game, resp.get_json()['game_id'])
+            defender = next(
+                player for player in game.players
+                if player.id != game.invader_player_id
+            )
+            call = ConquerTactic.query.filter_by(
+                game_id=game.id,
+                player_id=defender.id,
+                family_name='Call King',
+            ).one()
+            called_figure = db.session.get(Figure, call.call_figure_id)
+
+            assert called_figure.suit == 'Spades'
+            assert call.suit == 'Spades'
+
     def test_invader_swap_preserves_automated_defender_prelude(self, app, db):
         with app.app_context():
             attacker = _make_user(db, username='atk_swap_ai_prelude')

@@ -9,7 +9,7 @@ This module intentionally keeps AI land defence balancing out of
 
 from game_service.card_values import AI_DEFENCE_RANK_VALUES
 
-AI_DEFENCE_GENERATOR_VERSION = 7
+AI_DEFENCE_GENERATOR_VERSION = 8
 
 AI_DEFENCE_SUITS = ('Hearts', 'Diamonds', 'Clubs', 'Spades')
 AI_DEFENCE_RED_SUITS = ('Hearts', 'Diamonds')
@@ -432,6 +432,10 @@ AI_DEFENCE_FIGURE_CATALOG = {
 #   their target at battle start (defender heuristic) so no extra data is
 #   required in the template.  Battle-modifier preludes (``Peasant War``,
 #   ``Civil War``) append to ``game.battle_modifier`` like player-cast spells.
+#   The generator filters these pools against the completed roster: Landslide
+#   needs an off-land-suit defender, Civil War needs a legal same-color village
+#   pair, and a Health Boost counter needs a mandatory defender the attacker
+#   cannot simply avoid.
 
 # ``extra_castle_cross_color_chance`` / ``optional_suit_weights``
 #   Controls suit-color variety. Guaranteed core roles stay in the land's

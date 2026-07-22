@@ -196,6 +196,7 @@ class _DummyHexMap:
         self.minimap_clicks = []
         self._minimap_rect = None
         self.zoom = 1.0
+        self.clicked_tile = None
 
     def focus_land(self, land_id):
         self.focused.append(land_id)
@@ -213,7 +214,7 @@ class _DummyHexMap:
 
     def handle_event(self, event):
         self.events.append(event)
-        return None
+        return self.clicked_tile
 
     def handle_minimap_click(self, sx, sy):
         if self._minimap_rect and self._minimap_rect.collidepoint(sx, sy):
@@ -796,6 +797,29 @@ class TestKingdomDragRelease:
         assert screen._layers_open is True
         assert screen._activity_open is False
         assert screen._hex_map.events == []
+
+    def test_land_tap_plays_selection_cue_before_opening_detail(self, monkeypatch):
+        import game.screens.kingdom_screen as module
+
+        KingdomScreen, screen = self._screen()
+        tile = SimpleNamespace(land_id=42)
+        screen._hex_map.clicked_tile = tile
+        screen._open_detail = MagicMock()
+        screen._handle_activity_click = MagicMock(return_value=False)
+        screen._handle_map_mode_click = MagicMock(return_value=False)
+        screen._handle_kingdom_chip_click = MagicMock(return_value=False)
+        screen._recommended_tutorial_touch_tile = MagicMock(return_value=None)
+        screen._leaderboard_panel = None
+        played = []
+        monkeypatch.setattr(
+            module.sound, 'play', lambda name, **kwargs: played.append(name))
+        up = SimpleNamespace(
+            type=pygame.MOUSEBUTTONUP, button=1, pos=(260, 260))
+
+        KingdomScreen.handle_events(screen, [up])
+
+        assert played == ['land_select']
+        screen._open_detail.assert_called_once_with(tile)
 
 
 class TestKingdomLargestComponentFocus:

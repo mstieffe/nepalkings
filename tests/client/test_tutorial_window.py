@@ -46,6 +46,23 @@ def test_window_navigates_next_back_and_done():
     assert win.page_index == 0
 
 
+def test_window_navigation_plays_directional_cues(monkeypatch):
+    from utils import sound
+
+    played = []
+    monkeypatch.setattr(
+        sound, 'play', lambda name, **kwargs: played.append((name, kwargs)))
+    win = _window([
+        {'title': 'Page 1', 'lines': ['a']},
+        {'title': 'Page 2', 'lines': ['b']},
+    ])
+
+    win.update([_click(win._btn_next.rect)])
+    win.update([_click(win._btn_back.rect)])
+
+    assert [name for name, _kwargs in played] == ['ui_click', 'ui_back']
+
+
 def test_window_last_page_next_returns_done():
     win = _window([{'title': 'Only', 'lines': ['x']}])
     # Single page -> immediately last; Next returns done.
@@ -297,6 +314,49 @@ def test_reveal_runs_spin_then_done():
     assert r._current_reel_suit() == 'Diamonds'
     # Acknowledge -> done.
     assert r.update([_click(r._btn.rect)]) == 'done'
+
+
+def test_reveal_ticks_once_per_suit_change_then_celebrates_grant(monkeypatch):
+    from game.components import tutorial_window as tw
+    from utils import sound
+
+    now = [1000]
+    monkeypatch.setattr(tw.pygame.time, 'get_ticks', lambda: now[0])
+    played = []
+    monkeypatch.setattr(
+        sound, 'play', lambda name, **kwargs: played.append((name, kwargs)))
+    r = tw.StarterSuitRevealDialogue(
+        pygame.display.get_surface(), 'Hearts', wait_for_grant=True)
+
+    now[0] += tw._REEL_TICK_MS + 1
+    assert r.update([]) is None
+    assert r.update([]) is None  # repeated frames in one reel cell stay silent
+    now[0] += tw._REEL_TICK_MS
+    assert r.update([]) is None
+    assert [name for name, _kwargs in played] == ['tally_tick', 'tally_tick']
+
+    now[0] = r._phase_started + tw._REEL_SPIN_MS + 1
+    assert r.update([]) == 'revealed'
+    assert [name for name, _kwargs in played] == ['tally_tick', 'tally_tick']
+
+    r.set_grant_result(True)
+    assert [name for name, _kwargs in played][-1] == 'reward_reveal'
+
+
+def test_reveal_failed_grant_and_final_button_have_feedback(monkeypatch):
+    from utils import sound
+
+    played = []
+    monkeypatch.setattr(
+        sound, 'play', lambda name, **kwargs: played.append((name, kwargs)))
+    r = _reveal('Clubs')
+    r._phase = 'done'
+    r._reveal_notified = True
+
+    r.set_grant_result(False)
+    assert played[-1][0] == 'error'
+    assert r.update([_click(r._btn.rect)]) == 'retry'
+    assert played[-1][0] == 'ui_click'
 
 
 def test_reveal_supports_direct_kingdom_button_label():

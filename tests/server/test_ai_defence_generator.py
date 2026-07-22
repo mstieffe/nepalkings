@@ -114,9 +114,14 @@ class TestAiDefenceGenerator:
             assert template['counter_spell_name']
 
     def test_spell_pools_produce_variety_across_seeds(self):
-        # Every configured spell (and the None sentinel where present) should
-        # appear at least once across a handful of seeds for each tier.
+        # Unconditional spells (and the None sentinel where present) should
+        # appear across a handful of seeds. Strategic spells may be filtered
+        # when the generated roster cannot use them truthfully.
         from ai.defence.config import AI_DEFENCE_GENERATION_RULES
+        conditional = {
+            'prelude': {'Landslide', 'Civil War'},
+            'counter': {'Health Boost'},
+        }
         for tier in (1, 2, 3, 4, 5, 6):
             rules = AI_DEFENCE_GENERATION_RULES[tier]
             for key in ('prelude', 'counter'):
@@ -132,7 +137,7 @@ class TestAiDefenceGenerator:
                         _land(tier=tier, suit='Hearts', seed=seed, land_id=3000 + seed)
                     )
                     seen.add(template[f'{key}_spell_name'])
-                missing = expected - seen
+                missing = expected - seen - conditional[key]
                 assert not missing, (
                     f'tier={tier} key={key} never produced spells: {missing}'
                 )
@@ -236,6 +241,41 @@ class TestAiDefenceGenerator:
 
         assert not validate_ai_defence_template(template)
 
+    def test_validator_rejects_self_defeating_spell_and_call_plans(self):
+        landslide = get_ai_defence_template_for_land(_land(tier=1, suit='Hearts'))
+        landslide['prelude_spell_name'] = 'Landslide'
+        landslide['counter_spell_name'] = None
+        landslide['battle_figure_index'] = next(
+            idx for idx, figure in enumerate(landslide['figures'])
+            if figure['suit'] == 'Hearts' and _can_counter_advance(figure)
+        )
+        assert not validate_ai_defence_template(landslide)
+
+        civil_war = get_ai_defence_template_for_land(_land(tier=1, suit='Hearts'))
+        civil_war['figures'] = civil_war['figures'][:2]
+        civil_war['prelude_spell_name'] = 'Civil War'
+        civil_war['counter_spell_name'] = None
+        civil_war['battle_figure_index'] = 1
+        assert not validate_ai_defence_template(civil_war)
+
+        health_counter = get_ai_defence_template_for_land(
+            _land(tier=1, suit='Hearts'))
+        health_counter['prelude_spell_name'] = None
+        health_counter['counter_spell_name'] = 'Health Boost'
+        assert not validate_ai_defence_template(health_counter)
+
+        mismatched_call = get_ai_defence_template_for_land(
+            _land(tier=1, suit='Hearts'))
+        mismatched_call['prelude_spell_name'] = None
+        mismatched_call['counter_spell_name'] = None
+        call = next(
+            move for move in mismatched_call['battle_moves']
+            if move['family_name'].startswith('Call ')
+        )
+        called = mismatched_call['figures'][call['call_figure_index']]
+        call['suit'] = 'Spades' if called['suit'] != 'Spades' else 'Hearts'
+        assert not validate_ai_defence_template(mismatched_call)
+
     def test_generation_is_deterministic_for_same_land(self):
         land = _land(tier=4, suit='Spades', seed=98765, land_id=44, col=8, row=9)
         assert get_ai_defence_template_for_land(land) == get_ai_defence_template_for_land(land)
@@ -262,7 +302,10 @@ class TestAiDefenceGenerator:
             for suit in AI_DEFENCE_SUITS:
                 template = get_ai_defence_template_for_land(_land(tier=tier, suit=suit))
                 battle_figure = template['figures'][template['battle_figure_index']]
-                assert battle_figure['suit'] == suit
+                if template['prelude_spell_name'] == 'Landslide':
+                    assert battle_figure['suit'] != suit
+                else:
+                    assert battle_figure['suit'] == suit
                 assert any(move['suit'] == suit for move in template['battle_moves'])
 
     def test_templates_keep_land_suit_anchor_while_allowing_cross_color_figures(self):
@@ -306,7 +349,7 @@ class TestAiDefenceGenerator:
                 assert saw_fortress_free
                 assert saw_gorkha_on_black_land
 
-    def test_call_moves_only_reference_available_fields(self):
+    def test_call_moves_reference_same_suit_available_figures(self):
         call_field = {
             'Call King': 'castle',
             'Call Military': 'military',
@@ -318,6 +361,71 @@ class TestAiDefenceGenerator:
             for move in template['battle_moves']:
                 if move['family_name'] in call_field:
                     assert call_field[move['family_name']] in fields
+                    call_idx = move['call_figure_index']
+                    call_figure = template['figures'][call_idx]
+                    assert call_figure['field'] == call_field[move['family_name']]
+                    assert call_figure['suit'] == move['suit']
+
+    def test_generated_spell_strategies_are_internally_coherent(self):
+        for tier in (1, 2, 3, 4, 5, 6):
+            for suit in AI_DEFENCE_SUITS:
+                for seed in range(300):
+                    template = get_ai_defence_template_for_land(
+                        _land(
+                            tier=tier,
+                            suit=suit,
+                            seed=seed,
+                            land_id=24000 + tier * 1000 + seed,
+                        )
+                    )
+                    assert not template['ai_name'].startswith('Fallback')
+                    figures = template['figures']
+                    battle_idx = template['battle_figure_index']
+                    battle_figure = figures[battle_idx]
+                    prelude = template['prelude_spell_name']
+
+                    if prelude == 'Landslide':
+                        assert battle_figure['suit'] != suit
+                        forced = [
+                            figure for figure in figures
+                            if (FAMILY_SKILLS.get(figure['family_name']) or {}).get(
+                                'must_be_attacked')
+                            and not figure.get('checkmate', False)
+                        ]
+                        assert all(figure['suit'] != suit for figure in forced)
+
+                    if prelude == 'Civil War':
+                        legal_villages = [
+                            figure for figure in figures
+                            if figure['field'] == 'village'
+                            and _can_counter_advance(figure)
+                        ]
+                        assert any(
+                            other is not battle_figure
+                            and _color_group(other['suit'])
+                            == _color_group(battle_figure['suit'])
+                            for other in legal_villages
+                        )
+
+                    if template['counter_spell_name'] == 'Health Boost':
+                        assert any(
+                            (FAMILY_SKILLS.get(figure['family_name']) or {}).get(
+                                'must_be_attacked')
+                            and not figure.get('checkmate', False)
+                            for figure in figures
+                        )
+
+                    call_fields = {
+                        'Call King': 'castle',
+                        'Call Military': 'military',
+                        'Call Villager': 'village',
+                    }
+                    for move in template['battle_moves']:
+                        if move['family_name'] not in call_fields:
+                            continue
+                        call_figure = figures[move['call_figure_index']]
+                        assert call_figure['field'] == call_fields[move['family_name']]
+                        assert call_figure['suit'] == move['suit']
 
     def test_neutral_lands_still_generate_valid_templates(self):
         template = get_ai_defence_template_for_land(_land(tier=2, suit='Neutral'))
