@@ -1152,8 +1152,7 @@ def test_main_menu_journey_coach_routes_starter_reveal_then_conquer():
     assert step['title'] == 'Visit Your Collection'
     assert step['body'] == (
         'This is the main menu. Let us visit your collection first, where all '
-        'your personal cards are stored. YOu add cards to your collection by '
-        'opening booster packs or by conquering/defending lands')
+        'your personal cards are stored that you have gathered.')
 
     # Starter set revealed: now conquer the first land.
     screen.state.user_dict['onboarding']['menu_hints_seen'].append(
