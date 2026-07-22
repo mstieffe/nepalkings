@@ -3780,6 +3780,40 @@ class TestConquerSubscreenLayout:
         )
 
 
+def _install_immediate_tactics_action_poller(monkeypatch):
+    """Keep action-routing tests deterministic while production stays async."""
+    class ImmediatePoller:
+        def __init__(self, func, *args, **kwargs):
+            self._func = func
+            self._result = None
+            self._has_result = False
+            self._busy = False
+
+        def poll(self, args=None, kwargs=None):
+            self._busy = True
+            self._result = self._func(*(args or ()), **(kwargs or {}))
+            self._has_result = True
+            self._busy = False
+
+        def has_result(self):
+            return self._has_result
+
+        @property
+        def result(self):
+            self._has_result = False
+            return self._result
+
+        @property
+        def busy(self):
+            return self._busy
+
+        def invalidate_cache(self):
+            return None
+
+    monkeypatch.setattr(
+        'game.screens.conquer_game_screen.BackgroundPoller', ImmediatePoller)
+
+
 class TestTacticsHandRouting:
     """Phase 9-10 redesign: tactics-hand games never visit ``battle_shop``."""
 
@@ -4368,12 +4402,13 @@ pygame.quit()
         from game.components.conquer_tactics_rail import ACTION_GAMBLE
 
         ConquerGameScreen, screen = self._make_screen()
+        _install_immediate_tactics_action_poller(monkeypatch)
         screen._tactics_rail = SimpleNamespace(reset_after_action=lambda: None)
         called = []
-        monkeypatch.setattr(
-            'utils.game_service.gamble_conquer_tactic',
-            lambda game_id, player_id, tactic_id: called.append((game_id, player_id, tactic_id)),
-        )
+        def fake_gamble(game_id, player_id, tactic_id, **_kwargs):
+            called.append((game_id, player_id, tactic_id))
+            return {'success': True}
+        monkeypatch.setattr('utils.game_service.gamble_conquer_tactic', fake_gamble)
         monkeypatch.setattr(
             'utils.battle_shop_service.gamble_battle_move',
             lambda *_args: called.append(('legacy',)),
@@ -4383,13 +4418,64 @@ pygame.quit()
             screen,
             {'action': ACTION_GAMBLE, 'move': {'id': 7}},
         )
+        ConquerGameScreen._pump_tactics_rail_action(screen)
 
         assert called == [(1, 42, 7)]
+
+    def test_tactics_action_dispatch_is_non_blocking_and_reuses_action_id(
+            self, monkeypatch):
+        from game.components.conquer_tactics_rail import ACTION_GAMBLE
+
+        ConquerGameScreen, screen = self._make_screen()
+        service_calls = []
+        pollers = []
+
+        class DeferredPoller:
+            def __init__(self, func, *args, **kwargs):
+                self.func = func
+                self.kwargs = kwargs
+                self.started = False
+                pollers.append(self)
+
+            def poll(self, args=None, kwargs=None):
+                self.started = True
+
+            def has_result(self):
+                return False
+
+        monkeypatch.setattr(
+            'game.screens.conquer_game_screen.BackgroundPoller', DeferredPoller)
+        monkeypatch.setattr(
+            'utils.game_service.new_client_action_id', lambda: 'mobile-action-1')
+        monkeypatch.setattr(
+            'utils.game_service.gamble_conquer_tactic',
+            lambda *args, **kwargs: service_calls.append((args, kwargs)),
+        )
+        pending = []
+        screen._tactics_rail = SimpleNamespace(
+            selection_revision=lambda: 4,
+            begin_server_action=lambda *args: pending.append(args),
+        )
+
+        ConquerGameScreen._dispatch_tactics_rail_action(
+            screen,
+            {'action': ACTION_GAMBLE, 'move': {'id': 7}},
+        )
+
+        # Dispatch starts the poller but never executes the service call on
+        # the game-loop thread.
+        assert service_calls == []
+        assert pollers[0].started is True
+        assert pending == [(ACTION_GAMBLE, 7)]
+        request = pollers[0].kwargs['async_requests'][0]
+        assert request['json']['client_action_id'] == 'mobile-action-1'
+        assert screen._tactics_action_context['selection_revision'] == 4
 
     def test_tactics_hand_gamble_failure_shows_banner(self, monkeypatch):
         from game.components.conquer_tactics_rail import ACTION_GAMBLE
 
         ConquerGameScreen, screen = self._make_screen()
+        _install_immediate_tactics_action_poller(monkeypatch)
         banners = []
         resets = []
         rail = SimpleNamespace(
@@ -4400,7 +4486,7 @@ pygame.quit()
         screen._tactics_rail = rail
         monkeypatch.setattr(
             'utils.game_service.gamble_conquer_tactic',
-            lambda *_args: {
+            lambda *_args, **_kwargs: {
                 'success': False,
                 'message': 'You can only gamble once per battle round',
             },
@@ -4410,6 +4496,7 @@ pygame.quit()
             screen,
             {'action': ACTION_GAMBLE, 'move': {'id': 7}},
         )
+        ConquerGameScreen._pump_tactics_rail_action(screen)
 
         assert banners[0][0][0] == 'You can only gamble once per battle round'
         assert resets == []
@@ -4446,6 +4533,7 @@ pygame.quit()
             battle_turn_player_id=42,
             battle_round=1,
         )
+        _install_immediate_tactics_action_poller(monkeypatch)
         source_rect = pygame.Rect(20, 30, 80, 40)
         screen._tactics_rail = SimpleNamespace(
             reset_after_action=lambda: None,
@@ -4453,7 +4541,7 @@ pygame.quit()
         )
         called = []
 
-        def fake_play(game_id, player_id, tactic_id):
+        def fake_play(game_id, player_id, tactic_id, **_kwargs):
             called.append((game_id, player_id, tactic_id))
             return {'success': True}
 
@@ -4470,6 +4558,7 @@ pygame.quit()
                 'move': {'id': 7, 'family_name': 'Sword', 'value': 9},
             },
         )
+        ConquerGameScreen._pump_tactics_rail_action(screen)
 
         assert called == [(1, 42, 7)]
         animation = screen._tactic_flight_animation
@@ -4493,12 +4582,14 @@ pygame.quit()
         from game.components.conquer_tactics_rail import ACTION_DISMANTLE
 
         ConquerGameScreen, screen = self._make_screen()
+        _install_immediate_tactics_action_poller(monkeypatch)
         screen._tactics_rail = SimpleNamespace(reset_after_action=lambda: None)
         called = []
+        def fake_dismantle(game_id, player_id, tactic_id, **_kwargs):
+            called.append((game_id, player_id, tactic_id))
+            return {'success': True}
         monkeypatch.setattr(
-            'utils.game_service.dismantle_conquer_tactic',
-            lambda game_id, player_id, tactic_id: called.append((game_id, player_id, tactic_id)),
-        )
+            'utils.game_service.dismantle_conquer_tactic', fake_dismantle)
         monkeypatch.setattr(
             'utils.battle_shop_service.dismantle_battle_move',
             lambda *_args: called.append(('legacy',)),
@@ -4508,6 +4599,7 @@ pygame.quit()
             screen,
             {'action': ACTION_DISMANTLE, 'move': {'id': 8}},
         )
+        ConquerGameScreen._pump_tactics_rail_action(screen)
 
         assert called == [(1, 42, 8)]
 
@@ -4515,21 +4607,24 @@ pygame.quit()
         from game.components.conquer_tactics_rail import ACTION_GAMBLE
 
         ConquerGameScreen, screen = self._make_screen(conquer_move_model='battle_move')
+        _install_immediate_tactics_action_poller(monkeypatch)
         screen._tactics_rail = SimpleNamespace(reset_after_action=lambda: None)
         called = []
         monkeypatch.setattr(
             'utils.game_service.gamble_conquer_tactic',
             lambda *_args: called.append(('tactics',)),
         )
+        def fake_legacy_gamble(game_id, player_id, move_id):
+            called.append((game_id, player_id, move_id))
+            return {'success': True}
         monkeypatch.setattr(
-            'utils.battle_shop_service.gamble_battle_move',
-            lambda game_id, player_id, move_id: called.append((game_id, player_id, move_id)),
-        )
+            'utils.battle_shop_service.gamble_battle_move', fake_legacy_gamble)
 
         ConquerGameScreen._dispatch_tactics_rail_action(
             screen,
             {'action': ACTION_GAMBLE, 'move': {'id': 9}},
         )
+        ConquerGameScreen._pump_tactics_rail_action(screen)
 
         assert called == [(1, 42, 9)]
 
@@ -4537,21 +4632,25 @@ pygame.quit()
         from game.components.conquer_tactics_rail import ACTION_DISMANTLE
 
         ConquerGameScreen, screen = self._make_screen(conquer_move_model='battle_move')
+        _install_immediate_tactics_action_poller(monkeypatch)
         screen._tactics_rail = SimpleNamespace(reset_after_action=lambda: None)
         called = []
         monkeypatch.setattr(
             'utils.game_service.dismantle_conquer_tactic',
             lambda *_args: called.append(('tactics',)),
         )
+        def fake_legacy_dismantle(game_id, player_id, move_id):
+            called.append((game_id, player_id, move_id))
+            return {'success': True}
         monkeypatch.setattr(
             'utils.battle_shop_service.dismantle_battle_move',
-            lambda game_id, player_id, move_id: called.append((game_id, player_id, move_id)),
-        )
+            fake_legacy_dismantle)
 
         ConquerGameScreen._dispatch_tactics_rail_action(
             screen,
             {'action': ACTION_DISMANTLE, 'move': {'id': 10}},
         )
+        ConquerGameScreen._pump_tactics_rail_action(screen)
 
         assert called == [(1, 42, 10)]
 
@@ -4918,12 +5017,44 @@ def test_battle_countdown_click_skips_to_go(monkeypatch):
     screen._ensure_conquer_screen_game = lambda: True
     screen.dialogue_box = None
     screen._conquer_payoff_pending = None
+    rail_calls = []
+    screen._tactics_rail = SimpleNamespace(
+        handle_event=lambda event, **kwargs: rail_calls.append((event, kwargs)))
     screen._start_conquer_battle_countdown()
-    click = SimpleNamespace(type=pygame.MOUSEBUTTONDOWN, button=1)
+    click = SimpleNamespace(type=pygame.MOUSEBUTTONDOWN, button=1, pos=(20, 30))
     screen.handle_events([click])
     assert not screen._is_battle_countdown_active()
+    assert rail_calls == [(click, {'allow_actions': False})]
     # Skipping before GO still lands the war drum for closure.
     assert played[-1] == 'battle_start'
+
+
+def test_battle_reveal_click_preserves_safe_tactics_rail_intent(monkeypatch):
+    clock = {'now': 75_000}
+    screen = _countdown_screen(monkeypatch, clock)
+    screen._ensure_conquer_screen_game = lambda: True
+    screen.dialogue_box = None
+    screen._conquer_payoff_pending = None
+    screen._handle_battle_intro_window_events = lambda events: False
+    screen._handle_conquer_battle_coach_events = lambda events: False
+    screen._gameplay_input_overlay_owner = lambda: None
+    screen._handle_conquer_command_events = lambda events: False
+    screen._handle_collapsed_header_events = lambda events: False
+    screen._handle_conquer_touch_pin_events = lambda events: False
+    fast_forwards = []
+    screen._conquer_reveal_sequencer = SimpleNamespace(
+        is_active=lambda: True,
+        fast_forward=lambda: fast_forwards.append(True),
+    )
+    rail_calls = []
+    screen._tactics_rail = SimpleNamespace(
+        handle_event=lambda event, **kwargs: rail_calls.append((event, kwargs)))
+
+    click = SimpleNamespace(type=pygame.MOUSEBUTTONDOWN, button=1, pos=(20, 30))
+    screen.handle_events([click])
+
+    assert fast_forwards == [True]
+    assert rail_calls == [(click, {'allow_actions': False})]
 
 
 def test_lane_entrances_seed_silently_on_rejoin(monkeypatch):

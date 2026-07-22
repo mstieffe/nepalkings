@@ -35,7 +35,8 @@ from game.components.suit_text import fit_suit_text, render_suit_text
 # Visual constants
 _BG_RGBA = (38, 29, 22, 218)
 _BORDER_RGBA = (122, 92, 56)
-_SELECTED_RGBA = (210, 168, 72)
+_SELECTED_RGBA = (92, 218, 202)
+_SELECTED_BG_RGBA = (22, 54, 52, 242)
 _TEXT_PRIMARY = (238, 218, 170)
 _TEXT_SECONDARY = (170, 152, 110)
 _TEXT_MUTED = (132, 116, 86)
@@ -85,6 +86,13 @@ class ConquerTacticsRail:
         self._scroll_down_rect: Optional[pygame.Rect] = None
         # Pending action consumed by the parent each frame.
         self._pending_action: Optional[Dict[str, Any]] = None
+        # Monotonic user-selection version. The parent snapshots this when a
+        # server mutation begins so a response never erases a choice the
+        # player made while that request was in flight.
+        self._selection_revision = 0
+        # One server mutation may be pending while the rail remains locally
+        # interactive. Shape: {'action': str, 'move_id': int|None} or None.
+        self._server_action_pending: Optional[Dict[str, Any]] = None
         # Sticky result banner — shown at the top of the rail until next
         # action or until ttl expires. (#8a)
         self._result_banner: Optional[Dict[str, Any]] = None
@@ -492,13 +500,124 @@ class ConquerTacticsRail:
         self._pending_action = None
         return action
 
-    def reset_selection(self):
+    def reset_selection(self, *, record_revision: bool = False):
+        changed = self._selected_id is not None
         self._selected_id = None
         self._hovered_id = None
         self._combine_partner_id = None
         self._combine_pending = False
         self._pending_action = None
         self._gamble_armed = None
+        if changed and record_revision:
+            self._selection_revision += 1
+
+    def selection_revision(self) -> int:
+        return int(self._selection_revision)
+
+    def begin_server_action(self, action: str, move_id=None) -> None:
+        """Mark one mutation pending without locking local rail navigation."""
+        try:
+            move_id = int(move_id) if move_id is not None else None
+        except (TypeError, ValueError):
+            move_id = None
+        self._server_action_pending = {
+            'action': str(action or 'action'),
+            'move_id': move_id,
+        }
+
+    def clear_server_action(self) -> None:
+        self._server_action_pending = None
+
+    def _scroll_move_into_view(self, move_id: int) -> None:
+        items = self._visible_hand_items()
+        target_index = None
+        for index, item in enumerate(items):
+            move = (item.get('move') if item.get('kind') == 'move'
+                    else item.get('representative'))
+            try:
+                if int((move or {}).get('id') or 0) == int(move_id):
+                    target_index = index
+                    break
+            except (TypeError, ValueError):
+                continue
+        if target_index is None:
+            return
+        layout = self._ensure_layout().tactics_rail
+        list_h = (self._dyn_hand_list_rect.height
+                  if self._dyn_hand_list_rect is not None
+                  else layout.hand_list_rect[3])
+        visible = max(1, min(
+            layout.cells_visible,
+            list_h // max(1, layout.cell_height),
+        ))
+        if settings.TOUCH_TARGET_MIN > 0:
+            visible = max(
+                visible,
+                list_h // max(1, layout.cell_height),
+            )
+        if target_index < self._scroll:
+            self._scroll = target_index
+        elif target_index >= self._scroll + visible:
+            self._scroll = max(0, target_index - visible + 1)
+        self._clamp_scroll()
+
+    def focus_move(self, move_id, *, reveal_group: bool = False) -> bool:
+        """Programmatically select and reveal a still-available tactic."""
+        try:
+            wanted = int(move_id)
+        except (TypeError, ValueError):
+            return False
+        target = next(
+            (move for move in self._hand_moves()
+             if int(move.get('id') or 0) == wanted),
+            None,
+        )
+        if target is None:
+            return False
+        if reveal_group:
+            group = self._family_group(target)
+            members = next(
+                (moves for label, moves in self._hand_groups_in_order()
+                 if label == group),
+                [],
+            )
+            if len(members) > 1 and int(members[0].get('id') or 0) != wanted:
+                self._collapsed_groups.discard(group)
+                self._expanded_groups.add(group)
+        self._selected_id = wanted
+        self._combine_partner_id = None
+        self._combine_pending = False
+        self._gamble_armed = None
+        self._scroll_move_into_view(wanted)
+        return True
+
+    def complete_server_action(self, *, submit_revision: int,
+                               preferred_move_ids=None,
+                               select_strongest_fallback: bool = False) -> None:
+        """Finish a mutation without erasing selection made during its wait."""
+        self.clear_server_action()
+        self._hovered_id = None
+        self._combine_partner_id = None
+        self._combine_pending = False
+        self._pending_action = None
+        self._gamble_armed = None
+
+        user_reselected = self._selection_revision != int(submit_revision)
+        current = self._selected_move()
+        if user_reselected and current is not None:
+            self._scroll_move_into_view(int(current.get('id') or 0))
+            return
+
+        for move_id in preferred_move_ids or []:
+            if self.focus_move(move_id, reveal_group=True):
+                return
+        if select_strongest_fallback:
+            moves = [m for m in self._hand_moves() if not self._is_ghost_move(m)]
+            if moves:
+                strongest = max(moves, key=lambda move: self._power(move))
+                if self.focus_move(strongest.get('id'), reveal_group=True):
+                    return
+        self._selected_id = None
 
     def preview_move(self) -> Optional[Dict[str, Any]]:
         if not self._is_my_battle_turn() or self._hovered_id is None:
@@ -525,6 +644,7 @@ class ConquerTacticsRail:
 
     def reset_after_action(self):
         """Clear ephemeral state after a server action completed."""
+        self.clear_server_action()
         self.reset_selection()
 
     NEW_MOVE_GLOW_MS = 3500
@@ -734,8 +854,8 @@ class ConquerTacticsRail:
         """Return True if the group should render every member.
 
         Groups with one member are always "expanded" (nothing to collapse).
-        Otherwise: explicit user toggle wins; auto-expand the Dagger group
-        whenever the player is mid-combine so partners stay visible.
+        Multi-member groups change only through their dedicated disclosure
+        control. Card selection never moves rows underneath the player's hand.
         """
         if len(members) <= 1:
             return True
@@ -743,12 +863,6 @@ class ConquerTacticsRail:
             return True
         if group_label in self._collapsed_groups:
             return False
-        # Auto-expand Daggers when a single Dagger is selected or the
-        # combine flow is armed — partners must stay visible.
-        if group_label == 'Dagger':
-            sel = self._selected_move()
-            if (sel is not None and self._is_single_dagger(sel)) or self._combine_pending:
-                return True
         # Default: collapse multi-member groups.
         return False
 
@@ -773,6 +887,20 @@ class ConquerTacticsRail:
                 self._collapsed_groups.add(group_label)
             else:
                 self._expanded_groups.add(group_label)
+
+        members = next(
+            (lst for label, lst in self._hand_groups_in_order()
+             if label == group_label),
+            [],
+        )
+        if members and not self._group_is_expanded(group_label, members):
+            representative_id = int(members[0].get('id') or 0)
+            if (self._selected_id is not None
+                    and int(self._selected_id) != representative_id
+                    and any(int(move.get('id') or 0) == int(self._selected_id)
+                            for move in members)):
+                self._selected_id = None
+                self._selection_revision += 1
 
     def _visible_hand_items(self) -> List[Dict[str, Any]]:
         """Flatten groups into render rows, collapsing where appropriate.
@@ -807,7 +935,7 @@ class ConquerTacticsRail:
                 })
         return items
 
-    def handle_event(self, event) -> bool:
+    def handle_event(self, event, *, allow_actions: bool = True) -> bool:
         """Returns True if the rail consumed the event."""
         if event.type not in (
             pygame.MOUSEBUTTONDOWN,
@@ -903,7 +1031,8 @@ class ConquerTacticsRail:
             if self._touch_collide(rect, pos,
                                    settings.TOUCH_COMPACT_MIN,
                                    settings.TOUCH_COMPACT_MIN):
-                self._trigger_action(key)
+                if allow_actions:
+                    self._trigger_action(key)
                 return True
         # Cell selection
         for i, (rect, mid) in enumerate(zip(self._cell_rects, self._cell_move_ids)):
@@ -918,16 +1047,11 @@ class ConquerTacticsRail:
                     settings.TOUCH_COMPACT_MIN):
                 kind = (self._cell_kinds[i]
                         if i < len(self._cell_kinds) else 'move')
-                if kind == 'collapsed':
-                    group = (self._cell_groups[i]
-                             if i < len(self._cell_groups) else None)
-                    if group:
-                        self._toggle_group(group)
-                    return True
                 toggle_rect = (self._cell_group_toggle_rects[i]
                                if i < len(self._cell_group_toggle_rects) else None)
                 if self._touch_collide(toggle_rect, pos,
-                                       settings.TOUCH_COMPACT_MIN, settings.TOUCH_COMPACT_MIN):
+                                       settings.TOUCH_COMPACT_MIN,
+                                       settings.TOUCH_COMPACT_MIN):
                     group = (self._cell_groups[i]
                              if i < len(self._cell_groups) else None)
                     if group:
@@ -938,7 +1062,8 @@ class ConquerTacticsRail:
                 # single Daggers; the actual drag promotes on motion.
                 move = next((m for m in self._hand_moves()
                              if int(m.get('id') or 0) == mid), None)
-                if move is not None and self._is_single_dagger(move):
+                if (allow_actions and kind != 'collapsed'
+                        and move is not None and self._is_single_dagger(move)):
                     self._drag_origin_id = mid
                     self._drag_pos = pos
                     self._drag_active = False
@@ -1011,7 +1136,10 @@ class ConquerTacticsRail:
             # Invalid pair — fall through to plain selection toggle so the
             # player can pick a different partner without re-arming.
         # Plain selection / toggle.
-        self._selected_id = None if self._selected_id == mid else mid
+        next_id = None if self._selected_id == mid else mid
+        if next_id != self._selected_id:
+            self._selection_revision += 1
+        self._selected_id = next_id
         self._combine_pending = False
         self._combine_partner_id = None
 
@@ -1149,6 +1277,10 @@ class ConquerTacticsRail:
             duration = int(self._gamble_anim.get('duration', 0) or 0)
             if now < started + duration:
                 return None
+        if self._server_action_pending is not None:
+            # Pending source rows use a small live pulse while the non-blocking
+            # request is in flight.
+            return None
         if any(int(expires or 0) > now for expires in self._new_move_glow_until.values()):
             return None
         if any(int(data.get('expires_at') or 0) > now for data in self._removed_ghosts.values()):
@@ -1781,13 +1913,13 @@ class ConquerTacticsRail:
                 rep_id = int(rep.get('id') or 0)
                 if hovered:
                     self._hovered_id = rep_id
-                self._draw_collapsed_group_cell(
+                toggle_rect = self._draw_collapsed_group_cell(
                     cell_rect, item, font, chip_font, hovered=hovered)
                 self._cell_rects.append(cell_rect)
                 self._cell_move_ids.append(rep_id)
                 self._cell_kinds.append('collapsed')
                 self._cell_groups.append(item['group'])
-                self._cell_group_toggle_rects.append(None)
+                self._cell_group_toggle_rects.append(toggle_rect)
             else:
                 move = item['move']
                 if hovered:
@@ -1878,12 +2010,11 @@ class ConquerTacticsRail:
         return pill_rect
 
     def _draw_collapsed_group_cell(self, rect: pygame.Rect, item: Dict[str, Any],
-                                    font, chip_font, *, hovered: bool = False) -> None:
+                                    font, chip_font, *, hovered: bool = False) -> pygame.Rect:
         """Render a collapsed-group cell: representative move + ×N badge.
 
-        The representative is the strongest move in the group. Click
-        anywhere on the cell toggles expansion (handled in
-        ``_handle_cell_click``).
+        The representative is the strongest move in the group. The main row
+        selects that tactic; only the trailing count/chevron toggles expansion.
         """
         rep = item['representative']
         count = int(item.get('count') or 1)
@@ -1900,10 +2031,10 @@ class ConquerTacticsRail:
         self.window.set_clip(rect)
         pill_font = settings.get_font(max(settings.FS_CONQUER_META, int(settings.FS_TINY * 0.85)), bold=True)
         if settings.TOUCH_TARGET_MIN > 0:
-            self._draw_mobile_group_chip(
+            toggle_rect = self._draw_mobile_group_chip(
                 rect, count, pill_font, expanded=False, hovered=hovered)
             self.window.set_clip(previous_clip)
-            return
+            return toggle_rect
         pill_text = f'×{count}'
         pill_surf = pill_font.render(pill_text, True, (24, 18, 12))
         pill_w = pill_surf.get_width() + 10
@@ -1924,6 +2055,9 @@ class ConquerTacticsRail:
             self.window, chev_color,
             [(cx - 5, cy - 3), (cx + 5, cy - 3), (cx, cy + 4)])
         self.window.set_clip(previous_clip)
+        toggle_rect = pill_rect.union(
+            pygame.Rect(rect.right - 21, rect.top, 21, rect.height))
+        return toggle_rect
 
 
     def _draw_drag_ghost(self, move: Dict[str, Any], pos: tuple) -> None:
@@ -2024,12 +2158,43 @@ class ConquerTacticsRail:
         self.window.set_clip(rect)
         is_selected = move.get('id') == self._selected_id
         is_partner = move.get('id') == self._combine_partner_id and self._combine_pending
-        bg_col = (52, 40, 30, 240) if is_selected else (38, 32, 25, 224) if hovered else (32, 24, 18, 200)
+        pending = self._server_action_pending or {}
+        try:
+            is_pending = int(pending.get('move_id') or -1) == int(move.get('id') or -2)
+        except (TypeError, ValueError):
+            is_pending = False
+        bg_col = (_SELECTED_BG_RGBA if is_selected
+                  else (38, 32, 25, 224) if hovered
+                  else (32, 24, 18, 200))
         bg = pygame.Surface(rect.size, pygame.SRCALPHA)
         bg.fill(bg_col)
         self.window.blit(bg, rect.topleft)
-        border_col = _SELECTED_RGBA if is_selected else (190, 178, 120) if hovered else (_BORDER_RGBA if not is_partner else (130, 200, 250))
-        pygame.draw.rect(self.window, border_col, rect, 2, border_radius=4)
+        border_col = (_SELECTED_RGBA if is_selected
+                      else (130, 200, 250) if is_pending or is_partner
+                      else (190, 178, 120) if hovered
+                      else _BORDER_RGBA)
+        pygame.draw.rect(
+            self.window, border_col, rect,
+            3 if is_selected else 2, border_radius=4)
+        if is_selected:
+            # Selection owns a dedicated teal language: dark tint, stronger
+            # border, and a solid leading bar. Gold remains reserved for
+            # strongest/new-card feedback.
+            pygame.draw.rect(
+                self.window, _SELECTED_RGBA,
+                pygame.Rect(rect.left + 2, rect.top + 4, 4, rect.height - 8),
+                border_radius=2,
+            )
+        if is_pending:
+            phase = (pygame.time.get_ticks() % 600) / 600.0
+            pulse = 110 + int(100 * (1.0 - abs(0.5 - phase) * 2.0))
+            pending_surf = pygame.Surface(rect.size, pygame.SRCALPHA)
+            pygame.draw.rect(
+                pending_surf, (130, 200, 250, pulse),
+                pending_surf.get_rect().inflate(-4, -4), 2,
+                border_radius=4,
+            )
+            self.window.blit(pending_surf, rect.topleft)
 
         # New-move glow (#round5) — stronger pulse + outer halo + corner
         # NEW ribbon for ``NEW_MOVE_GLOW_MS`` after a new move appears.
@@ -2153,7 +2318,14 @@ class ConquerTacticsRail:
         # Power is already rendered inside the battle-move icon itself, so
         # we omit the duplicate right-edge number to free horizontal
         # space for the move name + rank chip (#round5).
-        max_text_w = max(24, rect.right - text_x - 8)
+        # The mobile check is only 14 px wide. Keep a small safety gap without
+        # needlessly truncating short family names such as "Dagger".
+        selected_reserve = (
+            15 if is_selected and settings.TOUCH_TARGET_MIN > 0
+            else 19 if is_selected
+            else 0
+        )
+        max_text_w = max(24, rect.right - text_x - 8 - selected_reserve)
 
         name_surf = font.render(self._fit_text(name, font, max_text_w), True, _TEXT_PRIMARY)
         name_y = rect.top + (4 if settings.TOUCH_TARGET_MIN > 0 else 6)
@@ -2176,6 +2348,21 @@ class ConquerTacticsRail:
         # could render a missing-character box in this corner.
         if mid == self._strongest_move_id():
             self._draw_strongest_marker(self.window, rect)
+
+        glow_active = bool(glow_until and glow_until > now)
+        if is_selected and not glow_active:
+            # Vector checkmark: browser fonts are not guaranteed to contain a
+            # reliable check glyph at this scale.
+            center = (rect.right - 10, rect.top + 11)
+            pygame.draw.circle(self.window, (18, 48, 46), center, 7)
+            pygame.draw.circle(self.window, _SELECTED_RGBA, center, 7, 2)
+            pygame.draw.lines(
+                self.window, _SELECTED_RGBA, False,
+                [(center[0] - 3, center[1]),
+                 (center[0] - 1, center[1] + 3),
+                 (center[0] + 4, center[1] - 3)],
+                2,
+            )
 
         # Combine-flow position indicator (#3.2). Show "1/2" on the
         # origin and "2/2" on the partner so the player understands the

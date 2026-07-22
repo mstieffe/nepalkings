@@ -49,6 +49,7 @@ CONQUER_GAME_ALIASES = {
     "conquer_game_prebattle_confirm": "prebattle_confirm",
     "conquer_game_battle_shop": "battle_shop",
     "conquer_game_battle": "battle",
+    "conquer_game_battle_selected": "battle_selected",
     "conquer_game_battle_notice": "battle_notice",
     "conquer_game_battle_dagger": "battle_dagger",
     "conquer_game_battle_collapsed": "battle_collapsed",
@@ -873,6 +874,7 @@ def populate_conquer_game(client, subscreen: str):
     battle_variants = {
         "battle_collapsed",
         "battle_dagger",
+        "battle_selected",
         "battle_notice",
         "battle_intro_1",
         "battle_intro_2",
@@ -1065,6 +1067,16 @@ def populate_conquer_game(client, subscreen: str):
                     if move.get("family_name") == "Dagger" and not move.get("card_id_b"):
                         rail._selected_id = move.get("id")
                         break
+        if requested_subscreen == "battle_selected":
+            rail = getattr(screen, "_tactics_rail", None)
+            if rail is not None:
+                dagger_group = next(
+                    (moves for label, moves in rail._hand_groups_in_order()
+                     if label == "Dagger"),
+                    [],
+                )
+                if dagger_group:
+                    rail._selected_id = dagger_group[0].get("id")
         if requested_subscreen == "battle_notice":
             # Insert this after the renderer's first settling frame: the live
             # animation pump intentionally clears stale effects while it seeds

@@ -257,6 +257,9 @@ class ConquerGameScreen(GameScreen):
         self._battle_state_poller_key = None
         self._battle_state_pending_key = None
         self._battle_state_last_poll_ms = 0
+        self._discard_next_battle_state_result = False
+        self._tactics_action_poller = None
+        self._tactics_action_context = None
         self._conquer_battle_move_cache_key = None
         self._conquer_battle_move_cache = []
         self._conquer_battle_move_icon_caches = {}
@@ -1819,6 +1822,16 @@ class ConquerGameScreen(GameScreen):
         Covers the played-tactic flight animation, the round-transition
         pause, and the staged round-reveal sequence.
         """
+        pending = getattr(self, '_tactics_action_context', None)
+        if pending:
+            label = {
+                ACTION_PLAY: 'Playing tactic',
+                ACTION_GAMBLE: 'Gambling',
+                ACTION_COMBINE: 'Combining',
+                ACTION_DISMANTLE: 'Dismantling',
+                ACTION_SKIP: 'Skipping turn',
+            }.get(pending.get('action'), 'Resolving action')
+            return f'{label}…'
         animation = getattr(self, '_tactic_flight_animation', None)
         if animation:
             try:
@@ -3884,9 +3897,160 @@ class ConquerGameScreen(GameScreen):
         specs = preview.get('specs') or []
         return specs if len(specs) == 2 else None
 
+    @staticmethod
+    def _transform_tactics_action_async_responses(responses):
+        """Convert the browser poller's single POST response into a dict."""
+        response = (responses or {}).get('action')
+        if response is None:
+            return {'success': False, 'message': 'Action returned no response'}
+        try:
+            payload = response.json()
+        except Exception:
+            payload = None
+        status = int(getattr(response, 'status_code', 0) or 0)
+        if not isinstance(payload, dict):
+            return {
+                'success': False,
+                'message': f'Action returned an invalid response (HTTP {status})',
+            }
+        if status >= 400:
+            payload = dict(payload)
+            payload['success'] = False
+            payload.setdefault('message', f'Action failed (HTTP {status})')
+        return payload
+
+    def _build_tactics_action_request(self, action_payload, gid, pid):
+        """Return a desktop task and matching async-web request definition."""
+        action = action_payload.get('action')
+        move = action_payload.get('move') or {}
+        mid = move.get('id')
+        tactics_hand = self._is_tactics_hand_game()
+        url = None
+        payload = None
+        call = None
+
+        if tactics_hand and action in {
+                ACTION_PLAY, ACTION_GAMBLE, ACTION_COMBINE, ACTION_DISMANTLE}:
+            action_id = game_service.new_client_action_id()
+        else:
+            action_id = None
+
+        if tactics_hand and action == ACTION_PLAY and mid is not None:
+            call_figure = self._conquer_best_call_figure_for_tactic(move)
+            call_figure_id = (
+                getattr(call_figure, 'id', None)
+                if call_figure is not None else move.get('call_figure_id'))
+            payload = {
+                'game_id': gid, 'player_id': pid, 'tactic_id': mid,
+                'client_action_id': action_id,
+            }
+            if call_figure_id is not None:
+                payload['call_figure_id'] = call_figure_id
+            url = f'{settings.SERVER_URL}/games/play_conquer_tactic'
+            call = lambda: game_service.play_conquer_tactic(
+                gid, pid, mid, call_figure_id=call_figure_id,
+                client_action_id=action_id)
+        elif action == ACTION_PLAY and mid is not None:
+            payload = {'game_id': gid, 'player_id': pid, 'battle_move_id': mid}
+            url = f'{settings.SERVER_URL}/games/play_battle_move'
+            call = lambda: game_service.play_battle_move(gid, pid, mid)
+        elif action == ACTION_SKIP:
+            payload = {'game_id': gid, 'player_id': pid}
+            url = f'{settings.SERVER_URL}/games/skip_battle_turn'
+            call = lambda: game_service.skip_battle_turn(gid, pid)
+        elif tactics_hand and action == ACTION_GAMBLE and mid is not None:
+            payload = {
+                'game_id': gid, 'player_id': pid, 'tactic_id': mid,
+                'client_action_id': action_id,
+            }
+            url = f'{settings.SERVER_URL}/games/gamble_conquer_tactic'
+            call = lambda: game_service.gamble_conquer_tactic(
+                gid, pid, mid, client_action_id=action_id)
+        elif action == ACTION_GAMBLE and mid is not None:
+            payload = {'game_id': gid, 'player_id': pid, 'battle_move_id': mid}
+            url = f'{settings.SERVER_URL}/battle_shop/gamble_battle_move'
+            call = lambda: battle_shop_service.gamble_battle_move(gid, pid, mid)
+        elif tactics_hand and action == ACTION_DISMANTLE and mid is not None:
+            payload = {
+                'game_id': gid, 'player_id': pid, 'tactic_id': mid,
+                'client_action_id': action_id,
+            }
+            url = f'{settings.SERVER_URL}/games/dismantle_conquer_tactic'
+            call = lambda: game_service.dismantle_conquer_tactic(
+                gid, pid, mid, client_action_id=action_id)
+        elif action == ACTION_DISMANTLE and mid is not None:
+            payload = {'game_id': gid, 'player_id': pid, 'battle_move_id': mid}
+            url = f'{settings.SERVER_URL}/battle_shop/dismantle_battle_move'
+            call = lambda: battle_shop_service.dismantle_battle_move(gid, pid, mid)
+        elif action == ACTION_COMBINE and mid is not None:
+            partner = action_payload.get('partner') or {}
+            pmid = partner.get('id')
+            if pmid is not None and tactics_hand:
+                payload = {
+                    'game_id': gid, 'player_id': pid,
+                    'tactic_id_a': mid, 'tactic_id_b': pmid,
+                    'client_action_id': action_id,
+                }
+                url = f'{settings.SERVER_URL}/games/combine_conquer_tactics'
+                call = lambda: game_service.combine_conquer_tactics(
+                    gid, pid, mid, pmid, client_action_id=action_id)
+            elif pmid is not None:
+                payload = {
+                    'game_id': gid, 'player_id': pid,
+                    'move_id_a': mid, 'move_id_b': pmid,
+                }
+                url = f'{settings.SERVER_URL}/battle_shop/combine_battle_moves'
+                call = lambda: battle_shop_service.combine_battle_moves(
+                    gid, pid, mid, pmid)
+
+        if call is None or url is None or payload is None:
+            return None
+
+        def safe_call():
+            try:
+                result = call()
+                if isinstance(result, dict):
+                    return result
+                return {'success': False, 'message': 'Action returned no result'}
+            except Exception as exc:
+                return {'success': False, 'message': str(exc) or 'Action failed'}
+
+        return safe_call, {
+            'key': 'action',
+            'method': 'POST_JSON',
+            'url': url,
+            'json': payload,
+        }
+
+    def _discard_battle_poll_before_tactics_action(self):
+        """Prevent a snapshot started before a mutation from winning the race."""
+        poller = getattr(self, '_battle_state_poller', None)
+        if poller is None:
+            return
+        try:
+            if poller.has_result():
+                _ = poller.result
+                poller.invalidate_cache()
+                self._discard_next_battle_state_result = False
+                self._battle_state_pending_key = None
+                return
+            was_busy = bool(poller.busy)
+            # On web, reading ``busy`` also pumps the async XHR and may publish
+            # its result. Re-check before deciding that only a future result
+            # needs discarding.
+            if poller.has_result():
+                _ = poller.result
+                poller.invalidate_cache()
+                self._discard_next_battle_state_result = False
+                self._battle_state_pending_key = None
+            elif was_busy:
+                self._discard_next_battle_state_result = True
+        except Exception:
+            self._discard_next_battle_state_result = True
+
     def _dispatch_tactics_rail_action(self, action_payload):
-        """Apply a tactics-rail action by calling the appropriate API."""
-        if not action_payload:
+        """Start one non-blocking tactics mutation and keep the rail usable."""
+        if not action_payload or getattr(self, '_tactics_action_context', None):
             return
         game = self.state.game
         if not game:
@@ -3895,15 +4059,31 @@ class ConquerGameScreen(GameScreen):
         pid = getattr(game, 'player_id', None)
         if gid is None or pid is None:
             return
+        request = self._build_tactics_action_request(action_payload, gid, pid)
+        if request is None:
+            return
+
         action = action_payload.get('action')
         move = action_payload.get('move') or {}
-        mid = move.get('id')
-        # Friendly label for the banner.
-        family = (move.get('family_name') or move.get('family')
-                  or move.get('name') or 'Tactic')
-        rank = move.get('rank') or ''
         rail = getattr(self, '_tactics_rail', None)
-        result = None
+        selection_revision = (
+            rail.selection_revision()
+            if rail is not None and hasattr(rail, 'selection_revision') else 0)
+        task, async_request = request
+        self._tactics_action_context = {
+            'action': action,
+            'move': dict(move),
+            'selection_revision': selection_revision,
+        }
+        self._tactics_action_poller = BackgroundPoller(
+            task,
+            async_requests=[async_request],
+            async_transform=self._transform_tactics_action_async_responses,
+        )
+        if rail is not None and hasattr(rail, 'begin_server_action'):
+            rail.begin_server_action(action, move.get('id'))
+        self._discard_battle_poll_before_tactics_action()
+
         from utils import sound
         sound.play({
             ACTION_PLAY: 'card_place',
@@ -3912,83 +4092,104 @@ class ConquerGameScreen(GameScreen):
             ACTION_DISMANTLE: 'card_slide',
             ACTION_SKIP: 'ui_back',
         }.get(action, 'ui_click'))
-        try:
-            if self._is_tactics_hand_game() and action == ACTION_PLAY and mid is not None:
-                call_figure = self._conquer_best_call_figure_for_tactic(move)
-                call_figure_id = (
-                    getattr(call_figure, 'id', None)
-                    if call_figure is not None
-                    else move.get('call_figure_id')
-                )
-                if call_figure_id is not None:
-                    result = game_service.play_conquer_tactic(
-                        gid, pid, mid, call_figure_id=call_figure_id)
-                else:
-                    result = game_service.play_conquer_tactic(gid, pid, mid)
-                if not isinstance(result, dict) or result.get('success', True):
-                    self._start_tactic_flight_animation(move)
-            elif action == ACTION_PLAY and mid is not None:
-                result = game_service.play_battle_move(gid, pid, mid)
-            elif action == ACTION_SKIP:
-                result = game_service.skip_battle_turn(gid, pid)
-            elif self._is_tactics_hand_game() and action == ACTION_GAMBLE and mid is not None:
-                result = game_service.gamble_conquer_tactic(gid, pid, mid)
-            elif action == ACTION_GAMBLE and mid is not None:
-                result = battle_shop_service.gamble_battle_move(gid, pid, mid)
-            elif self._is_tactics_hand_game() and action == ACTION_DISMANTLE and mid is not None:
-                result = game_service.dismantle_conquer_tactic(gid, pid, mid)
-            elif action == ACTION_DISMANTLE and mid is not None:
-                result = battle_shop_service.dismantle_battle_move(gid, pid, mid)
-            elif action == ACTION_COMBINE and mid is not None:
-                partner = action_payload.get('partner') or {}
-                pmid = partner.get('id')
-                if pmid is not None:
-                    if self._is_tactics_hand_game():
-                        result = game_service.combine_conquer_tactics(gid, pid, mid, pmid)
-                    else:
-                        result = battle_shop_service.combine_battle_moves(gid, pid, mid, pmid)
-        except Exception as exc:
-            result = {'success': False, 'message': str(exc) or 'Action failed'}
-        if isinstance(result, dict) and result.get('success') is False:
+        self._tactics_action_poller.poll()
+
+    @staticmethod
+    def _action_result_moves(result, *keys):
+        for key in keys:
+            value = result.get(key) if isinstance(result, dict) else None
+            if isinstance(value, dict):
+                return [value]
+            if isinstance(value, list):
+                return [move for move in value if isinstance(move, dict)]
+        return []
+
+    @staticmethod
+    def _preferred_result_move_ids(moves):
+        def power(move):
+            if move.get('family_name') == 'Block':
+                return 0
+            try:
+                return int(move.get('value') or 0)
+            except (TypeError, ValueError):
+                return 0
+
+        return [move.get('id') for move in sorted(
+            moves, key=lambda move: (power(move), int(move.get('id') or 0)),
+            reverse=True) if move.get('id') is not None]
+
+    def _finish_tactics_rail_action(self, context, result):
+        action = context.get('action')
+        move = context.get('move') or {}
+        family = (move.get('family_name') or move.get('family')
+                  or move.get('name') or 'Tactic')
+        rank = move.get('rank') or ''
+        label = f"{family} {rank}".strip()
+        rail = getattr(self, '_tactics_rail', None)
+        set_banner = getattr(rail, 'set_result_banner', None) if rail else None
+
+        game_state = result.get('game') if isinstance(result, dict) else None
+        game_obj = self.state.game if hasattr(self, 'state') else None
+        if game_state and game_obj is not None and hasattr(game_obj, 'update_from_dict'):
+            try:
+                game_obj.update_from_dict(game_state)
+                self._sync_conquer_action_modes()
+                self._auto_route_conquer_once()
+            except Exception:
+                pass
+
+        if not isinstance(result, dict) or result.get('success') is False:
+            from utils import sound
             sound.play('error')
-            set_banner = getattr(rail, 'set_result_banner', None) if rail else None
-            message = result.get('message') or 'Action failed'
+            message = (result or {}).get('message') or 'Action failed'
             if callable(set_banner):
                 set_banner(message, color=(232, 140, 120), ttl_ms=5000)
                 if action == ACTION_GAMBLE and hasattr(rail, '_gamble_anim'):
                     rail._gamble_anim = None
+                if hasattr(rail, 'clear_server_action'):
+                    rail.clear_server_action()
             else:
-                self.make_dialogue_box(message, actions=['ok'], icon='info', title='Error')
-            self._conquer_tactic_cache_key = None  # force refetch
-            self._conquer_battle_move_cache_key = None  # force refetch
+                self.make_dialogue_box(
+                    message, actions=['ok'], icon='info', title='Error')
+            self._conquer_tactic_cache_key = None
+            self._conquer_battle_move_cache_key = None
             if getattr(self, '_battle_state_poller', None) is not None:
                 self._request_battle_state_poll(force=True)
             return
-        # Show a banner reflecting the action that was just submitted; the
-        # rail's auto-glow will highlight any newly-arrived moves once the
-        # next poll lands. (#8a / #8c)
-        set_banner = getattr(rail, 'set_result_banner', None) if rail else None
-        # Apply the server-returned game state immediately so gates that
-        # depend on it (e.g. gamble lockout) reflect the new state without
-        # waiting for the next poll. Mitigates double-gamble in a round
-        # when the user double-clicks before the poll catches up.
-        try:
-            game_state = isinstance(result, dict) and result.get('game')
-            game_obj = self.state.game if hasattr(self, 'state') else None
-            if game_state and game_obj is not None and hasattr(game_obj, 'update_from_dict'):
-                game_obj.update_from_dict(game_state)
-                try:
-                    self._sync_conquer_action_modes()
-                    self._auto_route_conquer_once()
-                except Exception:
-                    pass
-        except Exception:
-            pass
+
+        if action == ACTION_PLAY:
+            self._start_tactic_flight_animation(move)
+
+        preferred_moves = []
+        if action == ACTION_GAMBLE:
+            preferred_moves = self._action_result_moves(
+                result, 'new_tactics', 'new_moves')
+        elif action == ACTION_COMBINE:
+            preferred_moves = self._action_result_moves(
+                result, 'combined_tactic', 'combined_move')
+        elif action == ACTION_DISMANTLE:
+            preferred_moves = self._action_result_moves(
+                result, 'restored_tactics', 'restored_moves')
+        preferred_ids = self._preferred_result_move_ids(preferred_moves)
+
+        self._conquer_tactic_cache_key = None
+        self._conquer_battle_move_cache_key = None
+        if rail is not None:
+            if preferred_ids:
+                rail.mark_new_moves(preferred_ids)
+            if action == ACTION_GAMBLE and hasattr(rail, '_gamble_anim'):
+                rail._gamble_anim = None
+            if hasattr(rail, 'complete_server_action'):
+                rail.complete_server_action(
+                    submit_revision=context.get('selection_revision', 0),
+                    preferred_move_ids=preferred_ids,
+                    select_strongest_fallback=(action == ACTION_PLAY),
+                )
+            else:
+                rail.reset_after_action()
+
         if callable(set_banner):
-            label = f"{family} {rank}".strip()
             if action == ACTION_PLAY:
-                # First-conquest tutorial: explain *why* a Dagger matters the
-                # first time one is played, not just that it was played.
                 if ('Dagger' in str(family)
                         and self._first_conquest_tutorial_active()
                         and not getattr(self, '_tutorial_dagger_explained', False)):
@@ -3997,41 +4198,45 @@ class ConquerGameScreen(GameScreen):
                         f"Played {label} — Daggers add their value to your attack total.",
                         color=(180, 220, 160), ttl_ms=6000)
                 else:
-                    set_banner(f"Played {label}", color=(180, 220, 160), ttl_ms=4500)
+                    set_banner(f"Played {label}", color=(180, 220, 160),
+                               ttl_ms=4500)
             elif action == ACTION_GAMBLE:
-                drawn = result.get('new_tactics') if isinstance(result, dict) else None
-                if drawn:
-                    names = []
-                    for tactic in drawn[:2]:
-                        if not isinstance(tactic, dict):
-                            continue
-                        t_name = tactic.get('family_name') or 'Tactic'
-                        t_rank = tactic.get('rank') or ''
-                        names.append(f'{t_name} {t_rank}'.strip())
-                    if names:
-                        drew = ' + '.join(names)
-                        set_banner(f'Drew {drew}', color=(250, 226, 130),
-                                   ttl_ms=6000)
-                        self.push_conquer_feed(
-                            f'Gambled {label} → drew {drew}.',
-                            (250, 226, 130))
-                    else:
-                        set_banner(f'Gambling {label}…',
-                                   color=(238, 218, 170), ttl_ms=5500)
+                names = []
+                for tactic in preferred_moves[:2]:
+                    t_name = tactic.get('family_name') or 'Tactic'
+                    t_rank = tactic.get('rank') or ''
+                    names.append(f'{t_name} {t_rank}'.strip())
+                if names:
+                    drew = ' + '.join(names)
+                    set_banner(f'Drew {drew}', color=(250, 226, 130),
+                               ttl_ms=6000)
+                    self.push_conquer_feed(
+                        f'Gambled {label} → drew {drew}.', (250, 226, 130))
                 else:
                     set_banner(f'Gambling {label}…', color=(238, 218, 170),
                                ttl_ms=5500)
             elif action == ACTION_COMBINE:
-                set_banner(f"Combined {label}", color=(170, 200, 240), ttl_ms=4500)
+                set_banner(f"Combined {label}", color=(170, 200, 240),
+                           ttl_ms=4500)
             elif action == ACTION_DISMANTLE:
-                set_banner(f"Dismantled {label}", color=(220, 170, 170), ttl_ms=4500)
+                set_banner(f"Dismantled {label}", color=(220, 170, 170),
+                           ttl_ms=4500)
             elif action == ACTION_SKIP:
-                set_banner("Skipped battle turn", color=(190, 190, 190), ttl_ms=3500)
-        self._tactics_rail.reset_after_action()
-        self._conquer_tactic_cache_key = None  # force refetch
-        self._conquer_battle_move_cache_key = None  # force refetch
+                set_banner("Skipped battle turn", color=(190, 190, 190),
+                           ttl_ms=3500)
         if getattr(self, '_battle_state_poller', None) is not None:
             self._request_battle_state_poll(force=True)
+
+    def _pump_tactics_rail_action(self):
+        poller = getattr(self, '_tactics_action_poller', None)
+        context = getattr(self, '_tactics_action_context', None)
+        if poller is None or context is None or not poller.has_result():
+            return False
+        result = poller.result
+        self._tactics_action_poller = None
+        self._tactics_action_context = None
+        self._finish_tactics_rail_action(context, result)
+        return True
 
     def _reset_game_screen_state(self):
         """Reset shared and conquer-only state when entering a different game."""
@@ -4058,6 +4263,12 @@ class ConquerGameScreen(GameScreen):
         self._battle_state_poller_key = None
         self._battle_state_pending_key = None
         self._battle_state_last_poll_ms = 0
+        self._discard_next_battle_state_result = False
+        self._tactics_action_poller = None
+        self._tactics_action_context = None
+        rail = getattr(self, '_tactics_rail', None)
+        if rail is not None and hasattr(rail, 'clear_server_action'):
+            rail.clear_server_action()
         self._conquer_tactic_cache_key = None
         self._conquer_tactic_cache = []
         self._conquer_opponent_tactic_cache_key = None
@@ -5073,11 +5284,27 @@ class ConquerGameScreen(GameScreen):
         poller = getattr(self, '_battle_state_poller', None)
         if poller is None or not poller.has_result():
             return False
+        if getattr(self, '_discard_next_battle_state_result', False):
+            _ = poller.result
+            self._discard_next_battle_state_result = False
+            try:
+                poller.invalidate_cache()
+            except Exception:
+                pass
+            self._battle_state_pending_key = None
+            return False
         self._apply_battle_state_result(poller.result)
         return True
 
     def _request_battle_state_poll(self, force=False):
         if not self._is_tactics_hand_game():
+            return
+        if getattr(self, '_tactics_action_context', None) is not None:
+            # No new battle-state polls start while a mutation is pending, so
+            # anything that arrives here began beforehand and is stale by
+            # definition. Consume it; never paint it over the local pending
+            # and selection state.
+            self._discard_battle_poll_before_tactics_action()
             return
         poller = self._ensure_battle_state_poller()
         if poller is None:
@@ -9529,6 +9756,9 @@ class ConquerGameScreen(GameScreen):
         self._normalize_conquer_subscreen()
         self._refresh_conquer_tab_locks()
 
+        with perf_section('conquer.update.tactics_action_drain'):
+            self._pump_tactics_rail_action()
+
         overlay_blocks_button_updates = (
             self._gameplay_input_overlay_open()
             or self._is_conquer_timeline_overlay_open()
@@ -9648,11 +9878,19 @@ class ConquerGameScreen(GameScreen):
             return
 
         # While the battle-start countdown plays, any click skips straight
-        # to GO (and never leaks into the UI below).
+        # to GO. A tap on the tactics rail may also preserve safe local
+        # selection/disclosure intent, but never fires a server action.
         if self._is_battle_countdown_active():
             for event in events:
                 if event.type == MOUSEBUTTONDOWN and event.button == 1:
                     self._skip_conquer_battle_countdown()
+                    # A tactic-row tap both skips the countdown and prepares
+                    # the player's next choice. Mutating action buttons remain
+                    # inert for this click.
+                    rail = getattr(self, '_tactics_rail', None)
+                    if self._is_tactics_hand_game() and rail is not None:
+                        rail.handle_event(
+                            event, allow_actions=False)
                     break
             return
 
@@ -9705,12 +9943,19 @@ class ConquerGameScreen(GameScreen):
         # clicks that would otherwise hit the field/battle subscreen.
         if self._is_tactics_hand_game():
             # While a round-reveal sequence plays, any click fast-forwards
-            # it to the resolved state instead of acting on the UI below.
+            # it to the resolved state. Tactic rows still accept safe local
+            # selection/disclosure intent from that same tap.
             sequencer = getattr(self, '_conquer_reveal_sequencer', None)
             if sequencer is not None and sequencer.is_active():
                 for event in events:
                     if event.type == MOUSEBUTTONDOWN and event.button == 1:
                         sequencer.fast_forward()
+                        # Preserve safe local intent from the same tap. This
+                        # makes row selection and group disclosure feel direct
+                        # while still requiring a fresh tap for server actions.
+                        rail = getattr(self, '_tactics_rail', None)
+                        if rail is not None:
+                            rail.handle_event(event, allow_actions=False)
                         return
                 return
             for event in events:

@@ -64,7 +64,7 @@ class CastSpellScreen(SubScreen):
         
         action_label = 'Cast Spell'
         bx, by, bw, bh = footer_button_geometry(
-            self, action_label, align='left')
+            self, action_label, align='center')
         self.confirm_button = ConfirmButton(
             self.window,
             bx, by, action_label, width=bw, height=bh,

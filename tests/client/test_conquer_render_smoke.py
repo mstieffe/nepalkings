@@ -672,8 +672,7 @@ def test_tactics_rail_collapses_groups_to_strongest_with_count_chip():
 
 
 def test_tactics_rail_click_toggles_group_expand():
-    """Round 13: clicking a collapsed cell expands the group; clicking
-    again collapses it. Selection is unaffected."""
+    """The card body selects; only the trailing disclosure chip expands."""
     from config import settings
     from game.components.conquer_tactics_rail import ConquerTacticsRail
 
@@ -691,24 +690,31 @@ def test_tactics_rail_click_toggles_group_expand():
     rail = ConquerTacticsRail(_ConquerUiParent(window, game, moves))
     rail.draw()
     assert rail._cell_kinds == ['collapsed']
+    representative_id = rail._cell_move_ids[0]
+    # Main-row tap immediately selects the visible strongest card.
     pos = rail._cell_rects[0].center
     event = pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=pos)
     rail.handle_event(event)
     rail.draw()
-    # All three Buffs visible after expand; selection unchanged.
-    assert rail._cell_kinds == ['move', 'move', 'move']
-    assert rail._selected_id is None
-    # Toggle back.
-    pos = rail._cell_rects[0].center
+    assert rail._cell_kinds == ['collapsed']
+    assert rail._selected_id == representative_id
+
+    # The dedicated count/chevron target expands without changing selection.
+    toggle_rect = rail._cell_group_toggle_rects[0]
+    assert toggle_rect is not None
     rail.handle_event(pygame.event.Event(
-        pygame.MOUSEBUTTONDOWN, button=1, pos=pos))
+        pygame.MOUSEBUTTONDOWN, button=1, pos=toggle_rect.center))
     rail.draw()
-    # Clicking an expanded "move" row triggers selection, not collapse.
-    # The group stays expanded; we collapse via the dedicated API to
-    # verify state transitions still work.
-    rail._toggle_group('Buff')
+    assert rail._cell_kinds == ['move', 'move', 'move']
+    assert rail._selected_id == representative_id
+
+    # The expanded group's dedicated up-chevron collapses it again.
+    toggle_rect = rail._cell_group_toggle_rects[0]
+    rail.handle_event(pygame.event.Event(
+        pygame.MOUSEBUTTONDOWN, button=1, pos=toggle_rect.center))
     rail.draw()
     assert rail._cell_kinds == ['collapsed']
+    assert rail._selected_id == representative_id
 
 
 def test_tactics_rail_expanded_group_has_collapse_control():
@@ -742,10 +748,8 @@ def test_tactics_rail_expanded_group_has_collapse_control():
     assert rail._selected_id is None
 
 
-def test_tactics_rail_auto_expands_dagger_group_for_combine():
-    """Round 13: selecting a single Dagger or arming Combine forces the
-    Dagger group to expand so partners stay visible even when default-
-    collapsed."""
+def test_tactics_rail_dagger_selection_stays_collapsed_for_one_tap_combine():
+    """Selecting Daggers never shifts rows; Combine can choose its partner."""
     from config import settings
     from game.components.conquer_tactics_rail import ConquerTacticsRail
 
@@ -764,10 +768,78 @@ def test_tactics_rail_auto_expands_dagger_group_for_combine():
     rail.draw()
     # Default: Dagger group collapsed (3 members > 1).
     assert rail._cell_kinds == ['collapsed']
-    # Selecting one of the daggers auto-expands the group.
+    # Selecting the representative leaves disclosure state unchanged. The
+    # one-tap Combine action finds the strongest matching hidden partner.
     rail._selected_id = 30
     rail.draw()
-    assert rail._cell_kinds == ['move', 'move', 'move']
+    assert rail._cell_kinds == ['collapsed']
+    assert rail._best_combine_partner()['id'] == 31
+
+
+def test_tactics_rail_preserves_user_reselection_while_action_is_pending():
+    from config import settings
+    from game.components.conquer_tactics_rail import ConquerTacticsRail
+
+    window = pygame.Surface((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+    game = SimpleNamespace(
+        mode='conquer', player_id=1, battle_round=1,
+        battle_turn_player_id=1, battle_confirmed=True,
+        battle_gamble_counts={}, last_battle_result=None,
+    )
+    moves = [
+        _move(70, family='Dagger', suit='Hearts', rank='9', value=9),
+        _move(71, family='Block', suit='Spades', rank='Q', value=0),
+    ]
+    parent = _ConquerUiParent(window, game, moves)
+    rail = ConquerTacticsRail(parent)
+    rail._handle_cell_click(70)
+    submitted_at = rail.selection_revision()
+    rail.begin_server_action('gamble', 70)
+
+    # The player prepares Block while the Gamble request is still running.
+    rail._handle_cell_click(71)
+    parent._moves = [
+        moves[1],
+        _move(72, family='Dagger', suit='Diamonds', rank='K', value=13),
+    ]
+    rail.complete_server_action(
+        submit_revision=submitted_at,
+        preferred_move_ids=[72],
+    )
+
+    assert rail._selected_id == 71
+    assert rail._server_action_pending is None
+
+
+def test_tactics_rail_focuses_new_result_when_player_did_not_reselect():
+    from config import settings
+    from game.components.conquer_tactics_rail import ConquerTacticsRail
+
+    window = pygame.Surface((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+    game = SimpleNamespace(
+        mode='conquer', player_id=1, battle_round=1,
+        battle_turn_player_id=1, battle_confirmed=True,
+        battle_gamble_counts={}, last_battle_result=None,
+    )
+    moves = [_move(80, family='Block', suit='Spades', rank='Q', value=0)]
+    parent = _ConquerUiParent(window, game, moves)
+    rail = ConquerTacticsRail(parent)
+    rail._handle_cell_click(80)
+    submitted_at = rail.selection_revision()
+    parent._moves = [
+        _move(81, family='Dagger', suit='Hearts', rank='9', value=9),
+        _move(82, family='Dagger', suit='Diamonds', rank='K', value=13),
+    ]
+
+    rail.complete_server_action(
+        submit_revision=submitted_at,
+        preferred_move_ids=[82, 81],
+    )
+
+    assert rail._selected_id == 82
+    # Programmatic focus does not force open a group when the selected new
+    # tactic is already its visible strongest representative.
+    assert rail._cell_kinds == [] or rail._visible_hand_items()[0]['kind'] == 'collapsed'
 
 
 def test_tactics_rail_top_strip_wraps_long_banner_into_multiline():
