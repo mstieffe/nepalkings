@@ -101,7 +101,20 @@ echo "🛠️  Running pygbag..."
 WEB_OUT="$APP/build/web"
 if [ -f nepal_kings/web/index.html ]; then
     cp nepal_kings/web/index.html "$WEB_OUT/index.html"
-    echo "   Applied custom index.html"
+    WEB_BUILD_ID="${GITHUB_SHA:-}"
+    if [ -z "$WEB_BUILD_ID" ]; then
+        WEB_BUILD_ID="$(git rev-parse HEAD 2>/dev/null || printf 'dev')"
+    fi
+    WEB_BUILD_ID="${WEB_BUILD_ID:0:12}"
+    sed -i.bak \
+        "s/__NK_WEB_BUNDLE_VERSION__/${WEB_BUILD_ID}/g" \
+        "$WEB_OUT/index.html"
+    rm -f "$WEB_OUT/index.html.bak"
+    if grep -q '__NK_WEB_BUNDLE_VERSION__' "$WEB_OUT/index.html"; then
+        echo "Failed to stamp web bundle version" >&2
+        exit 1
+    fi
+    echo "   Applied custom index.html (bundle ${WEB_BUILD_ID})"
 fi
 
 mkdir -p "$WEB_OUT/audio"

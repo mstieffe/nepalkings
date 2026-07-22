@@ -204,12 +204,20 @@ def test_web_uses_native_audio_manager_and_publishes_direct_assets():
     repo_root = Path(__file__).resolve().parents[2]
     index_html = (repo_root / 'nepal_kings/web/index.html').read_text()
     build_script = (repo_root / 'scripts/build_web.sh').read_text()
+    deploy_workflow = (
+        repo_root / '.github/workflows/deploy-web.yml').read_text()
     login_screen = (
         repo_root / 'nepal_kings/game/screens/login_screen.py').read_text()
 
     assert "new AudioContextClass({latencyHint: 'playback'})" in index_html
     assert "new AudioContextClass();" in index_html
+    assert 'WEB_BUNDLE_VERSION = "__NK_WEB_BUNDLE_VERSION__"' in index_html
+    assert 'versioned_bundle_url("nepal_kings.apk")' in index_html
+    assert 'versioned_bundle_url("nepal_kings.tar.gz")' in index_html
     assert "'audio/' + encodeURIComponent(candidate)" in index_html
+    assert "url.searchParams.set('v', webBuildId);" in index_html
+    assert "var webBuildId = '__NK_WEB_BUNDLE_VERSION__';" in index_html
+    assert 'buildId: webBuildId' in index_html
     assert "preferredExtension = supportsOgg ? '.ogg' : '.mp3'" in index_html
     assert "navigator.audioSession.type = 'playback';" in index_html
     assert 'audioSessionType: audioSessionType' in index_html
@@ -240,7 +248,10 @@ def test_web_uses_native_audio_manager_and_publishes_direct_assets():
     assert 'field_username.sync_web_input()' in login_screen
     assert 'field_pwd.sync_web_input()' in login_screen
     assert 'WEB_AUDIO_STAGE=' in build_script
+    assert 'WEB_BUILD_ID="${GITHUB_SHA:-}"' in build_script
+    assert 's/__NK_WEB_BUNDLE_VERSION__/${WEB_BUILD_ID}/g' in build_script
     assert "'*.mp3'" in build_script
     assert 'WEB_OGG_COUNT' in build_script
     assert 'WEB_MP3_COUNT' in build_script
     assert '"$WEB_OUT/audio"' in build_script
+    assert "- 'scripts/build_web.sh'" in deploy_workflow
