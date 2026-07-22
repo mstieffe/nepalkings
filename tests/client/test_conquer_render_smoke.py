@@ -2146,34 +2146,36 @@ def test_round_ledger_completed_battle_prefers_server_total():
     assert ledger.current_total_diff() == 11
 
 
-def test_round_ledger_uses_server_total_during_final_reveal():
+def test_round_ledger_uses_plus_one_server_total_during_final_reveal():
     from game.components.conquer_round_ledger import ConquerRoundLedger
 
     stage = {'stage': 'tally', 'opp_visible': True, 'diff_factor': 0.5}
-    game = SimpleNamespace(last_battle_result=None, battle_total_diff=11)
+    game = SimpleNamespace(last_battle_result=None, battle_total_diff=1)
     you_per = [
         _move(1, value=5, played_round=0),
         _move(2, value=5, played_round=1),
-        _move(3, value=8, played_round=2),
+        _move(3, value=1, played_round=2),
     ]
     opp_per = [
-        _move(11, value=4, played_round=0),
-        _move(12, value=4, played_round=1),
-        _move(13, value=2, played_round=2),
+        _move(11, value=5, played_round=0),
+        _move(12, value=5, played_round=1),
+        _move(13, value=8, played_round=2),
     ]
     parent = SimpleNamespace(
         window=pygame.Surface((100, 100)),
         state=SimpleNamespace(game=game),
-        _conquer_lane_figure_diff=lambda: 0,
+        _conquer_lane_figure_diff=lambda: 7,
         _conquer_lane_played_tactics=lambda: (you_per, opp_per),
         conquer_round_reveal_stage=lambda idx: stage if idx == 2 else None,
     )
     ledger = ConquerRoundLedger(parent)
 
-    # Local reveal math would transiently show 5 here (8 total minus half of
-    # round three's +6). Once the server has supplied +11, neither the reveal
-    # gate nor its count-up adjustment may replace that authoritative value.
-    assert ledger.current_total_diff() == 11
+    # Production incident: the lightweight client arithmetic reached a draw
+    # (figures +7, tactics -7), while the server's complete DB-backed figure
+    # calculation resolved +1.  The active final reveal must not hide that
+    # already-known authoritative result behind the local zero.
+    assert ledger._total_diff(you_per, opp_per) == 0
+    assert ledger.current_total_diff() == 1
     assert ledger._reveal_total_adjustment(you_per, opp_per) == 0
 
 
