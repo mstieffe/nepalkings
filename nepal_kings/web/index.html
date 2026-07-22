@@ -420,6 +420,10 @@ function show_infobox() {
         var musicGeneration = 0;
         var audioSessionType = 'unavailable';
         var webBuildId = '__NK_WEB_BUNDLE_VERSION__';
+        var sfxManifest = [];
+        try {
+            sfxManifest = JSON.parse('__NK_WEB_SFX_MANIFEST__');
+        } catch (error) {}
         var formatProbe = document.createElement('audio');
         var supportsOgg = false;
 
@@ -576,6 +580,17 @@ function show_infobox() {
             console.warn('Nepal Kings audio failed:', filename, error);
         }
 
+        function preloadSfx(){
+            // iOS only permits media downloads that originate from a user
+            // action. Start every small SFX request while handling the real
+            // tap-to-start gesture so timer/server-driven cues can play later.
+            sfxManifest.forEach(function(filename){
+                loadBuffer(filename).catch(function(error){
+                    reportError(filename, error);
+                });
+            });
+        }
+
         window.nk_audio_unlock = function(){
             configureAudioSession();
             var ctx = audioContext();
@@ -583,6 +598,7 @@ function show_infobox() {
             // Starting a source and resuming synchronously within the tap
             // covers both WebKit and Chromium's mobile autoplay policies.
             primeContext(ctx);
+            preloadSfx();
             return resumeContext(ctx).then(function(running){
                 if (!running) return false;
                 // Warm the first screen's theme while Python finishes booting.
@@ -676,6 +692,7 @@ function show_infobox() {
             var ctx = audioContext();
             if (!ctx) return Promise.resolve(false);
             primeContext(ctx);
+            preloadSfx();
             return resumeContext(ctx);
         };
 
@@ -686,6 +703,7 @@ function show_infobox() {
                 audioSessionType: audioSessionType,
                 musicFilename: currentMusic ? currentMusic.filename : null,
                 preferredExtension: preferredExtension,
+                sfxManifestCount: sfxManifest.length,
                 loaded: Object.keys(buffers),
                 pending: Object.keys(requests)
             };

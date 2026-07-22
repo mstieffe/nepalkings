@@ -214,6 +214,7 @@ def test_web_uses_native_audio_manager_and_publishes_direct_assets():
     assert 'WEB_BUNDLE_VERSION = "__NK_WEB_BUNDLE_VERSION__"' in index_html
     assert 'versioned_bundle_url("nepal_kings.apk")' in index_html
     assert 'versioned_bundle_url("nepal_kings.tar.gz")' in index_html
+    assert "sfxManifest = JSON.parse('__NK_WEB_SFX_MANIFEST__');" in index_html
     assert "'audio/' + encodeURIComponent(candidate)" in index_html
     assert "url.searchParams.set('v', webBuildId);" in index_html
     assert "var webBuildId = '__NK_WEB_BUNDLE_VERSION__';" in index_html
@@ -223,6 +224,9 @@ def test_web_uses_native_audio_manager_and_publishes_direct_assets():
     assert 'audioSessionType: audioSessionType' in index_html
     assert 'return loadCandidate(ctx, filenames, index + 1);' in index_html
     assert 'window.nk_audio_status' in index_html
+    assert 'function preloadSfx()' in index_html
+    assert index_html.count('preloadSfx();') == 2
+    assert 'sfxManifestCount: sfxManifest.length' in index_html
     assert 'musicFilename: currentMusic ? currentMusic.filename : null' in index_html
     assert 'window.nk_audio_play_sfx' in index_html
     assert 'window.nk_audio_play_music' in index_html
@@ -249,7 +253,10 @@ def test_web_uses_native_audio_manager_and_publishes_direct_assets():
     assert 'field_pwd.sync_web_input()' in login_screen
     assert 'WEB_AUDIO_STAGE=' in build_script
     assert 'WEB_BUILD_ID="${GITHUB_SHA:-}"' in build_script
+    assert 'WEB_SFX_MANIFEST=' in build_script
+    assert 'not path.name.startswith("music_")' in build_script
     assert 's/__NK_WEB_BUNDLE_VERSION__/${WEB_BUILD_ID}/g' in build_script
+    assert 's/__NK_WEB_SFX_MANIFEST__/${WEB_SFX_MANIFEST}/g' in build_script
     assert "'*.mp3'" in build_script
     assert 'WEB_OGG_COUNT' in build_script
     assert 'WEB_MP3_COUNT' in build_script
