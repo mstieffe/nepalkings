@@ -532,7 +532,7 @@ class GameMenuScreen(MenuScreenMixin, Screen):
                     'id': 'open_starter_cards',
                     'rect': self.button_collection.rect,
                     'title': 'Visit Your Collection',
-                    'body': 'This is the main menu. Let us visit your collection first, where all your personal cards are stored. YOu add cards to your collection by opening booster packs or by conquering/defending lands',
+                    'body': 'This is the main menu. Let us visit your collection first, where all your personal cards are stored that you have gathered.',
                     'action': 'click',
                     'mark_on_click': True,
                     'max_lines': 4,
