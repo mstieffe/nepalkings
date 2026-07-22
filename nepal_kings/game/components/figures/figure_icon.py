@@ -1272,8 +1272,11 @@ class FieldFigureIcon(FigureIcon):
         # Get skill glow for current state
         skill_glow = self.skill_glow_big if is_big_state else self.skill_glow
         if compact_info and skill_glow:
+            # A halo 1.5x larger than the compact icon was the main source of
+            # vertical border collisions. Keep decoration inside the same
+            # measured square as the skill itself on the narrow field badge.
             skill_glow = self._compact_info_surface(
-                skill_glow, max(compact_skill_size, int(compact_skill_size * 1.5)))
+                skill_glow, compact_skill_size)
         
         # Determine which skills show a suit icon behind them
         from game.components.figures.family_configs.skill_config import SKILL_DEFINITIONS as _SKILL_DEFS
@@ -1362,6 +1365,12 @@ class FieldFigureIcon(FigureIcon):
                 return (surf.get_width(), surf.get_height(), _draw)
 
             def _outlined_element(surf, outline, *, strike=False):
+                # Account for the one-pixel outline in the row height. The
+                # badge's regular horizontal padding already contains its
+                # one-pixel side fringe, but the old zero-height padding on
+                # mobile let the vertical fringe paint into the frame.
+                outline_pad = 1 if outline else 0
+
                 def _draw(x, cy, _s=surf, _o=outline, _strike=strike):
                     y = int(cy - _s.get_height() / 2)
                     if _o:
@@ -1373,7 +1382,11 @@ class FieldFigureIcon(FigureIcon):
                         pygame.draw.line(self.window, (220, 60, 60),
                                          (x - 1, sy),
                                          (x + _s.get_width() + 1, sy), 2)
-                return (surf.get_width(), surf.get_height(), _draw)
+                return (
+                    surf.get_width(),
+                    surf.get_height() + 2 * outline_pad,
+                    _draw,
+                )
 
             number_elements = [_blit_element(power_surface)]
             if buffs_allies_surface:
@@ -1400,20 +1413,38 @@ class FieldFigureIcon(FigureIcon):
             for _skill_key in skills_to_display:
                 if _skill_key in skill_icon_dict:
                     _sk_icon = skill_icon_dict[_skill_key]
+                    _skill_visual_w = max(
+                        _sk_icon.get_width(),
+                        skill_glow.get_width() if skill_glow else 0,
+                        (adv_suit_icon.get_width()
+                         if (adv_suit_icon
+                             and _SKILL_DEFS.get(_skill_key, {}).get(
+                                 'suit_advantage', False)) else 0),
+                    )
+                    _skill_visual_h = max(
+                        _sk_icon.get_height(),
+                        skill_glow.get_height() if skill_glow else 0,
+                        (adv_suit_icon.get_height()
+                         if (adv_suit_icon
+                             and _SKILL_DEFS.get(_skill_key, {}).get(
+                                 'suit_advantage', False)) else 0),
+                    )
 
-                    def _draw_skill(x, cy, _ic=_sk_icon, _key=_skill_key):
+                    def _draw_skill(x, cy, _ic=_sk_icon, _key=_skill_key,
+                                    _visual_w=_skill_visual_w):
+                        icon_x = x + (_visual_w - _ic.get_width()) // 2
                         y = int(cy - _ic.get_height() / 2)
                         if skill_glow:
-                            gx = x + (_ic.get_width() - skill_glow.get_width()) // 2
-                            gy = y + (_ic.get_height() - skill_glow.get_height()) // 2
+                            gx = x + (_visual_w - skill_glow.get_width()) // 2
+                            gy = int(cy - skill_glow.get_height() / 2)
                             self.window.blit(skill_glow, (gx, gy))
                         if adv_suit_icon and _SKILL_DEFS.get(_key, {}).get('suit_advantage', False):
-                            ax = x + (_ic.get_width() - adv_suit_icon.get_width()) // 2
-                            ay = y + (_ic.get_height() - adv_suit_icon.get_height()) // 2
+                            ax = x + (_visual_w - adv_suit_icon.get_width()) // 2
+                            ay = int(cy - adv_suit_icon.get_height() / 2)
                             self.window.blit(adv_suit_icon, (ax, ay))
-                        self.window.blit(_ic, (x, y))
+                        self.window.blit(_ic, (icon_x, y))
                     skill_elements.append(
-                        (_sk_icon.get_width(), _sk_icon.get_height(), _draw_skill))
+                        (_skill_visual_w, _skill_visual_h, _draw_skill))
             if has_enchantments and enchantment_icons:
                 for _en_icon in enchantment_icons:
                     skill_elements.append(_blit_element(_en_icon))
@@ -1423,8 +1454,14 @@ class FieldFigureIcon(FigureIcon):
                                                 element_spacing)
 
             info_padding = int(padding * settings.FIGURE_NAME_INFO_PADDING_SCALE)
-            row_h = max(power_surface.get_height(), icon_size,
-                        skill_icon_size if skill_icon_size > 0 else 0)
+            if compact_info:
+                # The two-pixel frame plus outlined text needs real breathing
+                # room. At 854x480 the proportional value rounds to zero.
+                info_padding = max(3, info_padding)
+            row_h = max(
+                (element[1] for element in single_row_elements),
+                default=max(power_surface.get_height(), icon_size),
+            )
 
             # When a single row would be clipped by the width cap, wrap without
             # dropping any status.  Compact Conquer badges fill available row
@@ -1466,6 +1503,8 @@ class FieldFigureIcon(FigureIcon):
                 'single_row_w': single_row_w,
                 'inner_w': box_width - 2 * padding,
                 'info_height': info_height,
+                'info_padding': info_padding,
+                'row_height': row_h,
                 'compact': compact_info,
                 'power_text': power_text,
                 'support_text': (
@@ -1555,7 +1594,7 @@ class FieldFigureIcon(FigureIcon):
                 if compact_hidden:
                     # Keep card artwork clear of the two-pixel badge border.
                     # The shared fractional padding rounds to zero at 854x480.
-                    info_padding = max(2, info_padding)
+                    info_padding = max(3, info_padding)
                 info_height = max(
                     _cb_size if _show_card_backs else 0,
                     skill_icon_size if (_show_skills and skill_icon_size > 0) else 0,
@@ -1577,6 +1616,9 @@ class FieldFigureIcon(FigureIcon):
                 'widest_row_w': hidden_info_row_width if has_info else 0,
                 'inner_w': box_width - 2 * padding,
                 'info_height': info_height,
+                'info_padding': info_padding if has_info else 0,
+                'row_height': (
+                    info_height - 2 * info_padding if has_info else 0),
                 'compact': compact_info,
                 'name_visible': show_name_row,
                 'hidden_card_back_only': compact_hidden,
@@ -1693,9 +1735,20 @@ class FieldFigureIcon(FigureIcon):
                              text_bg_rect, width=2, border_radius=corner_r)
 
         if isinstance(getattr(self, '_last_info_metrics', None), dict):
+            content_top = None
+            content_bottom = None
+            if info_height > 0 and row_count:
+                content_top = info_bg_rect.top + info_padding
+                content_bottom = (
+                    content_top
+                    + row_count * row_h
+                    + max(0, row_count - 1) * info_padding
+                ) if self.is_visible else info_bg_rect.bottom - info_padding
             self._last_info_metrics.update({
                 'vertical_nudge': vertical_nudge,
                 'info_rect': info_bg_rect.copy() if info_height > 0 else None,
+                'content_top': content_top,
+                'content_bottom': content_bottom,
             })
         
         # The full family name remains available in the tap-open figure detail.
@@ -1707,7 +1760,15 @@ class FieldFigureIcon(FigureIcon):
         if self.is_visible:
             old_clip = self.window.get_clip()
             if info_height > 0:
-                self.window.set_clip(info_bg_rect)
+                # Never let foreground pixels overwrite the two-pixel frame,
+                # even if a future icon reports imperfect dimensions.
+                vertical_clip = pygame.Rect(
+                    info_bg_rect.left,
+                    info_bg_rect.top + 2,
+                    info_bg_rect.width,
+                    max(0, info_bg_rect.height - 4),
+                )
+                self.window.set_clip(vertical_clip)
 
             row_cy = info_bg_rect.top + info_padding + row_h // 2
             for row in info_rows:

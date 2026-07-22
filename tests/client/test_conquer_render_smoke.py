@@ -430,6 +430,50 @@ def test_tactics_rail_strongest_marker_is_font_independent_vector():
         assert window.get_at(point)[:3] == (250, 220, 110)
 
 
+def test_tactics_rail_played_move_is_not_mislabeled_as_spell_removed(
+        monkeypatch):
+    from config import settings
+    from game.components.conquer_tactics_rail import ConquerTacticsRail
+
+    monkeypatch.setattr(pygame.time, 'get_ticks', lambda: 1000)
+    window = pygame.Surface((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+    game = SimpleNamespace(mode='conquer', player_id=1)
+    available = _move(1, family='Dagger', status='available')
+    parent = _ConquerUiParent(window, game, [available])
+    rail = ConquerTacticsRail(parent)
+
+    # Seed the previous playable-hand snapshot, then apply the normal state
+    # transition produced when that tactic is played.
+    rail._detect_new_moves()
+    parent._moves = [
+        _move(1, family='Dagger', status='played', played_round=0),
+    ]
+    rail._detect_new_moves()
+
+    assert rail._removed_ghosts == {}
+
+
+def test_tactics_rail_still_marks_a_genuinely_removed_tactic_as_spell_removed(
+        monkeypatch):
+    from config import settings
+    from game.components.conquer_tactics_rail import ConquerTacticsRail
+
+    monkeypatch.setattr(pygame.time, 'get_ticks', lambda: 1000)
+    window = pygame.Surface((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+    game = SimpleNamespace(mode='conquer', player_id=1)
+    available = _move(1, family='Dagger', status='available')
+    parent = _ConquerUiParent(window, game, [available])
+    rail = ConquerTacticsRail(parent)
+
+    rail._detect_new_moves()
+    parent._moves = []
+    rail._detect_new_moves()
+
+    assert rail._removed_ghosts[1]['move']['family_name'] == 'Dagger'
+    assert rail._removed_ghosts[1]['expires_at'] == (
+        1000 + rail.REMOVED_GHOST_MS)
+
+
 def test_tactics_rail_action_buttons_adapt_to_selected_tactic():
     from config import settings
     from game.components.conquer_tactics_rail import (

@@ -205,12 +205,18 @@ assert metrics['support_text'] == '+2', metrics
 assert metrics['enchantment_text'] == '+6', metrics
 assert metrics['widest_row_w'] <= metrics['inner_w'], metrics
 assert metrics['vertical_nudge'] == 0, metrics
+assert metrics['info_padding'] >= 3, metrics
+assert metrics['content_top'] >= metrics['info_rect'].top + 3, metrics
+assert metrics['content_bottom'] <= metrics['info_rect'].bottom - 3, metrics
 
 simple = _make_field_icon([], max_info_width=62, compact=True)
 simple.draw_figure_info()
 simple_metrics = simple._last_info_metrics
 assert simple_metrics['rows'] == 1, simple_metrics
 assert simple_metrics['vertical_nudge'] >= 4, simple_metrics
+assert simple_metrics['info_padding'] >= 3, simple_metrics
+assert simple_metrics['content_top'] >= simple_metrics['info_rect'].top + 3, simple_metrics
+assert simple_metrics['content_bottom'] <= simple_metrics['info_rect'].bottom - 3, simple_metrics
 assert simple_metrics['info_rect'].top > metrics['info_rect'].top, (
     simple_metrics, metrics)
 
@@ -228,6 +234,8 @@ assert hidden_metrics['vertical_nudge'] >= 4, hidden_metrics
 assert hidden_metrics['card_back_vertical_padding'] >= 2, hidden_metrics
 assert hidden_metrics['info_rect'].height >= (
     hidden_metrics['card_back_size'] + 4), hidden_metrics
+assert hidden_metrics['content_top'] >= hidden_metrics['info_rect'].top + 3, hidden_metrics
+assert hidden_metrics['content_bottom'] <= hidden_metrics['info_rect'].bottom - 3, hidden_metrics
 
 # Hidden figures can enlarge during defender selection.  The backs must be
 # recomputed for the narrower big-state inner width rather than overflowing.

@@ -571,14 +571,30 @@ class ConquerTacticsRail:
     def _detect_new_moves(self) -> None:
         """Auto-glow any move that wasn't visible last frame (#8c).
 
-        Also captures spell-removed moves as ghost rows so the player can
-        see what disappeared for ``REMOVED_GHOST_MS`` after the change.
+        Also captures genuinely spell-removed moves as ghost rows so the
+        player can see what disappeared for ``REMOVED_GHOST_MS`` after the
+        change. A tactic that merely left the hand because it was played,
+        gambled, or combined remains in the complete tactic snapshot and must
+        not be mislabeled as "removed by spell".
         """
         try:
-            hand = self._hand_moves()
+            all_moves = self._moves()
+            all_moves_by_id = {
+                int(m.get('id') or 0): m for m in all_moves
+                if isinstance(m, dict)
+            }
+            hand = [
+                m for m in all_moves
+                if m.get('played_round') is None
+                and (
+                    m.get('status', 'available') == 'available'
+                    or bool(m.get('_render_ghost'))
+                )
+            ]
             current_by_id = {int(m.get('id') or 0): m for m in hand}
             current = set(current_by_id.keys())
         except Exception:
+            all_moves_by_id = {}
             current_by_id = {}
             current = set()
         # Skip the very first frame (empty prev set would glow everything).
@@ -599,6 +615,13 @@ class ConquerTacticsRail:
             if removed_ids:
                 expires = pygame.time.get_ticks() + self.REMOVED_GHOST_MS
                 for mid in removed_ids:
+                    # Played/discarded tactics disappear from ``_hand_moves``
+                    # but remain in ``_moves`` with their new authoritative
+                    # state. Only an item absent from the full visible list is
+                    # a removal transition that warrants the spell ghost.
+                    if mid in all_moves_by_id:
+                        self._removed_ghosts.pop(mid, None)
+                        continue
                     snapshot = self._prev_moves_by_id.get(mid)
                     if snapshot is None:
                         continue
