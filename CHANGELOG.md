@@ -76,6 +76,14 @@ and the operational safety net to keep early adopters.
 
 ### Fixed
 
+- **Silent tutorial/timer sounds on iOS.** iOS Safari let the Web Audio
+  context idle back into `suspended` between taps, so cues fired from timers
+  or server callbacks (the starter-set reveal reel ticks and reward stinger,
+  "your turn" alerts) reached a dead context and were dropped, while
+  tap-driven clicks survived only because the tap itself resumed the context.
+  The native audio manager now runs a fully silent looping keep-alive source
+  (armed on unlock/resume and on every cue) so the context stays `running`
+  after the first gesture. Desktop web and the native build were unaffected.
 - **Coherent AI land defences.** Generator v8 filters scripted spells against
   the completed roster: Landslide uses an off-bonus-suit defender, Civil War
   requires a legal same-color village pair, and Health Boost counters require

@@ -227,6 +227,15 @@ def test_web_uses_native_audio_manager_and_publishes_direct_assets():
     assert 'function preloadSfx()' in index_html
     assert index_html.count('preloadSfx();') == 2
     assert 'sfxManifestCount: sfxManifest.length' in index_html
+    # A silent keep-alive loop stops iOS from suspending the context between
+    # gestures, so timer-/server-driven cues (tutorial reel, reward reveal,
+    # turn alerts) still play instead of hitting a suspended context.
+    assert 'function startKeepAlive(ctx)' in index_html
+    assert 'source.loop = true;' in index_html
+    assert 'gain.gain.value = 0;' in index_html
+    # Armed on unlock, on resume, and whenever a cue actually plays.
+    assert index_html.count('startKeepAlive(ctx);') == 4
+    assert 'keepAlive: !!keepAlive' in index_html
     assert 'musicFilename: currentMusic ? currentMusic.filename : null' in index_html
     assert 'window.nk_audio_play_sfx' in index_html
     assert 'window.nk_audio_play_music' in index_html

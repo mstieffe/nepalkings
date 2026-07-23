@@ -418,6 +418,7 @@ function show_infobox() {
         var requests = Object.create(null);
         var currentMusic = null;
         var musicGeneration = 0;
+        var keepAlive = null;
         var audioSessionType = 'unavailable';
         var webBuildId = '__NK_WEB_BUNDLE_VERSION__';
         var sfxManifest = [];
@@ -485,6 +486,39 @@ function show_infobox() {
                 source.buffer = buffer;
                 source.connect(ctx.destination);
                 source.start(0);
+            } catch (error) {}
+        }
+
+        function startKeepAlive(ctx){
+            // A looping, fully silent source keeps iOS from letting a running
+            // context idle back into 'suspended' between user gestures. Without
+            // it, timer- and server-driven cues (tutorial reel ticks, reward
+            // reveals, "your turn" alerts) reach a suspended context and are
+            // dropped; only tap-driven cues survive, because the tap that
+            // triggers them also resumes the context. Armed once per context.
+            if (!ctx || ctx.state === 'closed') return;
+            if (keepAlive && keepAlive.ctx === ctx) return;
+            try {
+                var frames = Math.max(
+                    1, Math.round((ctx.sampleRate || 44100) * 0.5));
+                var buffer = ctx.createBuffer(
+                    1, frames, ctx.sampleRate || 44100);
+                var source = ctx.createBufferSource();
+                var gain = ctx.createGain();
+                source.buffer = buffer;   // all-zero samples: silent
+                source.loop = true;
+                gain.gain.value = 0;      // belt-and-braces silence
+                source.connect(gain);
+                gain.connect(ctx.destination);
+                // If the system ever tears the loop down (e.g. after an audio
+                // interruption), clear the handle so the next call re-arms it.
+                source.onended = function(){
+                    if (keepAlive && keepAlive.source === source) {
+                        keepAlive = null;
+                    }
+                };
+                source.start(0);
+                keepAlive = {ctx: ctx, source: source, gain: gain};
             } catch (error) {}
         }
 
@@ -598,6 +632,7 @@ function show_infobox() {
             // Starting a source and resuming synchronously within the tap
             // covers both WebKit and Chromium's mobile autoplay policies.
             primeContext(ctx);
+            startKeepAlive(ctx);
             preloadSfx();
             return resumeContext(ctx).then(function(running){
                 if (!running) return false;
@@ -612,6 +647,7 @@ function show_infobox() {
         window.nk_audio_play_sfx = function(filename, volume){
             var ctx = audioContext();
             if (!ctx || !validFilename(filename)) return false;
+            startKeepAlive(ctx);
             loadBuffer(filename).then(function(buffer){
                 var source = ctx.createBufferSource();
                 var gain = ctx.createGain();
@@ -627,6 +663,7 @@ function show_infobox() {
         window.nk_audio_play_music = function(filename, volume, fadeMs){
             var ctx = audioContext();
             if (!ctx || !validFilename(filename)) return false;
+            startKeepAlive(ctx);
             var targetVolume = clampVolume(volume);
             var fadeSeconds = Math.max(0, Number(fadeMs) || 0) / 1000;
 
@@ -692,6 +729,7 @@ function show_infobox() {
             var ctx = audioContext();
             if (!ctx) return Promise.resolve(false);
             primeContext(ctx);
+            startKeepAlive(ctx);
             preloadSfx();
             return resumeContext(ctx);
         };
@@ -702,6 +740,7 @@ function show_infobox() {
                 buildId: webBuildId,
                 audioSessionType: audioSessionType,
                 musicFilename: currentMusic ? currentMusic.filename : null,
+                keepAlive: !!keepAlive,
                 preferredExtension: preferredExtension,
                 sfxManifestCount: sfxManifest.length,
                 loaded: Object.keys(buffers),
