@@ -570,6 +570,46 @@ def test_figure_icon_badge_reflects_landslide_live():
     assert icon._current_battle_bonus_received() == 0
 
 
+def test_effective_land_bonus_for_home_ground_asymmetry():
+    """Defender (land owner) keeps the full land bonus; the invader gets the
+    scaled share.  Disabling asymmetry restores symmetric values."""
+    game = _game_proxy_stub([], suit='Hearts', value=10)
+    game.land_home_ground_asymmetry_enabled = True
+    game.land_home_ground_attacker_factor = 0.5
+    game.invader_player_id = 7
+    # Defender (non-invader) full, invader scaled.
+    assert game.effective_land_bonus_for(3) == ('Hearts', 10)
+    assert game.effective_land_bonus_for(7) == ('Hearts', 5)
+    # Disabled → symmetric regardless of factor.
+    game.land_home_ground_asymmetry_enabled = False
+    assert game.effective_land_bonus_for(7) == ('Hearts', 10)
+
+
+def test_figure_icon_land_bonus_unblockable_and_scaled_for_invader():
+    """The land badge is unblockable and, under asymmetry, scaled for the
+    invader's figures while the defender's keep the full value."""
+    from game.components.figures.figure_icon import FieldFigureIcon
+    game = _game_proxy_stub([], suit='Hearts', value=10)
+    game.mode = 'conquer'
+    game.land_home_ground_asymmetry_enabled = True
+    game.land_home_ground_attacker_factor = 0.5
+    game.invader_player_id = 7
+
+    defender_icon = object.__new__(FieldFigureIcon)
+    defender_icon.battle_bonus_received = 0
+    defender_icon.figure = SimpleNamespace(suit='Hearts', player_id=3)
+    defender_icon.game = game
+    # Blocked support must not touch the land bonus.
+    defender_icon.battle_bonus_blocked = True
+    assert defender_icon._current_land_bonus() == 10
+
+    invader_icon = object.__new__(FieldFigureIcon)
+    invader_icon.battle_bonus_received = 0
+    invader_icon.figure = SimpleNamespace(suit='Hearts', player_id=7)
+    invader_icon.game = game
+    assert invader_icon._current_land_bonus() == 5
+
+
 def test_landslide_receipt_land_row_negative():
     from game.screens.conquer_game_screen import ConquerGameScreen
     stub = object.__new__(ConquerGameScreen)
@@ -579,6 +619,25 @@ def test_landslide_receipt_land_row_negative():
     # Non-matching figures get nothing either way.
     assert stub._conquer_lane_land_bonus_for(
         [SimpleNamespace(id=2, suit='Clubs')]) == 0
+
+
+def test_conquer_receipt_land_bonus_home_ground_asymmetry():
+    """The battle receipt's land component is unblockable and honours
+    home-ground asymmetry: the invader's figure gets the scaled share while
+    the defender's keeps the full value."""
+    from game.screens.conquer_game_screen import ConquerGameScreen
+    game = _game_proxy_stub([], suit='Hearts', value=10)
+    game.land_home_ground_asymmetry_enabled = True
+    game.land_home_ground_attacker_factor = 0.5
+    game.invader_player_id = 7
+
+    stub = object.__new__(ConquerGameScreen)
+    stub.state = SimpleNamespace(game=game)
+
+    defender_fig = SimpleNamespace(id=1, suit='Hearts', player_id=3)
+    invader_fig = SimpleNamespace(id=2, suit='Hearts', player_id=7)
+    assert stub._conquer_lane_land_bonus_for([defender_fig]) == 10
+    assert stub._conquer_lane_land_bonus_for([invader_fig]) == 5
 
 
 def test_support_badge_group_value_honours_negative_land_bonus():

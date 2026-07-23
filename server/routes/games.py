@@ -5173,15 +5173,15 @@ def _get_advantage_suit(suit):
     return _SUIT_ADVANTAGE.get(suit)
 
 
-def _compute_support_bonus(figure, all_figures, game_id,
-                           land_suit_bonus=None):
+def _compute_support_bonus(figure, all_figures, game_id):
     """Support bonus from same-player, same-suit figures of appropriate type.
 
     Matches client ``_calculate_battle_bonus_received`` exactly.
     Figures in resource deficit do NOT provide support bonus.
 
-    *land_suit_bonus*: optional ``(suit_str, value_int)`` tuple for conquer
-    mode.  Every figure whose suit matches gets *value* added.
+    This is the *blockable* castle/village bloodline support only — the
+    conquer land suit bonus is handled separately (and unblockably) in
+    ``_compute_figure_full_power``.
     """
     fig_field = (figure.field or '').lower()
     if fig_field == 'castle':
@@ -5221,12 +5221,6 @@ def _compute_support_bonus(figure, all_figures, game_id,
                         card = db.session.get(SideCard, assoc.card_id)
                     if card:
                         total += card.value
-
-    # Conquer mode: land suit bonus (applied to every matching figure)
-    if land_suit_bonus:
-        bonus_suit, bonus_value = land_suit_bonus
-        if (figure.suit or '').lower() == bonus_suit.lower():
-            total += bonus_value
 
     return total
 
@@ -5397,6 +5391,7 @@ def _compute_figure_full_power(figure, all_figures, enchant_spells,
         + support               (zeroed if Temple blocks)
         + wall                  (NOT affected by Temple)
         + enchantment
+        + land_bonus            (NOT affected by Temple — conquer only)
         − DA penalty            (handled externally, not here)
 
     *own_healers*: pre-filtered healer list for the figure's player
@@ -5404,6 +5399,8 @@ def _compute_figure_full_power(figure, all_figures, enchant_spells,
     *wall_total*: pre-computed wall defence total for the figure's player
         (0 when attacking, since only the defender gets wall defence).
     *land_suit_bonus*: optional ``(suit, value)`` for conquer mode land bonus.
+        Applied to figures whose suit matches, AFTER Temple blocking, so the
+        land's tier advantage can never be nullified by a Temple.
     """
     if not figure:
         return 0
@@ -5412,9 +5409,8 @@ def _compute_figure_full_power(figure, all_figures, enchant_spells,
     # Healer buff (NOT affected by Temple)
     healer_buff = _compute_healer_buff(figure, own_healers)
 
-    # Support bonus (includes land suit bonus in conquer mode)
-    support = _compute_support_bonus(figure, all_figures, game_id,
-                                     land_suit_bonus=land_suit_bonus)
+    # Blockable castle/village bloodline support
+    support = _compute_support_bonus(figure, all_figures, game_id)
 
     # Wall defence (pre-computed; 0 for attackers)
     wall = wall_total
@@ -5422,15 +5418,23 @@ def _compute_figure_full_power(figure, all_figures, enchant_spells,
     # Enchantment
     enchant = _compute_enchantment_mod(figure.id, enchant_spells)
 
-    # Temple blocking zeroes support only (NOT healer, NOT wall)
+    # Temple blocking zeroes support only (NOT healer, NOT wall, NOT land)
     if _find_temple_blocker(figure, opponent_player_id, all_figures,
                             battle_ids, game_id):
         support = 0
 
-    total = base + healer_buff + support + wall + enchant
+    # Conquer land suit bonus — unblockable (like wall/healer).  Applied after
+    # the Temple check so a Temple can never delete the land's tier advantage.
+    land_bonus = 0
+    if land_suit_bonus:
+        bonus_suit, bonus_value = land_suit_bonus
+        if (figure.suit or '').lower() == bonus_suit.lower():
+            land_bonus = bonus_value
+
+    total = base + healer_buff + support + wall + enchant + land_bonus
     logger.debug(f"[FIG_POWER] {figure.name}(id={figure.id},suit={figure.suit}) "
           f"base={base} healer={healer_buff} support={support} "
-          f"wall={wall} enchant={enchant} total={total}")
+          f"wall={wall} enchant={enchant} land={land_bonus} total={total}")
     return total
 
 
@@ -5491,6 +5495,24 @@ def _effective_land_bonus_value(game, raw_value):
     return value
 
 
+def _attacker_land_bonus_value(value):
+    """Scale a land bonus for the ATTACKER (invader) under home-ground rules.
+
+    The defender (land owner) always keeps the full bonus; the attacker's
+    share is scaled by ``LAND_HOME_GROUND_ATTACKER_BONUS_FACTOR`` when
+    ``LAND_HOME_GROUND_ASYMMETRY_ENABLED`` is set.  With asymmetry disabled
+    (or a factor of 1.0) the attacker keeps the full, symmetric bonus.
+
+    The sign is preserved so a Landslide-inverted (negative) bonus scales in
+    magnitude rather than flipping.
+    """
+    value = int(value or 0)
+    if not getattr(settings, 'LAND_HOME_GROUND_ASYMMETRY_ENABLED', False):
+        return value
+    factor = getattr(settings, 'LAND_HOME_GROUND_ATTACKER_BONUS_FACTOR', 1.0)
+    return int(round(value * factor))
+
+
 def _compute_server_total_diff(game, return_breakdown=False):
     """Authoritative total_diff from DB.  Positive = invader wins.
 
@@ -5542,28 +5564,44 @@ def _compute_server_total_diff(game, return_breakdown=False):
 
     def_kingdom_bonuses = {}
 
-    # ── Conquer mode: land suit bonus (applied via support bonus) ──
-    land_suit_bonus_attacker = None
-    land_suit_bonus_defender = None
+    # ── Conquer mode: land suit bonus (unblockable, home-ground aware) ──
+    # The land bonus is keyed on figure OWNERSHIP, not battle role: the land
+    # owner (defender / non-invader) is the home side and keeps the full
+    # bonus, while the invader (attacker) receives only a scaled share when
+    # home-ground asymmetry is enabled.  See ``_attacker_land_bonus_value``.
+    base_land_bonus = None  # (suit, full_defender_value)
+    invader_pid = game.invader_player_id
     if game.mode == 'conquer' and game.land_id:
         land = db.session.get(Land, game.land_id)
         if land and land.suit_bonus_suit and land.suit_bonus_value:
             effective_land_bonus = _effective_land_bonus_value(
                 game, land.suit_bonus_value)
-            land_suit_bonus_attacker = (land.suit_bonus_suit, effective_land_bonus)
-            land_suit_bonus_defender = (land.suit_bonus_suit, effective_land_bonus)
+            base_land_bonus = (land.suit_bonus_suit, effective_land_bonus)
+
+    def _land_bonus_for(player_id):
+        """Per-player land bonus tuple, or None.  Invader (attacker) gets the
+        scaled share; every other player (home defender) keeps the full one."""
+        if not base_land_bonus:
+            return None
+        suit, full_value = base_land_bonus
+        if invader_pid is not None and player_id == invader_pid:
+            return (suit, _attacker_land_bonus_value(full_value))
+        return (suit, full_value)
+
+    land_bonus_adv = _land_bonus_for(adv_pid)
+    land_bonus_def = _land_bonus_for(def_pid)
 
     # ── figure power WITHOUT distance-attack (handled below) ──
     adv_power = _compute_figure_full_power(
         adv_fig, all_figures, enchant_spells,
         def_pid, battle_ids, game.id,
         adv_healers, 0,
-        land_suit_bonus=land_suit_bonus_attacker)  # attacker: wall = 0
+        land_suit_bonus=land_bonus_adv)  # attacker: wall = 0
     def_power = _compute_figure_full_power(
         def_fig, all_figures, enchant_spells,
         adv_pid, battle_ids, game.id,
         def_healers, def_wall_total,
-        land_suit_bonus=land_suit_bonus_defender)
+        land_suit_bonus=land_bonus_def)
 
     if game.advancing_figure_id_2:
         f2 = db.session.get(Figure, game.advancing_figure_id_2)
@@ -5572,7 +5610,7 @@ def _compute_server_total_diff(game, return_breakdown=False):
                 f2, all_figures, enchant_spells,
                 def_pid, battle_ids, game.id,
                 adv_healers, 0,
-                land_suit_bonus=land_suit_bonus_attacker)
+                land_suit_bonus=land_bonus_adv)
     if game.defending_figure_id_2:
         f2 = db.session.get(Figure, game.defending_figure_id_2)
         if f2:
@@ -5580,7 +5618,7 @@ def _compute_server_total_diff(game, return_breakdown=False):
                 f2, all_figures, enchant_spells,
                 adv_pid, battle_ids, game.id,
                 def_healers, def_wall_total,
-                land_suit_bonus=land_suit_bonus_defender)
+                land_suit_bonus=land_bonus_def)
 
     kingdom_defence_bonus_total = 0  # kept for breakdown payload compatibility
 
@@ -5690,12 +5728,14 @@ def _compute_server_total_diff(game, return_breakdown=False):
 
     total = fig_diff + round_diff
 
-    # Land suit bonus is now included in each figure's support bonus
-    # (computed inside _compute_figure_full_power via _compute_support_bonus)
+    # Land suit bonus is added (unblockably) to each matching battle figure's
+    # power inside _compute_figure_full_power; the defender keeps the full
+    # value while the invader gets the home-ground-scaled share.
 
     logger.debug(f"[SERVER_TOTAL_DIFF] game={game.id} "
           f"fig_diff={fig_diff} (adv={adv_power} def={def_power}) "
-          f"round_diff={round_diff} land_suit_bonus={land_suit_bonus_defender} total={total}")
+          f"round_diff={round_diff} land_bonus_def={land_bonus_def} "
+          f"land_bonus_adv={land_bonus_adv} total={total}")
 
     if return_breakdown:
         breakdown = {
@@ -5711,7 +5751,8 @@ def _compute_server_total_diff(game, return_breakdown=False):
             'kingdom_defence_bonus': kingdom_defence_bonus_total,
             'fig_diff': fig_diff,
             'round_diff': round_diff,
-            'land_suit_bonus': land_suit_bonus_defender,
+            'land_suit_bonus': land_bonus_def,
+            'land_suit_bonus_attacker': land_bonus_adv,
             'total': total,
         }
         return total, breakdown

@@ -1050,7 +1050,9 @@ class BattleScreen(SubScreen):
 
     def _get_figure_total_power(self, figure, figure_icon):
         """Get total power of a figure including base value, bonus, and enchantments.
-        If the figure's bonus is blocked (blocks_bonus skill), the bonus is excluded.
+        If the figure's support is blocked (blocks_bonus skill), only the
+        castle/village support is excluded — the conquer land bonus is
+        unblockable and always applies.
         Distance-attack penalty (if any) is subtracted from the total.
         Buffs-allies bonus is added as base power (unaffected by blocks_bonus).
         Buffs-allies-defence bonus is a support bonus (affected by blocks_bonus).
@@ -1060,15 +1062,22 @@ class BattleScreen(SubScreen):
         base = figure.get_value()
         # buffs_allies bonus (treated as base power, not affected by blocks_bonus)
         buffs_bonus = getattr(figure_icon, 'buffs_allies_bonus', 0) if figure_icon else 0
-        # Live variant includes the land component (Landslide can invert it
-        # after the icon was built); fall back to the cached value.
+        # Unblockable conquer land bonus (live: Landslide can invert it, and
+        # home-ground asymmetry scales the invader's share).
+        land_bonus = (figure_icon._current_land_bonus()
+                      if figure_icon and callable(
+                          getattr(figure_icon, '_current_land_bonus', None))
+                      else 0)
+        # Live variant includes the land component; fall back to cached support
+        # plus the (unblockable) land bonus.
         if figure_icon and callable(getattr(figure_icon, '_current_battle_bonus_received', None)):
             bonus = figure_icon._current_battle_bonus_received()
         else:
-            bonus = figure_icon.battle_bonus_received if figure_icon else 0
-        # blocks_bonus negates the support bonus (NOT wall defence)
+            bonus = (figure_icon.battle_bonus_received if figure_icon else 0) + land_bonus
+        # blocks_bonus negates the castle/village support only — the land bonus
+        # survives (NOT wall defence either).
         if figure_icon and getattr(figure_icon, 'battle_bonus_blocked', False):
-            bonus = 0
+            bonus = land_bonus
         # buffs_allies_defence (wall) bonus — NOT affected by blocks_bonus
         defence_bonus = getattr(figure_icon, 'buffs_allies_defence_bonus', 0) if figure_icon else 0
         enchant = figure.get_total_enchantment_modifier()
@@ -1296,18 +1305,18 @@ class BattleScreen(SubScreen):
                     return "None"
                 base = fig.get_value()
                 buffs = getattr(icon, 'buffs_allies_bonus', 0) if icon else 0
-                if icon and callable(getattr(icon, '_current_battle_bonus_received', None)):
-                    bonus = icon._current_battle_bonus_received()
-                else:
-                    bonus = icon.battle_bonus_received if icon else 0
+                land = (icon._current_land_bonus()
+                        if icon and callable(getattr(icon, '_current_land_bonus', None))
+                        else 0)
+                support = int(getattr(icon, 'battle_bonus_received', 0) or 0) if icon else 0
                 blocked = getattr(icon, 'battle_bonus_blocked', False) if icon else False
                 if blocked:
-                    bonus = 0
+                    support = 0
                 defence = getattr(icon, 'buffs_allies_defence_bonus', 0) if icon else 0
                 enchant = fig.get_total_enchantment_modifier()
                 da = getattr(icon, 'distance_attack_penalty', 0) if icon else 0
                 return (f"{fig.name}(suit={fig.suit},base={base},buffs={buffs},"
-                        f"support={bonus},blocked={blocked},wall={defence},"
+                        f"support={support},land={land},blocked={blocked},wall={defence},"
                         f"enchant={enchant},da={da})")
             logger.debug(f"[CLIENT_FIG] player={_fig_breakdown(self.player_figure, self.player_figure_icon)} "
                   f"player2={_fig_breakdown(self.player_figure_2, self.player_figure_icon_2)} "

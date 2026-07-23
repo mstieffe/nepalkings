@@ -276,7 +276,13 @@ def test_conquer_tactics_total_diff_counts_block_and_double_dagger(db):
     assert breakdown['round_diff'] == 8
 
 
-def test_conquer_tactics_total_diff_counts_call_figure_support_and_land_bonus(db):
+def test_conquer_tactics_total_diff_counts_call_figure_support_and_land_bonus(
+        db, monkeypatch):
+    # Pin to symmetric land bonus so this test focuses on "land bonus is
+    # counted"; home-ground asymmetry scaling is covered separately.
+    import routes.games as games_routes
+    monkeypatch.setattr(games_routes.settings,
+                        'LAND_HOME_GROUND_ASYMMETRY_ENABLED', False)
     game, attacker, defender, _attacker_fig, _defender_fig = _setup_tactics_battle(
         db.session,
         land_bonus=True,
@@ -629,7 +635,13 @@ def test_finish_battle_pick_card_handles_played_conquer_tactic_card_fate(app, db
     assert LandAttackLog.query.filter_by(land_id=game.land_id).count() == 1
 
 
-def test_finish_battle_win_response_includes_figure_tactic_breakdown(app, db):
+def test_finish_battle_win_response_includes_figure_tactic_breakdown(
+        app, db, monkeypatch):
+    # Pin to symmetric land bonus so the asserted breakdown reflects the full
+    # invader land bonus; asymmetry scaling is covered separately.
+    import routes.games as games_routes
+    monkeypatch.setattr(games_routes.settings,
+                        'LAND_HOME_GROUND_ASYMMETRY_ENABLED', False)
     client = app.test_client()
     game, attacker, defender, _attacker_fig, _defender_fig = _setup_tactics_battle(
         db.session, land_bonus=True)

@@ -157,8 +157,9 @@ village_dict_list = [
         "field": "village",
         "description": (
             "The Himalaya Temple is a defensive village figure that cannot attack. "
-            "It blocks the support bonus of the opponent's battle figure whose suit it has an advantage over "
-            "(Spades blocks Hearts, Clubs blocks Diamonds). Can be upgraded to a Shield Manufactory."
+            "It blocks the castle and village support bonus (only) of the opponent's battle figure whose suit it has an advantage over "
+            "(Spades blocks Hearts, Clubs blocks Diamonds). It does NOT block the land's suit bonus. "
+            "Can be upgraded to a Shield Manufactory."
         ),
         "icon_img": "shrine_black.png",
         "icon_gray_img": "shrine_black.png",
@@ -189,8 +190,9 @@ village_dict_list = [
         "field": "village",
         "description": (
             "The Djungle Temple is an offensive village figure that cannot attack. "
-            "It blocks the support bonus of the opponent's battle figure whose suit it has an advantage over "
-            "(Hearts blocks Clubs, Diamonds blocks Spades). Can be upgraded to a Sword Manufactory."
+            "It blocks the castle and village support bonus (only) of the opponent's battle figure whose suit it has an advantage over "
+            "(Hearts blocks Clubs, Diamonds blocks Spades). It does NOT block the land's suit bonus. "
+            "Can be upgraded to a Sword Manufactory."
         ),
         "icon_img": "shrine_red.png",
         "icon_gray_img": "shrine_red.png",

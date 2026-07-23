@@ -679,6 +679,20 @@ class ConquerGameScreen(GameScreen):
         value = getattr(game, 'land_suit_bonus_value', None)
         return (suit, int(value)) if suit and value else (None, 0)
 
+    @staticmethod
+    def _conquer_effective_land_bonus_for_figure(game, figure):
+        """(suit, value) of the land bonus for a specific figure's owner.
+
+        Applies Landslide inversion AND home-ground asymmetry (the invader's
+        figures receive the scaled share).  Falls back to the symmetric value
+        when the game proxy predates the per-player getter."""
+        if game is None or figure is None:
+            return None, 0
+        getter = getattr(game, 'effective_land_bonus_for', None)
+        if callable(getter):
+            return getter(getattr(figure, 'player_id', None))
+        return ConquerGameScreen._conquer_effective_land_bonus(game)
+
     def _conquer_combined_status_label(self):
         """Single status string for the top row (no chip soup)."""
         game = self.state.game
@@ -6566,14 +6580,19 @@ class ConquerGameScreen(GameScreen):
         # Land bonus is not sourced by a figure, but belongs in the same
         # visible clash-support lane as the other always-on modifiers.
         # Landslide flips it to a malus for matching figures (both sides).
-        land_suit, land_bonus = self._conquer_effective_land_bonus(game)
-        if land_suit and land_bonus:
+        land_suit, _ = self._conquer_effective_land_bonus(game)
+        if land_suit:
             land_targets = [
                 target for target in own_targets
                 if getattr(target, 'suit', None) == land_suit
             ]
-            if land_targets:
-                per_target = int(land_bonus)
+            # Home-ground asymmetry: value depends on the owner, but every
+            # target on this lane shares one owner, so one lookup suffices.
+            _, land_value = (
+                self._conquer_effective_land_bonus_for_figure(game, land_targets[0])
+                if land_targets else (None, 0))
+            if land_targets and land_value:
+                per_target = int(land_value)
                 total = per_target * len(land_targets)
                 add(
                     'land_bonus', None, 'Land', f'{total:+d}',
@@ -6670,9 +6689,14 @@ class ConquerGameScreen(GameScreen):
             chips.append({'label': 'Call', 'value': f'+{self._conquer_lane_figure_power(call_figure)}'})
 
         game = self.state.game
-        land_suit, land_bonus = self._conquer_effective_land_bonus(game)
-        if land_suit and land_bonus and any(getattr(fig, 'suit', None) == land_suit for fig in figures or []):
-            chips.append({'label': 'Land', 'value': f'{int(land_bonus):+d}'})
+        land_suit, _ = self._conquer_effective_land_bonus(game)
+        match = (next((fig for fig in figures or []
+                       if getattr(fig, 'suit', None) == land_suit), None)
+                 if land_suit else None)
+        if match is not None:
+            _, land_value = self._conquer_effective_land_bonus_for_figure(game, match)
+            if land_value:
+                chips.append({'label': 'Land', 'value': f'{int(land_value):+d}'})
 
         enchant_total = self._conquer_lane_enchantment_total(figures)
         if enchant_total:
@@ -8345,7 +8369,8 @@ class ConquerGameScreen(GameScreen):
             except Exception:
                 enchant = 0
 
-        land = 0 if blocked else self._conquer_lane_land_bonus_for([figure])
+        # Land bonus is unblockable — a Temple never removes it.
+        land = self._conquer_lane_land_bonus_for([figure])
 
         # Distance-attack penalty: only if this figure is among targets
         da_penalty = 0
@@ -8427,7 +8452,8 @@ class ConquerGameScreen(GameScreen):
             rows.append(('Support', support))
         if wall:
             rows.append(('Wall', wall))
-        land = 0 if blocked else self._conquer_lane_land_bonus_for([figure])
+        # Land bonus is unblockable — a Temple never removes it.
+        land = self._conquer_lane_land_bonus_for([figure])
         if land:
             rows.append(('Land', land))
         if enchant:
@@ -8470,13 +8496,16 @@ class ConquerGameScreen(GameScreen):
         return 0
 
     def _conquer_lane_land_bonus_for(self, figures):
+        # Unblockable and home-ground aware: summed per figure so an invader's
+        # scaled share and a defender's full share are both counted correctly.
         game = self.state.game
-        land_suit, land_bonus = self._conquer_effective_land_bonus(game)
-        if not land_suit or not land_bonus:
-            return 0
-        if any(getattr(fig, 'suit', None) == land_suit for fig in figures or []):
-            return int(land_bonus)
-        return 0
+        total = 0
+        for fig in figures or []:
+            land_suit, land_bonus = self._conquer_effective_land_bonus_for_figure(
+                game, fig)
+            if land_suit and land_bonus and getattr(fig, 'suit', None) == land_suit:
+                total += int(land_bonus)
+        return total
 
     @staticmethod
     def _conquer_receipt_row(label, value, *, source_figure_ids=None, kind=None):
@@ -8620,10 +8649,11 @@ class ConquerGameScreen(GameScreen):
             for entry in support_entries
             if entry.get('kind') == 'support_bonus'
         )
+        # Land bonus is unblockable — count every matching figure regardless
+        # of whether a Temple blocked its castle/village support.
         land = sum(
             self._conquer_lane_land_bonus_for([fig])
             for fig in figures or []
-            if getattr(fig, 'id', None) not in blocked_target_ids
         )
         if isinstance(move, dict) and move.get('call_figure_id'):
             tactic = 0
@@ -8666,8 +8696,7 @@ class ConquerGameScreen(GameScreen):
                 source_figure_ids=[
                     getattr(fig, 'id', None) for fig in figures
                     if (getattr(fig, 'suit', None) == land_suit
-                        and getattr(fig, 'id', None) is not None
-                        and getattr(fig, 'id', None) not in blocked_target_ids)
+                        and getattr(fig, 'id', None) is not None)
                 ],
             ))
         if enchant:
@@ -8687,7 +8716,9 @@ class ConquerGameScreen(GameScreen):
                 'on',
                 source_figure_ids=self._conquer_support_entry_ids(support_entries, 'blocks_bonus'),
             ))
-        if blocked_by_enemy and (raw_support or self._conquer_lane_land_bonus_for(figures)):
+        # Only surface the "Blocked" row when real castle/village support was
+        # nullified — the land bonus is unblockable and never triggers it.
+        if blocked_by_enemy and raw_support:
             rows.append(self._conquer_receipt_row(
                 'Blocked',
                 'support',

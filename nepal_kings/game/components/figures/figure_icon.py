@@ -1298,10 +1298,13 @@ class FieldFigureIcon(FigureIcon):
         if self.is_visible:
             # Calculate power display
             base_power = self.figure.get_value()
-            # Support part is cached from __init__; the land component is
-            # live so Landslide's inversion shows up without an icon rebuild.
-            battle_bonus = self._current_battle_bonus_received()
-            
+            # Support part is what a Temple blocks; the land part is live
+            # (Landslide can invert it) and unblockable, so the two render as
+            # separate badges below.  Derive support from the public accessor
+            # (total = support + land) so both stay consistent.
+            land_bonus = self._current_land_bonus()
+            support_bonus = self._current_battle_bonus_received() - land_bonus
+
             # Create power text
             buffs_allies_bonus = getattr(self, 'buffs_allies_bonus', 0)
             defence_bonus = getattr(self, 'buffs_allies_defence_bonus', 0)
@@ -1322,21 +1325,32 @@ class FieldFigureIcon(FigureIcon):
             if defence_bonus > 0 and not compact_info:
                 defence_bonus_surface = font.render(f"+{defence_bonus}", True, settings.SUIT_ICON_CAPTION_COLOR)
             
-            # Create bonus text if applicable
+            # Create bonus text if applicable.  Two independent badges:
+            #   • support badge — blockable castle/village bloodline support;
+            #     a red strikethrough marks it when a Temple blocks it.
+            #   • land badge    — unblockable conquer land-tier bonus; never
+            #     struck through (a Temple cannot delete the land advantage).
+            def _make_modifier_surface(value):
+                # Negative totals happen when Landslide inverts the land bonus
+                # — render them in red instead of hiding them.
+                text = self._format_info_modifier(value, compact_info)
+                color = (settings.COLOR_BATTLE_BONUS if value > 0
+                         else (226, 120, 110))
+                outline = font.render(text, True, (0, 0, 0))
+                return font.render(text, True, color), outline
+
             bonus_surface = None
             bonus_outline_surface = None
             bonus_blocked = getattr(self, 'battle_bonus_blocked', False)
-            if battle_bonus != 0:
-                # Negative totals happen when Landslide inverts the land
-                # bonus — render them in red instead of hiding them.
-                bonus_text = self._format_info_modifier(
-                    battle_bonus, compact_info)
-                bonus_color = (settings.COLOR_BATTLE_BONUS if battle_bonus > 0
-                               else (226, 120, 110))
-                # Create outline for better contrast
-                bonus_outline_surface = font.render(bonus_text, True, (0, 0, 0))
-                # Positive stays green — the red strikethrough dash indicates blocked
-                bonus_surface = font.render(bonus_text, True, bonus_color)
+            if support_bonus != 0:
+                bonus_surface, bonus_outline_surface = _make_modifier_surface(
+                    support_bonus)
+
+            land_bonus_surface = None
+            land_bonus_outline_surface = None
+            if land_bonus != 0:
+                land_bonus_surface, land_bonus_outline_surface = (
+                    _make_modifier_surface(land_bonus))
             
             # Create distance-attack penalty text if applicable
             distance_penalty_surface = None
@@ -1396,6 +1410,10 @@ class FieldFigureIcon(FigureIcon):
             if bonus_surface:
                 number_elements.append(_outlined_element(
                     bonus_surface, bonus_outline_surface, strike=bonus_blocked))
+            if land_bonus_surface:
+                # Land bonus is unblockable — never struck through.
+                number_elements.append(_outlined_element(
+                    land_bonus_surface, land_bonus_outline_surface))
             if distance_penalty_surface:
                 number_elements.append(_outlined_element(
                     distance_penalty_surface, distance_penalty_outline))
@@ -1508,8 +1526,12 @@ class FieldFigureIcon(FigureIcon):
                 'compact': compact_info,
                 'power_text': power_text,
                 'support_text': (
-                    self._format_info_modifier(battle_bonus, compact_info)
-                    if battle_bonus else None
+                    self._format_info_modifier(support_bonus, compact_info)
+                    if support_bonus else None
+                ),
+                'land_text': (
+                    self._format_info_modifier(land_bonus, compact_info)
+                    if land_bonus else None
                 ),
                 'enchantment_text': (
                     self._format_info_modifier(enchantment_modifier, compact_info)
@@ -2242,30 +2264,50 @@ class FieldFigureIcon(FigureIcon):
             print(f"[FIELD_ICON] Failed to calculate battle bonus: {e}")
             return 0
 
-    def _current_battle_bonus_received(self):
-        """Cached figure-support bonus plus the LIVE land bonus component.
+    def _current_land_bonus(self):
+        """Live, UNBLOCKABLE land suit bonus for this figure (conquer mode).
 
-        The land part must be evaluated per frame: Landslide inverts the
-        land bonus at battle start, long after most icons were built and
-        their support bonus cached.
+        Evaluated per frame: Landslide inverts the land bonus at battle start,
+        long after most icons were built.  Under home-ground asymmetry the
+        invader (attacker) receives only a scaled share while the defender
+        (land owner) keeps the full value.  A Temple (blocks_bonus) never
+        affects this component — it only blocks castle/village support.
         """
         if getattr(self, 'suppress_battle_bonus', False):
             return 0
-        total = int(getattr(self, 'battle_bonus_received', 0) or 0)
         try:
-            if self.game and getattr(self.game, 'mode', 'duel') == 'conquer':
-                bonus_getter = getattr(self.game, 'effective_land_bonus', None)
-                if callable(bonus_getter):
-                    land_suit, land_value = bonus_getter()
+            if not (self.game and getattr(self.game, 'mode', 'duel') == 'conquer'):
+                return 0
+            per_player = getattr(self.game, 'effective_land_bonus_for', None)
+            if callable(per_player):
+                land_suit, land_value = per_player(
+                    getattr(self.figure, 'player_id', None))
+            else:
+                getter = getattr(self.game, 'effective_land_bonus', None)
+                if callable(getter):
+                    land_suit, land_value = getter()
                 else:
                     land_suit = getattr(self.game, 'land_suit_bonus_suit', None)
                     land_value = getattr(self.game, 'land_suit_bonus_value', None)
-                if land_suit and land_value:
-                    if (self.figure.suit or '').lower() == land_suit.lower():
-                        total += int(land_value)
+            if land_suit and land_value:
+                if (self.figure.suit or '').lower() == land_suit.lower():
+                    return int(land_value)
         except Exception:
             pass
-        return total
+        return 0
+
+    def _current_battle_bonus_received(self):
+        """Cached figure-support bonus plus the LIVE land bonus component.
+
+        The support part (castle/village bloodline) is what a Temple blocks;
+        the land part is unblockable (see ``_current_land_bonus``).  The land
+        component is evaluated per frame so Landslide's mid-battle inversion
+        shows up without an icon rebuild.
+        """
+        if getattr(self, 'suppress_battle_bonus', False):
+            return 0
+        support = int(getattr(self, 'battle_bonus_received', 0) or 0)
+        return support + self._current_land_bonus()
 
     def _scale_icon(self, image, scale_factor: float) -> pygame.Surface:
         """
