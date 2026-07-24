@@ -3419,6 +3419,55 @@ class TestConquerGameShell:
         assert FieldScreen.selectable_defender_figure_ids(field) == [50]
         assert [icon.conquer_selection_selectable for icon in icons] == [True, False]
 
+    def test_civil_war_second_attacker_outranks_stale_defender_selection_mode(self):
+        """Both latches can be armed at once (the turn stays parked on the
+        invader).  Own same-colour village figures must stay selectable —
+        greying them out left the player unable to make the required pick."""
+        from game.screens.field_screen import FieldScreen
+
+        def figure(fig_id, *, player_id=1, color='offensive', field='village'):
+            return SimpleNamespace(
+                id=fig_id,
+                player_id=player_id,
+                name=f'Figure {fig_id}',
+                family=SimpleNamespace(color=color, field=field),
+            )
+
+        own_match = figure(70)
+        own_wrong_color = figure(71, color='defensive')
+        advancing = figure(72)
+        opponent = figure(73, player_id=2)
+        icons = [
+            SimpleNamespace(figure=own_match, has_deficit=False),
+            SimpleNamespace(figure=own_wrong_color, has_deficit=False),
+            SimpleNamespace(figure=advancing, has_deficit=False),
+            SimpleNamespace(figure=opponent, has_deficit=False),
+        ]
+        field = FieldScreen.__new__(FieldScreen)
+        field.game = SimpleNamespace(
+            player_id=1,
+            battle_modifier=[{'type': 'Civil War'}],
+            advancing_figure_id=72,
+            civil_war_awaiting_second=True,
+            civil_war_defender_second=False,
+            civil_war_required_color='offensive',
+            resting_figure_ids=[],
+            pending_forced_advance=False,
+        )
+        field.state = SimpleNamespace(pending_conquer_prelude_target=None)
+        field.figures = [own_match, own_wrong_color, advancing, opponent]
+        field.figure_icons = icons
+        # Stale latch from the defender-selection detector.
+        field.defender_selection_mode = True
+        field.conquer_own_defender_mode = False
+        field._is_conquer_selection_active = lambda: True
+
+        FieldScreen._sync_conquer_selection_icon_states(field)
+
+        assert [icon.conquer_selection_selectable for icon in icons] == [
+            True, False, False, False,
+        ]
+
     def test_conquer_prelude_selection_visuals_honor_valid_target_ids(self):
         from game.screens.field_screen import FieldScreen
 

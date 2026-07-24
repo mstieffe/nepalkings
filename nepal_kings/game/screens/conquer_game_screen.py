@@ -1217,6 +1217,10 @@ class ConquerGameScreen(GameScreen):
         field = self.subscreens.get('field') if hasattr(self, 'subscreens') else None
         if game is None or field is None:
             return None, None
+        # An owed second Civil War attacker holds the turn; auto-firing a
+        # defender pick here would jump the timeline past it.
+        if getattr(game, 'civil_war_awaiting_second', False):
+            return None, None
         # Opponent defender selection (attacker picking who to hit).
         if getattr(field, 'defender_selection_mode', False):
             try:
@@ -4845,6 +4849,21 @@ class ConquerGameScreen(GameScreen):
 
         if not getattr(game, 'advancing_figure_id', None):
             self._clear_stale_conquer_defender_flags_if_no_advance()
+            if getattr(field, 'defender_selection_mode', False):
+                field.defender_selection_mode = False
+                field._reset_defender_selectable()
+            if getattr(field, 'conquer_own_defender_mode', False):
+                field.conquer_own_defender_mode = False
+                field._reset_defender_selectable()
+            self._auto_single_option_pending = None
+            return
+
+        # The invader still owes an optional second Civil War attacker.  The
+        # server parks the turn on them for that pick, so the usual
+        # "turn came back → select the defender" cue is wrong here: honouring
+        # it greys out the player's own figures, which are the only legal
+        # targets for this step.
+        if getattr(game, 'civil_war_awaiting_second', False):
             if getattr(field, 'defender_selection_mode', False):
                 field.defender_selection_mode = False
                 field._reset_defender_selectable()

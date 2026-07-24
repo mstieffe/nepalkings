@@ -1143,19 +1143,28 @@ class FieldScreen(SubScreen):
                                             rect, 'ADVANCE!', (238, 206, 130))
                                 logger.debug(f"[FIELD] Advanced {figure.name} successfully")
                                 self.state.set_msg(f"Advanced {figure.name} toward battle!")
+                                # Arm the Civil War second pick BEFORE applying
+                                # the server state: the turn stays parked on us
+                                # for the pick, which update_from_dict would
+                                # otherwise read as "pick the opponent defender".
+                                civil_war_need_second = bool(
+                                    result.get('civil_war_need_second'))
+                                civil_war_color = result.get('civil_war_color', '')
+                                if civil_war_need_second:
+                                    self.game.begin_civil_war_second_pick(
+                                        'attacker', civil_war_color)
                                 # Update game state from response
                                 # (update_from_dict -> unlock_actions)
                                 if result.get('game'):
                                     self.game.update_from_dict(result['game'])
                                 # Reload figures to refresh icons
                                 self.load_figures()
-                                
+
                                 # Check if Civil War needs a second figure
-                                if result.get('civil_war_need_second'):
-                                    civil_war_color = result.get('civil_war_color', '')
+                                if civil_war_need_second:
                                     color_name = 'red' if civil_war_color == 'offensive' else 'black'
-                                    self.game.civil_war_awaiting_second = True
-                                    self.game.civil_war_required_color = civil_war_color
+                                    self.defender_selection_mode = False
+                                    self._reset_defender_selectable()
                                     cw_icons = self._get_modifier_icon_images('Civil War')
                                     self.make_dialogue_box(
                                         message=f"Civil War! You may select a second village figure of the same color ({color_name}), or fight with only one figure.",
@@ -1250,15 +1259,16 @@ class FieldScreen(SubScreen):
                                     )
                                 # Check if Civil War needs a second defender
                                 elif result.get('civil_war_need_second'):
+                                    civil_war_color = result.get('civil_war_color', '')
+                                    color_name = 'red' if civil_war_color == 'offensive' else 'black'
+                                    # Arm before applying server state so the
+                                    # battle-ready detector doesn't fire on the
+                                    # first (now committed) defending figure.
+                                    self.game.begin_civil_war_second_pick(
+                                        'defender', civil_war_color)
                                     if result.get('game'):
                                         self.game.update_from_dict(result['game'])
                                     self.load_figures()
-                                    civil_war_color = result.get('civil_war_color', '')
-                                    color_name = 'red' if civil_war_color == 'offensive' else 'black'
-                                    self.game.civil_war_defender_second = True
-                                    self.game.civil_war_required_color = civil_war_color
-                                    self.game.pending_battle_ready = False
-                                    self.game.battle_ready_shown = False
                                     cw_icons = self._get_modifier_icon_images('Civil War')
                                     self.make_dialogue_box(
                                         message=f"Civil War! You may select a second opponent village figure of the same color ({color_name}), or proceed with only one.",
@@ -1333,18 +1343,21 @@ class FieldScreen(SubScreen):
                                 target_figure.id,
                             )
                             if result.get('success'):
+                                civil_war_need_second = bool(
+                                    result.get('civil_war_need_second'))
+                                civil_war_color = result.get('civil_war_color', '')
+                                # Arm before applying server state (see
+                                # begin_civil_war_second_pick).
+                                if civil_war_need_second:
+                                    self.game.begin_civil_war_second_pick(
+                                        'defender', civil_war_color)
                                 if result.get('game'):
                                     self.game.update_from_dict(result['game'])
                                 self.load_figures()
                                 self.game.pending_conquer_own_defender_selection = False
-                                if result.get('civil_war_need_second'):
-                                    civil_war_color = result.get('civil_war_color', '')
+                                if civil_war_need_second:
                                     color_name = 'red' if civil_war_color == 'offensive' else 'black'
                                     self.conquer_own_defender_mode = True
-                                    self.game.civil_war_defender_second = True
-                                    self.game.civil_war_required_color = civil_war_color
-                                    self.game.pending_battle_ready = False
-                                    self.game.battle_ready_shown = False
                                     cw_icons = self._get_modifier_icon_images('Civil War')
                                     self.make_dialogue_box(
                                         message=f"Civil War! You may select a second own village figure of the same color ({color_name}), or proceed with only one.",
@@ -1779,14 +1792,19 @@ class FieldScreen(SubScreen):
             self._handle_target_selection(events)
             return
 
-        if self.defender_selection_mode:
-            self._handle_defender_selection(events)
-            return
+        # A pending second Civil War attacker outranks any defender-selection
+        # mode: both can be armed at once (the turn stays with the invader for
+        # the pick), and routing clicks into defender selection would grey out
+        # the player's own figures — the very ones they must choose from.
+        if not self._civil_war_awaiting_second_attacker():
+            if self.defender_selection_mode:
+                self._handle_defender_selection(events)
+                return
 
-        if self.conquer_own_defender_mode:
-            self._handle_conquer_own_defender_selection(events)
-            return
-        
+            if self.conquer_own_defender_mode:
+                self._handle_conquer_own_defender_selection(events)
+                return
+
         for event in events:
             if event.type == MOUSEBUTTONDOWN:
                 # Only allow one figure to be selected at a time
@@ -3905,6 +3923,18 @@ class FieldScreen(SubScreen):
                 types.append(modifier_type)
         return types
 
+    def _civil_war_awaiting_second_attacker(self):
+        """True while we still owe an optional second Civil War attacker.
+
+        This state parks the turn on the advancing player, so it can coexist
+        with defender-selection latches; every selection path must let it win.
+        """
+        game = self.game
+        if not game or not getattr(game, 'civil_war_awaiting_second', False):
+            return False
+        return battle_required_field(
+            getattr(game, 'battle_modifier', None)) != 'castle'
+
     def _is_civil_war_second_attacker_selectable(self, figure, icon=None):
         game = self.game
         if not game or figure is None:
@@ -4076,15 +4106,19 @@ class FieldScreen(SubScreen):
 
     def _sync_conquer_selection_icon_states(self):
         active = self._is_conquer_selection_active()
+        defender_mode = (
+            getattr(self, 'defender_selection_mode', False)
+            and not self._civil_war_awaiting_second_attacker()
+        )
         defender_context = (
             self._opponent_defender_selection_context()
-            if active and getattr(self, 'defender_selection_mode', False) else None
+            if active and defender_mode else None
         )
         for icon in getattr(self, 'figure_icons', []) or []:
             if not active:
                 icon.conquer_selection_selectable = True
                 continue
-            if getattr(self, 'defender_selection_mode', False):
+            if defender_mode:
                 icon.conquer_selection_selectable = self._is_opponent_defender_selectable(
                     getattr(icon, 'figure', None), icon, context=defender_context)
             else:
@@ -4115,14 +4149,17 @@ class FieldScreen(SubScreen):
         is_own = (game is not None and figure.player_id == game.player_id)
         required_field, _field_mod = self._battle_required_field_mode()
 
+        # Checked first: a pending second attacker can coexist with a
+        # defender-selection latch, and it must win (see
+        # ``_civil_war_awaiting_second_attacker``).
+        if self._civil_war_awaiting_second_attacker():
+            return self._is_civil_war_second_attacker_selectable(figure, icon)
+
         if self.defender_selection_mode:
             return self._is_opponent_defender_selectable(figure, icon)
 
         if self.conquer_own_defender_mode:
             return self._is_conquer_own_defender_selectable(figure, icon)
-
-        if game is not None and getattr(game, 'civil_war_awaiting_second', False):
-            return self._is_civil_war_second_attacker_selectable(figure, icon)
 
         if (game is not None
                 and getattr(game, 'pending_forced_advance', False)
@@ -4181,6 +4218,10 @@ class FieldScreen(SubScreen):
                 and getattr(active_step, 'interactive', False)
             )
 
+        # Ordered before the defender-selection latches: both can be armed at
+        # once, and the second attacker pick owns the field while it lasts.
+        if self._civil_war_awaiting_second_attacker():
+            return timeline_allows('attacker')
         if self.defender_selection_mode or self.conquer_own_defender_mode:
             return timeline_allows('defender')
         if getattr(self.state, 'pending_conquer_prelude_target', None):

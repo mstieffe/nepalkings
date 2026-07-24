@@ -455,6 +455,34 @@ class Game:
         self.civil_war_defender_second = False
         self.civil_war_required_color = None
 
+    def begin_civil_war_second_pick(self, kind, color):
+        """Arm the client-side Civil War optional second-pick state.
+
+        MUST be called *before* ``update_from_dict()`` for the response that
+        reported ``civil_war_need_second``.  The server deliberately parks the
+        turn on the picking player, which the defender-selection and
+        battle-ready detectors would otherwise read as "the turn came back,
+        move on" — stealing the field selection and racing the timeline ahead
+        of the pick.
+
+        ``kind`` is ``'attacker'`` (advancing player's second figure) or
+        ``'defender'`` (second defending figure).
+        """
+        if kind == 'attacker':
+            self.civil_war_awaiting_second = True
+            self.civil_war_defender_second = False
+            # A poll may already have armed defender selection in the gap
+            # between the advance and this call — the second pick owns the
+            # turn now, so drop it.
+            self.pending_defender_selection = False
+            self.defender_selection_dialogue_shown = False
+        else:
+            self.civil_war_defender_second = True
+            self.civil_war_awaiting_second = False
+        self.civil_war_required_color = color or None
+        self.pending_battle_ready = False
+        self.battle_ready_shown = False
+
     def _clear_conquer_battle_cycle_flags(self):
         """Clear client-side conquer prompts when the server resets a battle."""
         if getattr(self, 'mode', None) != 'conquer':
@@ -1115,10 +1143,14 @@ class Game:
             self.waiting_for_battle_decision = False
             logger.info(f"[FOLD] update_from_dict: fold outcome={self.fold_outcome}, winner={self.fold_winner_id}")
         
-        # Detect battle_ready when both figures are set (e.g. after select_defender)
+        # Detect battle_ready when both figures are set (e.g. after select_defender).
+        # Mirrors the _apply_game_dict guard: a pending Civil War second pick
+        # must not race the timeline into the fight/fold step.
         if (self.advancing_figure_id and self.defending_figure_id and
                 not self.battle_confirmed and
-                not self.pending_battle_ready and not self.battle_ready_shown):
+                not self.pending_battle_ready and not self.battle_ready_shown and
+                not self.civil_war_awaiting_second and
+                not self.civil_war_defender_second):
             self.pending_battle_ready = True
             logger.info(f"[BATTLE_READY] update_from_dict: both figures set, triggering battle_ready")
         
