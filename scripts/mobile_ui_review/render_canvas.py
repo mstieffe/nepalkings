@@ -1060,9 +1060,12 @@ def populate_conquer_game(client, subscreen: str):
             screen._conquer_timeline_hover_open = False
             screen._conquer_timeline_last_layout_mode = "battle"
         if requested_subscreen == "battle_dagger":
+            # Filtered to the Dagger family with one Dagger selected: the
+            # state that exercises the filter strip, the row list, and the
+            # full Play/Gamble/Combine tray at once.
             rail = getattr(screen, "_tactics_rail", None)
             if rail is not None:
-                rail._expanded_groups.add("Dagger")
+                rail._set_active_family("Dagger")
                 for move in rail._hand_moves():
                     if move.get("family_name") == "Dagger" and not move.get("card_id_b"):
                         rail._selected_id = move.get("id")

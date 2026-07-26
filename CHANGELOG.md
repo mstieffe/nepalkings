@@ -51,6 +51,23 @@ and the operational safety net to keep early adopters.
 
 ### Changed
 
+- **Conquer tactics rail: family filter instead of an accordion.** Picking a
+  tactic on a phone used to mean expanding a family group behind a small ×N
+  chip, scrolling with 14 px arrows, and watching the list resize on every
+  tap. The rail now carries a filter strip (`ALL` + one chip per family, with
+  the three `Call *` families merged into one) and lists every tactic of the
+  active family as its own row — a chip tap swaps the list instead of growing
+  it. A merged group's chip picks its artwork from a fixed emblem order
+  rather than from whichever member happens to be strongest, so the icon
+  stops changing between hands; chips with room for it fan every member
+  family into one composite instead. The hand viewport is a fixed height for the whole battle: the action
+  tray reserves its worst-case size up front and the result banner floats over
+  the list, so selecting a tactic can no longer push it off screen. Touch
+  builds grab-scroll the list (drag anywhere, with a passive scrollbar) and no
+  longer arm drag-to-combine — a swipe over two same-colour Daggers used to
+  fire an unconfirmed, destructive Combine. Scroll arrows are desktop-only
+  (they overlapped the first/last row's tap target); rows show rank + suit
+  pips; the remaining-gamble count moved onto the Gamble button.
 - **Documentation information architecture.** Replaced the oversized root
   README with a concise public landing page; added player, developer,
   architecture, distribution, operations, legal, and plan indexes; rewrote

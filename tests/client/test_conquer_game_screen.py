@@ -4290,11 +4290,29 @@ assert hand_list is not None
 assert hand_list.bottom <= action_tray.top
 
 # Mobile does not spend a second band repeating the selected row's name and
-# stats. The hand begins where the desktop detail card would begin, exposing
-# an extra tactic slot while selection remains visible on the highlighted row.
+# stats: the hand absorbs the desktop detail card's band, exposing an extra
+# tactic slot while selection remains visible on the highlighted row. It
+# starts directly under the family filter strip, which owns the top strip.
 layout = rail._ensure_layout().tactics_rail
 detail_rect = pygame.Rect(*layout.selected_detail_rect)
-assert hand_list.top == detail_rect.top, (tuple(hand_list), tuple(detail_rect))
+filter_rect = rail._dyn_filter_strip_rect
+assert filter_rect is not None
+assert filter_rect.top == pygame.Rect(*layout.top_strip_rect).top
+assert hand_list.top == filter_rect.bottom, (
+    tuple(hand_list), tuple(filter_rect))
+assert hand_list.top < detail_rect.bottom, (
+    tuple(hand_list), tuple(detail_rect))
+
+# Selecting a tactic must not resize the hand: the tray is reserved up front.
+rail._selected_id = None
+screen.render()
+unselected_list = pygame.Rect(rail._dyn_hand_list_rect)
+unselected_rows = len(rail._cell_rects)
+rail._selected_id = hand[0]['id']
+screen.render()
+assert rail._dyn_hand_list_rect == unselected_list, (
+    tuple(rail._dyn_hand_list_rect), tuple(unselected_list))
+assert len(rail._cell_rects) == unselected_rows
 
 for key in (ACTION_PLAY, ACTION_GAMBLE):
     rect = rail._action_button_rects.get(key)
