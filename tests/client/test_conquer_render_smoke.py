@@ -3050,3 +3050,107 @@ def test_timeline_panel_battle_phase_reveals_all_when_unseeded():
     )
     panel.derive_display_steps = lambda _screen: []
     assert panel.currently_resolved_step_index(screen) == 4
+
+
+# ── Support breakdown popover ───────────────────────────────────────
+
+
+def _support_row(name, *, label='Support', value='+1', kind='support'):
+    return {
+        'label': label,
+        'value': value,
+        'kind': kind,
+        'figure': SimpleNamespace(name=name),
+    }
+
+
+def test_support_popover_collapses_identical_contributions():
+    """A tier-6 land puts a dozen identical farms behind one badge.
+
+    Listing each on its own line said nothing the first line had not, and
+    the list ran past the panel and over the battlefield.
+    """
+    from game.screens.conquer_game_screen import ConquerGameScreen
+
+    rows = [_support_row('Small Yack Farm') for _ in range(6)]
+    rows += [_support_row('Wall', label='Wall', value='+3') for _ in range(4)]
+
+    lines = ConquerGameScreen._conquer_support_popover_lines(rows)
+    assert len(lines) == 2
+    assert 'Small Yack Farm' in lines[0] and 'x6' in lines[0]
+    assert 'Wall' in lines[1] and 'x4' in lines[1]
+
+
+def test_support_popover_keeps_distinct_contributions_apart():
+    from game.screens.conquer_game_screen import ConquerGameScreen
+
+    lines = ConquerGameScreen._conquer_support_popover_lines([
+        _support_row('Small Yack Farm'),
+        _support_row('Djungle Healer', value='+4'),
+    ])
+    assert len(lines) == 2
+    assert not any('x' in line.rsplit('·', 1)[-1] for line in lines), (
+        'single contributions must not be labelled with a count')
+
+
+def test_support_popover_singletons_have_no_count():
+    from game.screens.conquer_game_screen import ConquerGameScreen
+
+    lines = ConquerGameScreen._conquer_support_popover_lines(
+        [_support_row('Small Yack Farm')])
+    assert lines == ['Support +1 · Small Yack Farm']
+
+
+def test_support_popover_land_bonus_falls_back_to_its_suit():
+    from game.screens.conquer_game_screen import ConquerGameScreen
+
+    lines = ConquerGameScreen._conquer_support_popover_lines([
+        {'label': 'Land', 'value': '+2', 'kind': 'land_bonus', 'suit': 'Hearts'},
+    ])
+    assert 'Hearts' in lines[0]
+
+
+def test_lane_overlays_are_not_drawn_inside_the_cached_lane():
+    """Regression guard for a whole bug class.
+
+    ``_draw_conquer_duel_lane``'s output is snapshotted into a lane-sized
+    cache surface, so anything drawn there that reaches past the lane gets
+    cut at its edge and then frozen for as long as the cache key holds.  The
+    support popovers, source links and tooltips must stay outside it.
+    """
+    import inspect
+    from game.screens.conquer_game_screen import ConquerGameScreen
+
+    lane_src = inspect.getsource(ConquerGameScreen._draw_conquer_duel_lane)
+    for overlay in ('_draw_conquer_support_badge_popover',
+                    '_draw_conquer_support_overflow_popover',
+                    '_draw_conquer_lane_source_link',
+                    '_draw_conquer_lane_tooltips'):
+        assert overlay not in lane_src, (
+            f'{overlay} is drawn inside the cached lane; it will be clipped '
+            f'to the lane rect and frozen into the cache')
+
+    render_src = inspect.getsource(ConquerGameScreen.render)
+    assert '_draw_conquer_lane_overlays' in render_src
+
+
+def test_only_one_support_popover_is_drawn_per_frame():
+    """Both popovers can be armed at once; two panels overlap unreadably."""
+    import inspect
+    from game.screens.conquer_game_screen import ConquerGameScreen
+
+    src = inspect.getsource(ConquerGameScreen._draw_conquer_lane_overlays)
+    assert ('if not self._draw_conquer_support_badge_popover():' in src
+            and 'self._draw_conquer_support_overflow_popover()' in src), (
+        'the two popovers must be mutually exclusive')
+
+
+def test_badge_popover_is_touch_only():
+    """Desktop explains support through per-badge values instead."""
+    from config import settings
+    from game.screens.conquer_game_screen import ConquerGameScreen
+
+    if settings.TOUCH_TARGET_MIN > 0:
+        return
+    screen = object.__new__(ConquerGameScreen)
+    assert screen._draw_conquer_support_badge_popover() is False

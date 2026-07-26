@@ -119,6 +119,21 @@ and the operational safety net to keep early adopters.
   rather than the `FIGURE_ICON_HEIGHT` proxy the old maths used, which
   understated the real frame by about half and made icons collide earlier
   than the spacing predicted.
+- **Support breakdown popover buried the battlefield and told you less than
+  it could.** With a dozen supporting figures behind one badge the breakdown
+  listed each contribution on its own line — six identical
+  `Support +1 · Small Yack Farm` rows that said nothing the first row had not
+  already said — capped the list without admitting anything was missing, and
+  covered the field columns doing it. Identical contributions now collapse
+  into one `x6` line, the row budget follows the room actually available
+  instead of a fixed cap, and a genuinely truncated list ends in `+N more`.
+  Two separate bugs surfaced alongside it: the touch and desktop popovers
+  could both be armed at once and stacked two panels on top of each other,
+  and all of these overlays were drawn from inside the duel lane's draw —
+  whose output is snapshotted into a lane-sized cache surface, so the popover
+  was cut off at the lane edge and then frozen there, and the links pointing
+  at each supporting figure never appeared at all. Only one panel is drawn
+  per frame now, and the overlays live outside the cached region.
 - **Unusable text entry on mobile web.** Renaming a kingdom opened a modal
   with no way to type into it: mobile browsers only raise their keyboard for
   a focused HTML element, and the modal had none, while its field and buttons

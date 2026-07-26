@@ -7624,55 +7624,114 @@ class ConquerGameScreen(GameScreen):
         pygame.draw.circle(overlay, color, local_start, 3)
         self.window.blit(overlay, bounds.topleft)
 
-    def _draw_conquer_support_overflow_popover(self):
-        info = self._current_conquer_support_overflow_entry()
-        if not info:
-            return
-        entries = info.get('entries') or []
-        if not entries:
-            return
-        anchor = pygame.Rect(info.get('rect'))
-        is_player = info.get('is_player', True)
-        font = settings.get_font(settings.FS_CONQUER_META, bold=True)
-        title_font = settings.get_font(settings.FS_CONQUER_META, bold=True)
-        width = 178
+    @staticmethod
+    def _conquer_support_row_identity(row):
+        """``(label, value, name)`` describing one support contribution."""
+        source_names = []
+        for source in row.get('source_entries') or [row]:
+            figure = source.get('figure')
+            if figure is not None:
+                source_names.append(getattr(figure, 'name', 'Figure'))
+        if not source_names and row.get('kind') == 'land_bonus':
+            source_names.append(str(row.get('suit') or 'Land'))
+        name = ', '.join(source_names[:2]) if source_names else 'Effect'
+        if len(source_names) > 2:
+            name += f' +{len(source_names) - 2}'
+        label = row.get('label') or row.get('kind') or 'Support'
+        return label, str(row.get('value') or ''), name
+
+    @classmethod
+    def _conquer_support_popover_lines(cls, rows):
+        """Fold support rows into display lines, collapsing repeats.
+
+        A tier-6 land routinely puts a dozen identical farms behind one
+        support badge.  Listing each on its own line said nothing the first
+        line had not already said, and the list then ran past the panel and
+        over the battlefield, so identical contributions collapse into one
+        ``xN`` line instead.
+        """
+        grouped = []
+        seen = {}
+        for row in rows:
+            key = cls._conquer_support_row_identity(row)
+            if key in seen:
+                grouped[seen[key]][1] += 1
+            else:
+                seen[key] = len(grouped)
+                grouped.append([key, 1])
+        lines = []
+        for (label, value, name), count in grouped:
+            text = f'{label} {value} · {name}'.strip()
+            if count > 1:
+                text += f'  x{count}'
+            lines.append(text)
+        return lines
+
+    def _draw_conquer_support_popover(self, anchor, *, is_player, title_text,
+                                      rows, width, title_font, font):
+        """Shared breakdown panel for the support badge / overflow popovers."""
+        lines = self._conquer_support_popover_lines(rows)
+        if not lines:
+            return False
         line_h = font.get_height() + 3
-        visible = entries[:5]
-        height = 12 + title_font.get_height() + len(visible) * line_h
+        # Budget by the room actually available rather than a fixed row cap,
+        # and never silently drop the remainder.
+        room = max(line_h,
+                   int(settings.SCREEN_HEIGHT * 0.62) - 12
+                   - title_font.get_height())
+        max_lines = max(1, room // line_h)
+        hidden = 0
+        if len(lines) > max_lines:
+            keep = max(1, max_lines - 1)
+            hidden = len(lines) - keep
+            lines = lines[:keep]
+
+        rendered = list(lines)
+        if hidden:
+            rendered.append(f'+{hidden} more')
+        height = 12 + title_font.get_height() + len(rendered) * line_h
         panel = pygame.Rect(0, 0, width, height)
         panel.centery = anchor.centery
         if is_player:
             panel.left = anchor.right + 8
         else:
             panel.right = anchor.left - 8
-        panel.clamp_ip(pygame.Rect(0, 0, settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+        panel.clamp_ip(pygame.Rect(0, 0, settings.SCREEN_WIDTH,
+                                   settings.SCREEN_HEIGHT))
         bg = pygame.Surface(panel.size, pygame.SRCALPHA)
         pygame.draw.rect(bg, (22, 20, 18, 238), bg.get_rect(), border_radius=7)
-        border = (120, 220, 235)
-        pygame.draw.rect(bg, border, bg.get_rect(), 1, border_radius=7)
+        pygame.draw.rect(bg, (120, 220, 235), bg.get_rect(), 1, border_radius=7)
         self.window.blit(bg, panel.topleft)
-
-        title = title_font.render(f'+{len(entries)} support', True, (246, 226, 150))
+        title = title_font.render(title_text, True, (246, 226, 150))
         self.window.blit(title, (panel.left + 8, panel.top + 6))
+
         y = panel.top + 8 + title_font.get_height()
-        for entry in visible:
-            source_names = []
-            for source in entry.get('source_entries', []) or [entry]:
-                figure = source.get('figure')
-                if figure is not None:
-                    source_names.append(getattr(figure, 'name', 'Figure'))
-            if not source_names and entry.get('kind') == 'land_bonus':
-                source_names.append(str(entry.get('suit') or 'Land'))
-            name = ', '.join(source_names[:2]) if source_names else 'Effect'
-            if len(source_names) > 2:
-                name += f' +{len(source_names) - 2}'
-            label = entry.get('label') or entry.get('kind') or 'Support'
-            value = entry.get('value') or ''
-            text = fit_suit_text(
-                f'{label} {value} · {name}', font, panel.width - 16)
-            surf = render_suit_text(text, font, (232, 220, 180))
-            self.window.blit(surf, (panel.left + 8, y))
+        for index, text in enumerate(rendered):
+            is_more = hidden and index == len(rendered) - 1
+            colour = (198, 186, 156) if is_more else (232, 220, 180)
+            fitted = fit_suit_text(text, font, panel.width - 16)
+            self.window.blit(render_suit_text(fitted, font, colour),
+                             (panel.left + 8, y))
             y += line_h
+        return True
+
+    def _draw_conquer_support_overflow_popover(self):
+        info = self._current_conquer_support_overflow_entry()
+        if not info:
+            return False
+        entries = info.get('entries') or []
+        if not entries:
+            return False
+        font = settings.get_font(settings.FS_CONQUER_META, bold=True)
+        return self._draw_conquer_support_popover(
+            pygame.Rect(info.get('rect')),
+            is_player=info.get('is_player', True),
+            title_text=f'+{len(entries)} support',
+            rows=entries,
+            width=178,
+            title_font=font,
+            font=font,
+        )
 
     def _conquer_support_chip_summary(self, sections):
         """Fold grouped support entries into a few aggregate chips (mobile).
@@ -7885,17 +7944,17 @@ class ConquerGameScreen(GameScreen):
         field highlights and per-badge values.
         """
         if settings.TOUCH_TARGET_MIN <= 0:
-            return
+            return False
         info = self._current_conquer_support_hover_entry()
         if not info:
-            return
+            return False
         entry = info.get('entry') if isinstance(info, dict) else None
         entry = entry if isinstance(entry, dict) else {}
         if not str(entry.get('kind') or '').startswith('aggregate'):
-            return
+            return False
         rows = entry.get('source_entries') or []
         if not rows:
-            return
+            return False
         anchor = pygame.Rect(info.get('rect'))
         is_player = info.get('is_player', True)
         font = settings.get_font(settings.FS_CONQUER_META, bold=True)
@@ -7907,43 +7966,15 @@ class ConquerGameScreen(GameScreen):
         }
         title_text = (f"{titles.get(entry.get('kind'), 'Support')} "
                       f"{entry.get('value') or ''}").strip()
-        width = max(200, int(settings.SCREEN_WIDTH * 0.26))
-        line_h = font.get_height() + 3
-        visible = rows[:6]
-        height = 12 + title_font.get_height() + len(visible) * line_h
-        panel = pygame.Rect(0, 0, width, height)
-        panel.centery = anchor.centery
-        if is_player:
-            panel.left = anchor.right + 8
-        else:
-            panel.right = anchor.left - 8
-        panel.clamp_ip(pygame.Rect(0, 0, settings.SCREEN_WIDTH,
-                                   settings.SCREEN_HEIGHT))
-        bg = pygame.Surface(panel.size, pygame.SRCALPHA)
-        pygame.draw.rect(bg, (22, 20, 18, 238), bg.get_rect(), border_radius=7)
-        pygame.draw.rect(bg, (120, 220, 235), bg.get_rect(), 1, border_radius=7)
-        self.window.blit(bg, panel.topleft)
-        title = title_font.render(title_text, True, (246, 226, 150))
-        self.window.blit(title, (panel.left + 8, panel.top + 6))
-        y = panel.top + 8 + title_font.get_height()
-        for row in visible:
-            source_names = []
-            figure = row.get('figure')
-            if figure is not None:
-                source_names.append(getattr(figure, 'name', 'Figure'))
-            if not source_names and row.get('kind') == 'land_bonus':
-                source_names.append(str(row.get('suit') or 'Land'))
-            name = ', '.join(source_names[:2]) if source_names else 'Effect'
-            label = row.get('label') or row.get('kind') or 'Support'
-            value = row.get('value') or ''
-            text = fit_suit_text(
-                f'{label} {value} · {name}'.strip(),
-                font,
-                panel.width - 16,
-            )
-            surf = render_suit_text(text, font, (232, 220, 180))
-            self.window.blit(surf, (panel.left + 8, y))
-            y += line_h
+        return self._draw_conquer_support_popover(
+            anchor,
+            is_player=is_player,
+            title_text=title_text,
+            rows=rows,
+            width=max(200, int(settings.SCREEN_WIDTH * 0.26)),
+            title_font=title_font,
+            font=font,
+        )
 
     def _draw_conquer_lane_support_rail(self, rect, entries, *, is_player, pulse=False):
         rail = pygame.Rect(rect).inflate(-3, -8)
@@ -9158,6 +9189,15 @@ class ConquerGameScreen(GameScreen):
             opponent_support_display,
             is_player=False,
         )
+    def _draw_conquer_lane_overlays(self):
+        """Hover overlays that belong on top of the lane, not inside it.
+
+        These MUST NOT be drawn from ``_draw_conquer_duel_lane``: its output
+        is snapshotted into a lane-sized cache surface, so anything reaching
+        past the lane (a breakdown popover, a link to the supporting figure,
+        a tooltip) was cut at the lane edge and then frozen into the cache
+        for as long as the key held.
+        """
         hovered_support = self._update_conquer_support_hover_state()
         if hovered_support:
             is_player_side = hovered_support.get('is_player', True)
@@ -9171,8 +9211,12 @@ class ConquerGameScreen(GameScreen):
                     endpoint,
                     is_player=is_player_side,
                 )
-        self._draw_conquer_support_overflow_popover()
-        self._draw_conquer_support_badge_popover()
+        # Exactly one breakdown panel per frame.  The aggregate-chip popover
+        # (touch) and the per-badge overflow popover (desktop) can both be
+        # armed at once, and drawing both stacks two panels on top of each
+        # other so neither is readable.
+        if not self._draw_conquer_support_badge_popover():
+            self._draw_conquer_support_overflow_popover()
         self._draw_conquer_lane_tooltips()
 
     def _draw_conquer_lane_tooltips(self):
@@ -9456,6 +9500,8 @@ class ConquerGameScreen(GameScreen):
             self._restore_conquer_support_hover_visibility()
         with perf_section('conquer.duel_lane'):
             self._draw_conquer_duel_lane_cached()
+            # Outside the cached lane on purpose — see the docstring.
+            self._draw_conquer_lane_overlays()
         # Re-draw field figure icons (and their info boxes) above the duel
         # lane so figures always stay in the foreground. Limit the redraw
         # to icons that actually intersect the duel lane (performance).
