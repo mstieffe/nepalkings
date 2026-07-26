@@ -93,6 +93,16 @@ and the operational safety net to keep early adopters.
 
 ### Fixed
 
+- **Unusable text entry on mobile web.** Renaming a kingdom opened a modal
+  with no way to type into it: mobile browsers only raise their keyboard for
+  a focused HTML element, and the modal had none, while its field and buttons
+  were also far below the touch-target minimum. The modal now registers the
+  same canvas-aligned native input the login form uses and is laid out for
+  touch. Separately, an open keyboard simply covered the field being typed
+  into — the canvas is fixed and letterboxed, so nothing scrolled out of the
+  way — leaving login typing invisible. `index.html` now lifts the canvas by
+  exactly the overlap while a field is focused and drops it back once the
+  keyboard retracts.
 - **Silent tutorial/timer sounds on iOS.** iOS Safari let the Web Audio
   context idle back into `suspended` between taps, so cues fired from timers
   or server callbacks (the starter-set reveal reel ticks and reward stinger,
