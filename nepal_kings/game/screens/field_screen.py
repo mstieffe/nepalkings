@@ -12,6 +12,11 @@ from game.core.game import (
 )
 from game.core.figure_buffs import apply_buffs_allies_to_icon_map
 from game.components.conquer_layout import compute_conquer_layout
+from game.components.field_figure_layout import (
+    compute_field_column,
+    scroll_to_reveal,
+)
+from game.components.field_compartment_sheet import FieldCompartmentSheet
 from game.components.easing import ease_out_back
 from game.screens.sub_screen import SubScreen
 from game.components.figures.figure_manager import FigureManager
@@ -71,6 +76,16 @@ class FieldScreen(SubScreen):
         # restored right after, so hover/click hit-testing is unaffected.
         self._figure_entrance_anims = {}
         self._figure_entrance_cascade_pending = False
+        # Per-compartment scroll, keyed (player, field).  A compartment that
+        # holds more figures than fit clips and scrolls instead of crushing
+        # them on top of each other.
+        self._column_scroll = {}
+        self._column_layouts = {}
+        self._icon_clip_rects = {}
+        self._column_drag = None
+        self._column_drag_moved = False
+        self._compartment_sheet = None
+        self._sheet_icon_ids = set()
         self.last_figure_ids = set()  # Track the last set of figure IDs
         self.last_enchantment_state = {}  # Track enchantment state for each figure
         self.last_player_id = None  # Track the last player ID to detect player changes
@@ -228,6 +243,21 @@ class FieldScreen(SubScreen):
             return 0, slide
         return 0, int((1.0 - ease_out_back(t)) * slide)
 
+    def _icon_column_clip(self, icon):
+        """Clip rect for a figure icon, or ``None`` when it draws unclipped.
+
+        Only icons in a scrolling compartment are clipped, and only while
+        they sit at rest: hovering or selecting one pops it to full size, and
+        that pop deliberately spills over the column edge so a dense icon can
+        still be read whole.
+        """
+        if getattr(icon, 'hovered', False) or getattr(icon, 'clicked', False):
+            return None
+        fig_id = getattr(getattr(icon, 'figure', None), 'id', None)
+        if fig_id is None:
+            return None
+        return (getattr(self, '_icon_clip_rects', None) or {}).get(fig_id)
+
     def _draw_icon_with_entrance(self, icon, x, y):
         """Draw a figure icon honouring its entrance offset.
 
@@ -235,17 +265,280 @@ class FieldScreen(SubScreen):
         ``set_position`` and hover keys off them, so after an offset draw
         the resting position is restored immediately.
         """
-        dx, dy = self._figure_entrance_offset(icon)
-        if not dx and not dy:
-            icon.draw(x, y)
-            return
+        clip = self._icon_column_clip(icon)
+        previous_clip = self.window.get_clip() if clip is not None else None
+        if clip is not None:
+            # Intersect rather than replace: the caller may already be
+            # clipping (the conquer overlay pass does).
+            self.window.set_clip(pygame.Rect(clip).clip(previous_clip)
+                                 if previous_clip else pygame.Rect(clip))
         try:
-            icon.draw(x + dx, y + dy)
-        finally:
+            dx, dy = self._figure_entrance_offset(icon)
+            if not dx and not dy:
+                icon.draw(x, y)
+                return
             try:
-                icon.set_position(x, y)
+                icon.draw(x + dx, y + dy)
+            finally:
+                try:
+                    icon.set_position(x, y)
+                except Exception:
+                    pass
+        finally:
+            if clip is not None:
+                self.window.set_clip(previous_clip)
+
+    # ── Compartment columns: density, clipping and scrolling ────────
+
+    COLUMN_DRAG_START_PX = 6
+
+    def _column_title_space(self):
+        """Vertical space the compartment title needs above its figures."""
+        return settings.FIELD_TITLE_FONT_SIZE + settings.FIELD_TITLE_PADDING
+
+    def _column_figures(self, player, field):
+        categorized = getattr(self, 'categorized_figures', None) or {}
+        return (categorized.get(player) or {}).get(field) or []
+
+    def _sync_column_layouts(self):
+        """Resolve every compartment's rows for this frame.
+
+        Layouts are recomputed each frame because they depend on the live
+        figure count and scroll offset, but the solver is pure rect maths.
+        """
+        title_space = self._column_title_space()
+
+        def solve():
+            layouts = {}
+            clips = {}
+            for player in ('self', 'opponent'):
+                for field in ('castle', 'village', 'military'):
+                    compartment = (self.compartments.get(player) or {}).get(field)
+                    if compartment is None:
+                        continue
+                    figures = self._column_figures(player, field)
+                    key = (player, field)
+                    layout = compute_field_column(
+                        compartment,
+                        len(figures),
+                        title_space=title_space,
+                        is_castle_column=(field == 'castle'),
+                        scroll_px=int(self._column_scroll.get(key, 0)),
+                    )
+                    # Clamp a stale offset (figures can leave a compartment).
+                    self._column_scroll[key] = layout.scroll_px
+                    layouts[key] = layout
+                    if layout.overflow:
+                        clip = pygame.Rect(layout.content_rect)
+                        for figure in figures:
+                            fig_id = getattr(figure, 'id', None)
+                            if fig_id is not None:
+                                clips[fig_id] = clip
+            self._column_layouts = layouts
+            self._icon_clip_rects = clips
+
+        solve()
+        # Revealing a selection target moves the offsets the solve above
+        # already consumed, so re-solve rather than showing a stale frame.
+        if self._sync_selection_target_visibility():
+            solve()
+        return self._column_layouts
+
+    def _column_row_hit_rect(self, layout, index):
+        """Hit rect for one row, never wider than its own column.
+
+        Adjacent rows must stay disjoint: inflating each to the full touch
+        target (as isolated controls do) would overlap its neighbours and a
+        tap near a boundary would select the wrong figure — the same trap
+        the tactics rail documents for its cells.
+        """
+        row = layout.row_rect(index)
+        if row is None:
+            return None
+        rect = pygame.Rect(row)
+        min_h = int(getattr(settings, 'TOUCH_COMPACT_MIN', 0) or 0)
+        if min_h > 0 and rect.height < min_h:
+            grow = min(min_h - rect.height, max(0, layout.row_height - rect.height))
+            rect.inflate_ip(0, grow)
+        return rect.clip(pygame.Rect(layout.content_rect))
+
+    def _column_is_expandable(self, layout):
+        """True when opening the expand sheet would show more than the column.
+
+        A rich column already shows every figure whole, so its header stays
+        inert rather than offering a sheet that adds nothing.
+        """
+        return bool(layout and (layout.overflow or layout.mode == 'dense'))
+
+    def _column_badge_label(self, player, field):
+        """Text of a compartment's count badge, or ``None`` when it has none.
+
+        Deliberately the total only, never "shown/total": the badge width is
+        reserved inside the cached static chrome layer, and a label that
+        changed while scrolling would rebuild that whole surface every frame.
+        """
+        layout = (getattr(self, '_column_layouts', None) or {}).get((player, field))
+        if not self._column_is_expandable(layout):
+            return None
+        return str(layout.figure_count)
+
+    def _column_badge_font(self):
+        return settings.get_font(
+            max(9, int(settings.FIELD_TITLE_FONT_SIZE * 0.85)),
+            bold=True, allow_small=True)
+
+    def _column_badge_reserve(self, player, field):
+        """Width the title must leave free for the count badge."""
+        label = self._column_badge_label(player, field)
+        if not label:
+            return 0
+        font = self._column_badge_font()
+        return font.size(label)[0] + max(6, font.get_height() // 2)
+
+    def _draw_column_overflow_affordances(self):
+        """Count badge + scrollbar for compartments that cannot show it all.
+
+        Drawn in the dynamic pass rather than baked into the cached static
+        chrome layer: the count changes whenever a figure is picked up or
+        played, and folding it into ``_field_static_layer_key`` would rebuild
+        the whole board surface each time.
+        """
+        for (player, field), layout in (self._column_layouts or {}).items():
+            if not self._column_is_expandable(layout):
+                continue
+            total = layout.figure_count
+            content = pygame.Rect(layout.content_rect)
+
+            # Scrollbar: passive track + thumb on the column's inner edge.
+            # No clickable arrows — over a narrow column they land on the
+            # first/last row and swallow taps meant for that figure.
+            if layout.overflow and content.height > 8:
+                track_w = max(3, int(0.0025 * settings.SCREEN_WIDTH))
+                track = pygame.Rect(content.right - track_w - 1, content.top + 2,
+                                    track_w, content.height - 4)
+                pygame.draw.rect(self.window, (70, 58, 42), track, border_radius=2)
+                span = max(1, total * layout.row_height)
+                thumb_h = max(10, int(track.height * content.height / float(span)))
+                travel = max(0, track.height - thumb_h)
+                frac = (layout.scroll_px / float(layout.max_scroll_px)
+                        if layout.max_scroll_px else 0.0)
+                thumb = pygame.Rect(track.x, track.y + int(travel * frac),
+                                    track_w, thumb_h)
+                pygame.draw.rect(self.window, (188, 158, 96), thumb, border_radius=2)
+
+            # Count badge doubles as the "tap to expand" affordance.
+            header = pygame.Rect(layout.header_rect)
+            label = self._column_badge_label(player, field)
+            if not label:
+                continue
+            font = self._column_badge_font()
+            text = font.render(label, True, (238, 222, 190))
+            pad = max(2, text.get_height() // 4)
+            badge = pygame.Rect(0, 0, text.get_width() + 2 * pad,
+                                text.get_height() + pad)
+            badge.centery = header.centery
+            if player == 'self':
+                badge.right = header.right - 2
+            else:
+                badge.left = header.left + 2
+            badge.clamp_ip(header)
+            plate = pygame.Surface(badge.size, pygame.SRCALPHA)
+            radius = max(2, badge.height // 3)
+            pygame.draw.rect(plate, (46, 36, 26, 232), plate.get_rect(),
+                             border_radius=radius)
+            pygame.draw.rect(plate, (150, 122, 74, 240), plate.get_rect(), 1,
+                             border_radius=radius)
+            self.window.blit(plate, badge.topleft)
+            self.window.blit(text, text.get_rect(center=badge.center))
+
+    def _column_at(self, pos):
+        """``(player, field)`` whose column contains ``pos``, else ``None``."""
+        for key, layout in (self._column_layouts or {}).items():
+            if pygame.Rect(layout.column_rect).collidepoint(pos):
+                return key
+        return None
+
+    def _scroll_column(self, key, delta_px):
+        """Scroll one compartment by ``delta_px``; True if it actually moved."""
+        layout = (self._column_layouts or {}).get(key)
+        if layout is None or not layout.overflow:
+            return False
+        before = self._column_scroll.get(key, 0)
+        after = max(0, min(before + delta_px, layout.max_scroll_px))
+        self._column_scroll[key] = after
+        return after != before
+
+    def _figure_row_visible(self, figure_id):
+        """True when ``figure_id`` is currently drawn whole in its column."""
+        target = str(figure_id)
+        for (player, field), layout in (self._column_layouts or {}).items():
+            for index, figure in enumerate(self._column_figures(player, field)):
+                if str(getattr(figure, 'id', '')) == target:
+                    return layout.is_row_fully_visible(index)
+        return False
+
+    def _sync_selection_target_visibility(self):
+        """Bring a selectable figure into view when a selection prompt opens.
+
+        A defender or spell target scrolled out of its column cannot be
+        picked at all.  This is edge-triggered on the prompt appearing rather
+        than run every frame, so it never fights a player who scrolls the
+        column themselves while deciding.
+
+        Returns True when it actually scrolled something.
+        """
+        try:
+            active = self._is_conquer_selection_active()
+        except Exception:
+            active = False
+        active = bool(active or self.defender_selection_mode
+                      or self.conquer_own_defender_mode)
+        key = (active, self.defender_selection_mode,
+               self.conquer_own_defender_mode)
+        if key == getattr(self, '_last_selection_reveal_key', None):
+            return False
+        self._last_selection_reveal_key = key
+        if not active:
+            return False
+
+        targets = []
+        for icon in getattr(self, 'figure_icons', []) or []:
+            try:
+                if not self._icon_is_selectable_for_current_mode(icon):
+                    continue
             except Exception:
-                pass
+                continue
+            fig_id = getattr(getattr(icon, 'figure', None), 'id', None)
+            if fig_id is not None:
+                targets.append(fig_id)
+        if not targets or any(self._figure_row_visible(t) for t in targets):
+            return False
+        for fig_id in targets:
+            if self._reveal_figure_in_column(fig_id):
+                return True
+        return False
+
+    def _reveal_figure_in_column(self, figure_id):
+        """Scroll a figure's compartment until it is fully visible.
+
+        A defender or spell target hidden behind its column's scroll cannot
+        be picked, so every selection prompt runs its target through here.
+        """
+        if figure_id is None:
+            return False
+        target = str(figure_id)
+        for (player, field), layout in (self._column_layouts or {}).items():
+            if not layout.overflow:
+                continue
+            for index, figure in enumerate(self._column_figures(player, field)):
+                if str(getattr(figure, 'id', '')) != target:
+                    continue
+                wanted = scroll_to_reveal(layout, index)
+                if wanted != layout.scroll_px:
+                    self._column_scroll[(player, field)] = wanted
+                    return True
+                return False
+        return False
 
     def reset_state(self):
         """Reset all game-specific transient state.
@@ -261,6 +554,13 @@ class FieldScreen(SubScreen):
         self._last_figures_version = -1
         self._figure_entrance_anims = {}
         self._figure_entrance_cascade_pending = False
+        self._column_scroll = {}
+        self._column_layouts = {}
+        self._icon_clip_rects = {}
+        self._column_drag = None
+        self._column_drag_moved = False
+        self._compartment_sheet = None
+        self._sheet_icon_ids = set()
         self.categorized_figures = {
             'self': {'castle': [], 'village': [], 'military': []},
             'opponent': {'castle': [], 'village': [], 'military': []}
@@ -347,8 +647,15 @@ class FieldScreen(SubScreen):
         # Check in reverse order (topmost figures get priority)
         hovered_icon = None
         for icon in reversed(self.figure_icons):
-            if pos is not None and hasattr(icon, 'rect_frame'):
-                hit = icon.rect_frame.collidepoint(pos)
+            # hit_area() is the single gate: it honours the owner's hit_rect
+            # (a dense row is hit-tested against the whole row, not its
+            # shrunken frame) and returns None for icons the column has
+            # scrolled out of view.  It falls back to the raw frame so plain
+            # rect-only icons still hover.
+            has_area = callable(getattr(icon, 'hit_area', None))
+            if pos is not None and (has_area or hasattr(icon, 'rect_frame')):
+                area = icon.hit_area() if has_area else icon.rect_frame
+                hit = bool(area and area.collidepoint(pos))
             elif callable(getattr(icon, 'collide', None)):
                 hit = icon.collide()
             else:
@@ -993,10 +1300,162 @@ class FieldScreen(SubScreen):
                 ),
             )
 
+    def handle_column_events(self, events):
+        """Scroll / expand handling for the compartment columns.
+
+        Returns the events the field should still act on.  Runs before figure
+        selection so a swipe that scrolls a column can never also select the
+        figure it started on, and so a tap on a column header opens the
+        expand sheet instead of falling through to the figure beneath it.
+        """
+        # The expand sheet is modal: it takes the whole batch and nothing
+        # underneath may act on it, or a release lands on the board behind.
+        sheet = getattr(self, '_compartment_sheet', None)
+        if sheet is not None:
+            response = sheet.handle_events(events)
+            if response == 'close':
+                self._compartment_sheet = None
+                self._sheet_icon_ids = set()
+            elif isinstance(response, tuple) and response and response[0] == 'select':
+                self._compartment_sheet = None
+                self._sheet_icon_ids = set()
+                self._select_figure_by_id(response[1])
+            return []
+
+        if not getattr(self, '_column_layouts', None):
+            return events
+
+        remaining = []
+        for event in events:
+            pos = getattr(event, 'pos', None)
+            etype = getattr(event, 'type', None)
+
+            if etype == pygame.MOUSEWHEEL:
+                key = self._column_at(pos or pygame.mouse.get_pos())
+                step = max(24, int(0.045 * settings.SCREEN_HEIGHT))
+                if key and self._scroll_column(key, -getattr(event, 'y', 0) * step):
+                    continue
+
+            elif etype == pygame.MOUSEBUTTONDOWN and getattr(event, 'button', 0) == 1 and pos:
+                header_key = self._header_at(pos)
+                if header_key is not None:
+                    self._open_compartment_sheet(*header_key)
+                    continue
+                key = self._column_at(pos)
+                layout = (self._column_layouts or {}).get(key)
+                if key and layout is not None and layout.overflow:
+                    self._column_drag = {'key': key, 'y': pos[1]}
+                    self._column_drag_moved = False
+
+            elif etype == pygame.MOUSEMOTION and self._column_drag and pos:
+                drag = self._column_drag
+                dy = pos[1] - drag['y']
+                if not self._column_drag_moved:
+                    if abs(dy) < self.COLUMN_DRAG_START_PX:
+                        remaining.append(event)
+                        continue
+                    self._column_drag_moved = True
+                drag['y'] = pos[1]
+                self._scroll_column(drag['key'], -dy)
+                continue
+
+            elif etype == pygame.MOUSEBUTTONUP and getattr(event, 'button', 0) == 1:
+                was_drag = self._column_drag is not None and self._column_drag_moved
+                self._column_drag = None
+                self._column_drag_moved = False
+                if was_drag:
+                    # Swallow the release that ends a scroll gesture, or the
+                    # swipe also selects whatever figure it started on.
+                    self._clear_icon_hover_state()
+                    continue
+
+            remaining.append(event)
+        return remaining
+
+    def _clear_icon_hover_state(self):
+        for icon in getattr(self, 'figure_icons', []) or []:
+            icon.hovered = False
+
+    def _header_at(self, pos):
+        """``(player, field)`` whose expandable header contains ``pos``."""
+        for key, layout in (self._column_layouts or {}).items():
+            if not self._column_is_expandable(layout):
+                continue
+            if pygame.Rect(layout.header_rect).collidepoint(pos):
+                return key
+        return None
+
+    def draw_compartment_sheet(self):
+        """Draw the modal expand sheet, if one is open.
+
+        Called from the host screen's top-level overlay pass so the sheet
+        lands above the duel lane, rails and figure overlay.
+        """
+        sheet = getattr(self, '_compartment_sheet', None)
+        if sheet is not None:
+            sheet.draw()
+
+    def _open_compartment_sheet(self, player, field):
+        figures = self._column_figures(player, field)
+        if not figures:
+            return
+        icons = [self.icon_cache[f.id] for f in figures if f.id in self.icon_cache]
+        if not icons:
+            return
+        own = player == 'self'
+        self._compartment_sheet = FieldCompartmentSheet(
+            self.window, field, icons,
+            title=('YOUR ' if own else "OPPONENT'S ") + field.upper(),
+        )
+        # The sheet redraws these icons itself at full size; the column must
+        # leave them alone meanwhile, or the two fight over render_scale and
+        # rebuild every surface twice per frame.
+        self._sheet_icon_ids = {
+            getattr(getattr(icon, 'figure', None), 'id', None) for icon in icons
+        }
+        self._clear_icon_hover_state()
+
+    def _select_figure_by_id(self, figure_id):
+        """Route a sheet pick through the same path as a click in the column.
+
+        The picked figure is scrolled into view behind the sheet so closing
+        it does not leave the selection somewhere off-screen.
+        """
+        icon = (self.icon_cache or {}).get(figure_id)
+        if icon is None:
+            return
+        for other in getattr(self, 'figure_icons', []) or []:
+            if other is not icon:
+                other.clicked = False
+        icon.clicked = True
+        self._reveal_figure_in_column(figure_id)
+        if not icon.is_visible:
+            return
+        try:
+            resources_data = self.game.calculate_resources(
+                self.figure_manager.families)
+        except Exception:
+            resources_data = {}
+        self.figure_detail_box = FigureDetailBox(
+            self.window,
+            icon.figure,
+            self.game,
+            all_figures=self.figures,
+            resources_data=resources_data,
+            conquer_view_only=bool(self._conquer_parent()),
+        )
+
     def handle_events(self, events):
         """Handle events for interacting with the field."""
+        if getattr(self, '_compartment_sheet', None) is not None:
+            # Modal: the sheet consumes the batch outright.
+            self.handle_column_events(events)
+            return
+        # An empty batch still has to reach the handlers below — a dialogue
+        # can auto-close without any input of its own.
+        events = self.handle_column_events(events)
         super().handle_events(events)
-        
+
         # Update hover state on pointer movement and click/touch events. Web
         # clients can deliver a click without a preceding motion event, and a
         # background figure refresh may otherwise leave stale hover state.
@@ -1004,7 +1463,7 @@ class FieldScreen(SubScreen):
             if event.type in (pygame.MOUSEMOTION, pygame.MOUSEBUTTONDOWN,
                               pygame.MOUSEBUTTONUP):
                 self.update_hover_state(getattr(event, 'pos', None))
-        
+
         # Handle dialogue box events first (before target selection mode check)
         # This ensures auto-closing dialogues work even during target selection
         if self.dialogue_box:
@@ -3474,7 +3933,12 @@ class FieldScreen(SubScreen):
         for player in ('self', 'opponent'):
             for field in ('castle', 'village', 'military'):
                 rect = self.compartments[player][field]
-                compartment_key.append((player, field, rect.x, rect.y, rect.w, rect.h))
+                compartment_key.append((
+                    player, field, rect.x, rect.y, rect.w, rect.h,
+                    # Titles shrink to make room for the count badge, so the
+                    # badge's presence/width is part of this surface.
+                    self._column_badge_label(player, field),
+                ))
         bounds = self._field_static_bounds()
         return (
             settings.SCREEN_WIDTH,
@@ -3675,10 +4139,15 @@ class FieldScreen(SubScreen):
             for player in ('self', 'opponent'):
                 for field in ('castle', 'village', 'military'):
                     compartment = self.compartments[player][field]
+                    # The count badge is drawn over this strip in the dynamic
+                    # pass, so the title has to give up its width or the two
+                    # overlap (the label degrades to CSTL / C as needed).
+                    badge_reserve = self._column_badge_reserve(player, field)
                     title_label = self._responsive_field_title(
                         field,
                         self.field_title_font,
-                        compartment.width - 2 * settings.FIELD_TITLE_PADDING,
+                        compartment.width - 2 * settings.FIELD_TITLE_PADDING
+                        - badge_reserve,
                     )
                     title_text = self.field_title_font.render(
                         title_label, True, settings.FIELD_TITLE_COLOR)
@@ -3716,6 +4185,10 @@ class FieldScreen(SubScreen):
             return
 
         if self.figures or True:  # Always draw compartments even without figures
+            # Resolve the columns first: the static chrome reserves width for
+            # each compartment's count badge, which only the layouts know.
+            self._sync_column_layouts()
+
             with perf_section('field.static_layer'):
                 self._draw_field_static_layer()
 
@@ -3727,6 +4200,9 @@ class FieldScreen(SubScreen):
             all_selected = []
             all_hovered = None
 
+            sheet_owned = (getattr(self, '_sheet_icon_ids', None) or set()
+                           if getattr(self, '_compartment_sheet', None) else set())
+
             for player in ['self', 'opponent']:
                 for field in ['castle', 'village', 'military']:
                     compartment = self.compartments[player][field]
@@ -3736,60 +4212,22 @@ class FieldScreen(SubScreen):
                     figures = self.categorized_figures[player][field]
 
                     if len(figures) > 0:
-                        # Calculate the y-position to distribute icons in the compartment.
-                        #
-                        # The icon's y coordinate is the CENTER of the frame.
-                        # The frame extends frame_h/2 above and below that center.
-                        # Below, a name box + power row extends even further.
-                        # We reserve just enough top/bottom margin so the first
-                        # icon's frame top and the last icon's info box bottom
-                        # stay inside the compartment, then distribute centers
-                        # evenly across the remaining space.
-                        frame_h = settings.FRAME_FIGURE_SCALE * settings.FIGURE_ICON_HEIGHT
-                        # The frame has ornamental corners — the visible figure
-                        # content is smaller than frame_h/2, so we can let the
-                        # decorative part overlap the title area slightly.
-                        top_margin = settings.FIGURE_ICON_HEIGHT * 0.42
-                        # Bottom margin: info box extends ~0.34*FIH + caption below center
-                        caption_font_size = settings.FIGURE_ICON_FONT_CAPTION_FONT_SIZE
-                        caption_h = int(caption_font_size * 2.6)
-                        bottom_margin = 0.34 * settings.FIGURE_ICON_HEIGHT + caption_h
+                        layout = self._column_layouts.get((player, field))
+                        if layout is None:
+                            continue
+                        dense = layout.mode == 'dense'
 
-                        title_space = settings.FIELD_TITLE_FONT_SIZE + settings.FIELD_TITLE_PADDING
-                        total_height = compartment.height - 2 * settings.FIELD_BORDER_WIDTH
-                        
-                        # Usable range for icon centers
-                        first_center = compartment.top + title_space + top_margin
-                        last_center = compartment.top + total_height - bottom_margin
-                        
-                        if len(figures) == 1:
-                            icon_y_start = (first_center + last_center) / 2
-                            icon_spacing = 0
-                        else:
-                            # Default center-to-center spacing: the icon's visual
-                            # height (top_margin + bottom_margin ≈ frame visible area
-                            # + caption) plus a small gap between icons.
-                            default_spacing = top_margin + bottom_margin + settings.FIELD_ICON_PADDING_Y
-                            max_spacing = (last_center - first_center) / (len(figures) - 1)
-                            if max_spacing >= default_spacing:
-                                # Enough room — use default spacing and centre the group
-                                icon_spacing = default_spacing
-                                group_h = (len(figures) - 1) * icon_spacing
-                                offset = ((last_center - first_center) - group_h) / 2
-                                icon_y_start = first_center + offset
-                            else:
-                                # Tight — spread evenly across available range
-                                icon_spacing = max_spacing
-                                icon_y_start = first_center
-
-                        # Calculate positions and separate into layers: regular, selected, hovered
                         for i, figure in enumerate(figures):
                             if (self._is_tactics_hand_battle_field_view_only()
                                     and self._is_tactics_hand_battle_fighter(figure)):
                                 continue
                             if figure.id not in self.icon_cache:
                                 continue
+                            if figure.id in sheet_owned:
+                                continue
                             icon = self.icon_cache[figure.id]
+                            icon.set_render_scale(layout.icon_render_scale)
+                            icon.power_badge_only = dense
                             icon.compact_info_badge = bool(
                                 settings.TOUCH_TARGET_MIN > 0
                                 and getattr(self.game, 'mode', 'duel') == 'conquer'
@@ -3801,9 +4239,31 @@ class FieldScreen(SubScreen):
                                 )
                             else:
                                 icon.max_info_width = None
+
+                            # Rows outside the viewport are not drawn at all.
+                            # A partly scrolled row still draws (clipped) so
+                            # the list slides instead of popping, but only a
+                            # fully visible row answers hovers and clicks —
+                            # a half-drawn icon that still takes clicks reads
+                            # as a phantom hit.
+                            row_rect = layout.row_rect(i)
+                            if row_rect is None or not pygame.Rect(row_rect).colliderect(
+                                    pygame.Rect(layout.content_rect)):
+                                icon.hit_suppressed = True
+                                icon.hit_rect = None
+                                icon.hovered = False
+                                continue
+                            if layout.is_row_fully_visible(i):
+                                icon.hit_suppressed = False
+                                icon.hit_rect = self._column_row_hit_rect(layout, i)
+                            else:
+                                icon.hit_suppressed = True
+                                icon.hit_rect = None
+                                icon.hovered = False
+
                             icon_x = compartment.centerx
-                            icon_y = icon_y_start + i * icon_spacing
-                            
+                            icon_y = layout.row_centers[i]
+
                             if icon.hovered:
                                 all_hovered = (icon, icon_x, icon_y)
                             elif icon.clicked:
@@ -3846,6 +4306,8 @@ class FieldScreen(SubScreen):
                 all_regular + all_selected
                 + ([all_hovered] if all_hovered else []))
 
+            self._draw_column_overflow_affordances()
+
             # Conquer selection focus: dim the field, redraw selectable icons
             # cleanly above it, then add a compact side marker.
             self._draw_conquer_selection_focus(
@@ -3875,6 +4337,12 @@ class FieldScreen(SubScreen):
         if self.conquer_own_defender_mode and not conquer_parent:
             self._draw_selectable_defender_pulse()
             self._draw_conquer_own_defender_prompt()
+
+        # The expand sheet is NOT drawn here: the conquer screen paints the
+        # duel lane, rails and figure overlay after this method returns, so a
+        # modal drawn here would end up underneath them.  It is rendered from
+        # the shared top-level overlay pass instead (see
+        # ``draw_compartment_sheet``).
 
     def _draw_selectable_defender_pulse(self):
         """Breathing ring around selectable defender icons (pure draw).

@@ -55,6 +55,11 @@ CONQUER_GAME_ALIASES = {
     "conquer_game_battle_collapsed": "battle_collapsed",
     "conquer_game_battle_intro_1": "battle_intro_1",
     "conquer_game_battle_intro_2": "battle_intro_2",
+    # Worst-case compartment load: a tier-6 lineup, where the columns have to
+    # switch to dense scrolling rows instead of stacking figures on top of
+    # each other.
+    "conquer_game_crowded": "crowded",
+    "conquer_game_crowded_sheet": "crowded_sheet",
 }
 
 KINGDOM_SCREEN_ALIASES = {
@@ -864,6 +869,57 @@ def populate_duel_game(client, screen, subscreen: str) -> None:
             traceback.print_exc(limit=2)
 
 
+def _crowd_conquer_field(field, game):
+    """Fill the field fixture out to a tier-6 sized lineup.
+
+    Clones the figures the perf fixture already built (so every icon keeps
+    real cards, skills and bonuses) until each side holds six castle figures
+    and a dozen village/military ones, then re-points ``get_figures`` at the
+    bigger lists and rebuilds the icons.
+    """
+    import copy as _copy
+
+    base = list(getattr(field, "figures", []) or [])
+    if not base:
+        return
+    by_field = {"castle": [], "village": [], "military": []}
+    for figure in base:
+        by_field.setdefault(figure.family.field, []).append(figure)
+
+    targets = {"castle": 6, "village": 12, "military": 5}
+    next_id = max(int(getattr(f, "id", 0) or 0) for f in base) + 1
+    own, opponent = [], []
+    for player_id, bucket in ((1, own), (2, opponent)):
+        for field_name, wanted in targets.items():
+            sources = [f for f in by_field.get(field_name) or []
+                       if getattr(f, "player_id", None) == player_id]
+            if not sources:
+                sources = by_field.get(field_name) or []
+            if not sources:
+                continue
+            for index in range(wanted):
+                template = sources[index % len(sources)]
+                clone = _copy.copy(template)
+                clone.player_id = player_id
+                if index < len(sources) and template.player_id == player_id:
+                    clone.id = template.id
+                else:
+                    clone.id = next_id
+                    next_id += 1
+                clone.active_enchantments = list(
+                    getattr(template, "active_enchantments", []) or [])
+                bucket.append(clone)
+
+    game.get_figures = (
+        lambda _families, is_opponent=False: list(opponent if is_opponent else own))
+    game._figures_data_version = int(
+        getattr(game, "_figures_data_version", 1) or 1) + 1
+    field.icon_cache.clear()
+    field.last_figure_ids.clear()
+    field._last_figures_version = game._figures_data_version
+    field.load_figures()
+
+
 def populate_conquer_game(client, subscreen: str):
     requested_subscreen = subscreen
     prebattle_variants = {
@@ -879,9 +935,12 @@ def populate_conquer_game(client, subscreen: str):
         "battle_intro_1",
         "battle_intro_2",
     }
+    crowded_variants = {"crowded", "crowded_sheet"}
     if requested_subscreen == "field_badges":
         subscreen = "field"
     elif requested_subscreen in prebattle_variants:
+        subscreen = "field"
+    elif requested_subscreen in crowded_variants:
         subscreen = "field"
     elif requested_subscreen in battle_variants:
         subscreen = "battle"
@@ -994,6 +1053,19 @@ def populate_conquer_game(client, subscreen: str):
                     ]
                 if healer is not None or hidden_castle is not None:
                     field._generate_figure_icons()
+        if requested_subscreen in crowded_variants:
+            # Worst realistic case: a tier-6 land allows six castle figures
+            # and village/military are uncapped, so an AI defence routinely
+            # fields a dozen figures across three columns.  At full icon size
+            # only two fit a column, so this is the fixture that shows
+            # whether the columns compact and scroll or stack on top of each
+            # other.
+            field = screen.subscreens.get("field")
+            if field is not None:
+                _crowd_conquer_field(field, game)
+                if requested_subscreen == "crowded_sheet":
+                    field._sync_column_layouts()
+                    field._open_compartment_sheet("opponent", "village")
         if requested_subscreen == "prebattle_confirm":
             field = screen.subscreens.get("field")
             if field is not None:

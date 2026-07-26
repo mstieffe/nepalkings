@@ -24,6 +24,7 @@ from game.components.coach_card import draw_coach_button, draw_coach_panel
 from game.components.conquer_round_ledger import ConquerRoundLedger
 from game.components.conquer_effects import ConquerEffectsLayer
 from game.components.conquer_layout import compute_conquer_layout
+from game.components.field_figure_layout import compute_field_column
 from game.components.conquer_reveal_sequencer import (
     ConquerRevealSequencer,
     draw_face_down_card,
@@ -3712,29 +3713,23 @@ class ConquerGameScreen(GameScreen):
         except ValueError:
             ghost_index = max(0, len(figure_ids) - 1)
         count = max(1, len(figure_ids))
-        frame_h = settings.FRAME_FIGURE_SCALE * settings.FIGURE_ICON_HEIGHT
-        top_margin = settings.FIGURE_ICON_HEIGHT * 0.42
-        caption_h = int(settings.FIGURE_ICON_FONT_CAPTION_FONT_SIZE * 2.6)
-        bottom_margin = 0.34 * settings.FIGURE_ICON_HEIGHT + caption_h
-        title_space = settings.FIELD_TITLE_FONT_SIZE + settings.FIELD_TITLE_PADDING
-        total_height = compartment.height - 2 * settings.FIELD_BORDER_WIDTH
-        first_center = compartment.top + title_space + top_margin
-        last_center = compartment.top + total_height - bottom_margin
-        if count == 1:
-            center_y = (first_center + last_center) / 2
-        else:
-            default_spacing = top_margin + bottom_margin + settings.FIELD_ICON_PADDING_Y
-            max_spacing = (last_center - first_center) / max(1, count - 1)
-            if max_spacing >= default_spacing:
-                spacing = default_spacing
-                offset = ((last_center - first_center) - (count - 1) * spacing) / 2
-                center_y = first_center + offset + ghost_index * spacing
-            else:
-                spacing = max_spacing
-                center_y = first_center + ghost_index * spacing
-        width = max(44, int(settings.FIGURE_ICON_WIDTH * settings.FRAME_FIGURE_SCALE))
-        height = max(54, int(frame_h))
-        rect = pygame.Rect(0, 0, width, height)
+        # Positions come from the same solver the column draws with, so a
+        # ghost never lands where no figure actually is.
+        layout = compute_field_column(
+            compartment,
+            count,
+            title_space=(settings.FIELD_TITLE_FONT_SIZE
+                         + settings.FIELD_TITLE_PADDING),
+            is_castle_column=(field_type == 'castle'),
+            scroll_px=int(((getattr(field, '_column_scroll', None) or {})
+                           .get((side, field_type), 0))),
+        )
+        if not layout.row_centers:
+            return None
+        ghost_index = min(ghost_index, len(layout.row_centers) - 1)
+        center_y = layout.row_centers[ghost_index]
+        size = max(44, int(layout.frame_px))
+        rect = pygame.Rect(0, 0, size, size)
         rect.center = (compartment.centerx, int(center_y))
         return rect
 
@@ -9536,6 +9531,13 @@ class ConquerGameScreen(GameScreen):
 
         # Shared top-level overlays used by the conquer flow.
         with perf_section('conquer.overlays'):
+            # The compartment expand sheet is modal and must sit above the
+            # duel lane, figure overlay and rails, all of which are painted
+            # after the subscreen's own draw.
+            if self.state.subscreen == 'field' and subscreen is not None:
+                sheet = getattr(subscreen, 'draw_compartment_sheet', None)
+                if callable(sheet):
+                    sheet()
             if (self.state.subscreen in ('field', 'battle') and subscreen and
                     getattr(subscreen, 'figure_detail_box', None)):
                 subscreen.figure_detail_box.draw()

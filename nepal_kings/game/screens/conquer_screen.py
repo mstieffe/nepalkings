@@ -31,6 +31,7 @@ from game.components.figures.skill_display_filters import (
 )
 from game.components.figures.figure_icon import FieldFigureIcon
 from game.components.figure_detail_box import FigureDetailBox
+from game.components.field_figure_layout import compute_field_column
 from game.components.castle_cap_indicator import (
     castle_cap_reached,
     draw_castle_cap_indicator,
@@ -1506,43 +1507,39 @@ class ConquerScreen(MenuScreenMixin, Screen):
             if not field_figs:
                 continue
 
-            frame_h = settings.FRAME_FIGURE_SCALE * settings.FIGURE_ICON_HEIGHT
-            top_margin = settings.FIGURE_ICON_HEIGHT * 0.42
-            caption_font_size = settings.FIGURE_ICON_FONT_CAPTION_FONT_SIZE
-            caption_h = int(caption_font_size * 2.6)
-            bottom_margin = 0.34 * settings.FIGURE_ICON_HEIGHT + caption_h
-
             title_space = 24
             if settings.TOUCH_TARGET_MIN > 0:
                 title_space = max(title_space, int(0.068 * _SH))
-            first_center = rect.top + title_space + top_margin
-            last_center = rect.top + rect.height - bottom_margin
-
-            if len(field_figs) == 1:
-                icon_y_start = (first_center + last_center) / 2
-                icon_spacing = 0
-            else:
-                default_spacing = top_margin + bottom_margin + settings.FIELD_ICON_PADDING_Y
-                max_spacing = (last_center - first_center) / (len(field_figs) - 1)
-                if max_spacing >= default_spacing:
-                    icon_spacing = default_spacing
-                    group_h = (len(field_figs) - 1) * icon_spacing
-                    offset = ((last_center - first_center) - group_h) / 2
-                    icon_y_start = first_center + offset
-                else:
-                    icon_spacing = max_spacing
-                    icon_y_start = first_center
+            # Shared solver: compacts the rows once the compartment cannot
+            # hold them at full size, instead of squeezing the spacing until
+            # the icons overlap.
+            layout = compute_field_column(
+                rect, len(field_figs),
+                title_space=title_space,
+                is_castle_column=(field_name == 'castle'),
+            )
 
             icon_x = rect.left + 0.5 * rect.w
             for i, fig in enumerate(field_figs):
                 icon = self._figure_icons.get(fig.id)
                 if not icon:
                     continue
+                if callable(getattr(icon, 'set_render_scale', None)):
+                    icon.set_render_scale(layout.icon_render_scale)
+                icon.power_badge_only = layout.mode == 'dense'
                 if settings.TOUCH_TARGET_MIN > 0:
                     icon.max_info_width = max(48, rect.w - 6)
                 else:
                     icon.max_info_width = None
-                icon_y = icon_y_start + i * icon_spacing
+                if not layout.is_row_fully_visible(i):
+                    icon.hit_suppressed = True
+                    icon.hit_rect = None
+                    icon.hovered = False
+                    continue
+                icon.hit_suppressed = False
+                icon.hit_rect = pygame.Rect(layout.row_rect(i)).clip(
+                    pygame.Rect(layout.content_rect))
+                icon_y = layout.row_centers[i]
                 icon_positions[fig.id] = (icon_x, icon_y)
                 if icon.hovered:
                     all_hovered = (icon, icon_x, icon_y, fig.id)

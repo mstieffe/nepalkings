@@ -323,20 +323,37 @@ class FigureIcon:
             center=(self.x, self.y + 0.9 * settings.FIGURE_ICON_BIG_HEIGHT // 2)
         )
 
-    def collide(self) -> bool:
-        """
-        Check if the mouse is hovering over the figure icon.
+    def hit_area(self):
+        """The rect a pointer must be inside to hover this icon.
 
-        :return: True if the mouse is over the icon's frame, False otherwise.
+        Returns ``None`` when the icon is currently not interactive.  Owners
+        that lay icons out themselves override this via ``hit_rect`` /
+        ``hit_suppressed``: a field column both shrinks its icons (a dense
+        frame is smaller than the touch minimum) and clips them (an icon
+        scrolled out of its column must stop answering clicks, or it reads as
+        a phantom hit).
         """
-        mx, my = pygame.mouse.get_pos()
+        if getattr(self, 'hit_suppressed', False):
+            return None
+        override = getattr(self, 'hit_rect', None)
+        if override is not None:
+            return pygame.Rect(override)
         hit = self.rect_frame
         if self.draw_name and settings.TOUCH_TARGET_MIN > 0:
             hit = pygame.Rect(0, 0,
                               max(hit.w, settings.TOUCH_TARGET_MIN),
                               max(hit.h, settings.TOUCH_TARGET_MIN))
             hit.center = self.rect_frame.center
-        return hit.collidepoint((mx, my))
+        return hit
+
+    def collide(self) -> bool:
+        """
+        Check if the mouse is hovering over the figure icon.
+
+        :return: True if the mouse is over the icon's frame, False otherwise.
+        """
+        hit = self.hit_area()
+        return bool(hit and hit.collidepoint(pygame.mouse.get_pos()))
 
     def draw_icon(
         self,
@@ -619,7 +636,18 @@ class FieldFigureIcon(FigureIcon):
         # Set castle figure flag before calling super().__init__()
         # because parent's __init__ calls load_glow_effects() which we override
         self.is_castle_figure = figure.family.field == 'castle'
-        
+
+        # Owner-controlled size multiplier for the NORMAL (resting) surfaces.
+        # A crowded field compartment renders its icons denser so they stop
+        # overlapping; the "big" hover/click surfaces stay at full size, so
+        # pointing at a dense icon still pops it out at its natural size.
+        # Must precede super().__init__(), which builds the images.
+        self.render_scale = 1.0
+
+        # Hover/click gating, honoured by FigureIcon.hit_area().
+        self.hit_rect = None
+        self.hit_suppressed = False
+
         super().__init__(
             window,
             figure.family.name,
@@ -735,6 +763,10 @@ class FieldFigureIcon(FigureIcon):
         # of covering neighbouring UI.
         self.max_info_width = None
 
+        # Dense field rows replace the name/power plate with a corner badge
+        # (see _draw_dense_power_badge); set by the owning column.
+        self.power_badge_only = False
+
         # Blocks-bonus: when True the support bonus is negated (shown as red strikethrough)
         self.battle_bonus_blocked = False
 
@@ -779,8 +811,12 @@ class FieldFigureIcon(FigureIcon):
         """
         # Use larger glow for castle figures (Kings and Maharajas)
         glow_scale = 1.2 if self.is_castle_figure else 1.0
-        
-        normal_glow_size = int(settings.FIGURE_ICON_GLOW_WIDTH * glow_scale)
+
+        # The resting glow tracks render_scale so it stays wrapped around a
+        # dense icon instead of haloing far past it; the big glow matches the
+        # big surfaces and stays at full size.
+        normal_glow_size = max(1, int(settings.FIGURE_ICON_GLOW_WIDTH * glow_scale
+                                      * getattr(self, 'render_scale', 1.0)))
         big_glow_size = int(settings.FIGURE_ICON_GLOW_BIG_WIDTH * glow_scale)
         
         # Load base images from class-level cache (shared with parent class)
@@ -1061,7 +1097,54 @@ class FieldFigureIcon(FigureIcon):
                     self.window.blit(advance_icon, (adv_x, adv_y))
 
         # Draw figure name and cards together in a box
-        self.draw_figure_info()
+        is_popped = self.hovered or self.clicked
+        if getattr(self, 'power_badge_only', False) and not is_popped:
+            # A dense row is only as tall as the frame, so there is nowhere to
+            # hang the name/power plate: it would land on the icon below.
+            # Pointing at the row pops the icon to full size and restores the
+            # full plate, and tapping opens the detail box.
+            self._draw_dense_power_badge()
+        else:
+            self.draw_figure_info()
+
+    def _draw_dense_power_badge(self) -> None:
+        """Corner badge carrying a dense row's power, e.g. ``9`` or ``9+2``.
+
+        Hidden opponent figures get nothing — their frame already reads as
+        face-down and a power number would leak what it is hiding.
+        """
+        if not self.is_visible:
+            return
+        try:
+            base_power = self.figure.get_value()
+        except Exception:
+            return
+        base_power += (getattr(self, 'buffs_allies_bonus', 0)
+                       + getattr(self, 'buffs_allies_defence_bonus', 0))
+        bonus = 0 if getattr(self, 'battle_bonus_blocked', False) \
+            else self._current_battle_bonus_received()
+        bonus -= getattr(self, 'distance_attack_penalty', 0)
+        label = f"{base_power}+{bonus}" if bonus > 0 else (
+            f"{base_power}{bonus}" if bonus < 0 else f"{base_power}")
+
+        frame = self.rect_frame
+        size = max(9, int(frame.height * 0.26))
+        font = settings.get_font(size, bold=True)
+        # Light on the dark plate below.  SUIT_ICON_CAPTION_COLOR is near
+        # black because the name plate it normally sits on is parchment.
+        text = font.render(label, True, (240, 226, 194))
+        pad = max(2, size // 4)
+        badge = pygame.Rect(0, 0, text.get_width() + 2 * pad,
+                            text.get_height() + pad)
+        badge.bottomright = (frame.right, frame.bottom)
+
+        plate = pygame.Surface(badge.size, pygame.SRCALPHA)
+        pygame.draw.rect(plate, (24, 18, 14, 224), plate.get_rect(),
+                         border_radius=max(2, badge.height // 3))
+        pygame.draw.rect(plate, (132, 108, 68, 235), plate.get_rect(), 1,
+                         border_radius=max(2, badge.height // 3))
+        self.window.blit(plate, badge.topleft)
+        self.window.blit(text, text.get_rect(center=badge.center))
 
     @staticmethod
     def _info_row_width(elements, spacing):
@@ -1904,6 +1987,20 @@ class FieldFigureIcon(FigureIcon):
         # Allow hovering for visible figures always; for hidden figures only during defender selection
         self.hovered = self.collide() and (self.is_visible or self.in_defender_selection_mode)
 
+    def set_render_scale(self, scale: float) -> None:
+        """Resize the resting surfaces to ``scale`` of their natural size.
+
+        Rebuilding costs a handful of ``smoothscale`` calls, so this returns
+        early unless the scale actually moved — a crowded compartment changes
+        density only when figures are added or removed, never per frame.
+        """
+        scale = max(0.2, min(1.0, float(scale)))
+        if abs(scale - getattr(self, 'render_scale', 1.0)) < 0.005:
+            return
+        self.render_scale = scale
+        self.load_glow_effects()
+        self._initialize_images(self.family, self.x, self.y)
+
     def _initialize_images(self, fig_fam, x, y) -> None:
         """
         Initialize and scale images based on field type.
@@ -1914,8 +2011,13 @@ class FieldFigureIcon(FigureIcon):
         """
         castle_scale_factor = 1.2
         is_castle = fig_fam.field == "castle"
-        scale_factor = castle_scale_factor if is_castle else 1
-        big_scale_factor = scale_factor * settings.FIGURE_ICON_BIG_SCALE
+        family_scale = castle_scale_factor if is_castle else 1
+        # Only the resting surfaces follow render_scale.  The big set keeps
+        # its natural size so hovering a dense icon reveals it at full size,
+        # and so ``icon_scale_factor`` (measured once at construction) stays
+        # the true normal→big ratio that the info plate scales by.
+        scale_factor = family_scale * getattr(self, 'render_scale', 1.0)
+        big_scale_factor = family_scale * settings.FIGURE_ICON_BIG_SCALE
 
         self.icon_img = self._scale_icon(fig_fam.icon_img_small, scale_factor)
         self.icon_gray_img = self._scale_icon(fig_fam.icon_gray_img_small, scale_factor)
