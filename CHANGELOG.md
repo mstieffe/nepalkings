@@ -93,6 +93,32 @@ and the operational safety net to keep early adopters.
 
 ### Fixed
 
+- **Field compartments stacked figures on top of each other.** A castle,
+  village or military compartment drew its figures as one column of
+  full-size icons and, past the two that actually fit, quietly squeezed the
+  spacing instead of doing anything about it. A tier-6 land allows six castle
+  figures and village/military have no cap at all, so a dozen figures in one
+  compartment is ordinary play — at six castle figures the spacing was 28 px
+  for a 73 px frame, and frames and name plates simply overlapped. On mobile
+  the castle frame was also 87 px wide inside a 69 px column, so castle icons
+  bled sideways into the duel lane and the neighbouring compartment.
+  Compartments now compact and scroll rather than overlap: while every figure
+  fits they keep their existing look, and past that the column switches to
+  uniform dense rows (icon at 70%, power as a corner badge, no name plate)
+  that clip and scroll with the wheel, a drag, or a swipe on touch. A swipe
+  that scrolls a column no longer also selects the figure it began on, and a
+  figure scrolled out of view stops answering hovers and clicks instead of
+  staying a phantom target. Tapping a crowded compartment's header opens a
+  sheet showing that whole compartment at full size — twelve figures read at a
+  glance instead of three screens of scrolling — and hovering or tapping a
+  dense icon still pops it out at its natural size. When a defender or spell
+  prompt's only valid target is scrolled away, the column scrolls it back.
+  Under all of this, the four copied-and-pasted versions of the spacing
+  formula (field, attack config, defence config, and the conquer spell-ghost
+  fallback) collapse into one solver that measures the frame actually drawn
+  rather than the `FIGURE_ICON_HEIGHT` proxy the old maths used, which
+  understated the real frame by about half and made icons collide earlier
+  than the spacing predicted.
 - **Unusable text entry on mobile web.** Renaming a kingdom opened a modal
   with no way to type into it: mobile browsers only raise their keyboard for
   a focused HTML element, and the modal had none, while its field and buttons
