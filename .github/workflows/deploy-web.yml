@@ -46,7 +46,7 @@ jobs:
             --output web-bundle-report.json
 
       - name: Upload bundle report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: web-bundle-report-${{ github.sha }}
           path: web-bundle-report.json
