@@ -148,6 +148,19 @@ def test_modifier_format_is_compact_only_when_requested():
     assert FieldFigureIcon._format_info_modifier(6, compact=False) == '(+6)'
 
 
+def test_dense_fallback_net_excludes_struck_blocked_support():
+    """The space-saving total must not turn blocked support back on."""
+    from game.components.figures.figure_icon import FieldFigureIcon
+
+    segments = [
+        ('5', (255, 255, 255), False),
+        ('+12', (0, 255, 0), True),
+        ('+20', (0, 255, 0), False),
+        ('-3', (255, 140, 40), False),
+    ]
+    assert FieldFigureIcon._dense_active_modifier_total(segments) == 17
+
+
 def test_compact_card_back_row_shrinks_to_inner_width():
     from game.components.figures.figure_icon import FieldFigureIcon
 

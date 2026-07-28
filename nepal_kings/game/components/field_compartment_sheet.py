@@ -122,8 +122,12 @@ class FieldCompartmentSheet:
             return 'close'
         if not self.panel_rect.collidepoint(pos):
             return 'outside'
+        # Cells are drawn through a content clip, so their off-screen portion
+        # must not remain an invisible hit target in the header or footer.
+        if not self.content_rect.collidepoint(pos):
+            return 'panel'
         for icon, rect in self._cell_rects:
-            if rect.collidepoint(pos):
+            if rect.clip(self.content_rect).collidepoint(pos):
                 figure_id = getattr(getattr(icon, 'figure', None), 'id', None)
                 if figure_id is not None:
                     return ('cell', figure_id)
@@ -259,7 +263,7 @@ class FieldCompartmentSheet:
                 icon.power_badge_only = False
                 icon.max_info_width = self._cell_w - 6
                 icon.hit_suppressed = False
-                icon.hit_rect = cell
+                icon.hit_rect = cell.clip(self.content_rect)
 
                 # The icon paints its own name/power/suit plate, so the cell
                 # adds no caption of its own.

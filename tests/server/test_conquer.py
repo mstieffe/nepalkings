@@ -33,6 +33,34 @@ def _add_collection_card(db, user_id, suit='Hearts', rank='K', value=4):
 
 class TestGetConquerConfig:
 
+    def test_land_context_includes_home_ground_settings(
+            self, client, db, two_users, auth_headers_user1, monkeypatch):
+        import importlib
+        kingdom_routes = importlib.import_module('routes.kingdom')
+
+        _u1, u2 = two_users
+        land = _add_land(db, owner_id=u2.id)
+        monkeypatch.setattr(
+            kingdom_routes.config,
+            'LAND_HOME_GROUND_ASYMMETRY_ENABLED',
+            True,
+        )
+        monkeypatch.setattr(
+            kingdom_routes.config,
+            'LAND_HOME_GROUND_ATTACKER_BONUS_FACTOR',
+            0.25,
+        )
+
+        rv = client.get(
+            f'/kingdom/conquer/config?land_id={land.id}',
+            headers=auth_headers_user1,
+        )
+
+        assert rv.status_code == 200
+        context = rv.get_json()['land']
+        assert context['land_home_ground_asymmetry_enabled'] is True
+        assert context['land_home_ground_attacker_factor'] == 0.25
+
     def test_creates_empty_config(self, client, db, two_users, auth_headers_user1):
         u1, u2 = two_users
         land = _add_land(db, owner_id=u2.id)

@@ -19,15 +19,31 @@ class KingdomGameProxy:
 
     def __init__(self, config=None, land_id=None, mode='conquer',
                  land_suit_bonus_suit=None, land_suit_bonus_value=None,
-                 land=None):
+                 land=None, land_bonus_role=None):
         self._config = config or {}
         self.land_id = land_id
         self.land = land or {}
         self.mode = mode  # 'conquer' or 'defence'
 
         # Land suit bonus (used by FieldFigureIcon for battle bonus calculation)
-        self.land_suit_bonus_suit = land_suit_bonus_suit
-        self.land_suit_bonus_value = land_suit_bonus_value
+        self.land_suit_bonus_suit = (
+            land_suit_bonus_suit
+            if land_suit_bonus_suit is not None
+            else self.land.get('suit_bonus_suit')
+        )
+        self.land_suit_bonus_value = (
+            land_suit_bonus_value
+            if land_suit_bonus_value is not None
+            else self.land.get('suit_bonus_value')
+        )
+        self.land_home_ground_asymmetry_enabled = bool(
+            self.land.get('land_home_ground_asymmetry_enabled', False))
+        self.land_home_ground_attacker_factor = float(
+            self.land.get('land_home_ground_attacker_factor', 1.0))
+        # Config figures do not have live Player ids yet, so their side of the
+        # future battle is explicit: conquer setup is attacker, defence setup
+        # is defender.
+        self.land_bonus_role = land_bonus_role
 
         # Properties read by SubScreen / BuildFigureScreen / BattleShopScreen
         self.game_id = None
@@ -38,6 +54,7 @@ class KingdomGameProxy:
         self.ceasefire_active = False
         self.advancing_figure_id = None
         self.advancing_player_id = None
+        self.invader_player_id = None
         self.pending_forced_advance = False
         self.battle_confirmed = False
         self.battle_moves_phase = False
@@ -102,6 +119,41 @@ class KingdomGameProxy:
 
     def is_battle_active(self):
         return False
+
+    def landslide_active(self):
+        """Whether the config currently contains a Landslide modifier."""
+        modifiers = self.battle_modifier if isinstance(
+            self.battle_modifier, list) else []
+        return any(
+            isinstance(modifier, dict)
+            and modifier.get('type') == 'Landslide'
+            for modifier in modifiers
+        )
+
+    def effective_land_bonus(self):
+        """Return the land bonus after config-time battle modifiers."""
+        suit = self.land_suit_bonus_suit
+        value = self.land_suit_bonus_value
+        if not suit or not value:
+            return None, 0
+        value = int(value)
+        if self.landslide_active():
+            value = -abs(value)
+        return suit, value
+
+    def effective_land_bonus_for(self, player_id):
+        """Mirror Game.effective_land_bonus_for() before Player ids exist."""
+        suit, value = self.effective_land_bonus()
+        if not suit or not value:
+            return suit, value
+        is_attacker = self.land_bonus_role == 'attacker'
+        if self.land_bonus_role is None:
+            invader_id = self.invader_player_id
+            is_attacker = invader_id is not None and player_id == invader_id
+        if self.land_home_ground_asymmetry_enabled and is_attacker:
+            value = int(round(
+                int(value) * self.land_home_ground_attacker_factor))
+        return suit, value
 
     @property
     def cached_figures_data(self):

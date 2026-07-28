@@ -65,6 +65,9 @@ class _Icon:
             return None
         return pygame.Rect(self.hit_rect) if self.hit_rect else self.rect_frame
 
+    def draw(self, _x, _y):
+        pass
+
 
 def _field(counts=None):
     """A FieldScreen carrying only what the column code touches."""
@@ -203,7 +206,8 @@ def test_swipe_scrolls_and_swallows_the_release(touch_mode):
     layout = screen._column_layouts[key]
     start = pygame.Rect(layout.content_rect).center
 
-    _press(screen, start)
+    assert _press(screen, start) == [], (
+        'the press must be held until the gesture is classified')
     _motion(screen, (start[0], start[1] - 40))
     assert screen._column_scroll[key] > 0, 'the drag did not scroll'
 
@@ -217,10 +221,12 @@ def test_tap_without_movement_still_reaches_selection(touch_mode):
     key = ('self', 'castle')
     start = pygame.Rect(screen._column_layouts[key].content_rect).center
 
-    _press(screen, start)
+    assert _press(screen, start) == []
     remaining = _release(screen, start)
     assert screen._column_scroll[key] == 0
-    assert len(remaining) == 1, 'a plain tap must pass through to the field'
+    assert [event.type for event in remaining] == [
+        pygame.MOUSEBUTTONDOWN, pygame.MOUSEBUTTONUP,
+    ], 'a plain tap must be replayed to the field'
 
 
 def test_tiny_jitter_does_not_count_as_a_drag(touch_mode):
@@ -233,7 +239,9 @@ def test_tiny_jitter_does_not_count_as_a_drag(touch_mode):
     _motion(screen, (start[0], start[1] - 2))
     assert screen._column_scroll[key] == 0
     remaining = _release(screen, (start[0], start[1] - 2))
-    assert len(remaining) == 1
+    assert [event.type for event in remaining] == [
+        pygame.MOUSEBUTTONDOWN, pygame.MOUSEBUTTONUP,
+    ]
 
 
 def test_scroll_is_clamped_at_both_ends():
@@ -463,6 +471,110 @@ def test_sheet_close_restores_the_borrowed_icons():
     for icon in sheet.icons:
         assert icon.render_scale == pytest.approx(dense_scale)
         assert icon.power_badge_only is True
+
+
+def test_sheet_clipped_cell_portion_is_not_a_hit_target():
+    """A row hidden behind the header must not remain invisibly clickable."""
+    screen = _field()
+    header = pygame.Rect(screen._column_layouts[('self', 'castle')].header_rect)
+    _click(screen, header.center)
+    sheet = screen._compartment_sheet
+
+    # Force the same half-row geometry produced by a real scroll on a small
+    # viewport; the desktop test viewport may fit the whole grid.
+    sheet._scroll = sheet._cell_h / 2
+    sheet._draw_cells()
+    icon, cell = sheet._cell_rects[0]
+    probe = (cell.centerx, sheet.content_rect.top - 1)
+    assert cell.collidepoint(probe)
+    assert sheet.header_rect.collidepoint(probe)
+    assert sheet._target_at(probe) == 'panel'
+    assert icon.hit_rect == cell.clip(sheet.content_rect)
+
+
+def _prepare_sheet_selection_screen(screen):
+    screen.state = SimpleNamespace(
+        pending_spell_cast=None,
+        pending_conquer_prelude_target=None,
+        parent_screen=None,
+    )
+    screen.game = SimpleNamespace(
+        mode='conquer',
+        battle_modifier=[],
+        civil_war_awaiting_second=False,
+        civil_war_defender_second=False,
+    )
+    screen.dialogue_box = None
+    screen.figure_detail_box = None
+
+
+def test_sheet_pick_routes_through_spell_target_selection():
+    screen = _field()
+    _prepare_sheet_selection_screen(screen)
+    screen.state.pending_spell_cast = {'spell': 'Health Boost'}
+    routed = []
+    screen._handle_target_selection = lambda events: routed.extend(events)
+    figure_id = screen.figure_icons[0].figure.id
+    # Hidden-target prelude/spell modes must still reach their own validator;
+    # the generic sheet router must not reject them first.
+    screen.icon_cache[figure_id].is_visible = False
+
+    screen._select_figure_by_id(figure_id)
+
+    assert len(routed) == 1
+    assert routed[0].type == pygame.MOUSEBUTTONDOWN
+    assert routed[0].sheet_figure_id == figure_id
+    assert all(not icon.hovered for icon in screen.figure_icons)
+
+
+@pytest.mark.parametrize(
+    ('mode_attr', 'handler_name'),
+    [
+        ('defender_selection_mode', '_handle_defender_selection'),
+        ('conquer_own_defender_mode',
+         '_handle_conquer_own_defender_selection'),
+    ],
+)
+def test_sheet_pick_routes_through_defender_selection(
+        mode_attr, handler_name):
+    screen = _field()
+    _prepare_sheet_selection_screen(screen)
+    setattr(screen, mode_attr, True)
+    routed = []
+    setattr(screen, handler_name, lambda events: routed.extend(events))
+    figure_id = screen.figure_icons[0].figure.id
+
+    screen._select_figure_by_id(figure_id)
+
+    assert len(routed) == 1
+    assert routed[0].sheet_figure_id == figure_id
+
+
+def test_sheet_pick_routes_through_civil_war_second_attacker():
+    screen = _field({'castle': 1, 'village': 2, 'military': 1})
+    _prepare_sheet_selection_screen(screen)
+    icon = next(
+        icon for icon in screen.figure_icons
+        if icon.figure.family.field == 'village')
+    screen.game.player_id = icon.figure.player_id
+    screen.game.battle_modifier = [{'type': 'Civil War'}]
+    screen.game.civil_war_awaiting_second = True
+    screen.game.advancing_figure_id = -1
+    screen.game.defending_figure_id = -2
+    screen.game.civil_war_required_color = None
+    screen._force_immediate_redraw = lambda: None
+    screen._get_modifier_icon_images = lambda _name: []
+    confirmations = []
+    parent = SimpleNamespace(
+        request_conquer_figure_confirmation=(
+            lambda *args, **kwargs: confirmations.append((args, kwargs))))
+    screen._conquer_parent = lambda: parent
+
+    screen._select_figure_by_id(icon.figure.id)
+
+    assert screen._pending_advance_figure is icon.figure
+    assert len(confirmations) == 1
+    assert confirmations[0][0][:2] == ('advance', icon.figure)
 
 
 def test_escape_closes_the_sheet():

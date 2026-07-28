@@ -1349,15 +1349,22 @@ class FieldScreen(SubScreen):
                 key = self._column_at(pos)
                 layout = (self._column_layouts or {}).get(key)
                 if key and layout is not None and layout.overflow:
-                    self._column_drag = {'key': key, 'y': pos[1]}
+                    # Hold the press until we know whether this is a tap or a
+                    # scroll. Passing it through now lets figure selection act
+                    # one frame before motion crosses the drag threshold.
+                    self._column_drag = {
+                        'key': key,
+                        'y': pos[1],
+                        'press_event': event,
+                    }
                     self._column_drag_moved = False
+                    continue
 
             elif etype == pygame.MOUSEMOTION and self._column_drag and pos:
                 drag = self._column_drag
                 dy = pos[1] - drag['y']
                 if not self._column_drag_moved:
                     if abs(dy) < self.COLUMN_DRAG_START_PX:
-                        remaining.append(event)
                         continue
                     self._column_drag_moved = True
                 drag['y'] = pos[1]
@@ -1375,13 +1382,20 @@ class FieldScreen(SubScreen):
                         self._open_compartment_sheet(*header_press)
                     continue
 
-                was_drag = self._column_drag is not None and self._column_drag_moved
+                drag = self._column_drag
+                was_drag = drag is not None and self._column_drag_moved
                 self._column_drag = None
                 self._column_drag_moved = False
                 if was_drag:
                     # Swallow the release that ends a scroll gesture, or the
                     # swipe also selects whatever figure it started on.
                     self._clear_icon_hover_state()
+                    continue
+                if drag is not None:
+                    # It stayed below the movement threshold: replay the held
+                    # press together with this release as an ordinary tap.
+                    remaining.append(drag['press_event'])
+                    remaining.append(event)
                     continue
 
             remaining.append(event)
@@ -1451,26 +1465,20 @@ class FieldScreen(SubScreen):
         icon = (self.icon_cache or {}).get(figure_id)
         if icon is None:
             return
-        for other in getattr(self, 'figure_icons', []) or []:
-            if other is not icon:
-                other.clicked = False
-        icon.clicked = True
         self._reveal_figure_in_column(figure_id)
-        if not icon.is_visible:
-            return
-        try:
-            resources_data = self.game.calculate_resources(
-                self.figure_manager.families)
-        except Exception:
-            resources_data = {}
-        self.figure_detail_box = FigureDetailBox(
-            self.window,
-            icon.figure,
-            self.game,
-            all_figures=self.figures,
-            resources_data=resources_data,
-            conquer_view_only=bool(self._conquer_parent()),
+        # A private synthetic press bypasses column gesture handling but then
+        # follows the exact same spell/defender/Civil-War/normal-click routing
+        # below. This matters when the sheet is the only practical way to
+        # reach a target in a crowded compartment.
+        event = pygame.event.Event(
+            pygame.MOUSEBUTTONDOWN,
+            button=1,
+            sheet_figure_id=figure_id,
         )
+        try:
+            self.handle_events([event])
+        finally:
+            self._clear_icon_hover_state()
 
     def handle_events(self, events):
         """Handle events for interacting with the field."""
@@ -1478,18 +1486,30 @@ class FieldScreen(SubScreen):
             # Modal: the sheet consumes the batch outright.
             self.handle_column_events(events)
             return
-        # An empty batch still has to reach the handlers below — a dialogue
-        # can auto-close without any input of its own.
-        events = self.handle_column_events(events)
-        super().handle_events(events)
+        direct_figure_id = next(
+            (getattr(event, 'sheet_figure_id', None) for event in events
+             if getattr(event, 'sheet_figure_id', None) is not None),
+            None,
+        )
+        if direct_figure_id is None:
+            # An empty batch still has to reach the handlers below — a
+            # dialogue can auto-close without any input of its own.
+            events = self.handle_column_events(events)
+            super().handle_events(events)
 
-        # Update hover state on pointer movement and click/touch events. Web
-        # clients can deliver a click without a preceding motion event, and a
-        # background figure refresh may otherwise leave stale hover state.
-        for event in events:
-            if event.type in (pygame.MOUSEMOTION, pygame.MOUSEBUTTONDOWN,
-                              pygame.MOUSEBUTTONUP):
-                self.update_hover_state(getattr(event, 'pos', None))
+            # Update hover state on pointer movement and click/touch events.
+            # Web clients can deliver a click without a preceding motion
+            # event, and a refresh may otherwise leave stale hover state.
+            for event in events:
+                if event.type in (pygame.MOUSEMOTION, pygame.MOUSEBUTTONDOWN,
+                                  pygame.MOUSEBUTTONUP):
+                    self.update_hover_state(getattr(event, 'pos', None))
+        else:
+            direct_icon = (self.icon_cache or {}).get(direct_figure_id)
+            if direct_icon is None:
+                return
+            for icon in getattr(self, 'figure_icons', []) or []:
+                icon.hovered = icon is direct_icon
 
         # Handle dialogue box events first (before target selection mode check)
         # This ensures auto-closing dialogues work even during target selection

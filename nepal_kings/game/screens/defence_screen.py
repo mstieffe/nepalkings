@@ -1268,6 +1268,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
             land_suit_bonus_suit=land.get('suit_bonus_suit'),
             land_suit_bonus_value=land.get('suit_bonus_value'),
             land=land,
+            land_bonus_role='defender',
         )
 
         # First pass: build the complete figure list. Support-bonus depends
@@ -2703,7 +2704,8 @@ class DefenceScreen(MenuScreenMixin, Screen):
             self._error = 'Failed to load collection'
             return
         self._game_proxy = KingdomGameProxy(
-            self._config, self._land_id, mode='defence', land=self._land or {})
+            self._config, self._land_id, mode='defence',
+            land=self._land or {}, land_bonus_role='defender')
         self.state.game = self._game_proxy
         sx, sy = self._config_subscreen_origin()
         self._subscreen_obj = BuildFigureScreen(
@@ -2721,7 +2723,8 @@ class DefenceScreen(MenuScreenMixin, Screen):
             self._error = 'Failed to load collection'
             return
         self._game_proxy = KingdomGameProxy(
-            self._config, self._land_id, mode='defence', land=self._land or {})
+            self._config, self._land_id, mode='defence',
+            land=self._land or {}, land_bonus_role='defender')
         self.state.game = self._game_proxy
         sx, sy = self._config_subscreen_origin()
         self._subscreen_obj = BattleShopScreen(
@@ -2741,7 +2744,8 @@ class DefenceScreen(MenuScreenMixin, Screen):
             self._error = 'Failed to load collection'
             return
         self._game_proxy = KingdomGameProxy(
-            self._config, self._land_id, mode='defence', land=self._land or {})
+            self._config, self._land_id, mode='defence',
+            land=self._land or {}, land_bonus_role='defender')
         self.state.game = self._game_proxy
         sx, sy = self._config_subscreen_origin()
         self._subscreen_obj = PreludeSpellScreen(
@@ -2768,7 +2772,8 @@ class DefenceScreen(MenuScreenMixin, Screen):
             self._error = 'Failed to load collection'
             return
         self._game_proxy = KingdomGameProxy(
-            self._config, self._land_id, mode='defence', land=self._land or {})
+            self._config, self._land_id, mode='defence',
+            land=self._land or {}, land_bonus_role='defender')
         self.state.game = self._game_proxy
         sx, sy = self._config_subscreen_origin()
         self._subscreen_obj = PreludeSpellScreen(

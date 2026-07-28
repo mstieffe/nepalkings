@@ -1185,9 +1185,7 @@ class FieldFigureIcon(FigureIcon):
                 break
         else:
             # Still too wide: base power plus a single net modifier.
-            net = sum(
-                int(text.replace('+', '')) for text, _c, _s in segments[1:]
-                if text.lstrip('+-').isdigit())
+            net = self._dense_active_modifier_total(segments)
             colour = (settings.COLOR_BATTLE_BONUS if net > 0
                       else self._DENSE_BADGE_NEGATIVE_COLOR)
             parts = [segments[0]]
@@ -1218,6 +1216,14 @@ class FieldFigureIcon(FigureIcon):
                 pygame.draw.line(self.window, (232, 92, 84),
                                  (x, mid), (x + surface.get_width(), mid), 1)
             x += surface.get_width()
+
+    @staticmethod
+    def _dense_active_modifier_total(segments):
+        """Collapse only active modifiers; struck support is informational."""
+        return sum(
+            int(text.replace('+', '')) for text, _colour, strike in segments[1:]
+            if not strike and text.lstrip('+-').isdigit()
+        )
 
     @staticmethod
     def _info_row_width(elements, spacing):

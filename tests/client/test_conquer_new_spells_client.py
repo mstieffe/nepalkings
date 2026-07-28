@@ -585,6 +585,29 @@ def test_effective_land_bonus_for_home_ground_asymmetry():
     assert game.effective_land_bonus_for(7) == ('Hearts', 10)
 
 
+def test_attack_config_proxy_scales_land_bonus_before_game_exists():
+    """Attack setup must show the same land value the server will score."""
+    from game.components.figures.figure_icon import FieldFigureIcon
+    from game.core.kingdom_game_proxy import KingdomGameProxy
+
+    land = {
+        'suit_bonus_suit': 'Hearts',
+        'suit_bonus_value': 20,
+        'land_home_ground_asymmetry_enabled': True,
+        'land_home_ground_attacker_factor': 0.0,
+    }
+    attacker = KingdomGameProxy(
+        mode='conquer', land=land, land_bonus_role='attacker')
+    defender = KingdomGameProxy(
+        mode='defence', land=land, land_bonus_role='defender')
+
+    attack_icon = object.__new__(FieldFigureIcon)
+    attack_icon.figure = SimpleNamespace(suit='Hearts', player_id=None)
+    attack_icon.game = attacker
+    assert attack_icon._current_land_bonus() == 0
+    assert defender.effective_land_bonus_for(None) == ('Hearts', 20)
+
+
 def test_figure_icon_land_bonus_unblockable_and_scaled_for_invader():
     """The land badge is unblockable and, under asymmetry, scaled for the
     invader's figures while the defender's keep the full value."""
