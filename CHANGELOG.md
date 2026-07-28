@@ -119,6 +119,29 @@ and the operational safety net to keep early adopters.
   rather than the `FIGURE_ICON_HEIGHT` proxy the old maths used, which
   understated the real frame by about half and made icons collide earlier
   than the spacing predicted.
+- **Expand sheet opened only while the button was held.** The compartment
+  sheet opened on the mouse-down, which handed the freshly built sheet the
+  matching mouse-up — it read that as a click, and a release outside its panel
+  means close, so the sheet vanished the instant the button came up. Where the
+  release happened decided the outcome, so it sometimes stayed open instead,
+  and it fought the figure detail box for the same click. Opening now happens
+  on the release, every action inside the sheet needs a press and a release on
+  the same target, and a header underneath an open detail box stays inert.
+- **Compartments did not scroll on the attack and defence config screens.**
+  Both were moved onto the shared column solver without a scroll offset or any
+  gesture handling, so a compartment past its visible rows hid the remainder
+  with no way to reach it — worse than the overlap it replaced. Scrolling is
+  now a shared component used by the battlefield and both config screens
+  alike: the wheel scrolls the column under the cursor, a drag scrolls on
+  touch, the release ending a swipe never doubles as a click on the figure it
+  began on, and each scrolling column shows a scrollbar.
+- **Compacted figures lost the colour language of their power plate.** A dense
+  row's badge drew everything in one flat colour, so a support bonus, an
+  enchantment and a ranged penalty all looked alike. The badge now matches the
+  full plate: support and land bonuses green (red when inverted), enchantments
+  purple, ranged penalties orange, and a Temple-blocked support struck through
+  rather than dropped. It steps its font down before it will outgrow the icon
+  it annotates.
 - **Support breakdown popover buried the battlefield and told you less than
   it could.** With a dozen supporting figures behind one badge the breakdown
   listed each contribution on its own line — six identical

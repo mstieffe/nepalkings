@@ -628,7 +628,7 @@ def populate_conquer_config(screen) -> None:
     screen._rebuild_figure_objects()
 
 
-def populate_defence_config(screen) -> None:
+def populate_defence_config(screen, crowded: bool = False) -> None:
     screen._land_id = 7
     screen.state.defence_land_id = 7
     manager = screen._figure_manager
@@ -639,6 +639,21 @@ def populate_defence_config(screen) -> None:
         fixture_config_figure(manager, "Gorkha Warriors", "Hearts", 304, card_start=2160),
         fixture_config_figure(manager, "Djungle Archer", "Spades", 305, card_start=2180),
     ]
+    if crowded:
+        # A tier-6 defence: the compartments have to compact and scroll
+        # rather than hide or stack the figures they cannot fit.
+        crowd = [
+            ("Himalaya King", "Hearts", "castle", 6),
+            ("Large Rice Farm", "Diamonds", "village", 7),
+            ("Gorkha Warriors", "Hearts", "military", 6),
+        ]
+        next_id, card_id = 320, 2300
+        for name, suit, _field, count in crowd:
+            for _ in range(count):
+                figures.append(fixture_config_figure(
+                    manager, name, suit, next_id, card_start=card_id))
+                next_id += 1
+                card_id += 20
     config = {
         "figures": figures,
         "battle_moves": [
@@ -1501,7 +1516,15 @@ def populate_kingdom_config(screen, section: str) -> None:
         screen._content_scroll = max(0, layout["cosmetics_h"] + layout["gap"] - 20)
 
 
+# Fixture variants of a config screen: same screen, different data.
+CONFIG_VARIANT_ALIASES = {
+    "defence_crowded": "defence",
+}
+
+
 def canonical_screen_name(screen_name: str) -> str:
+    if screen_name in CONFIG_VARIANT_ALIASES:
+        return CONFIG_VARIANT_ALIASES[screen_name]
     if screen_name in SETTINGS_SCREEN_ALIASES:
         return "settings"
     if screen_name in CONFIG_PICKER_ALIASES:
@@ -1534,7 +1557,7 @@ def uses_fixture(screen_name: str) -> bool:
         or screen_name in COLLECTION_SCREEN_ALIASES
         or screen_name in NEW_GAME_ALIASES
         or screen_name in SETTINGS_SCREEN_ALIASES
-        or screen_name in {"conquer", "defence"}
+        or screen_name in {"conquer", "defence", "defence_crowded"}
     )
 
 
@@ -1754,13 +1777,18 @@ def prepare_screen(client, screen_name: str):
         populate_kingdom_config(screen, KINGDOM_CONFIG_ALIASES[screen_name])
         return screen
 
-    screen = client.screens.get(screen_name)
+    # "defence_crowded" is a fixture variant of the defence config screen.
+    base_screen_name = ("defence" if screen_name == "defence_crowded"
+                        else screen_name)
+    screen = client.screens.get(base_screen_name)
     if screen is None:
         return None
     if screen_name == "conquer":
         populate_conquer_config(screen)
     elif screen_name == "defence":
         populate_defence_config(screen)
+    elif screen_name == "defence_crowded":
+        populate_defence_config(screen, crowded=True)
     return screen
 
 
@@ -1793,6 +1821,7 @@ def render_screens(width: int, height: int, ui_scale: str,
             *COLLECTION_SCREEN_ALIASES.keys(),
             *NEW_GAME_ALIASES.keys(),
             *SETTINGS_SCREEN_ALIASES.keys(),
+            *CONFIG_VARIANT_ALIASES.keys(),
         )
         if screen_name not in known_names:
             print(f"skip {screen_name}: screen not loaded")

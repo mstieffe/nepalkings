@@ -1107,6 +1107,55 @@ class FieldFigureIcon(FigureIcon):
         else:
             self.draw_figure_info()
 
+    # Base power on the dark dense badge.  SUIT_ICON_CAPTION_COLOR is near
+    # black because the plate it normally sits on is parchment.
+    _DENSE_BADGE_BASE_COLOR = (240, 226, 194)
+    _DENSE_BADGE_NEGATIVE_COLOR = (226, 120, 110)
+    _DENSE_BADGE_ENCHANTMENT_COLOR = (185, 110, 235)
+    _DENSE_BADGE_PENALTY_COLOR = (255, 140, 40)
+
+    def _dense_power_badge_segments(self):
+        """``(text, colour, strike)`` parts of the dense badge, left to right.
+
+        Mirrors the colour language of the full info plate so a compacted
+        figure reads the same way: support and land bonuses green (red when
+        inverted), enchantments purple, a ranged penalty orange, and a
+        Temple-blocked support struck through rather than dropped.
+        """
+        try:
+            base_power = int(self.figure.get_value())
+        except Exception:
+            return []
+        base_power += (getattr(self, 'buffs_allies_bonus', 0)
+                       + getattr(self, 'buffs_allies_defence_bonus', 0))
+        segments = [(str(base_power), self._DENSE_BADGE_BASE_COLOR, False)]
+
+        def _add(value, colour, *, strike=False):
+            if value:
+                segments.append(
+                    (self._format_info_modifier(value, True), colour, strike))
+
+        land_bonus = self._current_land_bonus()
+        support_bonus = self._current_battle_bonus_received() - land_bonus
+        _add(support_bonus,
+             settings.COLOR_BATTLE_BONUS if support_bonus > 0
+             else self._DENSE_BADGE_NEGATIVE_COLOR,
+             strike=bool(getattr(self, 'battle_bonus_blocked', False)))
+        # The land part is unblockable, so it is never struck through.
+        _add(land_bonus,
+             settings.COLOR_BATTLE_BONUS if land_bonus > 0
+             else self._DENSE_BADGE_NEGATIVE_COLOR)
+
+        if getattr(self.figure, 'active_enchantments', None):
+            try:
+                _add(self.figure.get_total_enchantment_modifier(),
+                     self._DENSE_BADGE_ENCHANTMENT_COLOR)
+            except Exception:
+                pass
+        _add(-int(getattr(self, 'distance_attack_penalty', 0) or 0),
+             self._DENSE_BADGE_PENALTY_COLOR)
+        return segments
+
     def _draw_dense_power_badge(self) -> None:
         """Corner badge carrying a dense row's power, e.g. ``9`` or ``9+2``.
 
@@ -1115,36 +1164,60 @@ class FieldFigureIcon(FigureIcon):
         """
         if not self.is_visible:
             return
-        try:
-            base_power = self.figure.get_value()
-        except Exception:
+        segments = self._dense_power_badge_segments()
+        if not segments:
             return
-        base_power += (getattr(self, 'buffs_allies_bonus', 0)
-                       + getattr(self, 'buffs_allies_defence_bonus', 0))
-        bonus = 0 if getattr(self, 'battle_bonus_blocked', False) \
-            else self._current_battle_bonus_received()
-        bonus -= getattr(self, 'distance_attack_penalty', 0)
-        label = f"{base_power}+{bonus}" if bonus > 0 else (
-            f"{base_power}{bonus}" if bonus < 0 else f"{base_power}")
 
         frame = self.rect_frame
-        size = max(9, int(frame.height * 0.26))
-        font = settings.get_font(size, bold=True)
-        # Light on the dark plate below.  SUIT_ICON_CAPTION_COLOR is near
-        # black because the name plate it normally sits on is parchment.
-        text = font.render(label, True, (240, 226, 194))
-        pad = max(2, size // 4)
-        badge = pygame.Rect(0, 0, text.get_width() + 2 * pad,
-                            text.get_height() + pad)
+        pad = None
+        # The badge may not outgrow the icon it annotates: step the font down
+        # before giving up detail, and only then fold the modifiers into one
+        # net value.
+        for size in (max(9, int(frame.height * 0.26)),
+                     max(8, int(frame.height * 0.22)),
+                     max(7, int(frame.height * 0.19))):
+            font = settings.get_font(size, bold=True)
+            pad = max(2, size // 4)
+            rendered = [(font.render(text, True, colour), strike)
+                        for text, colour, strike in segments]
+            width = sum(s.get_width() for s, _ in rendered)
+            if width + 2 * pad <= frame.width:
+                break
+        else:
+            # Still too wide: base power plus a single net modifier.
+            net = sum(
+                int(text.replace('+', '')) for text, _c, _s in segments[1:]
+                if text.lstrip('+-').isdigit())
+            colour = (settings.COLOR_BATTLE_BONUS if net > 0
+                      else self._DENSE_BADGE_NEGATIVE_COLOR)
+            parts = [segments[0]]
+            if net:
+                parts.append((self._format_info_modifier(net, True), colour, False))
+            rendered = [(font.render(text, True, colour_), strike)
+                        for text, colour_, strike in parts]
+            width = sum(s.get_width() for s, _ in rendered)
+
+        height = max(s.get_height() for s, _ in rendered)
+        badge = pygame.Rect(0, 0, width + 2 * pad, height + pad)
         badge.bottomright = (frame.right, frame.bottom)
 
+        radius = max(2, badge.height // 3)
         plate = pygame.Surface(badge.size, pygame.SRCALPHA)
         pygame.draw.rect(plate, (24, 18, 14, 224), plate.get_rect(),
-                         border_radius=max(2, badge.height // 3))
+                         border_radius=radius)
         pygame.draw.rect(plate, (132, 108, 68, 235), plate.get_rect(), 1,
-                         border_radius=max(2, badge.height // 3))
+                         border_radius=radius)
         self.window.blit(plate, badge.topleft)
-        self.window.blit(text, text.get_rect(center=badge.center))
+
+        x = badge.left + pad
+        for surface, strike in rendered:
+            y = badge.centery - surface.get_height() // 2
+            self.window.blit(surface, (x, y))
+            if strike:
+                mid = badge.centery
+                pygame.draw.line(self.window, (232, 92, 84),
+                                 (x, mid), (x + surface.get_width(), mid), 1)
+            x += surface.get_width()
 
     @staticmethod
     def _info_row_width(elements, spacing):

@@ -33,6 +33,7 @@ from game.components.figures.skill_display_filters import (
 from game.components.figures.figure_icon import FieldFigureIcon
 from game.components.figure_detail_box import FigureDetailBox
 from game.components.field_figure_layout import compute_field_column
+from game.components.field_column_scroll import FieldColumnScroller
 from game.components.castle_cap_indicator import (
     castle_cap_reached,
     draw_castle_cap_indicator,
@@ -1852,7 +1853,10 @@ class DefenceScreen(MenuScreenMixin, Screen):
                 rect, len(field_figs),
                 title_space=title_space,
                 is_castle_column=(field_name == 'castle'),
+                scroll_px=self._field_scroller.scroll_px(field_name),
             )
+            self._field_scroller.sync(field_name, layout)
+            self._field_scroller.draw_scrollbar(self.window, field_name)
 
             icon_x = rect.left + 0.5 * rect.w
             for i, fig in enumerate(field_figs):
@@ -2992,11 +2996,24 @@ class DefenceScreen(MenuScreenMixin, Screen):
             icon.update()
         self._maybe_show_tutorial_completion()
 
+    @property
+    def _field_scroller(self):
+        """Scroll offsets for the figure compartments (created on demand)."""
+        scroller = getattr(self, '_field_scroller_obj', None)
+        if scroller is None:
+            scroller = FieldColumnScroller()
+            self._field_scroller_obj = scroller
+        return scroller
+
     def handle_events(self, events):
         if self._handle_tutorial_completion_events(events):
             return
         if super().handle_events(events):
             events = ()
+
+        # Compartment scrolling comes first: a swipe that scrolls a column
+        # must not also land as a click on the figure it started on.
+        events = self._field_scroller.handle_events(events)
 
         # Handle prelude / counter spell confirmation dialogue responses
         response = self.state.action.get('status')

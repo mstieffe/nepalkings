@@ -29,6 +29,10 @@ def _settings():
     return settings
 
 
+def settings_screen_height():
+    return _settings().SCREEN_HEIGHT
+
+
 @pytest.fixture
 def touch_mode(monkeypatch):
     """Simulate the mobile runtime: non-zero touch targets."""
@@ -123,6 +127,12 @@ def _motion(screen, pos):
 def _release(screen, pos):
     return screen.handle_column_events(
         [pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=pos)])
+
+
+def _click(screen, pos, release_pos=None):
+    """A complete click: press and release on the same spot."""
+    _press(screen, pos)
+    return _release(screen, release_pos or pos)
 
 
 # ── Layout wiring ───────────────────────────────────────────────────
@@ -317,30 +327,72 @@ def test_selection_reveal_does_not_fight_manual_scrolling():
 # ── Expand sheet ────────────────────────────────────────────────────
 
 
-def test_header_tap_opens_the_expand_sheet(touch_mode):
+def test_header_click_opens_the_expand_sheet(touch_mode):
     screen = _field()
     layout = screen._column_layouts[('self', 'castle')]
     header = pygame.Rect(layout.header_rect)
 
-    remaining = _press(screen, header.center)
+    remaining = _click(screen, header.center)
     assert screen._compartment_sheet is not None
     assert remaining == [], 'the header tap must not also hit a figure'
     assert len(screen._compartment_sheet.icons) == layout.figure_count
 
 
+def test_header_press_alone_does_not_open_the_sheet():
+    """It opens on the release, so the sheet never sees that release itself.
+
+    Opening on the press handed the fresh sheet the matching release, which
+    it read as a click and acted on — the sheet appeared only while the
+    button was held.
+    """
+    screen = _field()
+    header = pygame.Rect(screen._column_layouts[('self', 'castle')].header_rect)
+    _press(screen, header.center)
+    assert screen._compartment_sheet is None
+
+
+def test_sheet_survives_the_click_that_opened_it():
+    """The exact reported bug: open, then stay open."""
+    screen = _field()
+    header = pygame.Rect(screen._column_layouts[('self', 'castle')].header_rect)
+    _click(screen, header.center)
+    assert screen._compartment_sheet is not None
+
+    # A following frame with no input must not close it either.
+    screen.handle_column_events([])
+    assert screen._compartment_sheet is not None
+
+
+def test_press_on_header_released_elsewhere_does_not_open():
+    screen = _field()
+    header = pygame.Rect(screen._column_layouts[('self', 'castle')].header_rect)
+    _press(screen, header.center)
+    _release(screen, (header.centerx, header.bottom + 200))
+    assert screen._compartment_sheet is None
+
+
 def test_header_of_a_column_that_fits_stays_inert():
     screen = _field()
     header = pygame.Rect(screen._column_layouts[('self', 'village')].header_rect)
-    remaining = _press(screen, header.center)
+    remaining = _click(screen, header.center)
     assert screen._compartment_sheet is None
     assert len(remaining) == 1
+
+
+def test_header_is_inert_while_a_detail_box_is_open():
+    """The detail box is drawn over the board and owns the pointer."""
+    screen = _field()
+    screen.figure_detail_box = object()
+    header = pygame.Rect(screen._column_layouts[('self', 'castle')].header_rect)
+    _click(screen, header.center)
+    assert screen._compartment_sheet is None
 
 
 def test_open_sheet_consumes_every_event():
     """The sheet is modal; nothing underneath may act on the same batch."""
     screen = _field()
     header = pygame.Rect(screen._column_layouts[('self', 'castle')].header_rect)
-    _press(screen, header.center)
+    _click(screen, header.center)
     assert screen._compartment_sheet is not None
 
     remaining = screen.handle_column_events([
@@ -348,6 +400,48 @@ def test_open_sheet_consumes_every_event():
         pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=(5, 5)),
     ])
     assert remaining == []
+
+
+def test_sheet_closes_on_a_full_click_outside_it():
+    screen = _field()
+    header = pygame.Rect(screen._column_layouts[('self', 'castle')].header_rect)
+    _click(screen, header.center)
+    sheet = screen._compartment_sheet
+    outside = (2, settings_screen_height() - 2)
+    assert sheet._target_at(outside) == 'outside'
+
+    screen.handle_column_events([
+        pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=outside)])
+    assert screen._compartment_sheet is not None, 'press alone must not close'
+    screen.handle_column_events([
+        pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=outside)])
+    assert screen._compartment_sheet is None
+
+
+def test_sheet_closes_on_its_close_button():
+    screen = _field()
+    header = pygame.Rect(screen._column_layouts[('self', 'castle')].header_rect)
+    _click(screen, header.center)
+    close = screen._compartment_sheet._close_rect.center
+
+    screen.handle_column_events([
+        pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=close)])
+    screen.handle_column_events([
+        pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=close)])
+    assert screen._compartment_sheet is None
+
+
+def test_stray_release_inside_the_sheet_does_nothing():
+    """A release whose press the sheet never saw must be ignored."""
+    screen = _field()
+    header = pygame.Rect(screen._column_layouts[('self', 'castle')].header_rect)
+    _click(screen, header.center)
+    sheet = screen._compartment_sheet
+
+    screen.handle_column_events([
+        pygame.event.Event(pygame.MOUSEBUTTONUP, button=1,
+                           pos=sheet.panel_rect.center)])
+    assert screen._compartment_sheet is sheet
 
 
 def test_sheet_close_restores_the_borrowed_icons():
@@ -361,7 +455,7 @@ def test_sheet_close_restores_the_borrowed_icons():
         icon.power_badge_only = True
 
     header = pygame.Rect(screen._column_layouts[key].header_rect)
-    _press(screen, header.center)
+    _click(screen, header.center)
     sheet = screen._compartment_sheet
     assert sheet is not None
 
@@ -374,7 +468,7 @@ def test_sheet_close_restores_the_borrowed_icons():
 def test_escape_closes_the_sheet():
     screen = _field()
     header = pygame.Rect(screen._column_layouts[('self', 'castle')].header_rect)
-    _press(screen, header.center)
+    _click(screen, header.center)
     assert screen._compartment_sheet is not None
 
     screen.handle_column_events([
@@ -461,3 +555,101 @@ def test_real_icon_hit_area_honours_the_gates():
     icon.hit_suppressed = True
     assert icon.hit_area() is None
     assert icon.collide() is False
+
+
+# ── Shared scroller (config screens) ────────────────────────────────
+
+
+def _scroller_with_column(count=12):
+    """A FieldColumnScroller holding one crowded compartment."""
+    from game.components.field_column_scroll import FieldColumnScroller
+    from game.components.field_figure_layout import compute_field_column
+    settings = _settings()
+
+    column = (int(0.2 * settings.SCREEN_WIDTH), int(0.12 * settings.SCREEN_HEIGHT),
+              int(0.132 * settings.SCREEN_WIDTH), int(0.48 * settings.SCREEN_HEIGHT))
+    scroller = FieldColumnScroller()
+    layout = compute_field_column(
+        column, count, title_space=24,
+        scroll_px=scroller.scroll_px('village'))
+    scroller.sync('village', layout)
+    return scroller, layout, pygame.Rect(column)
+
+
+def test_config_column_wheel_scrolls():
+    """The attack/defence config screens must scroll like the battlefield.
+
+    They were migrated to the shared solver without a scroll offset, so any
+    figure past the visible rows was suppressed and simply unreachable.
+    """
+    scroller, layout, column = _scroller_with_column()
+    assert layout.overflow
+
+    remaining = scroller.handle_events([
+        pygame.event.Event(pygame.MOUSEWHEEL, y=-1, pos=column.center)])
+    assert scroller.scroll_px('village') > 0
+    assert remaining == []
+
+
+def test_config_column_drag_scrolls_and_swallows_the_release():
+    scroller, _layout, column = _scroller_with_column()
+    start = column.center
+
+    scroller.handle_events([
+        pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=start)])
+    scroller.handle_events([
+        pygame.event.Event(pygame.MOUSEMOTION, pos=(start[0], start[1] - 40))])
+    assert scroller.scroll_px('village') > 0
+
+    remaining = scroller.handle_events([
+        pygame.event.Event(pygame.MOUSEBUTTONUP, button=1,
+                           pos=(start[0], start[1] - 40))])
+    assert remaining == [], 'a swipe must not also click the figure beneath it'
+
+
+def test_config_column_tap_passes_through():
+    scroller, _layout, column = _scroller_with_column()
+    scroller.handle_events([
+        pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=column.center)])
+    remaining = scroller.handle_events([
+        pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=column.center)])
+    assert len(remaining) == 1
+
+
+def test_config_column_that_fits_is_left_alone():
+    scroller, layout, column = _scroller_with_column(count=1)
+    assert not layout.overflow
+    remaining = scroller.handle_events([
+        pygame.event.Event(pygame.MOUSEWHEEL, y=-1, pos=column.center)])
+    assert scroller.scroll_px('village') == 0
+    assert len(remaining) == 1
+
+
+def test_config_scroll_is_clamped_and_survives_figures_leaving():
+    from game.components.field_figure_layout import compute_field_column
+
+    scroller, layout, column = _scroller_with_column()
+    for _ in range(60):
+        scroller.handle_events([
+            pygame.event.Event(pygame.MOUSEWHEEL, y=-1, pos=column.center)])
+    assert scroller.scroll_px('village') == layout.max_scroll_px
+
+    smaller = compute_field_column(
+        column, 1, title_space=24, scroll_px=scroller.scroll_px('village'))
+    scroller.sync('village', smaller)
+    assert scroller.scroll_px('village') == 0
+
+
+def test_config_screens_are_wired_to_the_scroller():
+    """Both config screens must feed the offset in and the events through."""
+    import inspect
+    from game.screens.conquer_screen import ConquerScreen
+    from game.screens.defence_screen import DefenceScreen
+
+    for cls in (ConquerScreen, DefenceScreen):
+        source = inspect.getsource(cls)
+        assert 'scroll_px=self._field_scroller.scroll_px(' in source, (
+            f'{cls.__name__} solves its columns without a scroll offset')
+        assert 'self._field_scroller.sync(' in source
+        assert 'self._field_scroller.handle_events(' in source, (
+            f'{cls.__name__} never routes events to the scroller')

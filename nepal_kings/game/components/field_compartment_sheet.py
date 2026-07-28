@@ -49,6 +49,9 @@ class FieldCompartmentSheet:
 
         self._cell_rects = []      # (icon, rect) for the current draw
         self._close_rect = None
+        # What the last press landed on; an action needs press and release on
+        # the same target, so a stray release can never act.
+        self._press_target = None
         self._touch = bool(getattr(settings, 'TOUCH_TARGET_MIN', 0) > 0)
 
         # Icons are shared with the column behind us; remember what to put
@@ -112,11 +115,31 @@ class FieldCompartmentSheet:
 
     # ── Events ──────────────────────────────────────────────────────
 
+    def _target_at(self, pos):
+        """What ``pos`` points at: ``'close'``, ``('cell', id)``, ``'outside'``
+        or ``'panel'`` for inert panel background."""
+        if self._close_rect and self._close_rect.collidepoint(pos):
+            return 'close'
+        if not self.panel_rect.collidepoint(pos):
+            return 'outside'
+        for icon, rect in self._cell_rects:
+            if rect.collidepoint(pos):
+                figure_id = getattr(getattr(icon, 'figure', None), 'id', None)
+                if figure_id is not None:
+                    return ('cell', figure_id)
+        return 'panel'
+
     def handle_events(self, events):
         """Return ``'close'``, ``('select', figure_id)`` or ``None``.
 
         Consumes the whole batch: the caller must not route these events to
         anything underneath.
+
+        Every action needs a press and a release on the *same* target.  A
+        release on its own is ignored, which is what stops the sheet acting
+        on the release belonging to the click that opened it — that used to
+        close it again immediately, so it appeared only while the button was
+        held.
         """
         from game.components.tutorial_window import _apply_wheel_drag_scroll
 
@@ -127,27 +150,33 @@ class FieldCompartmentSheet:
             if etype == pygame.KEYDOWN and getattr(event, 'key', None) == pygame.K_ESCAPE:
                 self.close()
                 return 'close'
+
+            if etype == pygame.MOUSEBUTTONDOWN and getattr(event, 'button', 0) == 1:
+                pos = getattr(event, 'pos', None) or pygame.mouse.get_pos()
+                self._press_target = self._target_at(pos)
+                continue
+
             if etype != pygame.MOUSEBUTTONUP or getattr(event, 'button', 0) != 1:
                 continue
-            pos = getattr(event, 'pos', None) or pygame.mouse.get_pos()
+
+            press = self._press_target
+            self._press_target = None
+            if press is None:
+                continue
             if self._drag_moved:
                 # The release that ends a scroll drag must not also pick a
                 # figure out of the grid.
                 self._drag_moved = False
                 continue
-            if self._close_rect and self._close_rect.collidepoint(pos):
+            pos = getattr(event, 'pos', None) or pygame.mouse.get_pos()
+            if self._target_at(pos) != press:
+                continue
+            if press == 'close' or press == 'outside':
                 self.close()
                 return 'close'
-            if not self.panel_rect.collidepoint(pos):
+            if isinstance(press, tuple) and press[0] == 'cell':
                 self.close()
-                return 'close'
-            for icon, rect in self._cell_rects:
-                if not rect.collidepoint(pos):
-                    continue
-                figure_id = getattr(getattr(icon, 'figure', None), 'id', None)
-                if figure_id is not None:
-                    self.close()
-                    return ('select', figure_id)
+                return ('select', press[1])
         return None
 
     def close(self):

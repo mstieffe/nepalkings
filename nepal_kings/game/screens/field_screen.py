@@ -86,6 +86,7 @@ class FieldScreen(SubScreen):
         self._column_drag_moved = False
         self._compartment_sheet = None
         self._sheet_icon_ids = set()
+        self._header_press = None
         self.last_figure_ids = set()  # Track the last set of figure IDs
         self.last_enchantment_state = {}  # Track enchantment state for each figure
         self.last_player_id = None  # Track the last player ID to detect player changes
@@ -561,6 +562,7 @@ class FieldScreen(SubScreen):
         self._column_drag_moved = False
         self._compartment_sheet = None
         self._sheet_icon_ids = set()
+        self._header_press = None
         self.categorized_figures = {
             'self': {'castle': [], 'village': [], 'military': []},
             'opponent': {'castle': [], 'village': [], 'military': []}
@@ -1339,7 +1341,10 @@ class FieldScreen(SubScreen):
             elif etype == pygame.MOUSEBUTTONDOWN and getattr(event, 'button', 0) == 1 and pos:
                 header_key = self._header_at(pos)
                 if header_key is not None:
-                    self._open_compartment_sheet(*header_key)
+                    # Remember the press; the sheet opens on the matching
+                    # release. Opening on the press handed the sheet its own
+                    # release, which it read as a click and acted on.
+                    self._header_press = header_key
                     continue
                 key = self._column_at(pos)
                 layout = (self._column_layouts or {}).get(key)
@@ -1360,6 +1365,16 @@ class FieldScreen(SubScreen):
                 continue
 
             elif etype == pygame.MOUSEBUTTONUP and getattr(event, 'button', 0) == 1:
+                header_press = getattr(self, '_header_press', None)
+                self._header_press = None
+                if header_press is not None:
+                    # A header click is only a click when press and release
+                    # land on the same header; either way nothing beneath it
+                    # may act on this release.
+                    if pos and self._header_at(pos) == header_press:
+                        self._open_compartment_sheet(*header_press)
+                    continue
+
                 was_drag = self._column_drag is not None and self._column_drag_moved
                 self._column_drag = None
                 self._column_drag_moved = False
@@ -1377,7 +1392,14 @@ class FieldScreen(SubScreen):
             icon.hovered = False
 
     def _header_at(self, pos):
-        """``(player, field)`` whose expandable header contains ``pos``."""
+        """``(player, field)`` whose expandable header contains ``pos``.
+
+        Returns ``None`` while a figure detail box is open: that box is drawn
+        over the board and owns the pointer, so a header underneath it must
+        not compete for the same click.
+        """
+        if getattr(self, 'figure_detail_box', None) is not None:
+            return None
         for key, layout in (self._column_layouts or {}).items():
             if not self._column_is_expandable(layout):
                 continue
@@ -1413,6 +1435,11 @@ class FieldScreen(SubScreen):
         self._sheet_icon_ids = {
             getattr(getattr(icon, 'figure', None), 'id', None) for icon in icons
         }
+        # Take the board's selection state with us: leaving a figure marked
+        # selected behind the sheet made the two disagree about what is open.
+        self.figure_detail_box = None
+        for icon in getattr(self, 'figure_icons', []) or []:
+            icon.clicked = False
         self._clear_icon_hover_state()
 
     def _select_figure_by_id(self, figure_id):
