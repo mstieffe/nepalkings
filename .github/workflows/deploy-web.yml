@@ -52,7 +52,7 @@ jobs:
           path: web-bundle-report.json
 
       - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
         with:
           path: build/web-staging/nepal_kings/build/web
 
