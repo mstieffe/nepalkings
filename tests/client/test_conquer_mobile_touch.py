@@ -407,3 +407,173 @@ def test_compact_info_box_wraps_long_headline_and_body(touch_mode):
     # The old renderer ellipsized to one line; the wrapped headline now
     # paints text into the second line band as well.
     assert _rect_has_non_background_pixel(window, second_line)
+
+
+# ── Tactics rail: touch navigation ───────────────────────────────────
+
+
+class _RailParent:
+    """Minimal ``ConquerGameScreen`` stand-in for the tactics rail."""
+
+    def __init__(self, window, game, moves):
+        self.window = window
+        self.state = SimpleNamespace(game=game)
+        self.subscreens = {'battle': SimpleNamespace(opp_played=[])}
+        self._moves = list(moves)
+
+    def _current_conquer_battle_moves(self):
+        return list(self._moves)
+
+    def _conquer_battle_move_icon_assets(self, icon_size):
+        settings = _settings()
+        return ({}, {}, {}, {},
+                settings.get_font(max(8, icon_size // 3), bold=True))
+
+
+def _tactic(move_id, family='Dagger', suit='Hearts', rank='9', value=9,
+            **extra):
+    move = {
+        'id': move_id,
+        'family_name': family,
+        'suit': suit,
+        'rank': rank,
+        'value': value,
+        'status': 'available',
+        'played_round': None,
+    }
+    move.update(extra)
+    return move
+
+
+def _touch_rail(moves):
+    from config import settings
+    from game.components.conquer_tactics_rail import ConquerTacticsRail
+
+    window = pygame.Surface((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+    game = SimpleNamespace(
+        mode='conquer', player_id=1, battle_round=1,
+        battle_turn_player_id=1, battle_confirmed=True,
+        battle_gamble_counts={}, last_battle_result=None,
+    )
+    rail = ConquerTacticsRail(_RailParent(window, game, moves))
+    rail.draw()
+    return rail
+
+
+def _press(rail, pos):
+    rail.handle_event(pygame.event.Event(
+        pygame.MOUSEBUTTONDOWN, button=1, pos=pos))
+
+
+def _drag(rail, pos):
+    rail.handle_event(pygame.event.Event(pygame.MOUSEMOTION, pos=pos))
+
+
+def _release(rail, pos):
+    rail.handle_event(pygame.event.Event(
+        pygame.MOUSEBUTTONUP, button=1, pos=pos))
+
+
+def test_tactics_rail_swipe_scrolls_instead_of_combining(touch_mode):
+    """The instinctive scroll gesture must never merge two Daggers.
+
+    Drag-to-combine fires an unconfirmed, destructive Combine, and touch
+    input reaches the rail as mouse events — so a swipe down a hand full of
+    same-colour Daggers used to consume two of them.
+    """
+    moves = [_tactic(i, suit='Hearts', rank=str(9 - i), value=9 - i)
+             for i in range(6)]
+    rail = _touch_rail(moves)
+    assert len(rail._cell_rects) >= 2
+
+    start = rail._cell_rects[0].center
+    target = rail._cell_rects[1].center
+    _press(rail, start)
+    _drag(rail, (start[0], start[1] - 40))
+    assert rail._scroll_px > 0             # the gesture scrolls the list
+    # Finish the swipe over a second same-colour Dagger — the exact drop
+    # that used to fire Combine.
+    _drag(rail, target)
+    _release(rail, target)
+    rail.draw()
+
+    assert rail.consume_pending_action() is None
+    assert rail._selected_id is None       # the optimistic select was undone
+    assert rail._drag_origin_id is None    # drag-to-combine never armed
+
+
+def test_tactics_rail_tap_without_movement_still_selects(touch_mode):
+    moves = [_tactic(i) for i in range(4)]
+    rail = _touch_rail(moves)
+
+    tap = rail._cell_rects[1].center
+    _press(rail, tap)
+    _release(rail, tap)
+
+    assert rail._selected_id == rail._cell_move_ids[1]
+    assert rail.consume_pending_action() is None
+
+
+def test_tactics_rail_scroll_arrows_are_not_tap_targets_on_touch(touch_mode):
+    """Arrows drawn over the first/last row swallowed taps meant for them."""
+    moves = [_tactic(i) for i in range(12)]
+    rail = _touch_rail(moves)
+
+    assert len(rail._cell_rects) < len(moves)   # the list really does scroll
+    assert rail._scroll_up_rect is None
+    assert rail._scroll_down_rect is None
+
+    # A tap in the bottom-right corner of the last row selects that row
+    # rather than scrolling the list underneath the finger.
+    last_rect = rail._cell_rects[-1]
+    probe = (last_rect.right - 6, last_rect.bottom - 4)
+    _press(rail, probe)
+    _release(rail, probe)
+    assert rail._selected_id == rail._cell_move_ids[-1]
+    assert rail._scroll_px == 0
+
+
+def test_tactics_rail_filter_chips_are_tappable_and_disjoint(touch_mode):
+    settings = _settings()
+    moves = [
+        _tactic(1, family='Dagger', suit='Hearts', rank='9', value=9),
+        _tactic(2, family='Dagger', suit='Spades', rank='8', value=8),
+        _tactic(3, family='Block', suit='Clubs', rank='Q', value=0),
+        _tactic(4, family='Call King', suit='Hearts', rank='K', value=5),
+    ]
+    rail = _touch_rail(moves)
+
+    rects = [rect for _key, rect in rail._filter_chip_rects]
+    assert len(rects) == 4                      # All + Dagger + Block + Call
+    for rect in rects:
+        assert rect.height >= settings.TOUCH_COMPACT_MIN - 4
+    for first in range(len(rects)):
+        for second in range(first + 1, len(rects)):
+            overlap = rects[first].clip(rects[second])
+            assert overlap.width <= 0 or overlap.height <= 0, (
+                first, second, tuple(rects[first]), tuple(rects[second]))
+    # Chips live above the list, never on top of a tactic row.
+    for chip in rects:
+        for row in rail._cell_rects:
+            assert not chip.colliderect(row)
+
+
+def test_tactics_rail_hand_viewport_does_not_move_while_playing(touch_mode):
+    """Selecting a tactic or showing a banner must not resize the hand."""
+    moves = [_tactic(i) for i in range(8)]
+    rail = _touch_rail(moves)
+    baseline = pygame.Rect(rail._dyn_hand_list_rect)
+    rows = len(rail._cell_rects)
+
+    tap = rail._cell_rects[-1].center
+    _press(rail, tap)
+    _release(rail, tap)
+    rail.draw()
+    assert rail._dyn_hand_list_rect == baseline
+    assert len(rail._cell_rects) == rows
+    assert rail._selected_id in rail._cell_move_ids   # still on screen
+
+    rail.set_result_banner('Burn Dagger for 2 random tactics? Tap again.')
+    rail.draw()
+    assert rail._dyn_hand_list_rect == baseline
+    assert len(rail._cell_rects) == rows

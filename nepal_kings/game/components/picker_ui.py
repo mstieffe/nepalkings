@@ -380,6 +380,8 @@ def footer_button_geometry(subscreen, label, *, align='left'):
     y = rail.centery - height // 2
     if align == 'right':
         x = rail.right - width - 6
+    elif align == 'center':
+        x = rail.centerx - width // 2
     else:
         x = rail.x + 6
     return x, y, width, height

@@ -4,7 +4,9 @@
 
 from models import (
     ActiveSpell,
+    BattleMove,
     CardToFigure,
+    ConquerTactic,
     Figure,
     MainCard,
     SideCard,
@@ -13,7 +15,32 @@ from models import (
 
 
 def destroy_figure_and_collect_cards(figure):
-    """Delete a figure and detach its cards for caller-directed recovery."""
+    """Delete a figure and detach its cards for caller-directed recovery.
+
+    PostgreSQL enforces the nullable figure references on spell and battle
+    rows.  Preserve their replay metadata, but clear the live foreign keys
+    before scheduling the figure delete so the flush cannot fail.
+    """
+    figure_id = figure.id
+    ActiveSpell.query.filter(
+        ActiveSpell.target_figure_id == figure_id,
+    ).update(
+        {ActiveSpell.target_figure_id: None},
+        synchronize_session='fetch',
+    )
+    BattleMove.query.filter(
+        BattleMove.call_figure_id == figure_id,
+    ).update(
+        {BattleMove.call_figure_id: None},
+        synchronize_session='fetch',
+    )
+    ConquerTactic.query.filter(
+        ConquerTactic.call_figure_id == figure_id,
+    ).update(
+        {ConquerTactic.call_figure_id: None},
+        synchronize_session='fetch',
+    )
+
     card_associations = CardToFigure.query.filter_by(figure_id=figure.id).all()
     cards = []
     for association in card_associations:

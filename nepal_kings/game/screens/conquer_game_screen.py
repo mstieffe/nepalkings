@@ -24,6 +24,7 @@ from game.components.coach_card import draw_coach_button, draw_coach_panel
 from game.components.conquer_round_ledger import ConquerRoundLedger
 from game.components.conquer_effects import ConquerEffectsLayer
 from game.components.conquer_layout import compute_conquer_layout
+from game.components.field_figure_layout import compute_field_column
 from game.components.conquer_reveal_sequencer import (
     ConquerRevealSequencer,
     draw_face_down_card,
@@ -257,6 +258,9 @@ class ConquerGameScreen(GameScreen):
         self._battle_state_poller_key = None
         self._battle_state_pending_key = None
         self._battle_state_last_poll_ms = 0
+        self._discard_next_battle_state_result = False
+        self._tactics_action_poller = None
+        self._tactics_action_context = None
         self._conquer_battle_move_cache_key = None
         self._conquer_battle_move_cache = []
         self._conquer_battle_move_icon_caches = {}
@@ -675,6 +679,20 @@ class ConquerGameScreen(GameScreen):
         suit = getattr(game, 'land_suit_bonus_suit', None)
         value = getattr(game, 'land_suit_bonus_value', None)
         return (suit, int(value)) if suit and value else (None, 0)
+
+    @staticmethod
+    def _conquer_effective_land_bonus_for_figure(game, figure):
+        """(suit, value) of the land bonus for a specific figure's owner.
+
+        Applies Landslide inversion AND home-ground asymmetry (the invader's
+        figures receive the scaled share).  Falls back to the symmetric value
+        when the game proxy predates the per-player getter."""
+        if game is None or figure is None:
+            return None, 0
+        getter = getattr(game, 'effective_land_bonus_for', None)
+        if callable(getter):
+            return getter(getattr(figure, 'player_id', None))
+        return ConquerGameScreen._conquer_effective_land_bonus(game)
 
     def _conquer_combined_status_label(self):
         """Single status string for the top row (no chip soup)."""
@@ -1199,6 +1217,10 @@ class ConquerGameScreen(GameScreen):
         game = self.state.game
         field = self.subscreens.get('field') if hasattr(self, 'subscreens') else None
         if game is None or field is None:
+            return None, None
+        # An owed second Civil War attacker holds the turn; auto-firing a
+        # defender pick here would jump the timeline past it.
+        if getattr(game, 'civil_war_awaiting_second', False):
             return None, None
         # Opponent defender selection (attacker picking who to hit).
         if getattr(field, 'defender_selection_mode', False):
@@ -1819,6 +1841,16 @@ class ConquerGameScreen(GameScreen):
         Covers the played-tactic flight animation, the round-transition
         pause, and the staged round-reveal sequence.
         """
+        pending = getattr(self, '_tactics_action_context', None)
+        if pending:
+            label = {
+                ACTION_PLAY: 'Playing tactic',
+                ACTION_GAMBLE: 'Gambling',
+                ACTION_COMBINE: 'Combining',
+                ACTION_DISMANTLE: 'Dismantling',
+                ACTION_SKIP: 'Skipping turn',
+            }.get(pending.get('action'), 'Resolving action')
+            return f'{label}…'
         animation = getattr(self, '_tactic_flight_animation', None)
         if animation:
             try:
@@ -3681,29 +3713,23 @@ class ConquerGameScreen(GameScreen):
         except ValueError:
             ghost_index = max(0, len(figure_ids) - 1)
         count = max(1, len(figure_ids))
-        frame_h = settings.FRAME_FIGURE_SCALE * settings.FIGURE_ICON_HEIGHT
-        top_margin = settings.FIGURE_ICON_HEIGHT * 0.42
-        caption_h = int(settings.FIGURE_ICON_FONT_CAPTION_FONT_SIZE * 2.6)
-        bottom_margin = 0.34 * settings.FIGURE_ICON_HEIGHT + caption_h
-        title_space = settings.FIELD_TITLE_FONT_SIZE + settings.FIELD_TITLE_PADDING
-        total_height = compartment.height - 2 * settings.FIELD_BORDER_WIDTH
-        first_center = compartment.top + title_space + top_margin
-        last_center = compartment.top + total_height - bottom_margin
-        if count == 1:
-            center_y = (first_center + last_center) / 2
-        else:
-            default_spacing = top_margin + bottom_margin + settings.FIELD_ICON_PADDING_Y
-            max_spacing = (last_center - first_center) / max(1, count - 1)
-            if max_spacing >= default_spacing:
-                spacing = default_spacing
-                offset = ((last_center - first_center) - (count - 1) * spacing) / 2
-                center_y = first_center + offset + ghost_index * spacing
-            else:
-                spacing = max_spacing
-                center_y = first_center + ghost_index * spacing
-        width = max(44, int(settings.FIGURE_ICON_WIDTH * settings.FRAME_FIGURE_SCALE))
-        height = max(54, int(frame_h))
-        rect = pygame.Rect(0, 0, width, height)
+        # Positions come from the same solver the column draws with, so a
+        # ghost never lands where no figure actually is.
+        layout = compute_field_column(
+            compartment,
+            count,
+            title_space=(settings.FIELD_TITLE_FONT_SIZE
+                         + settings.FIELD_TITLE_PADDING),
+            is_castle_column=(field_type == 'castle'),
+            scroll_px=int(((getattr(field, '_column_scroll', None) or {})
+                           .get((side, field_type), 0))),
+        )
+        if not layout.row_centers:
+            return None
+        ghost_index = min(ghost_index, len(layout.row_centers) - 1)
+        center_y = layout.row_centers[ghost_index]
+        size = max(44, int(layout.frame_px))
+        rect = pygame.Rect(0, 0, size, size)
         rect.center = (compartment.centerx, int(center_y))
         return rect
 
@@ -3884,9 +3910,160 @@ class ConquerGameScreen(GameScreen):
         specs = preview.get('specs') or []
         return specs if len(specs) == 2 else None
 
+    @staticmethod
+    def _transform_tactics_action_async_responses(responses):
+        """Convert the browser poller's single POST response into a dict."""
+        response = (responses or {}).get('action')
+        if response is None:
+            return {'success': False, 'message': 'Action returned no response'}
+        try:
+            payload = response.json()
+        except Exception:
+            payload = None
+        status = int(getattr(response, 'status_code', 0) or 0)
+        if not isinstance(payload, dict):
+            return {
+                'success': False,
+                'message': f'Action returned an invalid response (HTTP {status})',
+            }
+        if status >= 400:
+            payload = dict(payload)
+            payload['success'] = False
+            payload.setdefault('message', f'Action failed (HTTP {status})')
+        return payload
+
+    def _build_tactics_action_request(self, action_payload, gid, pid):
+        """Return a desktop task and matching async-web request definition."""
+        action = action_payload.get('action')
+        move = action_payload.get('move') or {}
+        mid = move.get('id')
+        tactics_hand = self._is_tactics_hand_game()
+        url = None
+        payload = None
+        call = None
+
+        if tactics_hand and action in {
+                ACTION_PLAY, ACTION_GAMBLE, ACTION_COMBINE, ACTION_DISMANTLE}:
+            action_id = game_service.new_client_action_id()
+        else:
+            action_id = None
+
+        if tactics_hand and action == ACTION_PLAY and mid is not None:
+            call_figure = self._conquer_best_call_figure_for_tactic(move)
+            call_figure_id = (
+                getattr(call_figure, 'id', None)
+                if call_figure is not None else move.get('call_figure_id'))
+            payload = {
+                'game_id': gid, 'player_id': pid, 'tactic_id': mid,
+                'client_action_id': action_id,
+            }
+            if call_figure_id is not None:
+                payload['call_figure_id'] = call_figure_id
+            url = f'{settings.SERVER_URL}/games/play_conquer_tactic'
+            call = lambda: game_service.play_conquer_tactic(
+                gid, pid, mid, call_figure_id=call_figure_id,
+                client_action_id=action_id)
+        elif action == ACTION_PLAY and mid is not None:
+            payload = {'game_id': gid, 'player_id': pid, 'battle_move_id': mid}
+            url = f'{settings.SERVER_URL}/games/play_battle_move'
+            call = lambda: game_service.play_battle_move(gid, pid, mid)
+        elif action == ACTION_SKIP:
+            payload = {'game_id': gid, 'player_id': pid}
+            url = f'{settings.SERVER_URL}/games/skip_battle_turn'
+            call = lambda: game_service.skip_battle_turn(gid, pid)
+        elif tactics_hand and action == ACTION_GAMBLE and mid is not None:
+            payload = {
+                'game_id': gid, 'player_id': pid, 'tactic_id': mid,
+                'client_action_id': action_id,
+            }
+            url = f'{settings.SERVER_URL}/games/gamble_conquer_tactic'
+            call = lambda: game_service.gamble_conquer_tactic(
+                gid, pid, mid, client_action_id=action_id)
+        elif action == ACTION_GAMBLE and mid is not None:
+            payload = {'game_id': gid, 'player_id': pid, 'battle_move_id': mid}
+            url = f'{settings.SERVER_URL}/battle_shop/gamble_battle_move'
+            call = lambda: battle_shop_service.gamble_battle_move(gid, pid, mid)
+        elif tactics_hand and action == ACTION_DISMANTLE and mid is not None:
+            payload = {
+                'game_id': gid, 'player_id': pid, 'tactic_id': mid,
+                'client_action_id': action_id,
+            }
+            url = f'{settings.SERVER_URL}/games/dismantle_conquer_tactic'
+            call = lambda: game_service.dismantle_conquer_tactic(
+                gid, pid, mid, client_action_id=action_id)
+        elif action == ACTION_DISMANTLE and mid is not None:
+            payload = {'game_id': gid, 'player_id': pid, 'battle_move_id': mid}
+            url = f'{settings.SERVER_URL}/battle_shop/dismantle_battle_move'
+            call = lambda: battle_shop_service.dismantle_battle_move(gid, pid, mid)
+        elif action == ACTION_COMBINE and mid is not None:
+            partner = action_payload.get('partner') or {}
+            pmid = partner.get('id')
+            if pmid is not None and tactics_hand:
+                payload = {
+                    'game_id': gid, 'player_id': pid,
+                    'tactic_id_a': mid, 'tactic_id_b': pmid,
+                    'client_action_id': action_id,
+                }
+                url = f'{settings.SERVER_URL}/games/combine_conquer_tactics'
+                call = lambda: game_service.combine_conquer_tactics(
+                    gid, pid, mid, pmid, client_action_id=action_id)
+            elif pmid is not None:
+                payload = {
+                    'game_id': gid, 'player_id': pid,
+                    'move_id_a': mid, 'move_id_b': pmid,
+                }
+                url = f'{settings.SERVER_URL}/battle_shop/combine_battle_moves'
+                call = lambda: battle_shop_service.combine_battle_moves(
+                    gid, pid, mid, pmid)
+
+        if call is None or url is None or payload is None:
+            return None
+
+        def safe_call():
+            try:
+                result = call()
+                if isinstance(result, dict):
+                    return result
+                return {'success': False, 'message': 'Action returned no result'}
+            except Exception as exc:
+                return {'success': False, 'message': str(exc) or 'Action failed'}
+
+        return safe_call, {
+            'key': 'action',
+            'method': 'POST_JSON',
+            'url': url,
+            'json': payload,
+        }
+
+    def _discard_battle_poll_before_tactics_action(self):
+        """Prevent a snapshot started before a mutation from winning the race."""
+        poller = getattr(self, '_battle_state_poller', None)
+        if poller is None:
+            return
+        try:
+            if poller.has_result():
+                _ = poller.result
+                poller.invalidate_cache()
+                self._discard_next_battle_state_result = False
+                self._battle_state_pending_key = None
+                return
+            was_busy = bool(poller.busy)
+            # On web, reading ``busy`` also pumps the async XHR and may publish
+            # its result. Re-check before deciding that only a future result
+            # needs discarding.
+            if poller.has_result():
+                _ = poller.result
+                poller.invalidate_cache()
+                self._discard_next_battle_state_result = False
+                self._battle_state_pending_key = None
+            elif was_busy:
+                self._discard_next_battle_state_result = True
+        except Exception:
+            self._discard_next_battle_state_result = True
+
     def _dispatch_tactics_rail_action(self, action_payload):
-        """Apply a tactics-rail action by calling the appropriate API."""
-        if not action_payload:
+        """Start one non-blocking tactics mutation and keep the rail usable."""
+        if not action_payload or getattr(self, '_tactics_action_context', None):
             return
         game = self.state.game
         if not game:
@@ -3895,15 +4072,31 @@ class ConquerGameScreen(GameScreen):
         pid = getattr(game, 'player_id', None)
         if gid is None or pid is None:
             return
+        request = self._build_tactics_action_request(action_payload, gid, pid)
+        if request is None:
+            return
+
         action = action_payload.get('action')
         move = action_payload.get('move') or {}
-        mid = move.get('id')
-        # Friendly label for the banner.
-        family = (move.get('family_name') or move.get('family')
-                  or move.get('name') or 'Tactic')
-        rank = move.get('rank') or ''
         rail = getattr(self, '_tactics_rail', None)
-        result = None
+        selection_revision = (
+            rail.selection_revision()
+            if rail is not None and hasattr(rail, 'selection_revision') else 0)
+        task, async_request = request
+        self._tactics_action_context = {
+            'action': action,
+            'move': dict(move),
+            'selection_revision': selection_revision,
+        }
+        self._tactics_action_poller = BackgroundPoller(
+            task,
+            async_requests=[async_request],
+            async_transform=self._transform_tactics_action_async_responses,
+        )
+        if rail is not None and hasattr(rail, 'begin_server_action'):
+            rail.begin_server_action(action, move.get('id'))
+        self._discard_battle_poll_before_tactics_action()
+
         from utils import sound
         sound.play({
             ACTION_PLAY: 'card_place',
@@ -3912,83 +4105,104 @@ class ConquerGameScreen(GameScreen):
             ACTION_DISMANTLE: 'card_slide',
             ACTION_SKIP: 'ui_back',
         }.get(action, 'ui_click'))
-        try:
-            if self._is_tactics_hand_game() and action == ACTION_PLAY and mid is not None:
-                call_figure = self._conquer_best_call_figure_for_tactic(move)
-                call_figure_id = (
-                    getattr(call_figure, 'id', None)
-                    if call_figure is not None
-                    else move.get('call_figure_id')
-                )
-                if call_figure_id is not None:
-                    result = game_service.play_conquer_tactic(
-                        gid, pid, mid, call_figure_id=call_figure_id)
-                else:
-                    result = game_service.play_conquer_tactic(gid, pid, mid)
-                if not isinstance(result, dict) or result.get('success', True):
-                    self._start_tactic_flight_animation(move)
-            elif action == ACTION_PLAY and mid is not None:
-                result = game_service.play_battle_move(gid, pid, mid)
-            elif action == ACTION_SKIP:
-                result = game_service.skip_battle_turn(gid, pid)
-            elif self._is_tactics_hand_game() and action == ACTION_GAMBLE and mid is not None:
-                result = game_service.gamble_conquer_tactic(gid, pid, mid)
-            elif action == ACTION_GAMBLE and mid is not None:
-                result = battle_shop_service.gamble_battle_move(gid, pid, mid)
-            elif self._is_tactics_hand_game() and action == ACTION_DISMANTLE and mid is not None:
-                result = game_service.dismantle_conquer_tactic(gid, pid, mid)
-            elif action == ACTION_DISMANTLE and mid is not None:
-                result = battle_shop_service.dismantle_battle_move(gid, pid, mid)
-            elif action == ACTION_COMBINE and mid is not None:
-                partner = action_payload.get('partner') or {}
-                pmid = partner.get('id')
-                if pmid is not None:
-                    if self._is_tactics_hand_game():
-                        result = game_service.combine_conquer_tactics(gid, pid, mid, pmid)
-                    else:
-                        result = battle_shop_service.combine_battle_moves(gid, pid, mid, pmid)
-        except Exception as exc:
-            result = {'success': False, 'message': str(exc) or 'Action failed'}
-        if isinstance(result, dict) and result.get('success') is False:
+        self._tactics_action_poller.poll()
+
+    @staticmethod
+    def _action_result_moves(result, *keys):
+        for key in keys:
+            value = result.get(key) if isinstance(result, dict) else None
+            if isinstance(value, dict):
+                return [value]
+            if isinstance(value, list):
+                return [move for move in value if isinstance(move, dict)]
+        return []
+
+    @staticmethod
+    def _preferred_result_move_ids(moves):
+        def power(move):
+            if move.get('family_name') == 'Block':
+                return 0
+            try:
+                return int(move.get('value') or 0)
+            except (TypeError, ValueError):
+                return 0
+
+        return [move.get('id') for move in sorted(
+            moves, key=lambda move: (power(move), int(move.get('id') or 0)),
+            reverse=True) if move.get('id') is not None]
+
+    def _finish_tactics_rail_action(self, context, result):
+        action = context.get('action')
+        move = context.get('move') or {}
+        family = (move.get('family_name') or move.get('family')
+                  or move.get('name') or 'Tactic')
+        rank = move.get('rank') or ''
+        label = f"{family} {rank}".strip()
+        rail = getattr(self, '_tactics_rail', None)
+        set_banner = getattr(rail, 'set_result_banner', None) if rail else None
+
+        game_state = result.get('game') if isinstance(result, dict) else None
+        game_obj = self.state.game if hasattr(self, 'state') else None
+        if game_state and game_obj is not None and hasattr(game_obj, 'update_from_dict'):
+            try:
+                game_obj.update_from_dict(game_state)
+                self._sync_conquer_action_modes()
+                self._auto_route_conquer_once()
+            except Exception:
+                pass
+
+        if not isinstance(result, dict) or result.get('success') is False:
+            from utils import sound
             sound.play('error')
-            set_banner = getattr(rail, 'set_result_banner', None) if rail else None
-            message = result.get('message') or 'Action failed'
+            message = (result or {}).get('message') or 'Action failed'
             if callable(set_banner):
                 set_banner(message, color=(232, 140, 120), ttl_ms=5000)
                 if action == ACTION_GAMBLE and hasattr(rail, '_gamble_anim'):
                     rail._gamble_anim = None
+                if hasattr(rail, 'clear_server_action'):
+                    rail.clear_server_action()
             else:
-                self.make_dialogue_box(message, actions=['ok'], icon='info', title='Error')
-            self._conquer_tactic_cache_key = None  # force refetch
-            self._conquer_battle_move_cache_key = None  # force refetch
+                self.make_dialogue_box(
+                    message, actions=['ok'], icon='info', title='Error')
+            self._conquer_tactic_cache_key = None
+            self._conquer_battle_move_cache_key = None
             if getattr(self, '_battle_state_poller', None) is not None:
                 self._request_battle_state_poll(force=True)
             return
-        # Show a banner reflecting the action that was just submitted; the
-        # rail's auto-glow will highlight any newly-arrived moves once the
-        # next poll lands. (#8a / #8c)
-        set_banner = getattr(rail, 'set_result_banner', None) if rail else None
-        # Apply the server-returned game state immediately so gates that
-        # depend on it (e.g. gamble lockout) reflect the new state without
-        # waiting for the next poll. Mitigates double-gamble in a round
-        # when the user double-clicks before the poll catches up.
-        try:
-            game_state = isinstance(result, dict) and result.get('game')
-            game_obj = self.state.game if hasattr(self, 'state') else None
-            if game_state and game_obj is not None and hasattr(game_obj, 'update_from_dict'):
-                game_obj.update_from_dict(game_state)
-                try:
-                    self._sync_conquer_action_modes()
-                    self._auto_route_conquer_once()
-                except Exception:
-                    pass
-        except Exception:
-            pass
+
+        if action == ACTION_PLAY:
+            self._start_tactic_flight_animation(move)
+
+        preferred_moves = []
+        if action == ACTION_GAMBLE:
+            preferred_moves = self._action_result_moves(
+                result, 'new_tactics', 'new_moves')
+        elif action == ACTION_COMBINE:
+            preferred_moves = self._action_result_moves(
+                result, 'combined_tactic', 'combined_move')
+        elif action == ACTION_DISMANTLE:
+            preferred_moves = self._action_result_moves(
+                result, 'restored_tactics', 'restored_moves')
+        preferred_ids = self._preferred_result_move_ids(preferred_moves)
+
+        self._conquer_tactic_cache_key = None
+        self._conquer_battle_move_cache_key = None
+        if rail is not None:
+            if preferred_ids:
+                rail.mark_new_moves(preferred_ids)
+            if action == ACTION_GAMBLE and hasattr(rail, '_gamble_anim'):
+                rail._gamble_anim = None
+            if hasattr(rail, 'complete_server_action'):
+                rail.complete_server_action(
+                    submit_revision=context.get('selection_revision', 0),
+                    preferred_move_ids=preferred_ids,
+                    select_strongest_fallback=(action == ACTION_PLAY),
+                )
+            else:
+                rail.reset_after_action()
+
         if callable(set_banner):
-            label = f"{family} {rank}".strip()
             if action == ACTION_PLAY:
-                # First-conquest tutorial: explain *why* a Dagger matters the
-                # first time one is played, not just that it was played.
                 if ('Dagger' in str(family)
                         and self._first_conquest_tutorial_active()
                         and not getattr(self, '_tutorial_dagger_explained', False)):
@@ -3997,41 +4211,45 @@ class ConquerGameScreen(GameScreen):
                         f"Played {label} — Daggers add their value to your attack total.",
                         color=(180, 220, 160), ttl_ms=6000)
                 else:
-                    set_banner(f"Played {label}", color=(180, 220, 160), ttl_ms=4500)
+                    set_banner(f"Played {label}", color=(180, 220, 160),
+                               ttl_ms=4500)
             elif action == ACTION_GAMBLE:
-                drawn = result.get('new_tactics') if isinstance(result, dict) else None
-                if drawn:
-                    names = []
-                    for tactic in drawn[:2]:
-                        if not isinstance(tactic, dict):
-                            continue
-                        t_name = tactic.get('family_name') or 'Tactic'
-                        t_rank = tactic.get('rank') or ''
-                        names.append(f'{t_name} {t_rank}'.strip())
-                    if names:
-                        drew = ' + '.join(names)
-                        set_banner(f'Drew {drew}', color=(250, 226, 130),
-                                   ttl_ms=6000)
-                        self.push_conquer_feed(
-                            f'Gambled {label} → drew {drew}.',
-                            (250, 226, 130))
-                    else:
-                        set_banner(f'Gambling {label}…',
-                                   color=(238, 218, 170), ttl_ms=5500)
+                names = []
+                for tactic in preferred_moves[:2]:
+                    t_name = tactic.get('family_name') or 'Tactic'
+                    t_rank = tactic.get('rank') or ''
+                    names.append(f'{t_name} {t_rank}'.strip())
+                if names:
+                    drew = ' + '.join(names)
+                    set_banner(f'Drew {drew}', color=(250, 226, 130),
+                               ttl_ms=6000)
+                    self.push_conquer_feed(
+                        f'Gambled {label} → drew {drew}.', (250, 226, 130))
                 else:
                     set_banner(f'Gambling {label}…', color=(238, 218, 170),
                                ttl_ms=5500)
             elif action == ACTION_COMBINE:
-                set_banner(f"Combined {label}", color=(170, 200, 240), ttl_ms=4500)
+                set_banner(f"Combined {label}", color=(170, 200, 240),
+                           ttl_ms=4500)
             elif action == ACTION_DISMANTLE:
-                set_banner(f"Dismantled {label}", color=(220, 170, 170), ttl_ms=4500)
+                set_banner(f"Dismantled {label}", color=(220, 170, 170),
+                           ttl_ms=4500)
             elif action == ACTION_SKIP:
-                set_banner("Skipped battle turn", color=(190, 190, 190), ttl_ms=3500)
-        self._tactics_rail.reset_after_action()
-        self._conquer_tactic_cache_key = None  # force refetch
-        self._conquer_battle_move_cache_key = None  # force refetch
+                set_banner("Skipped battle turn", color=(190, 190, 190),
+                           ttl_ms=3500)
         if getattr(self, '_battle_state_poller', None) is not None:
             self._request_battle_state_poll(force=True)
+
+    def _pump_tactics_rail_action(self):
+        poller = getattr(self, '_tactics_action_poller', None)
+        context = getattr(self, '_tactics_action_context', None)
+        if poller is None or context is None or not poller.has_result():
+            return False
+        result = poller.result
+        self._tactics_action_poller = None
+        self._tactics_action_context = None
+        self._finish_tactics_rail_action(context, result)
+        return True
 
     def _reset_game_screen_state(self):
         """Reset shared and conquer-only state when entering a different game."""
@@ -4058,6 +4276,12 @@ class ConquerGameScreen(GameScreen):
         self._battle_state_poller_key = None
         self._battle_state_pending_key = None
         self._battle_state_last_poll_ms = 0
+        self._discard_next_battle_state_result = False
+        self._tactics_action_poller = None
+        self._tactics_action_context = None
+        rail = getattr(self, '_tactics_rail', None)
+        if rail is not None and hasattr(rail, 'clear_server_action'):
+            rail.clear_server_action()
         self._conquer_tactic_cache_key = None
         self._conquer_tactic_cache = []
         self._conquer_opponent_tactic_cache_key = None
@@ -4629,6 +4853,21 @@ class ConquerGameScreen(GameScreen):
             self._auto_single_option_pending = None
             return
 
+        # The invader still owes an optional second Civil War attacker.  The
+        # server parks the turn on them for that pick, so the usual
+        # "turn came back → select the defender" cue is wrong here: honouring
+        # it greys out the player's own figures, which are the only legal
+        # targets for this step.
+        if getattr(game, 'civil_war_awaiting_second', False):
+            if getattr(field, 'defender_selection_mode', False):
+                field.defender_selection_mode = False
+                field._reset_defender_selectable()
+            if getattr(field, 'conquer_own_defender_mode', False):
+                field.conquer_own_defender_mode = False
+                field._reset_defender_selectable()
+            self._auto_single_option_pending = None
+            return
+
         civil_war_second_defender = bool(getattr(game, 'civil_war_defender_second', False))
         try:
             own_civil_war_second_defender = bool(
@@ -5073,11 +5312,27 @@ class ConquerGameScreen(GameScreen):
         poller = getattr(self, '_battle_state_poller', None)
         if poller is None or not poller.has_result():
             return False
+        if getattr(self, '_discard_next_battle_state_result', False):
+            _ = poller.result
+            self._discard_next_battle_state_result = False
+            try:
+                poller.invalidate_cache()
+            except Exception:
+                pass
+            self._battle_state_pending_key = None
+            return False
         self._apply_battle_state_result(poller.result)
         return True
 
     def _request_battle_state_poll(self, force=False):
         if not self._is_tactics_hand_game():
+            return
+        if getattr(self, '_tactics_action_context', None) is not None:
+            # No new battle-state polls start while a mutation is pending, so
+            # anything that arrives here began beforehand and is stale by
+            # definition. Consume it; never paint it over the local pending
+            # and selection state.
+            self._discard_battle_poll_before_tactics_action()
             return
         poller = self._ensure_battle_state_poller()
         if poller is None:
@@ -6339,14 +6594,19 @@ class ConquerGameScreen(GameScreen):
         # Land bonus is not sourced by a figure, but belongs in the same
         # visible clash-support lane as the other always-on modifiers.
         # Landslide flips it to a malus for matching figures (both sides).
-        land_suit, land_bonus = self._conquer_effective_land_bonus(game)
-        if land_suit and land_bonus:
+        land_suit, _ = self._conquer_effective_land_bonus(game)
+        if land_suit:
             land_targets = [
                 target for target in own_targets
                 if getattr(target, 'suit', None) == land_suit
             ]
-            if land_targets:
-                per_target = int(land_bonus)
+            # Home-ground asymmetry: value depends on the owner, but every
+            # target on this lane shares one owner, so one lookup suffices.
+            _, land_value = (
+                self._conquer_effective_land_bonus_for_figure(game, land_targets[0])
+                if land_targets else (None, 0))
+            if land_targets and land_value:
+                per_target = int(land_value)
                 total = per_target * len(land_targets)
                 add(
                     'land_bonus', None, 'Land', f'{total:+d}',
@@ -6443,9 +6703,14 @@ class ConquerGameScreen(GameScreen):
             chips.append({'label': 'Call', 'value': f'+{self._conquer_lane_figure_power(call_figure)}'})
 
         game = self.state.game
-        land_suit, land_bonus = self._conquer_effective_land_bonus(game)
-        if land_suit and land_bonus and any(getattr(fig, 'suit', None) == land_suit for fig in figures or []):
-            chips.append({'label': 'Land', 'value': f'{int(land_bonus):+d}'})
+        land_suit, _ = self._conquer_effective_land_bonus(game)
+        match = (next((fig for fig in figures or []
+                       if getattr(fig, 'suit', None) == land_suit), None)
+                 if land_suit else None)
+        if match is not None:
+            _, land_value = self._conquer_effective_land_bonus_for_figure(game, match)
+            if land_value:
+                chips.append({'label': 'Land', 'value': f'{int(land_value):+d}'})
 
         enchant_total = self._conquer_lane_enchantment_total(figures)
         if enchant_total:
@@ -7359,55 +7624,114 @@ class ConquerGameScreen(GameScreen):
         pygame.draw.circle(overlay, color, local_start, 3)
         self.window.blit(overlay, bounds.topleft)
 
-    def _draw_conquer_support_overflow_popover(self):
-        info = self._current_conquer_support_overflow_entry()
-        if not info:
-            return
-        entries = info.get('entries') or []
-        if not entries:
-            return
-        anchor = pygame.Rect(info.get('rect'))
-        is_player = info.get('is_player', True)
-        font = settings.get_font(settings.FS_CONQUER_META, bold=True)
-        title_font = settings.get_font(settings.FS_CONQUER_META, bold=True)
-        width = 178
+    @staticmethod
+    def _conquer_support_row_identity(row):
+        """``(label, value, name)`` describing one support contribution."""
+        source_names = []
+        for source in row.get('source_entries') or [row]:
+            figure = source.get('figure')
+            if figure is not None:
+                source_names.append(getattr(figure, 'name', 'Figure'))
+        if not source_names and row.get('kind') == 'land_bonus':
+            source_names.append(str(row.get('suit') or 'Land'))
+        name = ', '.join(source_names[:2]) if source_names else 'Effect'
+        if len(source_names) > 2:
+            name += f' +{len(source_names) - 2}'
+        label = row.get('label') or row.get('kind') or 'Support'
+        return label, str(row.get('value') or ''), name
+
+    @classmethod
+    def _conquer_support_popover_lines(cls, rows):
+        """Fold support rows into display lines, collapsing repeats.
+
+        A tier-6 land routinely puts a dozen identical farms behind one
+        support badge.  Listing each on its own line said nothing the first
+        line had not already said, and the list then ran past the panel and
+        over the battlefield, so identical contributions collapse into one
+        ``xN`` line instead.
+        """
+        grouped = []
+        seen = {}
+        for row in rows:
+            key = cls._conquer_support_row_identity(row)
+            if key in seen:
+                grouped[seen[key]][1] += 1
+            else:
+                seen[key] = len(grouped)
+                grouped.append([key, 1])
+        lines = []
+        for (label, value, name), count in grouped:
+            text = f'{label} {value} · {name}'.strip()
+            if count > 1:
+                text += f'  x{count}'
+            lines.append(text)
+        return lines
+
+    def _draw_conquer_support_popover(self, anchor, *, is_player, title_text,
+                                      rows, width, title_font, font):
+        """Shared breakdown panel for the support badge / overflow popovers."""
+        lines = self._conquer_support_popover_lines(rows)
+        if not lines:
+            return False
         line_h = font.get_height() + 3
-        visible = entries[:5]
-        height = 12 + title_font.get_height() + len(visible) * line_h
+        # Budget by the room actually available rather than a fixed row cap,
+        # and never silently drop the remainder.
+        room = max(line_h,
+                   int(settings.SCREEN_HEIGHT * 0.62) - 12
+                   - title_font.get_height())
+        max_lines = max(1, room // line_h)
+        hidden = 0
+        if len(lines) > max_lines:
+            keep = max(1, max_lines - 1)
+            hidden = len(lines) - keep
+            lines = lines[:keep]
+
+        rendered = list(lines)
+        if hidden:
+            rendered.append(f'+{hidden} more')
+        height = 12 + title_font.get_height() + len(rendered) * line_h
         panel = pygame.Rect(0, 0, width, height)
         panel.centery = anchor.centery
         if is_player:
             panel.left = anchor.right + 8
         else:
             panel.right = anchor.left - 8
-        panel.clamp_ip(pygame.Rect(0, 0, settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+        panel.clamp_ip(pygame.Rect(0, 0, settings.SCREEN_WIDTH,
+                                   settings.SCREEN_HEIGHT))
         bg = pygame.Surface(panel.size, pygame.SRCALPHA)
         pygame.draw.rect(bg, (22, 20, 18, 238), bg.get_rect(), border_radius=7)
-        border = (120, 220, 235)
-        pygame.draw.rect(bg, border, bg.get_rect(), 1, border_radius=7)
+        pygame.draw.rect(bg, (120, 220, 235), bg.get_rect(), 1, border_radius=7)
         self.window.blit(bg, panel.topleft)
-
-        title = title_font.render(f'+{len(entries)} support', True, (246, 226, 150))
+        title = title_font.render(title_text, True, (246, 226, 150))
         self.window.blit(title, (panel.left + 8, panel.top + 6))
+
         y = panel.top + 8 + title_font.get_height()
-        for entry in visible:
-            source_names = []
-            for source in entry.get('source_entries', []) or [entry]:
-                figure = source.get('figure')
-                if figure is not None:
-                    source_names.append(getattr(figure, 'name', 'Figure'))
-            if not source_names and entry.get('kind') == 'land_bonus':
-                source_names.append(str(entry.get('suit') or 'Land'))
-            name = ', '.join(source_names[:2]) if source_names else 'Effect'
-            if len(source_names) > 2:
-                name += f' +{len(source_names) - 2}'
-            label = entry.get('label') or entry.get('kind') or 'Support'
-            value = entry.get('value') or ''
-            text = fit_suit_text(
-                f'{label} {value} · {name}', font, panel.width - 16)
-            surf = render_suit_text(text, font, (232, 220, 180))
-            self.window.blit(surf, (panel.left + 8, y))
+        for index, text in enumerate(rendered):
+            is_more = hidden and index == len(rendered) - 1
+            colour = (198, 186, 156) if is_more else (232, 220, 180)
+            fitted = fit_suit_text(text, font, panel.width - 16)
+            self.window.blit(render_suit_text(fitted, font, colour),
+                             (panel.left + 8, y))
             y += line_h
+        return True
+
+    def _draw_conquer_support_overflow_popover(self):
+        info = self._current_conquer_support_overflow_entry()
+        if not info:
+            return False
+        entries = info.get('entries') or []
+        if not entries:
+            return False
+        font = settings.get_font(settings.FS_CONQUER_META, bold=True)
+        return self._draw_conquer_support_popover(
+            pygame.Rect(info.get('rect')),
+            is_player=info.get('is_player', True),
+            title_text=f'+{len(entries)} support',
+            rows=entries,
+            width=178,
+            title_font=font,
+            font=font,
+        )
 
     def _conquer_support_chip_summary(self, sections):
         """Fold grouped support entries into a few aggregate chips (mobile).
@@ -7620,17 +7944,17 @@ class ConquerGameScreen(GameScreen):
         field highlights and per-badge values.
         """
         if settings.TOUCH_TARGET_MIN <= 0:
-            return
+            return False
         info = self._current_conquer_support_hover_entry()
         if not info:
-            return
+            return False
         entry = info.get('entry') if isinstance(info, dict) else None
         entry = entry if isinstance(entry, dict) else {}
         if not str(entry.get('kind') or '').startswith('aggregate'):
-            return
+            return False
         rows = entry.get('source_entries') or []
         if not rows:
-            return
+            return False
         anchor = pygame.Rect(info.get('rect'))
         is_player = info.get('is_player', True)
         font = settings.get_font(settings.FS_CONQUER_META, bold=True)
@@ -7642,43 +7966,15 @@ class ConquerGameScreen(GameScreen):
         }
         title_text = (f"{titles.get(entry.get('kind'), 'Support')} "
                       f"{entry.get('value') or ''}").strip()
-        width = max(200, int(settings.SCREEN_WIDTH * 0.26))
-        line_h = font.get_height() + 3
-        visible = rows[:6]
-        height = 12 + title_font.get_height() + len(visible) * line_h
-        panel = pygame.Rect(0, 0, width, height)
-        panel.centery = anchor.centery
-        if is_player:
-            panel.left = anchor.right + 8
-        else:
-            panel.right = anchor.left - 8
-        panel.clamp_ip(pygame.Rect(0, 0, settings.SCREEN_WIDTH,
-                                   settings.SCREEN_HEIGHT))
-        bg = pygame.Surface(panel.size, pygame.SRCALPHA)
-        pygame.draw.rect(bg, (22, 20, 18, 238), bg.get_rect(), border_radius=7)
-        pygame.draw.rect(bg, (120, 220, 235), bg.get_rect(), 1, border_radius=7)
-        self.window.blit(bg, panel.topleft)
-        title = title_font.render(title_text, True, (246, 226, 150))
-        self.window.blit(title, (panel.left + 8, panel.top + 6))
-        y = panel.top + 8 + title_font.get_height()
-        for row in visible:
-            source_names = []
-            figure = row.get('figure')
-            if figure is not None:
-                source_names.append(getattr(figure, 'name', 'Figure'))
-            if not source_names and row.get('kind') == 'land_bonus':
-                source_names.append(str(row.get('suit') or 'Land'))
-            name = ', '.join(source_names[:2]) if source_names else 'Effect'
-            label = row.get('label') or row.get('kind') or 'Support'
-            value = row.get('value') or ''
-            text = fit_suit_text(
-                f'{label} {value} · {name}'.strip(),
-                font,
-                panel.width - 16,
-            )
-            surf = render_suit_text(text, font, (232, 220, 180))
-            self.window.blit(surf, (panel.left + 8, y))
-            y += line_h
+        return self._draw_conquer_support_popover(
+            anchor,
+            is_player=is_player,
+            title_text=title_text,
+            rows=rows,
+            width=max(200, int(settings.SCREEN_WIDTH * 0.26)),
+            title_font=title_font,
+            font=font,
+        )
 
     def _draw_conquer_lane_support_rail(self, rect, entries, *, is_player, pulse=False):
         rail = pygame.Rect(rect).inflate(-3, -8)
@@ -8118,7 +8414,8 @@ class ConquerGameScreen(GameScreen):
             except Exception:
                 enchant = 0
 
-        land = 0 if blocked else self._conquer_lane_land_bonus_for([figure])
+        # Land bonus is unblockable — a Temple never removes it.
+        land = self._conquer_lane_land_bonus_for([figure])
 
         # Distance-attack penalty: only if this figure is among targets
         da_penalty = 0
@@ -8200,7 +8497,8 @@ class ConquerGameScreen(GameScreen):
             rows.append(('Support', support))
         if wall:
             rows.append(('Wall', wall))
-        land = 0 if blocked else self._conquer_lane_land_bonus_for([figure])
+        # Land bonus is unblockable — a Temple never removes it.
+        land = self._conquer_lane_land_bonus_for([figure])
         if land:
             rows.append(('Land', land))
         if enchant:
@@ -8243,13 +8541,16 @@ class ConquerGameScreen(GameScreen):
         return 0
 
     def _conquer_lane_land_bonus_for(self, figures):
+        # Unblockable and home-ground aware: summed per figure so an invader's
+        # scaled share and a defender's full share are both counted correctly.
         game = self.state.game
-        land_suit, land_bonus = self._conquer_effective_land_bonus(game)
-        if not land_suit or not land_bonus:
-            return 0
-        if any(getattr(fig, 'suit', None) == land_suit for fig in figures or []):
-            return int(land_bonus)
-        return 0
+        total = 0
+        for fig in figures or []:
+            land_suit, land_bonus = self._conquer_effective_land_bonus_for_figure(
+                game, fig)
+            if land_suit and land_bonus and getattr(fig, 'suit', None) == land_suit:
+                total += int(land_bonus)
+        return total
 
     @staticmethod
     def _conquer_receipt_row(label, value, *, source_figure_ids=None, kind=None):
@@ -8393,10 +8694,11 @@ class ConquerGameScreen(GameScreen):
             for entry in support_entries
             if entry.get('kind') == 'support_bonus'
         )
+        # Land bonus is unblockable — count every matching figure regardless
+        # of whether a Temple blocked its castle/village support.
         land = sum(
             self._conquer_lane_land_bonus_for([fig])
             for fig in figures or []
-            if getattr(fig, 'id', None) not in blocked_target_ids
         )
         if isinstance(move, dict) and move.get('call_figure_id'):
             tactic = 0
@@ -8439,8 +8741,7 @@ class ConquerGameScreen(GameScreen):
                 source_figure_ids=[
                     getattr(fig, 'id', None) for fig in figures
                     if (getattr(fig, 'suit', None) == land_suit
-                        and getattr(fig, 'id', None) is not None
-                        and getattr(fig, 'id', None) not in blocked_target_ids)
+                        and getattr(fig, 'id', None) is not None)
                 ],
             ))
         if enchant:
@@ -8460,7 +8761,9 @@ class ConquerGameScreen(GameScreen):
                 'on',
                 source_figure_ids=self._conquer_support_entry_ids(support_entries, 'blocks_bonus'),
             ))
-        if blocked_by_enemy and (raw_support or self._conquer_lane_land_bonus_for(figures)):
+        # Only surface the "Blocked" row when real castle/village support was
+        # nullified — the land bonus is unblockable and never triggers it.
+        if blocked_by_enemy and raw_support:
             rows.append(self._conquer_receipt_row(
                 'Blocked',
                 'support',
@@ -8886,6 +9189,15 @@ class ConquerGameScreen(GameScreen):
             opponent_support_display,
             is_player=False,
         )
+    def _draw_conquer_lane_overlays(self):
+        """Hover overlays that belong on top of the lane, not inside it.
+
+        These MUST NOT be drawn from ``_draw_conquer_duel_lane``: its output
+        is snapshotted into a lane-sized cache surface, so anything reaching
+        past the lane (a breakdown popover, a link to the supporting figure,
+        a tooltip) was cut at the lane edge and then frozen into the cache
+        for as long as the key held.
+        """
         hovered_support = self._update_conquer_support_hover_state()
         if hovered_support:
             is_player_side = hovered_support.get('is_player', True)
@@ -8899,8 +9211,12 @@ class ConquerGameScreen(GameScreen):
                     endpoint,
                     is_player=is_player_side,
                 )
-        self._draw_conquer_support_overflow_popover()
-        self._draw_conquer_support_badge_popover()
+        # Exactly one breakdown panel per frame.  The aggregate-chip popover
+        # (touch) and the per-badge overflow popover (desktop) can both be
+        # armed at once, and drawing both stacks two panels on top of each
+        # other so neither is readable.
+        if not self._draw_conquer_support_badge_popover():
+            self._draw_conquer_support_overflow_popover()
         self._draw_conquer_lane_tooltips()
 
     def _draw_conquer_lane_tooltips(self):
@@ -9184,6 +9500,8 @@ class ConquerGameScreen(GameScreen):
             self._restore_conquer_support_hover_visibility()
         with perf_section('conquer.duel_lane'):
             self._draw_conquer_duel_lane_cached()
+            # Outside the cached lane on purpose — see the docstring.
+            self._draw_conquer_lane_overlays()
         # Re-draw field figure icons (and their info boxes) above the duel
         # lane so figures always stay in the foreground. Limit the redraw
         # to icons that actually intersect the duel lane (performance).
@@ -9259,6 +9577,13 @@ class ConquerGameScreen(GameScreen):
 
         # Shared top-level overlays used by the conquer flow.
         with perf_section('conquer.overlays'):
+            # The compartment expand sheet is modal and must sit above the
+            # duel lane, figure overlay and rails, all of which are painted
+            # after the subscreen's own draw.
+            if self.state.subscreen == 'field' and subscreen is not None:
+                sheet = getattr(subscreen, 'draw_compartment_sheet', None)
+                if callable(sheet):
+                    sheet()
             if (self.state.subscreen in ('field', 'battle') and subscreen and
                     getattr(subscreen, 'figure_detail_box', None)):
                 subscreen.figure_detail_box.draw()
@@ -9529,6 +9854,9 @@ class ConquerGameScreen(GameScreen):
         self._normalize_conquer_subscreen()
         self._refresh_conquer_tab_locks()
 
+        with perf_section('conquer.update.tactics_action_drain'):
+            self._pump_tactics_rail_action()
+
         overlay_blocks_button_updates = (
             self._gameplay_input_overlay_open()
             or self._is_conquer_timeline_overlay_open()
@@ -9648,11 +9976,19 @@ class ConquerGameScreen(GameScreen):
             return
 
         # While the battle-start countdown plays, any click skips straight
-        # to GO (and never leaks into the UI below).
+        # to GO. A tap on the tactics rail may also preserve safe local
+        # selection/disclosure intent, but never fires a server action.
         if self._is_battle_countdown_active():
             for event in events:
                 if event.type == MOUSEBUTTONDOWN and event.button == 1:
                     self._skip_conquer_battle_countdown()
+                    # A tactic-row tap both skips the countdown and prepares
+                    # the player's next choice. Mutating action buttons remain
+                    # inert for this click.
+                    rail = getattr(self, '_tactics_rail', None)
+                    if self._is_tactics_hand_game() and rail is not None:
+                        rail.handle_event(
+                            event, allow_actions=False)
                     break
             return
 
@@ -9705,12 +10041,19 @@ class ConquerGameScreen(GameScreen):
         # clicks that would otherwise hit the field/battle subscreen.
         if self._is_tactics_hand_game():
             # While a round-reveal sequence plays, any click fast-forwards
-            # it to the resolved state instead of acting on the UI below.
+            # it to the resolved state. Tactic rows still accept safe local
+            # selection/disclosure intent from that same tap.
             sequencer = getattr(self, '_conquer_reveal_sequencer', None)
             if sequencer is not None and sequencer.is_active():
                 for event in events:
                     if event.type == MOUSEBUTTONDOWN and event.button == 1:
                         sequencer.fast_forward()
+                        # Preserve safe local intent from the same tap. This
+                        # makes row selection and group disclosure feel direct
+                        # while still requiring a fresh tap for server actions.
+                        rail = getattr(self, '_tactics_rail', None)
+                        if rail is not None:
+                            rail.handle_event(event, allow_actions=False)
                         return
                 return
             for event in events:

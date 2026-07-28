@@ -51,6 +51,23 @@ and the operational safety net to keep early adopters.
 
 ### Changed
 
+- **Conquer tactics rail: family filter instead of an accordion.** Picking a
+  tactic on a phone used to mean expanding a family group behind a small ×N
+  chip, scrolling with 14 px arrows, and watching the list resize on every
+  tap. The rail now carries a filter strip (`ALL` + one chip per family, with
+  the three `Call *` families merged into one) and lists every tactic of the
+  active family as its own row — a chip tap swaps the list instead of growing
+  it. A merged group's chip picks its artwork from a fixed emblem order
+  rather than from whichever member happens to be strongest, so the icon
+  stops changing between hands; chips with room for it fan every member
+  family into one composite instead. The hand viewport is a fixed height for the whole battle: the action
+  tray reserves its worst-case size up front and the result banner floats over
+  the list, so selecting a tactic can no longer push it off screen. Touch
+  builds grab-scroll the list (drag anywhere, with a passive scrollbar) and no
+  longer arm drag-to-combine — a swipe over two same-colour Daggers used to
+  fire an unconfirmed, destructive Combine. Scroll arrows are desktop-only
+  (they overlapped the first/last row's tap target); rows show rank + suit
+  pips; the remaining-gamble count moved onto the Gamble button.
 - **Documentation information architecture.** Replaced the oversized root
   README with a concise public landing page; added player, developer,
   architecture, distribution, operations, legal, and plan indexes; rewrote
@@ -76,6 +93,88 @@ and the operational safety net to keep early adopters.
 
 ### Fixed
 
+- **Field compartments stacked figures on top of each other.** A castle,
+  village or military compartment drew its figures as one column of
+  full-size icons and, past the two that actually fit, quietly squeezed the
+  spacing instead of doing anything about it. A tier-6 land allows six castle
+  figures and village/military have no cap at all, so a dozen figures in one
+  compartment is ordinary play — at six castle figures the spacing was 28 px
+  for a 73 px frame, and frames and name plates simply overlapped. On mobile
+  the castle frame was also 87 px wide inside a 69 px column, so castle icons
+  bled sideways into the duel lane and the neighbouring compartment.
+  Compartments now compact and scroll rather than overlap: while every figure
+  fits they keep their existing look, and past that the column switches to
+  uniform dense rows (icon at 70%, power as a corner badge, no name plate)
+  that clip and scroll with the wheel, a drag, or a swipe on touch. A swipe
+  that scrolls a column no longer also selects the figure it began on, and a
+  figure scrolled out of view stops answering hovers and clicks instead of
+  staying a phantom target. Tapping a crowded compartment's header opens a
+  sheet showing that whole compartment at full size — twelve figures read at a
+  glance instead of three screens of scrolling — and hovering or tapping a
+  dense icon still pops it out at its natural size. When a defender or spell
+  prompt's only valid target is scrolled away, the column scrolls it back.
+  Under all of this, the four copied-and-pasted versions of the spacing
+  formula (field, attack config, defence config, and the conquer spell-ghost
+  fallback) collapse into one solver that measures the frame actually drawn
+  rather than the `FIGURE_ICON_HEIGHT` proxy the old maths used, which
+  understated the real frame by about half and made icons collide earlier
+  than the spacing predicted.
+- **Expand sheet opened only while the button was held.** The compartment
+  sheet opened on the mouse-down, which handed the freshly built sheet the
+  matching mouse-up — it read that as a click, and a release outside its panel
+  means close, so the sheet vanished the instant the button came up. Where the
+  release happened decided the outcome, so it sometimes stayed open instead,
+  and it fought the figure detail box for the same click. Opening now happens
+  on the release, every action inside the sheet needs a press and a release on
+  the same target, and a header underneath an open detail box stays inert.
+- **Compartments did not scroll on the attack and defence config screens.**
+  Both were moved onto the shared column solver without a scroll offset or any
+  gesture handling, so a compartment past its visible rows hid the remainder
+  with no way to reach it — worse than the overlap it replaced. Scrolling is
+  now a shared component used by the battlefield and both config screens
+  alike: the wheel scrolls the column under the cursor, a drag scrolls on
+  touch, the release ending a swipe never doubles as a click on the figure it
+  began on, and each scrolling column shows a scrollbar.
+- **Compacted figures lost the colour language of their power plate.** A dense
+  row's badge drew everything in one flat colour, so a support bonus, an
+  enchantment and a ranged penalty all looked alike. The badge now matches the
+  full plate: support and land bonuses green (red when inverted), enchantments
+  purple, ranged penalties orange, and a Temple-blocked support struck through
+  rather than dropped. It steps its font down before it will outgrow the icon
+  it annotates.
+- **Support breakdown popover buried the battlefield and told you less than
+  it could.** With a dozen supporting figures behind one badge the breakdown
+  listed each contribution on its own line — six identical
+  `Support +1 · Small Yack Farm` rows that said nothing the first row had not
+  already said — capped the list without admitting anything was missing, and
+  covered the field columns doing it. Identical contributions now collapse
+  into one `x6` line, the row budget follows the room actually available
+  instead of a fixed cap, and a genuinely truncated list ends in `+N more`.
+  Two separate bugs surfaced alongside it: the touch and desktop popovers
+  could both be armed at once and stacked two panels on top of each other,
+  and all of these overlays were drawn from inside the duel lane's draw —
+  whose output is snapshotted into a lane-sized cache surface, so the popover
+  was cut off at the lane edge and then frozen there, and the links pointing
+  at each supporting figure never appeared at all. Only one panel is drawn
+  per frame now, and the overlays live outside the cached region.
+- **Unusable text entry on mobile web.** Renaming a kingdom opened a modal
+  with no way to type into it: mobile browsers only raise their keyboard for
+  a focused HTML element, and the modal had none, while its field and buttons
+  were also far below the touch-target minimum. The modal now registers the
+  same canvas-aligned native input the login form uses and is laid out for
+  touch. Separately, an open keyboard simply covered the field being typed
+  into — the canvas is fixed and letterboxed, so nothing scrolled out of the
+  way — leaving login typing invisible. `index.html` now lifts the canvas by
+  exactly the overlap while a field is focused and drops it back once the
+  keyboard retracts.
+- **Silent tutorial/timer sounds on iOS.** iOS Safari let the Web Audio
+  context idle back into `suspended` between taps, so cues fired from timers
+  or server callbacks (the starter-set reveal reel ticks and reward stinger,
+  "your turn" alerts) reached a dead context and were dropped, while
+  tap-driven clicks survived only because the tap itself resumed the context.
+  The native audio manager now runs a fully silent looping keep-alive source
+  (armed on unlock/resume and on every cue) so the context stays `running`
+  after the first gesture. Desktop web and the native build were unaffected.
 - **Coherent AI land defences.** Generator v8 filters scripted spells against
   the completed roster: Landslide uses an off-bonus-suit defender, Civil War
   requires a legal same-color village pair, and Health Boost counters require

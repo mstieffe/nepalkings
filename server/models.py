@@ -399,6 +399,12 @@ class Game(db.Model):
             'land_gold_rate': self.land.gold_rate if self.land else None,
             'land_suit_bonus_suit': self.land.suit_bonus_suit if self.land else None,
             'land_suit_bonus_value': self.land.suit_bonus_value if self.land else None,
+            # Home-ground asymmetry config (so the client can mirror the
+            # server's unblockable land-bonus math for the battle preview).
+            'land_home_ground_asymmetry_enabled': bool(
+                getattr(server_config, 'LAND_HOME_GROUND_ASYMMETRY_ENABLED', False)),
+            'land_home_ground_attacker_factor': float(
+                getattr(server_config, 'LAND_HOME_GROUND_ATTACKER_BONUS_FACTOR', 1.0)),
             'date': self.date.isoformat() if self.date else None,
             'stake': self.stake,
             'game_limit': self.game_limit or self.stake,

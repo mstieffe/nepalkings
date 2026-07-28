@@ -385,11 +385,31 @@ def main() -> int:
         cdp.command("Page.navigate", {"url": url})
         deadline = time.time() + args.wait
         probe = {}
+        audio_gate_tapped = False
         while time.time() < deadline:
             time.sleep(1)
             try:
                 probe = evaluate_probe(cdp)
                 drain_cdp_events(cdp)
+                if (not audio_gate_tapped
+                        and "Tap to start" in (probe.get("bodyText") or "")):
+                    # The production shell intentionally waits for a real
+                    # user gesture before unlocking Web Audio. CDP input is a
+                    # trusted gesture, unlike element.click(), so let the
+                    # screenshot harness pass the same gate a player sees.
+                    for event_type in ("mousePressed", "mouseReleased"):
+                        cdp.command(
+                            "Input.dispatchMouseEvent",
+                            {
+                                "type": event_type,
+                                "x": width / 2,
+                                "y": height / 2,
+                                "button": "left",
+                                "clickCount": 1,
+                            },
+                        )
+                    audio_gate_tapped = True
+                    continue
                 canvas = probe.get("canvas") or {}
                 if canvas.get("width", 0) > 1 and probe.get("loaderDisplay") == "none":
                     break

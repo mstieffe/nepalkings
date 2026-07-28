@@ -871,6 +871,154 @@ assert quote_bottom + 4 <= btn_y
         assert screen._rename_dialog is None
         assert calls == ['start', 'stop']
 
+    def test_rename_modal_layout_keeps_controls_inside_the_box(self):
+        KingdomConfigScreen, screen = _screen_base()
+        screen._data = {'rename_price_gold': 150}
+
+        layout = KingdomConfigScreen._rename_modal_layout(screen)
+
+        box = layout['box']
+        assert box.contains(layout['input'])
+        assert box.contains(layout['cancel'])
+        assert box.contains(layout['confirm'])
+        assert layout['input'].bottom < layout['cancel'].top
+        assert layout['cancel'].right <= layout['confirm'].left
+
+    def test_rename_modal_is_touch_sized_on_mobile(self):
+        _run_mobile_geometry_check("""
+import pygame
+pygame.font.init()
+from config import settings
+from game.screens.kingdom_config_screen import KingdomConfigScreen
+
+screen = KingdomConfigScreen.__new__(KingdomConfigScreen)
+screen._heading_font = settings.get_font(settings.FS_BODY, bold=True)
+screen._tiny_font = settings.get_font(settings.FS_TINY)
+screen._data = {'rename_price_gold': 150}
+
+layout = KingdomConfigScreen._rename_modal_layout(screen)
+box = layout['box']
+
+# The whole modal stays on screen even after growing for touch targets.
+assert box.top >= 0 and box.bottom <= settings.SCREEN_HEIGHT
+assert box.left >= 0 and box.right <= settings.SCREEN_WIDTH
+
+# Field and buttons are large enough to hit with a thumb.
+assert layout['input'].height >= settings.TOUCH_TARGET_MIN
+assert layout['cancel'].height >= settings.TOUCH_TARGET_MIN
+assert layout['confirm'].height >= settings.TOUCH_TARGET_MIN
+assert layout['cancel'].width >= settings.TOUCH_TARGET_MIN
+assert layout['confirm'].width >= settings.TOUCH_TARGET_MIN
+
+assert box.contains(layout['input'])
+assert box.contains(layout['cancel'])
+assert box.contains(layout['confirm'])
+assert layout['cancel'].right <= layout['confirm'].left
+assert layout['input'].bottom < layout['cancel'].top
+""")
+
+    def test_start_rename_registers_and_focuses_mobile_web_input(self, monkeypatch):
+        import game.screens.kingdom_config_screen as module
+        from utils import web_keyboard
+
+        KingdomConfigScreen, screen = _screen_base()
+        screen._kingdom = _kingdom_payload()
+        screen._data = {'rename_price_gold': 150}
+
+        calls = []
+        monkeypatch.setattr(module, '_IS_WEB', True)
+        monkeypatch.setattr(module, '_MOBILE_UI', True)
+        monkeypatch.setattr(web_keyboard, 'is_mobile', lambda: True)
+        monkeypatch.setattr(web_keyboard, 'clear_inputs',
+                            lambda: calls.append(('clear',)) or True)
+        monkeypatch.setattr(
+            web_keyboard, 'register_input',
+            lambda *args: calls.append(('register',) + args) or True)
+        monkeypatch.setattr(
+            web_keyboard, 'open_input',
+            lambda *args: calls.append(('open',) + args) or True)
+
+        KingdomConfigScreen._start_rename(screen)
+
+        assert calls[0] == ('clear',)
+        assert calls[1][0] == 'register'
+        # label, current, is_password, max_length, rect
+        assert calls[1][1] == module.RENAME_INPUT_LABEL
+        assert calls[1][2] == 'North Pass'
+        assert calls[1][4] == module.MAX_KINGDOM_NAME_LENGTH
+        assert calls[1][5] == screen._rename_input_rect
+        assert screen._rename_input_rect is not None
+        assert calls[2][0] == 'open'
+        assert calls[2][1] == module.RENAME_INPUT_LABEL
+
+        KingdomConfigScreen._close_rename_dialog(screen)
+        assert calls[-1] == ('clear',)
+
+    def test_rename_dialog_mirrors_native_mobile_input(self, monkeypatch):
+        import game.screens.kingdom_config_screen as module
+        from utils import web_keyboard
+
+        KingdomConfigScreen, screen = _screen_base()
+        screen._rename_dialog = {'text': 'North Pass', 'error': 'Rename failed.'}
+        monkeypatch.setattr(module, '_IS_WEB', True)
+        monkeypatch.setattr(module, '_MOBILE_UI', True)
+        monkeypatch.setattr(
+            web_keyboard, 'poll_input',
+            lambda label: {'value': 'High Garden', 'active': True, 'done': False})
+
+        assert KingdomConfigScreen._sync_rename_web_input(screen) is True
+        assert screen._rename_dialog['text'] == 'High Garden'
+        assert screen._rename_dialog['error'] == ''
+
+        # An idle overlay publishes nothing, and must not clear the field.
+        monkeypatch.setattr(web_keyboard, 'poll_input', lambda label: None)
+        assert KingdomConfigScreen._sync_rename_web_input(screen) is False
+        assert screen._rename_dialog['text'] == 'High Garden'
+
+    def test_rename_submit_uses_characters_typed_since_the_last_frame(self, monkeypatch):
+        import game.screens.kingdom_config_screen as module
+        from utils import web_keyboard
+
+        KingdomConfigScreen, screen = _screen_base()
+        screen._kingdom = _kingdom_payload()
+        screen._data = {'rename_price_gold': 150, 'kingdoms': [screen._kingdom]}
+        screen._gold = 500
+        screen._rename_dialog = {'text': 'High Gard', 'error': ''}
+        calls = []
+
+        monkeypatch.setattr(module, '_IS_WEB', True)
+        monkeypatch.setattr(module, '_MOBILE_UI', True)
+        monkeypatch.setattr(
+            web_keyboard, 'poll_input',
+            lambda label: {'value': 'High Garden', 'active': True, 'done': False})
+        monkeypatch.setattr(web_keyboard, 'clear_inputs', lambda: True)
+        monkeypatch.setattr(
+            module.requests, 'post',
+            lambda url, json=None, timeout=0: calls.append(json) or _Response(
+                {'success': True, 'kingdom': _kingdom_payload(), 'gold': 350}))
+        monkeypatch.setattr(KingdomConfigScreen, '_fetch_config', lambda self: None)
+
+        assert KingdomConfigScreen._submit_rename(screen) is True
+        assert calls == [{'name': 'High Garden'}]
+
+    def test_rename_field_tap_restores_a_missing_native_input(self, monkeypatch):
+        import game.screens.kingdom_config_screen as module
+
+        KingdomConfigScreen, screen = _screen_base()
+        screen._data = {'rename_price_gold': 150}
+        screen._rename_dialog = {'text': 'North Pass', 'error': ''}
+        screen._rename_input_rect = pygame.Rect(100, 100, 200, 40)
+        screen._rename_cancel_rect = pygame.Rect(0, 0, 10, 10)
+        screen._rename_confirm_rect = pygame.Rect(20, 0, 10, 10)
+        reopened = []
+        monkeypatch.setattr(module.KingdomConfigScreen, '_open_rename_web_input',
+                            lambda self: reopened.append(True))
+
+        event = SimpleNamespace(type=pygame.MOUSEBUTTONUP, button=1, pos=(150, 120))
+        assert KingdomConfigScreen._handle_rename_event(screen, event) is True
+        assert reopened == [True]
+        assert screen._rename_dialog is not None
+
     def test_skill_effect_text_uses_current_and_next_increment_values(self):
         KingdomConfigScreen, screen = _screen_base()
 

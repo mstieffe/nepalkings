@@ -276,6 +276,75 @@ class TestGameBattleStateTransitions:
 
         assert game.pending_defender_selection is True
 
+    def test_civil_war_second_attacker_blocks_defender_pick_detection(self):
+        """Arming the second pick first keeps the parked turn from being read
+        as "the turn came back — choose the opponent's defender"."""
+        from game.core.game import Game
+
+        initial = _mk_game_dict()
+        initial['mode'] = 'conquer'
+        game = Game(initial, _mk_user_dict(), lightweight=True)
+        game.pending_defender_selection = False
+        game.defender_selection_dialogue_shown = False
+
+        game.begin_civil_war_second_pick('attacker', 'offensive')
+
+        # Server keeps the turn on the invader for the optional second pick.
+        post_advance = _mk_game_dict()
+        post_advance['mode'] = 'conquer'
+        post_advance['battle_modifier'] = [{'type': 'Civil War'}]
+        post_advance['advancing_figure_id'] = 501
+        post_advance['advancing_player_id'] = 113
+        post_advance['defending_figure_id'] = None
+        post_advance['turn_player_id'] = 113
+
+        game.update_from_dict(post_advance)
+
+        assert game.civil_war_awaiting_second is True
+        assert game.civil_war_required_color == 'offensive'
+        assert game.pending_defender_selection is False
+        assert game.defender_selection_dialogue_shown is False
+
+    def test_civil_war_second_attacker_blocks_battle_ready_detection(self):
+        """A preselected defender must not race the timeline into fight/fold
+        while the invader still owes their second Civil War attacker."""
+        from game.core.game import Game
+
+        initial = _mk_game_dict()
+        initial['mode'] = 'conquer'
+        game = Game(initial, _mk_user_dict(), lightweight=True)
+
+        game.begin_civil_war_second_pick('attacker', 'defensive')
+
+        post_advance = _mk_game_dict()
+        post_advance['mode'] = 'conquer'
+        post_advance['battle_modifier'] = [{'type': 'Civil War'}]
+        post_advance['advancing_figure_id'] = 501
+        post_advance['advancing_player_id'] = 113
+        post_advance['defending_figure_id'] = 601
+        post_advance['turn_player_id'] = 113
+
+        game.update_from_dict(post_advance)
+
+        assert game.pending_battle_ready is False
+
+    def test_begin_civil_war_second_pick_drops_raced_defender_latch(self):
+        """A poll can arm defender selection in the gap before the advance
+        response is handled; the second pick owns the turn and clears it."""
+        from game.core.game import Game
+
+        initial = _mk_game_dict()
+        initial['mode'] = 'conquer'
+        game = Game(initial, _mk_user_dict(), lightweight=True)
+        game.pending_defender_selection = True
+        game.defender_selection_dialogue_shown = True
+
+        game.begin_civil_war_second_pick('attacker', 'offensive')
+
+        assert game.pending_defender_selection is False
+        assert game.defender_selection_dialogue_shown is False
+        assert game.civil_war_defender_second is False
+
     def test_update_from_dict_clears_stale_conquer_defender_flags_without_advance(self):
         from game.core.game import Game
 

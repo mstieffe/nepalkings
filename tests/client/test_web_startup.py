@@ -227,6 +227,15 @@ def test_web_uses_native_audio_manager_and_publishes_direct_assets():
     assert 'function preloadSfx()' in index_html
     assert index_html.count('preloadSfx();') == 2
     assert 'sfxManifestCount: sfxManifest.length' in index_html
+    # A silent keep-alive loop stops iOS from suspending the context between
+    # gestures, so timer-/server-driven cues (tutorial reel, reward reveal,
+    # turn alerts) still play instead of hitting a suspended context.
+    assert 'function startKeepAlive(ctx)' in index_html
+    assert 'source.loop = true;' in index_html
+    assert 'gain.gain.value = 0;' in index_html
+    # Armed on unlock, on resume, and whenever a cue actually plays.
+    assert index_html.count('startKeepAlive(ctx);') == 4
+    assert 'keepAlive: !!keepAlive' in index_html
     assert 'musicFilename: currentMusic ? currentMusic.filename : null' in index_html
     assert 'window.nk_audio_play_sfx' in index_html
     assert 'window.nk_audio_play_music' in index_html
@@ -262,3 +271,18 @@ def test_web_uses_native_audio_manager_and_publishes_direct_assets():
     assert 'WEB_MP3_COUNT' in build_script
     assert '"$WEB_OUT/audio"' in build_script
     assert "- 'scripts/build_web.sh'" in deploy_workflow
+
+
+def test_web_keyboard_lifts_the_canvas_clear_of_the_virtual_keyboard():
+    """The canvas is fixed and unscrollable, so an open keyboard would simply
+    cover the field being typed into unless the canvas itself is lifted.
+
+    ``tests/client/test_web_keyboard_viewport.py`` runs this code against a
+    fake DOM; these are the structural hooks it needs to exist at all.
+    """
+    repo_root = Path(__file__).resolve().parents[2]
+    index_html = (repo_root / 'nepal_kings/web/index.html').read_text()
+
+    assert 'function updateKeyboardShift()' in index_html
+    assert 'function setCanvasShift(offset)' in index_html
+    assert 'window.visualViewport.addEventListener(\'resize\', relayout);' in index_html

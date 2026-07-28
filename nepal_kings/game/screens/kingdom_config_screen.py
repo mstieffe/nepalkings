@@ -4,6 +4,7 @@
 
 import math
 import os
+import sys
 import pygame
 from pygame.locals import *
 
@@ -22,6 +23,13 @@ from utils import http_compat as requests
 
 
 _SW, _SH = settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT
+_IS_WEB = sys.platform == 'emscripten'
+_MOBILE_UI = bool(getattr(settings, 'TOUCH_TARGET_MIN', 0))
+
+# Label of the native HTML input the mobile web build places over the rename
+# field, and the server-side limit on kingdom names.
+RENAME_INPUT_LABEL = 'kingdom name'
+MAX_KINGDOM_NAME_LENGTH = 40
 
 _BOX_PAD = int(0.020 * _SH)
 _BOX_X = int(0.04 * _SW)
@@ -1112,11 +1120,18 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
             if self._rename_confirm_rect and self._rename_confirm_rect.collidepoint(event.pos):
                 self._submit_rename()
                 return True
+            if self._rename_input_rect and self._rename_input_rect.collidepoint(event.pos):
+                # Taps on the field normally land on the native input itself;
+                # reaching the canvas means the overlay is missing, so put it
+                # back rather than leaving the modal untypable.
+                self._open_rename_web_input()
+                return True
             return True
         return True
 
     def _close_rename_dialog(self):
         self._rename_dialog = None
+        self._clear_rename_web_input()
         try:
             pygame.key.stop_text_input()
         except Exception:
@@ -1133,10 +1148,63 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
             'text': self._kingdom.get('name') or f"Kingdom #{self._kingdom.get('id', '?')}",
             'error': '',
         }
+        self._open_rename_web_input()
+
+    def _open_rename_web_input(self):
+        """Place a native HTML input over the modal's field on mobile web.
+
+        Mobile browsers only raise their keyboard for a focused HTML element,
+        so without this the modal opens with no way to type into it at all.
+        """
+        if not (_IS_WEB and _MOBILE_UI) or not self._rename_dialog:
+            return False
+        from utils.web_keyboard import (
+            clear_inputs,
+            is_mobile,
+            open_input,
+            register_input,
+        )
+        if not is_mobile():
+            return False
+        # The overlay has to be positioned before the first frame is drawn,
+        # so take the field rect from the layout rather than the renderer.
+        self._rename_input_rect = self._rename_modal_layout()['input']
+        clear_inputs()
+        text = self._rename_dialog.get('text') or ''
+        register_input(
+            RENAME_INPUT_LABEL, text, False, MAX_KINGDOM_NAME_LENGTH,
+            self._rename_input_rect)
+        # Best effort: browsers that allow a programmatic focus open the
+        # keyboard right away, the rest do so when the field is tapped.
+        open_input(RENAME_INPUT_LABEL, text, False, MAX_KINGDOM_NAME_LENGTH)
+        return True
+
+    def _clear_rename_web_input(self):
+        if not (_IS_WEB and _MOBILE_UI):
+            return False
+        from utils.web_keyboard import clear_inputs
+        clear_inputs()
+        return True
+
+    def _sync_rename_web_input(self):
+        """Mirror the native mobile input into the canvas-drawn field."""
+        if not (_IS_WEB and _MOBILE_UI) or not self._rename_dialog:
+            return False
+        from utils.web_keyboard import poll_input
+        state = poll_input(RENAME_INPUT_LABEL)
+        if not state:
+            return False
+        value = str(state.get('value', ''))[:MAX_KINGDOM_NAME_LENGTH]
+        if value != self._rename_dialog.get('text'):
+            self._rename_dialog['text'] = value
+            self._rename_dialog['error'] = ''
+        return True
 
     def _submit_rename(self):
         if not self._rename_dialog:
             return False
+        # Pick up anything typed since the last frame before spending gold.
+        self._sync_rename_web_input()
         name = (self._rename_dialog.get('text') or '').strip()
         if not name:
             self._rename_dialog['error'] = 'Enter a kingdom name.'
@@ -1395,6 +1463,7 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
     def update(self, events=None):
         super().update()
         self._update_icon_buttons()
+        self._sync_rename_web_input()
         self._maybe_show_tutorial_completion()
 
     def _current_kingdom_config_coach_id(self):
@@ -2765,6 +2834,63 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
             'header': header_rect,
         }
 
+    def _rename_helper_text(self):
+        price = int((self._data or {}).get('rename_price_gold', 0) or 0)
+        if _MOBILE_UI:
+            return f'Renaming costs {price} gold. Tap the field to type a name.'
+        return f'Renaming costs {price} gold. Enter confirms; Esc cancels.'
+
+    def _rename_modal_layout(self):
+        """Geometry of the rename modal.
+
+        Shared with the mobile keyboard bridge, which has to position its
+        native input over the field before the modal is first drawn.
+        """
+        pad = int((0.028 if _MOBILE_UI else 0.018) * _SH)
+        gap = int(0.012 * _SW)
+        box_w = int((0.74 if _MOBILE_UI else 0.40) * _SW)
+        inner_w = box_w - pad * 2
+        helper_lines = self._wrap_text(self._rename_helper_text(),
+                                       self._tiny_font, inner_w)
+        title_h = self._heading_font.get_height()
+        helper_h = self._tiny_font.get_height() * len(helper_lines)
+        tiny_h = self._tiny_font.get_height()
+        # Touch builds need a field and buttons big enough to hit; on desktop
+        # TOUCH_TARGET_MIN is 0 and the original proportions win.
+        input_h = max(int(0.052 * _SH), settings.TOUCH_TARGET_MIN)
+        btn_h = max(int(0.040 * _SH), settings.TOUCH_TARGET_MIN)
+        content_h = (pad + title_h + 8 + helper_h + 14 + input_h + 6 + tiny_h
+                     + 10 + btn_h + pad)
+        box = pygame.Rect(0, 0, box_w, max(content_h, int(0.28 * _SH)))
+        box.center = (_SW // 2, _SH // 2)
+
+        y = box.y + pad
+        title_pos = (box.x + pad, y)
+        y += title_h + 8
+        helper_pos = (box.x + pad, y)
+        y += helper_h + 14
+        input_rect = pygame.Rect(box.x + pad, y, inner_w, input_h)
+        error_pos = (box.x + pad, input_rect.bottom + 6)
+
+        if _MOBILE_UI:
+            btn_w = (inner_w - gap) // 2
+            cancel_x = box.x + pad
+        else:
+            btn_w = int(0.094 * _SW)
+            cancel_x = box.right - pad - btn_w * 2 - gap
+        by = box.bottom - pad - btn_h
+        return {
+            'box': box,
+            'pad': pad,
+            'title_pos': title_pos,
+            'helper_pos': helper_pos,
+            'helper_lines': helper_lines,
+            'input': input_rect,
+            'error_pos': error_pos,
+            'cancel': pygame.Rect(cancel_x, by, btn_w, btn_h),
+            'confirm': pygame.Rect(box.right - pad - btn_w, by, btn_w, btn_h),
+        }
+
     def _draw_rename_modal(self):
         if not self._rename_dialog:
             return
@@ -2772,22 +2898,19 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         overlay.fill((0, 0, 0, 135))
         self.window.blit(overlay, (0, 0))
 
-        box = pygame.Rect(0, 0, int(0.40 * _SW), int(0.28 * _SH))
-        box.center = (_SW // 2, _SH // 2)
+        layout = self._rename_modal_layout()
+        box = layout['box']
         self._draw_panel(box, None)
-        pad = int(0.018 * _SH)
         title = self._heading_font.render('Rename Kingdom', True, settings.LAND_DETAIL_TITLE_CLR)
-        self.window.blit(title, (box.x + pad, box.y + pad))
+        self.window.blit(title, layout['title_pos'])
 
-        price = int((self._data or {}).get('rename_price_gold', 0) or 0)
-        helper = f'Renaming costs {price} gold. Enter confirms; Esc cancels.'
-        helper = self._fit_text(helper, self._tiny_font, box.w - pad * 2)
-        helper_surf = self._tiny_font.render(helper, True, settings.KINGDOM_CONFIG_DIM_CLR)
-        self.window.blit(helper_surf, (box.x + pad, box.y + pad + title.get_height() + 8))
+        line_x, line_y = layout['helper_pos']
+        for line in layout['helper_lines']:
+            helper_surf = self._tiny_font.render(line, True, settings.KINGDOM_CONFIG_DIM_CLR)
+            self.window.blit(helper_surf, (line_x, line_y))
+            line_y += self._tiny_font.get_height()
 
-        input_y = box.y + pad + title.get_height() + helper_surf.get_height() + 22
-        self._rename_input_rect = pygame.Rect(box.x + pad, input_y, box.w - pad * 2,
-                                              int(0.052 * _SH))
+        self._rename_input_rect = layout['input']
         pygame.draw.rect(self.window, (18, 17, 24, 235), self._rename_input_rect,
                          border_radius=6)
         pygame.draw.rect(self.window, settings.KINGDOM_CONFIG_PANEL_BORDER,
@@ -2808,18 +2931,15 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
 
         err = self._rename_dialog.get('error') or ''
         if err:
-            err_surf = self._tiny_font.render(self._fit_text(err, self._tiny_font, box.w - pad * 2),
-                                              True, settings.KINGDOM_CONFIG_BAD_CLR)
-            self.window.blit(err_surf, (box.x + pad, self._rename_input_rect.bottom + 6))
+            err_surf = self._tiny_font.render(
+                self._fit_text(err, self._tiny_font, box.w - layout['pad'] * 2),
+                True, settings.KINGDOM_CONFIG_BAD_CLR)
+            self.window.blit(err_surf, layout['error_pos'])
 
-        btn_w = int(0.094 * _SW)
-        btn_h = int(0.040 * _SH)
-        gap = int(0.012 * _SW)
-        by = box.bottom - pad - btn_h
-        self._rename_cancel_rect = pygame.Rect(box.right - pad - btn_w * 2 - gap, by, btn_w, btn_h)
-        self._rename_confirm_rect = pygame.Rect(box.right - pad - btn_w, by, btn_w, btn_h)
+        self._rename_cancel_rect = layout['cancel']
+        self._rename_confirm_rect = layout['confirm']
         self._draw_button(self._rename_cancel_rect, 'Cancel', 'rename_cancel')
-        can_afford = self._gold >= price
+        can_afford = self._gold >= int((self._data or {}).get('rename_price_gold', 0) or 0)
         self._draw_button(self._rename_confirm_rect, 'Rename', 'rename_confirm', disabled=not can_afford)
 
     def render(self):

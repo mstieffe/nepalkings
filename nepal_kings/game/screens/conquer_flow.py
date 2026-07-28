@@ -1268,19 +1268,25 @@ def derive_conquer_timeline(game: Any, state: Any = None,
         bool(_get(field_screen, '_pending_advance_figure'))
         if field_screen is not None else False
     )
-    pending_defender_select_turn = bool(
-        advancing_id
-        and _get(game, 'pending_defender_selection', False)
-        and _get(game, 'turn', False)
-    )
-    pending_own_defender_select = bool(
-        advancing_id
-        and _get(game, 'pending_conquer_own_defender_selection', False)
-    )
     attacker_second_active = bool(
         advancing_id
         and _civil_war_pick_flow_active(game)
         and _get(game, 'civil_war_awaiting_second', False)
+    )
+    # While the second attacker is still owed, the turn parked on the invader
+    # is for that pick — not for defender selection.  Both latches can be set
+    # at once, so the attacker step must suppress the defender step rather
+    # than letting the timeline run ahead.
+    pending_defender_select_turn = bool(
+        advancing_id
+        and _get(game, 'pending_defender_selection', False)
+        and _get(game, 'turn', False)
+        and not attacker_second_active
+    )
+    pending_own_defender_select = bool(
+        advancing_id
+        and _get(game, 'pending_conquer_own_defender_selection', False)
+        and not attacker_second_active
     )
     attacker_select_active = bool(
         _get(game, 'pending_forced_advance', False) and not advancing_id

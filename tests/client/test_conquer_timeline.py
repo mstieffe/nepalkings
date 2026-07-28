@@ -1756,6 +1756,42 @@ def test_civil_war_second_attacker_is_active_and_shows_pending_figure():
     assert by_kind['to_battle'].active is False
 
 
+def test_civil_war_second_attacker_suppresses_defender_step():
+    """A defender-selection latch armed alongside the pending second pick must
+    not make the defender step active — the timeline would run ahead of the
+    attacker step the player is still on."""
+    from game.screens.conquer_flow import derive_conquer_timeline
+
+    first = _make_figure(10, 'First Attacker', player_id=1)
+    second = _make_figure(11, 'Second Attacker', player_id=1)
+    opponent = _make_figure(20, 'Opponent Villager', player_id=2)
+    field = SimpleNamespace(
+        figures=[first, second, opponent],
+        icon_cache={},
+        _pending_advance_figure=None,
+        figure_pending_defender_selection=None,
+        figure_pending_own_defender_selection=None,
+    )
+    game = _make_game(
+        turn=True,
+        advancing_figure_id=10,
+        advancing_player_id=1,
+        civil_war_awaiting_second=True,
+        civil_war_required_color='offensive',
+        pending_defender_selection=True,
+    )
+
+    steps = derive_conquer_timeline(game, _make_state(game), field, None)
+    by_kind = {s.kind: s for s in steps}
+
+    assert by_kind['attacker'].active
+    assert by_kind['attacker'].primary_action == 'select_second'
+    assert by_kind['attacker'].info_headline == 'Choose your second Civil War attacker'
+    assert by_kind['defender'].active is False
+    assert by_kind['defender'].interactive is False
+    assert by_kind['to_battle'].active is False
+
+
 def test_civil_war_second_defender_is_active_and_shows_pending_own_defender():
     from game.screens.conquer_flow import derive_conquer_timeline
 

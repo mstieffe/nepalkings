@@ -115,7 +115,7 @@ class BuildFigureScreen(SubScreen):
             'defence_draft': 'Add to Defence',
         }.get(self.mode, 'Build')
         bx, by, bw, bh = footer_button_geometry(
-            self, action_label, align='left')
+            self, action_label, align='center')
         self.confirm_button = ConfirmButton(
             self.window,
             bx, by, action_label, width=bw, height=bh,
@@ -973,22 +973,31 @@ class BuildFigureScreen(SubScreen):
                     if _is_kingdom_config_mode(self.mode):
                         self._refresh_selected_figure_family()
 
-                    # Update game state from the combined response
-                    if build_result.get('game'):
-                        self.game.update_from_dict(build_result['game'])
-
                     # Check the instant_charge result from the combined response
                     charge_result = build_result.get('instant_charge', {})
                     action_word = "counter-advanced" if response == 'build + counter' else "advanced"
                     fig_name = selected_figure.name
 
+                    # Arm the Civil War second pick BEFORE applying the server
+                    # state — the turn stays parked on us for the pick, which
+                    # update_from_dict would otherwise read as "the turn came
+                    # back, pick the opponent's defender".
+                    civil_war_need_second = bool(
+                        charge_result.get('success')
+                        and charge_result.get('civil_war_need_second'))
+                    civil_war_color = charge_result.get('civil_war_color', '')
+                    if civil_war_need_second:
+                        self.game.begin_civil_war_second_pick(
+                            'attacker', civil_war_color)
+
+                    # Update game state from the combined response
+                    if build_result.get('game'):
+                        self.game.update_from_dict(build_result['game'])
+
                     if charge_result.get('success'):
                         # Check if Civil War needs a second figure
-                        if charge_result.get('civil_war_need_second'):
-                            civil_war_color = charge_result.get('civil_war_color', '')
+                        if civil_war_need_second:
                             color_name = 'red' if civil_war_color == 'offensive' else 'black'
-                            self.game.civil_war_awaiting_second = True
-                            self.game.civil_war_required_color = civil_war_color
                             _post_build_actions = ['to field', 'build more'] if self.mode == 'conquer' else ['to field']
                             self.make_dialogue_box(
                                 message=f"{fig_name} has been built and {action_word} toward battle!\n\nCivil War! You may select a second village figure of the same color ({color_name}).",

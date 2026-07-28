@@ -17,6 +17,12 @@ def _new_client_action_id():
     """
     return uuid.uuid4().hex
 
+
+def new_client_action_id():
+    """Public action-id helper for non-blocking client request pipelines."""
+    return _new_client_action_id()
+
+
 def fetch_user_games(username):
     """Fetch the list of games for the user from the server."""
     response = requests.get(f'{settings.SERVER_URL}/games/get_games', params={'username': username}, timeout=10)
@@ -240,7 +246,30 @@ def finish_battle(game_id, player_id, total_diff):
             json={'game_id': game_id, 'player_id': player_id, 'total_diff': total_diff},
             timeout=10
         )
-        return response.json()
+        status_code = getattr(response, 'status_code', 0)
+        if status_code >= 400:
+            fallback = (
+                f'Server failed to finish the battle (HTTP {status_code}). '
+                'Please try again.'
+            )
+            return {
+                'success': False,
+                'message': _response_message(response, fallback),
+            }
+        try:
+            payload = response.json()
+        except Exception:
+            payload = None
+        if not isinstance(payload, dict) or not payload:
+            status_detail = f' (HTTP {status_code})' if status_code else ''
+            return {
+                'success': False,
+                'message': (
+                    f'Server returned an invalid response{status_detail} '
+                    'while finishing the battle. Please try again.'
+                ),
+            }
+        return payload
     except requests.RequestException as e:
         return {'success': False, 'message': f"Failed to finish battle: {str(e)}"}
 
@@ -265,14 +294,15 @@ def play_battle_move(game_id, player_id, battle_move_id, call_figure_id=None):
         return {'success': False, 'message': f"Failed to play battle move: {str(e)}"}
 
 
-def play_conquer_tactic(game_id, player_id, tactic_id, call_figure_id=None):
+def play_conquer_tactic(game_id, player_id, tactic_id, call_figure_id=None,
+                        client_action_id=None):
     """Play a conquer tactic in the current battle round."""
     try:
         payload = {
             'game_id': game_id,
             'player_id': player_id,
             'tactic_id': tactic_id,
-            'client_action_id': _new_client_action_id(),
+            'client_action_id': client_action_id or _new_client_action_id(),
         }
         if call_figure_id is not None:
             payload['call_figure_id'] = call_figure_id
@@ -286,7 +316,8 @@ def play_conquer_tactic(game_id, player_id, tactic_id, call_figure_id=None):
         return {'success': False, 'message': f"Failed to play conquer tactic: {str(e)}"}
 
 
-def gamble_conquer_tactic(game_id, player_id, tactic_id):
+def gamble_conquer_tactic(game_id, player_id, tactic_id,
+                           client_action_id=None):
     """Gamble a conquer tactic for two replacement tactics."""
     try:
         response = requests.post(
@@ -295,7 +326,7 @@ def gamble_conquer_tactic(game_id, player_id, tactic_id):
                 'game_id': game_id,
                 'player_id': player_id,
                 'tactic_id': tactic_id,
-                'client_action_id': _new_client_action_id(),
+                'client_action_id': client_action_id or _new_client_action_id(),
             },
             timeout=10,
         )
@@ -321,7 +352,8 @@ def conquer_gamble_preview(game_id, player_id, tactic_id):
         return {'success': False, 'message': f"Failed to preview gamble: {str(e)}"}
 
 
-def combine_conquer_tactics(game_id, player_id, tactic_id_a, tactic_id_b):
+def combine_conquer_tactics(game_id, player_id, tactic_id_a, tactic_id_b,
+                             client_action_id=None):
     """Combine two same-colour Dagger conquer tactics."""
     try:
         response = requests.post(
@@ -331,7 +363,7 @@ def combine_conquer_tactics(game_id, player_id, tactic_id_a, tactic_id_b):
                 'player_id': player_id,
                 'tactic_id_a': tactic_id_a,
                 'tactic_id_b': tactic_id_b,
-                'client_action_id': _new_client_action_id(),
+                'client_action_id': client_action_id or _new_client_action_id(),
             },
             timeout=10,
         )
@@ -340,7 +372,8 @@ def combine_conquer_tactics(game_id, player_id, tactic_id_a, tactic_id_b):
         return {'success': False, 'message': f"Failed to combine conquer tactics: {str(e)}"}
 
 
-def dismantle_conquer_tactic(game_id, player_id, tactic_id):
+def dismantle_conquer_tactic(game_id, player_id, tactic_id,
+                              client_action_id=None):
     """Dismantle an unplayed combined conquer tactic."""
     try:
         response = requests.post(
@@ -349,7 +382,7 @@ def dismantle_conquer_tactic(game_id, player_id, tactic_id):
                 'game_id': game_id,
                 'player_id': player_id,
                 'tactic_id': tactic_id,
-                'client_action_id': _new_client_action_id(),
+                'client_action_id': client_action_id or _new_client_action_id(),
             },
             timeout=10,
         )

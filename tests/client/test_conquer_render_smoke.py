@@ -363,43 +363,25 @@ def test_tactics_rail_draws_scrollable_long_tactics_without_blank_output():
     assert _rect_has_non_background_pixel(window, rail.rect())
     outside_rail = pygame.Rect(rail.rect().right + 1, rail.rect().top, 8, rail.rect().height)
     assert not _rect_has_non_background_pixel(window, outside_rail)
-    # Family headers between groups consume some vertical space, so the
-    # rail may render slightly fewer cells than ``cells_visible`` —
-    # require at least 1 and no more than the layout slot count.
     assert 1 <= len(rail._cell_rects) <= layout.cells_visible
-    # Round 13: groups default to collapsed, so the long hand renders as
-    # one row per group + 1-row groups directly. Scroll-down may not be
-    # needed at default zoom — but scrolling must still clamp safely.
+    # Round 14: every tactic is a row of its own (the accordion is gone),
+    # so a long hand scrolls. Scrolling must still clamp safely.
     rail._scroll = 99
     rail._clamp_scroll()
     assert rail._scroll <= len(moves) - 1
     rail.draw()
+    # The weakest/last group must be reachable by scrolling to the end.
     grouped = rail._hand_moves_grouped()
-    last_grouped = grouped[-1]
-    last_group_label = rail._family_group(last_grouped)
-    # The last group's *representative* (strongest) must be visible after
-    # the clamp, even when collapsed.
-    rep_ids = [m['id'] for m in grouped if rail._family_group(m) == last_group_label]
-    assert any(rid in rail._cell_move_ids for rid in rep_ids), (
-        f"last group {last_group_label} unreachable after scroll-clamp; "
+    assert grouped[-1]['id'] in rail._cell_move_ids, (
+        f"last tactic unreachable after scroll-clamp; "
         f"rendered={rail._cell_move_ids}, scroll={rail._scroll}"
     )
     first_id = rail._cell_move_ids[0]
     assert rail.move_cell_rect(first_id) == rail._cell_rects[0]
     rail._scroll = 0
     rail.draw()
-    # Hovering a collapsed-group cell does NOT produce a preview — the
-    # cell is meant to be clicked to expand instead.
-    first_kind = rail._cell_kinds[0] if rail._cell_kinds else 'move'
+    assert rail._cell_kinds[0] == 'move'
     rail._hovered_id = rail._cell_move_ids[0]
-    if first_kind == 'collapsed':
-        assert rail.preview_move() is None
-        # Expand the first collapsed group and re-render so we can hover
-        # an actual move row.
-        rail._toggle_group(rail._cell_groups[0])
-        rail.draw()
-        rail._hovered_id = rail._cell_move_ids[0]
-        assert rail._cell_kinds[0] == 'move'
     assert rail.preview_move()['id'] == rail._cell_move_ids[0]
     game.battle_turn_player_id = 2
     assert rail.preview_move() is None
@@ -629,19 +611,18 @@ def test_tactics_rail_header_shows_per_round_gamble_state():
     rail = ConquerTacticsRail(
         _ConquerUiParent(window, game, [_move(1), _move(2)]))
 
-    assert rail._top_strip_count_text(game) == (
-        '2 tactics · Gamble ready this round')
+    assert rail._gamble_status_for_strip(game) == (
+        'Gamble ready this round', 'ready')
 
     game.battle_gamble_counts = {'1': {'count': 2, 'rounds': [0, 1]}}
 
-    assert rail._top_strip_count_text(game) == (
-        '2 tactics · Gamble used this round')
-    assert 'left' not in rail._top_strip_count_text(game)
+    assert rail._gamble_status_for_strip(game) == ('Already gambled', 'used')
+    assert 'left' not in rail._gamble_status_for_strip(game)[0]
 
 
-def test_tactics_rail_collapses_groups_to_strongest_with_count_chip():
-    """Round 13: multi-member family groups collapse by default to a
-    single representative (strongest) row tagged with an ×N chip."""
+def test_tactics_rail_lists_every_tactic_with_one_chip_per_family():
+    """Round 14: no accordion — every tactic is its own row, and the filter
+    strip carries one chip per family plus ``All``."""
     from config import settings
     from game.components.conquer_tactics_rail import ConquerTacticsRail
 
@@ -660,20 +641,94 @@ def test_tactics_rail_collapses_groups_to_strongest_with_count_chip():
     rail = ConquerTacticsRail(_ConquerUiParent(window, game, moves))
     rail.draw()
 
-    # Buff group (3 members) collapses; Block group (1 member) stays as-is.
-    assert 'collapsed' in rail._cell_kinds
-    # The collapsed Buff representative is the strongest (id=11), not the
-    # first-listed one (id=10).
-    collapsed_idx = rail._cell_kinds.index('collapsed')
-    assert rail._cell_groups[collapsed_idx] == 'Buff'
-    assert rail._cell_move_ids[collapsed_idx] == 11
-    # Block stays expanded (single member).
-    assert 'move' in rail._cell_kinds
+    assert set(rail._cell_kinds) == {'move'}
+    # Strongest first inside a family; no member is hidden behind another.
+    assert rail._cell_move_ids[:3] == [11, 10, 12]
+    assert 13 in rail._cell_move_ids
+    chips = rail._family_filter_chips()
+    assert [chip['key'] for chip in chips] == ['all', 'Buff', 'Block']
+    assert [chip['count'] for chip in chips] == [4, 3, 1]
+    assert rail._filter_chip_rects
 
 
-def test_tactics_rail_click_toggles_group_expand():
-    """Round 13: clicking a collapsed cell expands the group; clicking
-    again collapses it. Selection is unaffected."""
+def test_tactics_rail_call_families_share_one_filter_chip():
+    """The three server call families are one decision for the player."""
+    from config import settings
+    from game.components.conquer_tactics_rail import ConquerTacticsRail
+
+    window = pygame.Surface((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+    game = SimpleNamespace(
+        mode='conquer', player_id=1, battle_round=1,
+        battle_turn_player_id=1, battle_confirmed=True,
+        battle_gamble_counts={}, last_battle_result=None,
+    )
+    moves = [
+        _move(20, family='Call Villager', suit='Hearts', rank='J', value=1),
+        _move(21, family='Call Military', suit='Spades', rank='A', value=3),
+        _move(22, family='Call King', suit='Clubs', rank='K', value=5),
+        _move(23, family='Dagger', suit='Diamonds', rank='9', value=9),
+    ]
+    rail = ConquerTacticsRail(_ConquerUiParent(window, game, moves))
+    rail.draw()
+
+    chips = {chip['key']: chip['count'] for chip in rail._family_filter_chips()}
+    assert chips == {'all': 4, 'Dagger': 1, 'Call': 3}
+
+    # The Call chip carries every member family in a fixed order, so its
+    # artwork does not reshuffle when a different call becomes the strongest.
+    call_chip = next(chip for chip in rail._family_filter_chips()
+                     if chip['key'] == 'Call')
+    assert call_chip['icon_families'] == (
+        'Call Villager', 'Call Military', 'Call King')
+
+
+def test_tactics_rail_call_chip_icon_uses_a_stable_emblem_when_small():
+    """A fan of three figures is mush on a narrow chip; one emblem is not.
+
+    The emblem must still be a tactic the player actually holds.
+    """
+    from config import settings
+    from game.components.conquer_tactics_rail import ConquerTacticsRail
+
+    window = pygame.Surface((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+    game = SimpleNamespace(
+        mode='conquer', player_id=1, battle_round=1,
+        battle_turn_player_id=1, battle_confirmed=True,
+        battle_gamble_counts={}, last_battle_result=None,
+    )
+    rail = ConquerTacticsRail(_ConquerUiParent(window, game, []))
+    requested = []
+
+    def fake_icon(family_name, size):
+        requested.append((family_name, size))
+        return pygame.Surface((size, size), pygame.SRCALPHA)
+
+    rail._family_icon = fake_icon
+
+    chip = {'key': 'Call',
+            'icon_families': ('Call Villager', 'Call Military', 'Call King')}
+    small = ConquerTacticsRail.COMPOSITE_ICON_MIN_PX - 12
+    assert rail._filter_chip_icon(chip, small) is not None
+    assert requested == [('Call King', small)]
+
+    # Without a King in hand the chip drops to the next call the player has.
+    requested.clear()
+    rail._filter_chip_icon(
+        {'key': 'Call', 'icon_families': ('Call Villager', 'Call Military')},
+        small)
+    assert requested == [('Call Military', small)]
+
+    # A chip with room fans every member instead.
+    requested.clear()
+    composite = rail._filter_chip_icon(
+        chip, ConquerTacticsRail.COMPOSITE_ICON_MIN_PX + 10)
+    assert composite is not None
+    assert [name for name, _size in requested] == [
+        'Call Villager', 'Call Military', 'Call King']
+
+
+def test_tactics_rail_filter_chip_swaps_the_visible_family():
+    """A chip tap filters; tapping the active chip returns to the full hand."""
     from config import settings
     from game.components.conquer_tactics_rail import ConquerTacticsRail
 
@@ -686,32 +741,38 @@ def test_tactics_rail_click_toggles_group_expand():
     moves = [
         _move(20, family='Buff', suit='Hearts', rank='9', value=4),
         _move(21, family='Buff', suit='Spades', rank='K', value=7),
-        _move(22, family='Buff', suit='Clubs', rank='J', value=2),
+        _move(22, family='Block', suit='Clubs', rank='Q', value=0),
     ]
     rail = ConquerTacticsRail(_ConquerUiParent(window, game, moves))
     rail.draw()
-    assert rail._cell_kinds == ['collapsed']
-    pos = rail._cell_rects[0].center
-    event = pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=pos)
-    rail.handle_event(event)
-    rail.draw()
-    # All three Buffs visible after expand; selection unchanged.
-    assert rail._cell_kinds == ['move', 'move', 'move']
-    assert rail._selected_id is None
-    # Toggle back.
-    pos = rail._cell_rects[0].center
+
+    # A row tap selects that exact tactic — no disclosure step in between.
     rail.handle_event(pygame.event.Event(
-        pygame.MOUSEBUTTONDOWN, button=1, pos=pos))
+        pygame.MOUSEBUTTONDOWN, button=1, pos=rail._cell_rects[1].center))
     rail.draw()
-    # Clicking an expanded "move" row triggers selection, not collapse.
-    # The group stays expanded; we collapse via the dedicated API to
-    # verify state transitions still work.
-    rail._toggle_group('Buff')
+    assert rail._selected_id == rail._cell_move_ids[1]
+
+    block_chip = next(rect for key, rect in rail._filter_chip_rects
+                      if key == 'Block')
+    rail.handle_event(pygame.event.Event(
+        pygame.MOUSEBUTTONDOWN, button=1, pos=block_chip.center))
     rail.draw()
-    assert rail._cell_kinds == ['collapsed']
+    assert rail._active_family == 'Block'
+    assert rail._cell_move_ids == [22]
+    # The Buff selection would now be invisible, so it is dropped rather
+    # than left driving the action tray from off-screen.
+    assert rail._selected_id is None
+
+    block_chip = next(rect for key, rect in rail._filter_chip_rects
+                      if key == 'Block')
+    rail.handle_event(pygame.event.Event(
+        pygame.MOUSEBUTTONDOWN, button=1, pos=block_chip.center))
+    rail.draw()
+    assert rail._active_family is None
+    assert len(rail._cell_move_ids) == 3
 
 
-def test_tactics_rail_expanded_group_has_collapse_control():
+def test_tactics_rail_filter_resets_when_its_family_is_played_out():
     from config import settings
     from game.components.conquer_tactics_rail import ConquerTacticsRail
 
@@ -722,30 +783,25 @@ def test_tactics_rail_expanded_group_has_collapse_control():
         battle_gamble_counts={}, last_battle_result=None,
     )
     moves = [
-        _move(60, family='Buff', suit='Hearts', rank='9', value=4),
-        _move(61, family='Buff', suit='Spades', rank='K', value=7),
-        _move(62, family='Buff', suit='Clubs', rank='J', value=2),
+        _move(30, family='Buff', suit='Hearts', rank='9', value=4),
+        _move(31, family='Block', suit='Clubs', rank='Q', value=0),
     ]
-    rail = ConquerTacticsRail(_ConquerUiParent(window, game, moves))
-    rail._expanded_groups.add('Buff')
+    parent = _ConquerUiParent(window, game, moves)
+    rail = ConquerTacticsRail(parent)
+    rail.draw()
+    rail._set_active_family('Buff')
+    rail.draw()
+    assert rail._cell_move_ids == [30]
+
+    parent._moves = [moves[1]]
     rail.draw()
 
-    assert rail._cell_kinds == ['move', 'move', 'move']
-    toggle_rect = rail._cell_group_toggle_rects[0]
-    assert toggle_rect is not None
-
-    rail.handle_event(pygame.event.Event(
-        pygame.MOUSEBUTTONDOWN, button=1, pos=toggle_rect.center))
-    rail.draw()
-
-    assert rail._cell_kinds == ['collapsed']
-    assert rail._selected_id is None
+    assert rail._active_family is None
+    assert rail._cell_move_ids == [31]
 
 
-def test_tactics_rail_auto_expands_dagger_group_for_combine():
-    """Round 13: selecting a single Dagger or arming Combine forces the
-    Dagger group to expand so partners stay visible even when default-
-    collapsed."""
+def test_tactics_rail_dagger_selection_keeps_rows_still_for_one_tap_combine():
+    """Selecting a Dagger never shifts rows; Combine still finds its partner."""
     from config import settings
     from game.components.conquer_tactics_rail import ConquerTacticsRail
 
@@ -762,18 +818,82 @@ def test_tactics_rail_auto_expands_dagger_group_for_combine():
     ]
     rail = ConquerTacticsRail(_ConquerUiParent(window, game, moves))
     rail.draw()
-    # Default: Dagger group collapsed (3 members > 1).
-    assert rail._cell_kinds == ['collapsed']
-    # Selecting one of the daggers auto-expands the group.
+    rows_before = list(rail._cell_rects)
+    assert rail._cell_move_ids == [30, 31, 32]
+
     rail._selected_id = 30
     rail.draw()
-    assert rail._cell_kinds == ['move', 'move', 'move']
+    assert rail._cell_rects == rows_before
+    assert rail._best_combine_partner()['id'] == 31
 
 
-def test_tactics_rail_top_strip_wraps_long_banner_into_multiline():
-    """Round 13: long banners wrap onto multiple lines instead of being
-    truncated, growing the top strip into the hand list (subject to a
-    floor of three visible cells)."""
+def test_tactics_rail_preserves_user_reselection_while_action_is_pending():
+    from config import settings
+    from game.components.conquer_tactics_rail import ConquerTacticsRail
+
+    window = pygame.Surface((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+    game = SimpleNamespace(
+        mode='conquer', player_id=1, battle_round=1,
+        battle_turn_player_id=1, battle_confirmed=True,
+        battle_gamble_counts={}, last_battle_result=None,
+    )
+    moves = [
+        _move(70, family='Dagger', suit='Hearts', rank='9', value=9),
+        _move(71, family='Block', suit='Spades', rank='Q', value=0),
+    ]
+    parent = _ConquerUiParent(window, game, moves)
+    rail = ConquerTacticsRail(parent)
+    rail._handle_cell_click(70)
+    submitted_at = rail.selection_revision()
+    rail.begin_server_action('gamble', 70)
+
+    # The player prepares Block while the Gamble request is still running.
+    rail._handle_cell_click(71)
+    parent._moves = [
+        moves[1],
+        _move(72, family='Dagger', suit='Diamonds', rank='K', value=13),
+    ]
+    rail.complete_server_action(
+        submit_revision=submitted_at,
+        preferred_move_ids=[72],
+    )
+
+    assert rail._selected_id == 71
+    assert rail._server_action_pending is None
+
+
+def test_tactics_rail_focuses_new_result_when_player_did_not_reselect():
+    from config import settings
+    from game.components.conquer_tactics_rail import ConquerTacticsRail
+
+    window = pygame.Surface((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+    game = SimpleNamespace(
+        mode='conquer', player_id=1, battle_round=1,
+        battle_turn_player_id=1, battle_confirmed=True,
+        battle_gamble_counts={}, last_battle_result=None,
+    )
+    moves = [_move(80, family='Block', suit='Spades', rank='Q', value=0)]
+    parent = _ConquerUiParent(window, game, moves)
+    rail = ConquerTacticsRail(parent)
+    rail._handle_cell_click(80)
+    submitted_at = rail.selection_revision()
+    parent._moves = [
+        _move(81, family='Dagger', suit='Hearts', rank='9', value=9),
+        _move(82, family='Dagger', suit='Diamonds', rank='K', value=13),
+    ]
+
+    rail.complete_server_action(
+        submit_revision=submitted_at,
+        preferred_move_ids=[82, 81],
+    )
+
+    assert rail._selected_id == 82
+    assert [item['move']['id'] for item in rail._visible_hand_items()] == [82, 81]
+
+
+def test_tactics_rail_banner_floats_over_the_list_without_resizing_it():
+    """Round 14: long banners wrap onto multiple lines and float over the
+    bottom of the hand list instead of stealing tactic rows from it."""
     from config import settings
     from game.components.conquer_tactics_rail import ConquerTacticsRail
 
@@ -790,26 +910,33 @@ def test_tactics_rail_top_strip_wraps_long_banner_into_multiline():
         'Forced deal triggered: opponent must reveal a hidden tactic '
         'and you may swap it with one of your own daggers immediately!'
     )
+    rail.draw()
+    list_without_banner = pygame.Rect(rail._dyn_hand_list_rect)
+
     rail.set_result_banner(long_text, ttl_ms=None)
     rail.draw()
 
     layout = rail._ensure_layout().tactics_rail
-    base_h = pygame.Rect(*layout.top_strip_rect).height
-    assert rail._dyn_top_strip_rect is not None
-    assert rail._dyn_top_strip_rect.height >= base_h
-    # If the message is long enough to need two or more lines, the strip
-    # actually grew.
-    font = settings.get_font(max(11, int(settings.FS_SMALL * 0.95)), bold=True)
-    avail = max(1, rail._dyn_top_strip_rect.width - 16)
-    line_count = len(ConquerTacticsRail._wrap_text(long_text, font, avail))
-    if line_count >= 2:
-        assert rail._dyn_top_strip_rect.height > base_h
-    # Hand list never shrinks below three cells.
-    assert rail._dyn_hand_list_rect is not None
+    # The hand viewport is identical with and without the banner.
+    assert rail._dyn_hand_list_rect == list_without_banner
     assert rail._dyn_hand_list_rect.height >= 3 * layout.cell_height
+    # The banner floats inside the list, anchored to its bottom edge.
+    assert rail._banner_rect is not None
+    assert list_without_banner.contains(rail._banner_rect)
+    assert rail._banner_rect.bottom == list_without_banner.bottom
+    # Multi-line messages get more than a single line of height.
+    font = settings.get_font(max(11, int(settings.FS_SMALL * 0.95)), bold=True)
+    avail = max(1, rail._banner_rect.width - 16)
+    if len(ConquerTacticsRail._wrap_text(long_text, font, avail)) >= 2:
+        assert rail._banner_rect.height > font.get_height() * 2
+
+    # A tap inside the banner dismisses it.
+    rail.handle_event(pygame.event.Event(
+        pygame.MOUSEBUTTONDOWN, button=1, pos=rail._banner_rect.center))
+    assert rail._result_banner is None
 
 
-def test_tactics_rail_banner_can_use_detail_space_before_truncating():
+def test_tactics_rail_banner_grows_for_long_text_without_covering_the_list():
     from config import settings
     from game.components.conquer_tactics_rail import ConquerTacticsRail
 
@@ -830,11 +957,10 @@ def test_tactics_rail_banner_can_use_detail_space_before_truncating():
     rail.draw()
 
     layout = rail._ensure_layout().tactics_rail
-    top_base = pygame.Rect(*layout.top_strip_rect)
-    assert rail._dyn_top_strip_rect.height > top_base.height
-    # Long banners are allowed to consume selected-detail space before
-    # squeezing the hand list below its three-cell floor.
-    assert rail._dyn_top_strip_rect.height >= top_base.height + 2
+    assert rail._banner_rect is not None
+    # Very long text grows the banner, but never past three quarters of the
+    # list: the hand has to stay partly readable behind the message.
+    assert rail._banner_rect.height <= rail._dyn_hand_list_rect.height * 0.75 + 1
     assert rail._dyn_hand_list_rect.height >= 3 * layout.cell_height
 
 
@@ -2924,3 +3050,107 @@ def test_timeline_panel_battle_phase_reveals_all_when_unseeded():
     )
     panel.derive_display_steps = lambda _screen: []
     assert panel.currently_resolved_step_index(screen) == 4
+
+
+# ── Support breakdown popover ───────────────────────────────────────
+
+
+def _support_row(name, *, label='Support', value='+1', kind='support'):
+    return {
+        'label': label,
+        'value': value,
+        'kind': kind,
+        'figure': SimpleNamespace(name=name),
+    }
+
+
+def test_support_popover_collapses_identical_contributions():
+    """A tier-6 land puts a dozen identical farms behind one badge.
+
+    Listing each on its own line said nothing the first line had not, and
+    the list ran past the panel and over the battlefield.
+    """
+    from game.screens.conquer_game_screen import ConquerGameScreen
+
+    rows = [_support_row('Small Yack Farm') for _ in range(6)]
+    rows += [_support_row('Wall', label='Wall', value='+3') for _ in range(4)]
+
+    lines = ConquerGameScreen._conquer_support_popover_lines(rows)
+    assert len(lines) == 2
+    assert 'Small Yack Farm' in lines[0] and 'x6' in lines[0]
+    assert 'Wall' in lines[1] and 'x4' in lines[1]
+
+
+def test_support_popover_keeps_distinct_contributions_apart():
+    from game.screens.conquer_game_screen import ConquerGameScreen
+
+    lines = ConquerGameScreen._conquer_support_popover_lines([
+        _support_row('Small Yack Farm'),
+        _support_row('Djungle Healer', value='+4'),
+    ])
+    assert len(lines) == 2
+    assert not any('x' in line.rsplit('·', 1)[-1] for line in lines), (
+        'single contributions must not be labelled with a count')
+
+
+def test_support_popover_singletons_have_no_count():
+    from game.screens.conquer_game_screen import ConquerGameScreen
+
+    lines = ConquerGameScreen._conquer_support_popover_lines(
+        [_support_row('Small Yack Farm')])
+    assert lines == ['Support +1 · Small Yack Farm']
+
+
+def test_support_popover_land_bonus_falls_back_to_its_suit():
+    from game.screens.conquer_game_screen import ConquerGameScreen
+
+    lines = ConquerGameScreen._conquer_support_popover_lines([
+        {'label': 'Land', 'value': '+2', 'kind': 'land_bonus', 'suit': 'Hearts'},
+    ])
+    assert 'Hearts' in lines[0]
+
+
+def test_lane_overlays_are_not_drawn_inside_the_cached_lane():
+    """Regression guard for a whole bug class.
+
+    ``_draw_conquer_duel_lane``'s output is snapshotted into a lane-sized
+    cache surface, so anything drawn there that reaches past the lane gets
+    cut at its edge and then frozen for as long as the cache key holds.  The
+    support popovers, source links and tooltips must stay outside it.
+    """
+    import inspect
+    from game.screens.conquer_game_screen import ConquerGameScreen
+
+    lane_src = inspect.getsource(ConquerGameScreen._draw_conquer_duel_lane)
+    for overlay in ('_draw_conquer_support_badge_popover',
+                    '_draw_conquer_support_overflow_popover',
+                    '_draw_conquer_lane_source_link',
+                    '_draw_conquer_lane_tooltips'):
+        assert overlay not in lane_src, (
+            f'{overlay} is drawn inside the cached lane; it will be clipped '
+            f'to the lane rect and frozen into the cache')
+
+    render_src = inspect.getsource(ConquerGameScreen.render)
+    assert '_draw_conquer_lane_overlays' in render_src
+
+
+def test_only_one_support_popover_is_drawn_per_frame():
+    """Both popovers can be armed at once; two panels overlap unreadably."""
+    import inspect
+    from game.screens.conquer_game_screen import ConquerGameScreen
+
+    src = inspect.getsource(ConquerGameScreen._draw_conquer_lane_overlays)
+    assert ('if not self._draw_conquer_support_badge_popover():' in src
+            and 'self._draw_conquer_support_overflow_popover()' in src), (
+        'the two popovers must be mutually exclusive')
+
+
+def test_badge_popover_is_touch_only():
+    """Desktop explains support through per-badge values instead."""
+    from config import settings
+    from game.screens.conquer_game_screen import ConquerGameScreen
+
+    if settings.TOUCH_TARGET_MIN > 0:
+        return
+    screen = object.__new__(ConquerGameScreen)
+    assert screen._draw_conquer_support_badge_popover() is False

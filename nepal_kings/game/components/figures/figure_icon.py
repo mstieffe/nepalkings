@@ -323,20 +323,37 @@ class FigureIcon:
             center=(self.x, self.y + 0.9 * settings.FIGURE_ICON_BIG_HEIGHT // 2)
         )
 
-    def collide(self) -> bool:
-        """
-        Check if the mouse is hovering over the figure icon.
+    def hit_area(self):
+        """The rect a pointer must be inside to hover this icon.
 
-        :return: True if the mouse is over the icon's frame, False otherwise.
+        Returns ``None`` when the icon is currently not interactive.  Owners
+        that lay icons out themselves override this via ``hit_rect`` /
+        ``hit_suppressed``: a field column both shrinks its icons (a dense
+        frame is smaller than the touch minimum) and clips them (an icon
+        scrolled out of its column must stop answering clicks, or it reads as
+        a phantom hit).
         """
-        mx, my = pygame.mouse.get_pos()
+        if getattr(self, 'hit_suppressed', False):
+            return None
+        override = getattr(self, 'hit_rect', None)
+        if override is not None:
+            return pygame.Rect(override)
         hit = self.rect_frame
         if self.draw_name and settings.TOUCH_TARGET_MIN > 0:
             hit = pygame.Rect(0, 0,
                               max(hit.w, settings.TOUCH_TARGET_MIN),
                               max(hit.h, settings.TOUCH_TARGET_MIN))
             hit.center = self.rect_frame.center
-        return hit.collidepoint((mx, my))
+        return hit
+
+    def collide(self) -> bool:
+        """
+        Check if the mouse is hovering over the figure icon.
+
+        :return: True if the mouse is over the icon's frame, False otherwise.
+        """
+        hit = self.hit_area()
+        return bool(hit and hit.collidepoint(pygame.mouse.get_pos()))
 
     def draw_icon(
         self,
@@ -619,7 +636,18 @@ class FieldFigureIcon(FigureIcon):
         # Set castle figure flag before calling super().__init__()
         # because parent's __init__ calls load_glow_effects() which we override
         self.is_castle_figure = figure.family.field == 'castle'
-        
+
+        # Owner-controlled size multiplier for the NORMAL (resting) surfaces.
+        # A crowded field compartment renders its icons denser so they stop
+        # overlapping; the "big" hover/click surfaces stay at full size, so
+        # pointing at a dense icon still pops it out at its natural size.
+        # Must precede super().__init__(), which builds the images.
+        self.render_scale = 1.0
+
+        # Hover/click gating, honoured by FigureIcon.hit_area().
+        self.hit_rect = None
+        self.hit_suppressed = False
+
         super().__init__(
             window,
             figure.family.name,
@@ -735,6 +763,10 @@ class FieldFigureIcon(FigureIcon):
         # of covering neighbouring UI.
         self.max_info_width = None
 
+        # Dense field rows replace the name/power plate with a corner badge
+        # (see _draw_dense_power_badge); set by the owning column.
+        self.power_badge_only = False
+
         # Blocks-bonus: when True the support bonus is negated (shown as red strikethrough)
         self.battle_bonus_blocked = False
 
@@ -779,8 +811,12 @@ class FieldFigureIcon(FigureIcon):
         """
         # Use larger glow for castle figures (Kings and Maharajas)
         glow_scale = 1.2 if self.is_castle_figure else 1.0
-        
-        normal_glow_size = int(settings.FIGURE_ICON_GLOW_WIDTH * glow_scale)
+
+        # The resting glow tracks render_scale so it stays wrapped around a
+        # dense icon instead of haloing far past it; the big glow matches the
+        # big surfaces and stays at full size.
+        normal_glow_size = max(1, int(settings.FIGURE_ICON_GLOW_WIDTH * glow_scale
+                                      * getattr(self, 'render_scale', 1.0)))
         big_glow_size = int(settings.FIGURE_ICON_GLOW_BIG_WIDTH * glow_scale)
         
         # Load base images from class-level cache (shared with parent class)
@@ -1061,7 +1097,133 @@ class FieldFigureIcon(FigureIcon):
                     self.window.blit(advance_icon, (adv_x, adv_y))
 
         # Draw figure name and cards together in a box
-        self.draw_figure_info()
+        is_popped = self.hovered or self.clicked
+        if getattr(self, 'power_badge_only', False) and not is_popped:
+            # A dense row is only as tall as the frame, so there is nowhere to
+            # hang the name/power plate: it would land on the icon below.
+            # Pointing at the row pops the icon to full size and restores the
+            # full plate, and tapping opens the detail box.
+            self._draw_dense_power_badge()
+        else:
+            self.draw_figure_info()
+
+    # Base power on the dark dense badge.  SUIT_ICON_CAPTION_COLOR is near
+    # black because the plate it normally sits on is parchment.
+    _DENSE_BADGE_BASE_COLOR = (240, 226, 194)
+    _DENSE_BADGE_NEGATIVE_COLOR = (226, 120, 110)
+    _DENSE_BADGE_ENCHANTMENT_COLOR = (185, 110, 235)
+    _DENSE_BADGE_PENALTY_COLOR = (255, 140, 40)
+
+    def _dense_power_badge_segments(self):
+        """``(text, colour, strike)`` parts of the dense badge, left to right.
+
+        Mirrors the colour language of the full info plate so a compacted
+        figure reads the same way: support and land bonuses green (red when
+        inverted), enchantments purple, a ranged penalty orange, and a
+        Temple-blocked support struck through rather than dropped.
+        """
+        try:
+            base_power = int(self.figure.get_value())
+        except Exception:
+            return []
+        base_power += (getattr(self, 'buffs_allies_bonus', 0)
+                       + getattr(self, 'buffs_allies_defence_bonus', 0))
+        segments = [(str(base_power), self._DENSE_BADGE_BASE_COLOR, False)]
+
+        def _add(value, colour, *, strike=False):
+            if value:
+                segments.append(
+                    (self._format_info_modifier(value, True), colour, strike))
+
+        land_bonus = self._current_land_bonus()
+        support_bonus = self._current_battle_bonus_received() - land_bonus
+        _add(support_bonus,
+             settings.COLOR_BATTLE_BONUS if support_bonus > 0
+             else self._DENSE_BADGE_NEGATIVE_COLOR,
+             strike=bool(getattr(self, 'battle_bonus_blocked', False)))
+        # The land part is unblockable, so it is never struck through.
+        _add(land_bonus,
+             settings.COLOR_BATTLE_BONUS if land_bonus > 0
+             else self._DENSE_BADGE_NEGATIVE_COLOR)
+
+        if getattr(self.figure, 'active_enchantments', None):
+            try:
+                _add(self.figure.get_total_enchantment_modifier(),
+                     self._DENSE_BADGE_ENCHANTMENT_COLOR)
+            except Exception:
+                pass
+        _add(-int(getattr(self, 'distance_attack_penalty', 0) or 0),
+             self._DENSE_BADGE_PENALTY_COLOR)
+        return segments
+
+    def _draw_dense_power_badge(self) -> None:
+        """Corner badge carrying a dense row's power, e.g. ``9`` or ``9+2``.
+
+        Hidden opponent figures get nothing — their frame already reads as
+        face-down and a power number would leak what it is hiding.
+        """
+        if not self.is_visible:
+            return
+        segments = self._dense_power_badge_segments()
+        if not segments:
+            return
+
+        frame = self.rect_frame
+        pad = None
+        # The badge may not outgrow the icon it annotates: step the font down
+        # before giving up detail, and only then fold the modifiers into one
+        # net value.
+        for size in (max(9, int(frame.height * 0.26)),
+                     max(8, int(frame.height * 0.22)),
+                     max(7, int(frame.height * 0.19))):
+            font = settings.get_font(size, bold=True)
+            pad = max(2, size // 4)
+            rendered = [(font.render(text, True, colour), strike)
+                        for text, colour, strike in segments]
+            width = sum(s.get_width() for s, _ in rendered)
+            if width + 2 * pad <= frame.width:
+                break
+        else:
+            # Still too wide: base power plus a single net modifier.
+            net = self._dense_active_modifier_total(segments)
+            colour = (settings.COLOR_BATTLE_BONUS if net > 0
+                      else self._DENSE_BADGE_NEGATIVE_COLOR)
+            parts = [segments[0]]
+            if net:
+                parts.append((self._format_info_modifier(net, True), colour, False))
+            rendered = [(font.render(text, True, colour_), strike)
+                        for text, colour_, strike in parts]
+            width = sum(s.get_width() for s, _ in rendered)
+
+        height = max(s.get_height() for s, _ in rendered)
+        badge = pygame.Rect(0, 0, width + 2 * pad, height + pad)
+        badge.bottomright = (frame.right, frame.bottom)
+
+        radius = max(2, badge.height // 3)
+        plate = pygame.Surface(badge.size, pygame.SRCALPHA)
+        pygame.draw.rect(plate, (24, 18, 14, 224), plate.get_rect(),
+                         border_radius=radius)
+        pygame.draw.rect(plate, (132, 108, 68, 235), plate.get_rect(), 1,
+                         border_radius=radius)
+        self.window.blit(plate, badge.topleft)
+
+        x = badge.left + pad
+        for surface, strike in rendered:
+            y = badge.centery - surface.get_height() // 2
+            self.window.blit(surface, (x, y))
+            if strike:
+                mid = badge.centery
+                pygame.draw.line(self.window, (232, 92, 84),
+                                 (x, mid), (x + surface.get_width(), mid), 1)
+            x += surface.get_width()
+
+    @staticmethod
+    def _dense_active_modifier_total(segments):
+        """Collapse only active modifiers; struck support is informational."""
+        return sum(
+            int(text.replace('+', '')) for text, _colour, strike in segments[1:]
+            if not strike and text.lstrip('+-').isdigit()
+        )
 
     @staticmethod
     def _info_row_width(elements, spacing):
@@ -1298,10 +1460,13 @@ class FieldFigureIcon(FigureIcon):
         if self.is_visible:
             # Calculate power display
             base_power = self.figure.get_value()
-            # Support part is cached from __init__; the land component is
-            # live so Landslide's inversion shows up without an icon rebuild.
-            battle_bonus = self._current_battle_bonus_received()
-            
+            # Support part is what a Temple blocks; the land part is live
+            # (Landslide can invert it) and unblockable, so the two render as
+            # separate badges below.  Derive support from the public accessor
+            # (total = support + land) so both stay consistent.
+            land_bonus = self._current_land_bonus()
+            support_bonus = self._current_battle_bonus_received() - land_bonus
+
             # Create power text
             buffs_allies_bonus = getattr(self, 'buffs_allies_bonus', 0)
             defence_bonus = getattr(self, 'buffs_allies_defence_bonus', 0)
@@ -1322,21 +1487,32 @@ class FieldFigureIcon(FigureIcon):
             if defence_bonus > 0 and not compact_info:
                 defence_bonus_surface = font.render(f"+{defence_bonus}", True, settings.SUIT_ICON_CAPTION_COLOR)
             
-            # Create bonus text if applicable
+            # Create bonus text if applicable.  Two independent badges:
+            #   • support badge — blockable castle/village bloodline support;
+            #     a red strikethrough marks it when a Temple blocks it.
+            #   • land badge    — unblockable conquer land-tier bonus; never
+            #     struck through (a Temple cannot delete the land advantage).
+            def _make_modifier_surface(value):
+                # Negative totals happen when Landslide inverts the land bonus
+                # — render them in red instead of hiding them.
+                text = self._format_info_modifier(value, compact_info)
+                color = (settings.COLOR_BATTLE_BONUS if value > 0
+                         else (226, 120, 110))
+                outline = font.render(text, True, (0, 0, 0))
+                return font.render(text, True, color), outline
+
             bonus_surface = None
             bonus_outline_surface = None
             bonus_blocked = getattr(self, 'battle_bonus_blocked', False)
-            if battle_bonus != 0:
-                # Negative totals happen when Landslide inverts the land
-                # bonus — render them in red instead of hiding them.
-                bonus_text = self._format_info_modifier(
-                    battle_bonus, compact_info)
-                bonus_color = (settings.COLOR_BATTLE_BONUS if battle_bonus > 0
-                               else (226, 120, 110))
-                # Create outline for better contrast
-                bonus_outline_surface = font.render(bonus_text, True, (0, 0, 0))
-                # Positive stays green — the red strikethrough dash indicates blocked
-                bonus_surface = font.render(bonus_text, True, bonus_color)
+            if support_bonus != 0:
+                bonus_surface, bonus_outline_surface = _make_modifier_surface(
+                    support_bonus)
+
+            land_bonus_surface = None
+            land_bonus_outline_surface = None
+            if land_bonus != 0:
+                land_bonus_surface, land_bonus_outline_surface = (
+                    _make_modifier_surface(land_bonus))
             
             # Create distance-attack penalty text if applicable
             distance_penalty_surface = None
@@ -1396,6 +1572,10 @@ class FieldFigureIcon(FigureIcon):
             if bonus_surface:
                 number_elements.append(_outlined_element(
                     bonus_surface, bonus_outline_surface, strike=bonus_blocked))
+            if land_bonus_surface:
+                # Land bonus is unblockable — never struck through.
+                number_elements.append(_outlined_element(
+                    land_bonus_surface, land_bonus_outline_surface))
             if distance_penalty_surface:
                 number_elements.append(_outlined_element(
                     distance_penalty_surface, distance_penalty_outline))
@@ -1508,8 +1688,12 @@ class FieldFigureIcon(FigureIcon):
                 'compact': compact_info,
                 'power_text': power_text,
                 'support_text': (
-                    self._format_info_modifier(battle_bonus, compact_info)
-                    if battle_bonus else None
+                    self._format_info_modifier(support_bonus, compact_info)
+                    if support_bonus else None
+                ),
+                'land_text': (
+                    self._format_info_modifier(land_bonus, compact_info)
+                    if land_bonus else None
                 ),
                 'enchantment_text': (
                     self._format_info_modifier(enchantment_modifier, compact_info)
@@ -1882,6 +2066,20 @@ class FieldFigureIcon(FigureIcon):
         # Allow hovering for visible figures always; for hidden figures only during defender selection
         self.hovered = self.collide() and (self.is_visible or self.in_defender_selection_mode)
 
+    def set_render_scale(self, scale: float) -> None:
+        """Resize the resting surfaces to ``scale`` of their natural size.
+
+        Rebuilding costs a handful of ``smoothscale`` calls, so this returns
+        early unless the scale actually moved — a crowded compartment changes
+        density only when figures are added or removed, never per frame.
+        """
+        scale = max(0.2, min(1.0, float(scale)))
+        if abs(scale - getattr(self, 'render_scale', 1.0)) < 0.005:
+            return
+        self.render_scale = scale
+        self.load_glow_effects()
+        self._initialize_images(self.family, self.x, self.y)
+
     def _initialize_images(self, fig_fam, x, y) -> None:
         """
         Initialize and scale images based on field type.
@@ -1892,8 +2090,13 @@ class FieldFigureIcon(FigureIcon):
         """
         castle_scale_factor = 1.2
         is_castle = fig_fam.field == "castle"
-        scale_factor = castle_scale_factor if is_castle else 1
-        big_scale_factor = scale_factor * settings.FIGURE_ICON_BIG_SCALE
+        family_scale = castle_scale_factor if is_castle else 1
+        # Only the resting surfaces follow render_scale.  The big set keeps
+        # its natural size so hovering a dense icon reveals it at full size,
+        # and so ``icon_scale_factor`` (measured once at construction) stays
+        # the true normal→big ratio that the info plate scales by.
+        scale_factor = family_scale * getattr(self, 'render_scale', 1.0)
+        big_scale_factor = family_scale * settings.FIGURE_ICON_BIG_SCALE
 
         self.icon_img = self._scale_icon(fig_fam.icon_img_small, scale_factor)
         self.icon_gray_img = self._scale_icon(fig_fam.icon_gray_img_small, scale_factor)
@@ -2242,30 +2445,50 @@ class FieldFigureIcon(FigureIcon):
             print(f"[FIELD_ICON] Failed to calculate battle bonus: {e}")
             return 0
 
-    def _current_battle_bonus_received(self):
-        """Cached figure-support bonus plus the LIVE land bonus component.
+    def _current_land_bonus(self):
+        """Live, UNBLOCKABLE land suit bonus for this figure (conquer mode).
 
-        The land part must be evaluated per frame: Landslide inverts the
-        land bonus at battle start, long after most icons were built and
-        their support bonus cached.
+        Evaluated per frame: Landslide inverts the land bonus at battle start,
+        long after most icons were built.  Under home-ground asymmetry the
+        invader (attacker) receives only a scaled share while the defender
+        (land owner) keeps the full value.  A Temple (blocks_bonus) never
+        affects this component — it only blocks castle/village support.
         """
         if getattr(self, 'suppress_battle_bonus', False):
             return 0
-        total = int(getattr(self, 'battle_bonus_received', 0) or 0)
         try:
-            if self.game and getattr(self.game, 'mode', 'duel') == 'conquer':
-                bonus_getter = getattr(self.game, 'effective_land_bonus', None)
-                if callable(bonus_getter):
-                    land_suit, land_value = bonus_getter()
+            if not (self.game and getattr(self.game, 'mode', 'duel') == 'conquer'):
+                return 0
+            per_player = getattr(self.game, 'effective_land_bonus_for', None)
+            if callable(per_player):
+                land_suit, land_value = per_player(
+                    getattr(self.figure, 'player_id', None))
+            else:
+                getter = getattr(self.game, 'effective_land_bonus', None)
+                if callable(getter):
+                    land_suit, land_value = getter()
                 else:
                     land_suit = getattr(self.game, 'land_suit_bonus_suit', None)
                     land_value = getattr(self.game, 'land_suit_bonus_value', None)
-                if land_suit and land_value:
-                    if (self.figure.suit or '').lower() == land_suit.lower():
-                        total += int(land_value)
+            if land_suit and land_value:
+                if (self.figure.suit or '').lower() == land_suit.lower():
+                    return int(land_value)
         except Exception:
             pass
-        return total
+        return 0
+
+    def _current_battle_bonus_received(self):
+        """Cached figure-support bonus plus the LIVE land bonus component.
+
+        The support part (castle/village bloodline) is what a Temple blocks;
+        the land part is unblockable (see ``_current_land_bonus``).  The land
+        component is evaluated per frame so Landslide's mid-battle inversion
+        shows up without an icon rebuild.
+        """
+        if getattr(self, 'suppress_battle_bonus', False):
+            return 0
+        support = int(getattr(self, 'battle_bonus_received', 0) or 0)
+        return support + self._current_land_bonus()
 
     def _scale_icon(self, image, scale_factor: float) -> pygame.Surface:
         """

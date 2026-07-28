@@ -418,6 +418,7 @@ function show_infobox() {
         var requests = Object.create(null);
         var currentMusic = null;
         var musicGeneration = 0;
+        var keepAlive = null;
         var audioSessionType = 'unavailable';
         var webBuildId = '__NK_WEB_BUNDLE_VERSION__';
         var sfxManifest = [];
@@ -485,6 +486,39 @@ function show_infobox() {
                 source.buffer = buffer;
                 source.connect(ctx.destination);
                 source.start(0);
+            } catch (error) {}
+        }
+
+        function startKeepAlive(ctx){
+            // A looping, fully silent source keeps iOS from letting a running
+            // context idle back into 'suspended' between user gestures. Without
+            // it, timer- and server-driven cues (tutorial reel ticks, reward
+            // reveals, "your turn" alerts) reach a suspended context and are
+            // dropped; only tap-driven cues survive, because the tap that
+            // triggers them also resumes the context. Armed once per context.
+            if (!ctx || ctx.state === 'closed') return;
+            if (keepAlive && keepAlive.ctx === ctx) return;
+            try {
+                var frames = Math.max(
+                    1, Math.round((ctx.sampleRate || 44100) * 0.5));
+                var buffer = ctx.createBuffer(
+                    1, frames, ctx.sampleRate || 44100);
+                var source = ctx.createBufferSource();
+                var gain = ctx.createGain();
+                source.buffer = buffer;   // all-zero samples: silent
+                source.loop = true;
+                gain.gain.value = 0;      // belt-and-braces silence
+                source.connect(gain);
+                gain.connect(ctx.destination);
+                // If the system ever tears the loop down (e.g. after an audio
+                // interruption), clear the handle so the next call re-arms it.
+                source.onended = function(){
+                    if (keepAlive && keepAlive.source === source) {
+                        keepAlive = null;
+                    }
+                };
+                source.start(0);
+                keepAlive = {ctx: ctx, source: source, gain: gain};
             } catch (error) {}
         }
 
@@ -598,6 +632,7 @@ function show_infobox() {
             // Starting a source and resuming synchronously within the tap
             // covers both WebKit and Chromium's mobile autoplay policies.
             primeContext(ctx);
+            startKeepAlive(ctx);
             preloadSfx();
             return resumeContext(ctx).then(function(running){
                 if (!running) return false;
@@ -612,6 +647,7 @@ function show_infobox() {
         window.nk_audio_play_sfx = function(filename, volume){
             var ctx = audioContext();
             if (!ctx || !validFilename(filename)) return false;
+            startKeepAlive(ctx);
             loadBuffer(filename).then(function(buffer){
                 var source = ctx.createBufferSource();
                 var gain = ctx.createGain();
@@ -627,6 +663,7 @@ function show_infobox() {
         window.nk_audio_play_music = function(filename, volume, fadeMs){
             var ctx = audioContext();
             if (!ctx || !validFilename(filename)) return false;
+            startKeepAlive(ctx);
             var targetVolume = clampVolume(volume);
             var fadeSeconds = Math.max(0, Number(fadeMs) || 0) / 1000;
 
@@ -692,6 +729,7 @@ function show_infobox() {
             var ctx = audioContext();
             if (!ctx) return Promise.resolve(false);
             primeContext(ctx);
+            startKeepAlive(ctx);
             preloadSfx();
             return resumeContext(ctx);
         };
@@ -702,6 +740,7 @@ function show_infobox() {
                 buildId: webBuildId,
                 audioSessionType: audioSessionType,
                 musicFilename: currentMusic ? currentMusic.filename : null,
+                keepAlive: !!keepAlive,
                 preferredExtension: preferredExtension,
                 sfxManifestCount: sfxManifest.length,
                 loaded: Object.keys(buffers),
@@ -726,6 +765,10 @@ function show_infobox() {
         var layer = document.getElementById('nk-keyboard-layer');
         var fields = Object.create(null);
         var enabled = true;
+        // Field the virtual keyboard was opened for, and how far the canvas is
+        // currently lifted so that field stays above the keyboard.
+        var activeRecord = null;
+        var canvasShift = 0;
 
         function resumeAudio(){
             if (window.nk_audio_resume) window.nk_audio_resume();
@@ -783,6 +826,67 @@ function show_infobox() {
             });
         }
 
+        // The game canvas is `position: fixed` and letterboxed to the whole
+        // screen, so an on-screen keyboard simply covers its lower half — the
+        // user cannot read the field they are typing into.  Nothing scrolls
+        // here, so lift the canvas by exactly the overlap instead.  Both the
+        // canvas and the native inputs are placed from
+        // `canvas.getBoundingClientRect()`, and emscripten derives pointer
+        // coordinates from it too, so the transform keeps everything aligned.
+        function setCanvasShift(offset){
+            offset = Math.round(offset) || 0;
+            if (offset === canvasShift) return;
+            canvasShift = offset;
+            var canvas = document.getElementById('canvas');
+            if (canvas) {
+                canvas.style.transform =
+                    offset ? ('translateY(' + offset + 'px)') : '';
+            }
+            layoutAll();
+        }
+
+        function updateKeyboardShift(){
+            var canvas = document.getElementById('canvas');
+            var viewport = window.visualViewport;
+            if (!canvas || !viewport || !activeRecord || !enabled) {
+                setCanvasShift(0);
+                return;
+            }
+            // Only a virtual keyboard shrinks the visual viewport this much;
+            // collapsing browser chrome stays well below the threshold.
+            if (window.innerHeight - viewport.height < 100) {
+                setCanvasShift(0);
+                return;
+            }
+            var bounds = canvas.getBoundingClientRect();
+            if (canvas.height <= 1 || bounds.height <= 1) return;
+            var scaleY = bounds.height / canvas.height;
+            // Measure against the unshifted position so repeated viewport
+            // events converge instead of drifting further up each time.
+            var restingTop = bounds.top - canvasShift;
+            var fieldTop = restingTop + activeRecord.y * scaleY;
+            var fieldBottom =
+                restingTop + (activeRecord.y + activeRecord.h) * scaleY;
+            var margin = Math.max(8, activeRecord.h * scaleY * 0.4);
+            var overlap =
+                (fieldBottom + margin) - (viewport.offsetTop + viewport.height);
+            if (overlap <= 0) {
+                setCanvasShift(0);
+                return;
+            }
+            // Never lift so far that the field leaves the top of the screen.
+            var room = Math.max(0, fieldTop - viewport.offsetTop - margin);
+            setCanvasShift(-Math.min(overlap, room));
+        }
+
+        function setActiveRecord(record){
+            activeRecord = record;
+            updateKeyboardShift();
+            // Keyboards animate in, and not every browser fires a viewport
+            // resize once they settle.
+            window.setTimeout(updateKeyboardShift, 300);
+        }
+
         window.nk_keyboard_register = function(
                 label, current, isPassword, maxLength, x, y, width, height,
                 inputMode){
@@ -818,12 +922,14 @@ function show_infobox() {
                 record.done = false;
                 record.dirty = true;
                 resumeAudio();
+                setActiveRecord(record);
             });
             input.addEventListener('focus', function(){
                 record.active = true;
                 record.done = false;
                 record.dirty = true;
                 resumeAudio();
+                setActiveRecord(record);
             });
             input.addEventListener('input', function(){
                 record.dirty = true;
@@ -834,6 +940,11 @@ function show_infobox() {
                 record.done = true;
                 record.dirty = true;
                 resumeAudio();
+                // Keep the canvas lifted until the keyboard has actually
+                // retracted (the viewport resize below drops it back).
+                // Dropping it on blur would move the canvas out from under a
+                // tap that has begun but not yet released.
+                window.setTimeout(updateKeyboardShift, 350);
             });
             ['keypress', 'keyup'].forEach(function(eventName){
                 input.addEventListener(eventName, keepKeyboardEventLocal);
@@ -900,7 +1011,9 @@ function show_infobox() {
                 input.disabled = !enabled;
                 if (!enabled && document.activeElement === input) input.blur();
             });
+            if (!enabled) activeRecord = null;
             layoutAll();
+            updateKeyboardShift();
             return true;
         };
 
@@ -909,14 +1022,21 @@ function show_infobox() {
                 fields[label].input.remove();
             });
             fields = Object.create(null);
+            activeRecord = null;
+            updateKeyboardShift();
             return true;
         };
 
-        window.addEventListener('resize', layoutAll);
-        window.addEventListener('orientationchange', layoutAll);
+        function relayout(){
+            layoutAll();
+            updateKeyboardShift();
+        }
+
+        window.addEventListener('resize', relayout);
+        window.addEventListener('orientationchange', relayout);
         if (window.visualViewport) {
-            window.visualViewport.addEventListener('resize', layoutAll);
-            window.visualViewport.addEventListener('scroll', layoutAll);
+            window.visualViewport.addEventListener('resize', relayout);
+            window.visualViewport.addEventListener('scroll', relayout);
         }
     })();
 

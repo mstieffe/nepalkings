@@ -2746,7 +2746,12 @@ class GameScreen(Screen):
 
         if self._clear_stale_conquer_defender_flags_if_no_advance():
             return
-        
+
+        # Civil War keeps the turn on the advancing player for their optional
+        # second attacker; that parked turn is not a defender-selection cue.
+        if getattr(self.state.game, 'civil_war_awaiting_second', False):
+            return
+
         # Only proceed when it's actually the player's turn (turn returned from opponent)
         # This prevents showing defender selection immediately after build+advance
         if not self.state.game.turn:

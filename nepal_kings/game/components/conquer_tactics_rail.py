@@ -9,11 +9,16 @@ hand* (`BattleMove` rows with `played_round is None`).  Replaces the old
 Sections (top → bottom, all rects come from
 :func:`game.components.conquer_layout.compute_conquer_layout`):
 
-* **top strip** — round/turn indicator + an opponent-intent hint.
-* **hand list** — scrollable column of one-row cells, one per move.
+* **top strip** — gamble status (desktop) and the *family filter strip*: one
+  chip per tactic family plus an ``All`` chip.  The filter replaces the old
+  per-family accordion: a chip tap swaps the whole list instead of growing
+  it, so rows never move underneath the player's finger.
+* **hand list** — scrollable column of one-row cells, one per move.  Touch
+  builds grab-scroll the list (drag anywhere); desktop keeps wheel + arrows.
 * **selected detail** — name, suit/rank chip, source, power (desktop only;
   mobile keeps selection feedback on the row itself).
-* **action tray** — Play / Gamble / Combine / Dismantle / Skip.
+* **action tray** — Play / Gamble / Combine / Dismantle / Skip.  Its height
+  is reserved up front so selecting a tactic never shrinks the hand list.
 
 Click handling is lightweight: the rail captures click events via
 ``handle_event`` and exposes the latest pending action through
@@ -35,7 +40,8 @@ from game.components.suit_text import fit_suit_text, render_suit_text
 # Visual constants
 _BG_RGBA = (38, 29, 22, 218)
 _BORDER_RGBA = (122, 92, 56)
-_SELECTED_RGBA = (210, 168, 72)
+_SELECTED_RGBA = (92, 218, 202)
+_SELECTED_BG_RGBA = (22, 54, 52, 242)
 _TEXT_PRIMARY = (238, 218, 170)
 _TEXT_SECONDARY = (170, 152, 110)
 _TEXT_MUTED = (132, 116, 86)
@@ -68,7 +74,9 @@ class ConquerTacticsRail:
     def __init__(self, parent):
         self._parent = parent
         self.window: pygame.Surface = parent.window
-        self._scroll = 0
+        # Scroll position is stored in pixels so touch drags can follow the
+        # finger; ``_scroll`` remains an item index for every other caller.
+        self._scroll_px = 0
         self._selected_id: Optional[int] = None
         # Pending second selection for "combine" two-step flow.
         self._combine_partner_id: Optional[int] = None
@@ -85,6 +93,13 @@ class ConquerTacticsRail:
         self._scroll_down_rect: Optional[pygame.Rect] = None
         # Pending action consumed by the parent each frame.
         self._pending_action: Optional[Dict[str, Any]] = None
+        # Monotonic user-selection version. The parent snapshots this when a
+        # server mutation begins so a response never erases a choice the
+        # player made while that request was in flight.
+        self._selection_revision = 0
+        # One server mutation may be pending while the rail remains locally
+        # interactive. Shape: {'action': str, 'move_id': int|None} or None.
+        self._server_action_pending: Optional[Dict[str, Any]] = None
         # Sticky result banner — shown at the top of the rail until next
         # action or until ttl expires. (#8a)
         self._result_banner: Optional[Dict[str, Any]] = None
@@ -115,26 +130,51 @@ class ConquerTacticsRail:
         self._drag_origin_id: Optional[int] = None
         self._drag_pos: Optional[tuple] = None
         self._drag_active: bool = False
-        # Category-collapse state (round 13). Defaults: any group with >1
-        # member is collapsed (representative + ×N chip). Explicit user
-        # toggles override the default in either direction.
-        self._collapsed_groups: set = set()
-        self._expanded_groups: set = set()
-        # Per-cell metadata captured during draw — used by click handling
-        # to distinguish collapsed-group rows from individual move rows.
+        # Family filter (round 14). ``None`` shows the whole hand; otherwise
+        # only the named family group renders. Replaces the per-group
+        # accordion: filtering swaps the list instead of resizing it, so a
+        # tap never shifts the row under the player's finger.
+        self._active_family: Optional[str] = None
+        self._filter_chip_rects: List[tuple] = []
+        # Touch grab-scroll. A press inside the list still selects
+        # immediately (responsive), but promoting the gesture to a drag
+        # restores the previous selection and scrolls instead.
+        self._list_press: Optional[Dict[str, Any]] = None
+        self._list_drag_active: bool = False
+        # Per-cell metadata captured during draw.
         self._cell_kinds: List[str] = []
         self._cell_groups: List[Optional[str]] = []
-        self._cell_group_toggle_rects: List[Optional[pygame.Rect]] = []
-        # Dynamic top-strip overflow lines (round 13 wrap). When the
-        # banner/title needs more height than the layout's fixed top
-        # strip, the rail steals pixels from the hand list (subject to a
-        # minimum visible-cell floor) and remembers them here so layout
-        # helpers stay in sync.
+        # Resolved zone rects for the current frame. The filter strip and the
+        # action tray are sized up front (never from the current selection),
+        # so the hand list keeps a constant height for the whole battle.
         self._dyn_top_strip_rect: Optional[pygame.Rect] = None
+        self._dyn_filter_strip_rect: Optional[pygame.Rect] = None
         self._dyn_hand_list_rect: Optional[pygame.Rect] = None
         self._dyn_action_tray_rect: Optional[pygame.Rect] = None
+        # Overlay rect of the sticky banner, so taps can dismiss it.
+        self._banner_rect: Optional[pygame.Rect] = None
         self._cached_render_key = None
         self._cached_render_surface: Optional[pygame.Surface] = None
+
+    # ------------------------------------------------------------------ scroll
+    def _cell_height(self) -> int:
+        try:
+            return max(1, int(self._ensure_layout().tactics_rail.cell_height))
+        except Exception:
+            return 1
+
+    @property
+    def _scroll(self) -> int:
+        """First visible item index (derived from the pixel offset)."""
+        return int(self._scroll_px // self._cell_height())
+
+    @_scroll.setter
+    def _scroll(self, value) -> None:
+        try:
+            index = max(0, int(value))
+        except (TypeError, ValueError):
+            index = 0
+        self._scroll_px = index * self._cell_height()
 
     # ------------------------------------------------------------------ data
     def _moves(self) -> List[Dict[str, Any]]:
@@ -492,26 +532,110 @@ class ConquerTacticsRail:
         self._pending_action = None
         return action
 
-    def reset_selection(self):
+    def reset_selection(self, *, record_revision: bool = False):
+        changed = self._selected_id is not None
         self._selected_id = None
         self._hovered_id = None
         self._combine_partner_id = None
         self._combine_pending = False
         self._pending_action = None
         self._gamble_armed = None
+        if changed and record_revision:
+            self._selection_revision += 1
+
+    def selection_revision(self) -> int:
+        return int(self._selection_revision)
+
+    def begin_server_action(self, action: str, move_id=None) -> None:
+        """Mark one mutation pending without locking local rail navigation."""
+        try:
+            move_id = int(move_id) if move_id is not None else None
+        except (TypeError, ValueError):
+            move_id = None
+        self._server_action_pending = {
+            'action': str(action or 'action'),
+            'move_id': move_id,
+        }
+
+    def clear_server_action(self) -> None:
+        self._server_action_pending = None
+
+    def _scroll_move_into_view(self, move_id: int) -> None:
+        items = self._visible_hand_items()
+        target_index = None
+        for index, item in enumerate(items):
+            try:
+                if int((item.get('move') or {}).get('id') or 0) == int(move_id):
+                    target_index = index
+                    break
+            except (TypeError, ValueError):
+                continue
+        if target_index is None:
+            return
+        visible = self._visible_cell_capacity()
+        if target_index < self._scroll:
+            self._scroll = target_index
+        elif target_index >= self._scroll + visible:
+            self._scroll = max(0, target_index - visible + 1)
+        self._clamp_scroll()
+
+    def focus_move(self, move_id, *, reveal_group: bool = False) -> bool:
+        """Programmatically select and reveal a still-available tactic."""
+        try:
+            wanted = int(move_id)
+        except (TypeError, ValueError):
+            return False
+        target = next(
+            (move for move in self._hand_moves()
+             if int(move.get('id') or 0) == wanted),
+            None,
+        )
+        if target is None:
+            return False
+        if reveal_group:
+            # A filtered rail must not hide the tactic it is focusing.
+            group = self._family_group(target)
+            if self._active_family is not None and self._active_family != group:
+                self._active_family = group
+                self._scroll_px = 0
+        self._selected_id = wanted
+        self._combine_partner_id = None
+        self._combine_pending = False
+        self._gamble_armed = None
+        self._scroll_move_into_view(wanted)
+        return True
+
+    def complete_server_action(self, *, submit_revision: int,
+                               preferred_move_ids=None,
+                               select_strongest_fallback: bool = False) -> None:
+        """Finish a mutation without erasing selection made during its wait."""
+        self.clear_server_action()
+        self._hovered_id = None
+        self._combine_partner_id = None
+        self._combine_pending = False
+        self._pending_action = None
+        self._gamble_armed = None
+
+        user_reselected = self._selection_revision != int(submit_revision)
+        current = self._selected_move()
+        if user_reselected and current is not None:
+            self._scroll_move_into_view(int(current.get('id') or 0))
+            return
+
+        for move_id in preferred_move_ids or []:
+            if self.focus_move(move_id, reveal_group=True):
+                return
+        if select_strongest_fallback:
+            moves = [m for m in self._hand_moves() if not self._is_ghost_move(m)]
+            if moves:
+                strongest = max(moves, key=lambda move: self._power(move))
+                if self.focus_move(strongest.get('id'), reveal_group=True):
+                    return
+        self._selected_id = None
 
     def preview_move(self) -> Optional[Dict[str, Any]]:
         if not self._is_my_battle_turn() or self._hovered_id is None:
             return None
-        # Don't preview the representative of a collapsed group — the
-        # cell is meant to be clicked to expand, not to act on a single
-        # move.
-        try:
-            i = self._cell_move_ids.index(self._hovered_id)
-            if i < len(self._cell_kinds) and self._cell_kinds[i] == 'collapsed':
-                return None
-        except ValueError:
-            pass
         for move in self._hand_moves():
             if move.get('id') == self._hovered_id:
                 return move
@@ -525,6 +649,7 @@ class ConquerTacticsRail:
 
     def reset_after_action(self):
         """Clear ephemeral state after a server action completed."""
+        self.clear_server_action()
         self.reset_selection()
 
     NEW_MOVE_GLOW_MS = 3500
@@ -683,7 +808,13 @@ class ConquerTacticsRail:
     FAMILY_GROUP_ORDER = ('Dagger', 'Buff', 'Block', 'Call')
 
     def _family_group(self, move: Dict[str, Any]) -> str:
-        """Map a move to its display family group (#8a)."""
+        """Map a move to its display family group (#8a).
+
+        The three server call families (``Call Villager`` / ``Call Military``
+        / ``Call King``) share one group: they are one decision for the
+        player ("summon a figure"), and keeping them apart would push the
+        filter strip past the chips a narrow rail can hold.
+        """
         fam = (move.get('family_name') or '').strip()
         if fam in ('Dagger', 'Double Dagger'):
             return 'Dagger'
@@ -691,7 +822,7 @@ class ConquerTacticsRail:
             return 'Buff'
         if fam == 'Block':
             return 'Block'
-        if fam == 'Call':
+        if fam == 'Call' or fam.startswith('Call '):
             return 'Call'
         return fam or 'Other'
 
@@ -730,84 +861,110 @@ class ConquerTacticsRail:
             ordered.append((g, sorted(lst, key=lambda x: -self._power(x))))
         return ordered
 
-    def _group_is_expanded(self, group_label: str, members: List[Dict[str, Any]]) -> bool:
-        """Return True if the group should render every member.
+    FILTER_ALL = 'all'
 
-        Groups with one member are always "expanded" (nothing to collapse).
-        Otherwise: explicit user toggle wins; auto-expand the Dagger group
-        whenever the player is mid-combine so partners stay visible.
+    def _family_filter_chips(self) -> List[Dict[str, Any]]:
+        """Chip descriptors for the filter strip, in display order.
+
+        Returns nothing for a single-family hand: the strip would only repeat
+        what the list already shows, and the rail spends the row on tactics
+        instead.  :meth:`_draw_filter_strip` may drop the leading ``All`` chip
+        on a rail too narrow for all of them.
         """
-        if len(members) <= 1:
-            return True
-        if group_label in self._expanded_groups:
-            return True
-        if group_label in self._collapsed_groups:
-            return False
-        # Auto-expand Daggers when a single Dagger is selected or the
-        # combine flow is armed — partners must stay visible.
-        if group_label == 'Dagger':
-            sel = self._selected_move()
-            if (sel is not None and self._is_single_dagger(sel)) or self._combine_pending:
-                return True
-        # Default: collapse multi-member groups.
-        return False
+        groups = self._hand_groups_in_order()
+        if len(groups) < 2:
+            # One family (or none) — the strip would only repeat the list.
+            return []
+        chips: List[Dict[str, Any]] = [{
+            'key': self.FILTER_ALL,
+            'label': 'All',
+            'count': sum(len(members) for _label, members in groups),
+            'icon_families': (),
+        }]
+        for label, members in groups:
+            chips.append({
+                'key': label,
+                'label': label,
+                'count': len(members),
+                'icon_families': self._group_icon_families(members),
+            })
+        return chips
 
-    def _toggle_group(self, group_label: str) -> None:
-        """Toggle a group's collapsed/expanded state via explicit user click."""
-        # Determine current effective state without consulting auto-expand,
-        # so a user click on an auto-expanded group force-collapses it.
-        if group_label in self._expanded_groups:
-            self._expanded_groups.discard(group_label)
-            self._collapsed_groups.add(group_label)
-        elif group_label in self._collapsed_groups:
-            self._collapsed_groups.discard(group_label)
-            self._expanded_groups.add(group_label)
-        else:
-            # Default state was collapsed → switch to explicit expand,
-            # unless auto-expand was active in which case collapse.
-            members = next(
-                (lst for g, lst in self._hand_groups_in_order() if g == group_label),
-                [],
-            )
-            if self._group_is_expanded(group_label, members):
-                self._collapsed_groups.add(group_label)
-            else:
-                self._expanded_groups.add(group_label)
+    # Fixed order for a group's composite chip icon, so the artwork does not
+    # reshuffle when the hand's strongest call changes.
+    ICON_FAMILY_ORDER = ('Dagger', 'Double Dagger', 'Block',
+                         'Call Villager', 'Call Military', 'Call King')
+
+    @classmethod
+    def _group_icon_families(cls, members: List[Dict[str, Any]]) -> tuple:
+        """Distinct family names in a group, in stable display order."""
+        seen = []
+        for move in members:
+            name = (move.get('family_name') or '').strip()
+            if name and name not in seen:
+                seen.append(name)
+
+        def order(name: str) -> tuple:
+            try:
+                return (cls.ICON_FAMILY_ORDER.index(name), name)
+            except ValueError:
+                return (len(cls.ICON_FAMILY_ORDER), name)
+
+        return tuple(sorted(seen, key=order))
+
+    def _sync_active_family(self) -> None:
+        """Drop a filter whose family has been emptied (played out)."""
+        if self._active_family is None:
+            return
+        if not any(label == self._active_family
+                   for label, _members in self._hand_groups_in_order()):
+            self._active_family = None
+
+    def _set_active_family(self, key: Optional[str]) -> None:
+        """Apply a filter chip tap.
+
+        Selection is dropped whenever it would leave the visible list: an
+        invisible selection with a live action tray is the worst of both
+        worlds — the tray acts on a tactic the player can no longer see.
+        """
+        family = None if key in (None, self.FILTER_ALL) else str(key)
+        if family == self._active_family:
+            # Tapping the active chip returns to the full hand.
+            family = None
+        self._active_family = family
+        self._scroll_px = 0
+        selected = self._selected_move()
+        if selected is not None and family is not None:
+            if self._family_group(selected) != family:
+                self._selected_id = None
+                self._selection_revision += 1
+        self._combine_pending = False
+        self._combine_partner_id = None
+        self._gamble_armed = None
+        if self._selected_id is not None:
+            self._scroll_move_into_view(self._selected_id)
 
     def _visible_hand_items(self) -> List[Dict[str, Any]]:
-        """Flatten groups into render rows, collapsing where appropriate.
+        """Rows to render: the active family, or the whole hand.
 
-        Each item is one of:
-          * ``{'kind': 'move', 'move': dict, 'group': str}``
-          * ``{'kind': 'collapsed', 'group': str, 'representative': dict,
-                'count': int, 'all_ids': List[int]}``
+        Each item is ``{'kind': 'move', 'move': dict, 'group': str}``.  The
+        ``kind`` key is retained so callers can stay agnostic about how the
+        list was built.
         """
+        self._sync_active_family()
         items: List[Dict[str, Any]] = []
         for group_label, members in self._hand_groups_in_order():
-            if not members:
+            if self._active_family is not None and group_label != self._active_family:
                 continue
-            if self._group_is_expanded(group_label, members):
-                for idx, m in enumerate(members):
-                    items.append({
-                        'kind': 'move',
-                        'move': m,
-                        'group': group_label,
-                        'group_count': len(members),
-                        'group_first': idx == 0,
-                        'can_collapse': len(members) > 1,
-                    })
-            else:
-                rep = members[0]  # already sorted desc by power
+            for move in members:
                 items.append({
-                    'kind': 'collapsed',
+                    'kind': 'move',
+                    'move': move,
                     'group': group_label,
-                    'representative': rep,
-                    'count': len(members),
-                    'all_ids': [int(m.get('id') or 0) for m in members],
                 })
         return items
 
-    def handle_event(self, event) -> bool:
+    def handle_event(self, event, *, allow_actions: bool = True) -> bool:
         """Returns True if the rail consumed the event."""
         if event.type not in (
             pygame.MOUSEBUTTONDOWN,
@@ -827,6 +984,8 @@ class ConquerTacticsRail:
             return False
         # Drag-and-drop combine handling. (#8b)
         if event.type == pygame.MOUSEMOTION:
+            if self._list_press is not None:
+                return self._update_list_drag(event.pos)
             if self._drag_origin_id is None:
                 return False
             self._drag_pos = event.pos
@@ -840,6 +999,13 @@ class ConquerTacticsRail:
                         self._drag_active = True
             return self._drag_active
         if event.type == pygame.MOUSEBUTTONUP:
+            if self._list_press is not None:
+                was_drag = self._list_drag_active
+                self._list_press = None
+                self._list_drag_active = False
+                if was_drag:
+                    self._snap_scroll_to_row()
+                    return True
             if event.button != 1 or self._drag_origin_id is None:
                 self._cancel_drag()
                 return False
@@ -876,18 +1042,21 @@ class ConquerTacticsRail:
         pos = event.pos
         if not rail_rect.collidepoint(pos):
             return False
-        # Banner — click anywhere inside it to dismiss (#8a).
-        if self._result_banner is not None:
-            top_strip = self._dyn_top_strip_rect
-            if top_strip is None:
-                try:
-                    top_strip = pygame.Rect(*layout.tactics_rail.top_strip_rect)
-                except Exception:
-                    top_strip = None
-            if top_strip is not None and top_strip.collidepoint(pos):
+        # Banner — click anywhere inside it to dismiss (#8a). The banner is an
+        # overlay now, so its own rect is the dismiss target.
+        if self._result_banner is not None and self._banner_rect is not None:
+            if self._banner_rect.collidepoint(pos):
                 self._result_banner = None
                 return True
-        # Scroll buttons
+        # Family filter chips — a chip swaps the visible family outright.
+        for key, chip_rect in self._filter_chip_rects:
+            if self._touch_collide(chip_rect, pos,
+                                   min_w=chip_rect.width,
+                                   min_h=settings.TOUCH_COMPACT_MIN):
+                self._set_active_family(key)
+                return True
+        # Scroll buttons (desktop only — touch builds grab-scroll the list,
+        # so an arrow sitting on top of a row would only steal taps).
         if self._touch_collide(self._scroll_up_rect, pos,
                                settings.TOUCH_COMPACT_MIN, settings.TOUCH_COMPACT_MIN):
             self._scroll = max(0, self._scroll - 1)
@@ -903,10 +1072,11 @@ class ConquerTacticsRail:
             if self._touch_collide(rect, pos,
                                    settings.TOUCH_COMPACT_MIN,
                                    settings.TOUCH_COMPACT_MIN):
-                self._trigger_action(key)
+                if allow_actions:
+                    self._trigger_action(key)
                 return True
         # Cell selection
-        for i, (rect, mid) in enumerate(zip(self._cell_rects, self._cell_move_ids)):
+        for rect, mid in zip(self._cell_rects, self._cell_move_ids):
             # Adjacent tactic rows are already compact touch targets.  Do not
             # inflate them to the global full-size target: the inflated rectangles
             # overlap vertically and make taps near a row boundary select the
@@ -916,34 +1086,71 @@ class ConquerTacticsRail:
                     rect, pos,
                     settings.TOUCH_COMPACT_MIN,
                     settings.TOUCH_COMPACT_MIN):
-                kind = (self._cell_kinds[i]
-                        if i < len(self._cell_kinds) else 'move')
-                if kind == 'collapsed':
-                    group = (self._cell_groups[i]
-                             if i < len(self._cell_groups) else None)
-                    if group:
-                        self._toggle_group(group)
-                    return True
-                toggle_rect = (self._cell_group_toggle_rects[i]
-                               if i < len(self._cell_group_toggle_rects) else None)
-                if self._touch_collide(toggle_rect, pos,
-                                       settings.TOUCH_COMPACT_MIN, settings.TOUCH_COMPACT_MIN):
-                    group = (self._cell_groups[i]
-                             if i < len(self._cell_groups) else None)
-                    if group:
-                        self._toggle_group(group)
-                    return True
+                previous_selection = self._selected_id
                 self._handle_cell_click(mid)
+                # Remember the press so a swipe can take the gesture back:
+                # selection feels instant, but dragging restores it and
+                # scrolls instead of leaving a stray selection behind.
+                # Touch only — on desktop the same motion is drag-to-combine,
+                # and the wheel/arrows already scroll.
+                if settings.TOUCH_TARGET_MIN > 0:
+                    self._list_press = {
+                        'y': pos[1],
+                        'x': pos[0],
+                        'previous_selection': previous_selection,
+                    }
+                    self._list_drag_active = False
                 # Arm drag-and-drop combine (#8b) — only meaningful for
-                # single Daggers; the actual drag promotes on motion.
+                # single Daggers; the actual drag promotes on motion.  Touch
+                # builds never arm it: a swipe over two same-colour Daggers
+                # would fire an unconfirmed, destructive Combine.
                 move = next((m for m in self._hand_moves()
                              if int(m.get('id') or 0) == mid), None)
-                if move is not None and self._is_single_dagger(move):
+                if (allow_actions and settings.TOUCH_TARGET_MIN <= 0
+                        and move is not None and self._is_single_dagger(move)):
                     self._drag_origin_id = mid
                     self._drag_pos = pos
                     self._drag_active = False
                 return True
+        # Empty space below the last row still starts a scroll drag.
+        hand_rect = self._dyn_hand_list_rect
+        if (settings.TOUCH_TARGET_MIN > 0 and hand_rect is not None
+                and hand_rect.collidepoint(pos)):
+            self._list_press = {
+                'y': pos[1], 'x': pos[0], 'previous_selection': self._selected_id,
+            }
+            self._list_drag_active = False
         return True  # consumed even if hit empty space inside the rail
+
+    # ------------------------------------------------------- list grab-scroll
+    def _update_list_drag(self, pos) -> bool:
+        """Follow the pointer while a press inside the hand list is held."""
+        press = self._list_press
+        if press is None:
+            return False
+        dy = pos[1] - press['y']
+        if not self._list_drag_active:
+            if abs(dy) < self.DRAG_START_PX:
+                return False
+            self._list_drag_active = True
+            # The press had selected a row optimistically; a drag means the
+            # player wanted to scroll, so give the previous selection back.
+            if self._selected_id != press.get('previous_selection'):
+                self._selected_id = press.get('previous_selection')
+                self._selection_revision += 1
+            self._combine_pending = False
+            self._combine_partner_id = None
+        press['y'] = pos[1]
+        self._scroll_px = max(0, self._scroll_px - dy)
+        self._clamp_scroll()
+        return True
+
+    def _snap_scroll_to_row(self) -> None:
+        """Settle a released drag on the nearest row boundary."""
+        cell_h = self._cell_height()
+        self._scroll_px = int(
+            round(self._scroll_px / float(cell_h))) * cell_h
+        self._clamp_scroll()
 
     def _cell_rect_for(self, move_id: int) -> Optional[pygame.Rect]:
         for rect, mid in zip(self._cell_rects, self._cell_move_ids):
@@ -956,13 +1163,9 @@ class ConquerTacticsRail:
         self._drag_pos = None
         self._drag_active = False
 
-    def _clamp_scroll(self):
-        layout = self._ensure_layout()
-        items = self._visible_hand_items()
-        total = len(items)
-        rail = layout.tactics_rail
-        # Use the dynamic hand-list rect when available so scroll respects
-        # the runtime header overflow (round 13 wrap).
+    def _visible_cell_capacity(self) -> int:
+        """How many whole rows the hand viewport can show right now."""
+        rail = self._ensure_layout().tactics_rail
         list_h = (self._dyn_hand_list_rect.height
                   if self._dyn_hand_list_rect is not None
                   else rail.hand_list_rect[3])
@@ -970,12 +1173,16 @@ class ConquerTacticsRail:
         visible_cap = rail.cells_visible
         if settings.TOUCH_TARGET_MIN > 0:
             visible_cap = max(visible_cap, height_capacity)
-        visible_cells = max(1, min(visible_cap, height_capacity))
+        return max(1, min(visible_cap, height_capacity))
+
+    def _clamp_scroll(self):
+        total = len(self._visible_hand_items())
         # Active removed-ghost cells share the visible budget (each one
         # steals a slot from the bottom).
         ghost_count = len(getattr(self, '_removed_ghosts', {}) or {})
-        effective_visible = max(1, visible_cells - ghost_count)
-        self._scroll = max(0, min(self._scroll, max(0, total - effective_visible)))
+        effective_visible = max(1, self._visible_cell_capacity() - ghost_count)
+        max_px = max(0, (total - effective_visible)) * self._cell_height()
+        self._scroll_px = max(0, min(int(self._scroll_px), max_px))
 
     def _handle_cell_click(self, mid: int):
         # Ghost cells represent tactics that the server has already marked
@@ -1011,7 +1218,10 @@ class ConquerTacticsRail:
             # Invalid pair — fall through to plain selection toggle so the
             # player can pick a different partner without re-arming.
         # Plain selection / toggle.
-        self._selected_id = None if self._selected_id == mid else mid
+        next_id = None if self._selected_id == mid else mid
+        if next_id != self._selected_id:
+            self._selection_revision += 1
+        self._selected_id = next_id
         self._combine_pending = False
         self._combine_partner_id = None
 
@@ -1149,6 +1359,10 @@ class ConquerTacticsRail:
             duration = int(self._gamble_anim.get('duration', 0) or 0)
             if now < started + duration:
                 return None
+        if self._server_action_pending is not None:
+            # Pending source rows use a small live pulse while the non-blocking
+            # request is in flight.
+            return None
         if any(int(expires or 0) > now for expires in self._new_move_glow_until.values()):
             return None
         if any(int(data.get('expires_at') or 0) > now for data in self._removed_ghosts.values()):
@@ -1181,12 +1395,11 @@ class ConquerTacticsRail:
         return (
             rail_rect.x, rail_rect.y, rail_rect.w, rail_rect.h,
             moves_key,
-            self._scroll,
+            self._scroll_px,
             self._selected_id,
             self._combine_partner_id,
             self._combine_pending,
-            tuple(sorted(self._collapsed_groups)),
-            tuple(sorted(self._expanded_groups)),
+            self._active_family,
             banner_key,
             getattr(game, 'battle_confirmed', None),
             getattr(game, 'battle_turn_player_id', None),
@@ -1227,59 +1440,79 @@ class ConquerTacticsRail:
         selected_detail_rect = pygame.Rect(*rail.selected_detail_rect)
         hand_list_rect = pygame.Rect(*rail.hand_list_rect)
         action_tray_rect = pygame.Rect(*rail.action_tray_rect)
-        # Dynamic top-strip wrap (round 13). Grow the strip downward when
-        # the title or banner needs more lines, stealing from the hand
-        # list. Floor: keep room for at least 3 cells in the hand list.
-        required_h = self._measure_top_strip_height(top_strip_rect.width)
-        extra = max(0, required_h - top_strip_rect.height)
-        if extra > 0:
-            min_list_h = 3 * rail.cell_height
-            hand_slack = max(0, hand_list_rect.height - min_list_h)
-            detail_slack = selected_detail_rect.height if self._result_banner else 0
-            grow = min(extra, detail_slack + hand_slack)
-            if grow > 0:
-                top_strip_rect.height += grow
-                detail_shrink = min(grow, detail_slack)
-                if detail_shrink:
-                    selected_detail_rect.y += detail_shrink
-                    selected_detail_rect.height -= detail_shrink
-                hand_grow = grow - detail_shrink
-                if hand_grow:
-                    hand_list_rect.y += hand_grow
-                    hand_list_rect.height -= hand_grow
-        norm_action_specs = self._normalized_action_specs()
-        action_h = self._preferred_action_tray_height(action_tray_rect.width)
-        if action_h > action_tray_rect.height:
-            if self._action_tray_uses_column_layout(
-                    action_tray_rect.width, norm_action_specs):
-                min_visible_cells = 1
-            elif self._action_tray_uses_stacked_layout(
-                    action_tray_rect.width, norm_action_specs):
-                min_visible_cells = 2
+        mobile_compact = settings.TOUCH_TARGET_MIN > 0
+
+        # ── Family filter strip ─────────────────────────────────────
+        # Mobile spends the whole (already minimal) top strip on chips; the
+        # per-family counts make the old "N battle moves" title redundant.
+        # Desktop keeps its status line and puts the chips underneath.
+        chips = self._family_filter_chips()
+        filter_rect = pygame.Rect(top_strip_rect.x, top_strip_rect.y,
+                                  top_strip_rect.width, 0)
+        if chips:
+            chip_h = self._filter_strip_height()
+            if mobile_compact:
+                filter_rect.height = chip_h
+                grow = max(0, chip_h - top_strip_rect.height)
+                top_strip_rect.height = 0
+                if grow:
+                    hand_list_rect.y += grow
+                    hand_list_rect.height -= grow
+                    selected_detail_rect.y += grow
+                    selected_detail_rect.height = max(
+                        0, selected_detail_rect.height - grow)
             else:
-                min_visible_cells = 3
-            min_list_h = min_visible_cells * rail.cell_height
-            hand_slack = max(0, hand_list_rect.height - min_list_h)
-            grow = min(action_h - action_tray_rect.height, hand_slack)
-            if grow > 0:
-                action_tray_rect.y -= grow
-                action_tray_rect.height += grow
-                hand_list_rect.height -= grow
+                # Desktop keeps its gamble status line above the chips. Borrow
+                # from the list only if the band cannot hold both.
+                status_h = settings.get_font(
+                    max(settings.FS_CONQUER_LABEL,
+                        int(settings.FS_TINY * 0.95))).get_height() + 8
+                deficit = max(0, chip_h + status_h - top_strip_rect.height)
+                grow = min(deficit,
+                           max(0, hand_list_rect.height - 2 * rail.cell_height))
+                if grow:
+                    top_strip_rect.height += grow
+                    selected_detail_rect.y += grow
+                    hand_list_rect.y += grow
+                    hand_list_rect.height -= grow
+                chip_h = min(chip_h, max(0, top_strip_rect.height - 4))
+                filter_rect.height = chip_h
+                filter_rect.y = top_strip_rect.bottom - chip_h
+                top_strip_rect.height = max(0, top_strip_rect.height - chip_h)
+
+        # ── Action tray: reserved, never selection-driven ───────────
+        # The tray used to grow when a tactic was selected, stealing a row
+        # from the hand — so tapping the bottom row made that very row
+        # disappear.  Reserve the worst-case height up front instead: the
+        # hand viewport then keeps one constant size for the whole battle.
+        action_h = max(action_tray_rect.height,
+                       self._reserved_action_tray_height(action_tray_rect.width))
+        min_list_h = 2 * rail.cell_height
+        hand_slack = max(0, hand_list_rect.height - min_list_h)
+        grow = min(max(0, action_h - action_tray_rect.height), hand_slack)
+        if grow > 0:
+            action_tray_rect.y -= grow
+            action_tray_rect.height += grow
+            hand_list_rect.height -= grow
 
         # On touch layouts the selected-detail card repeated information
         # already present in the highlighted row, while costing almost a full
         # extra tactic slot.  Fold that band into the scrollable hand instead.
         # The action tray remains the unambiguous place to act on the selected
         # row, and desktop keeps its richer hover/detail presentation.
-        mobile_compact = settings.TOUCH_TARGET_MIN > 0
         if mobile_compact and selected_detail_rect.height > 0:
             hand_list_rect = hand_list_rect.union(selected_detail_rect)
             selected_detail_rect.height = 0
         self._dyn_top_strip_rect = top_strip_rect
+        self._dyn_filter_strip_rect = filter_rect if filter_rect.height else None
         self._dyn_hand_list_rect = hand_list_rect
         self._dyn_action_tray_rect = action_tray_rect
 
-        self._draw_top_strip(top_strip_rect)
+        if top_strip_rect.height > 0:
+            self._draw_top_strip(top_strip_rect)
+        self._filter_chip_rects = []
+        if filter_rect.height > 0:
+            self._draw_filter_strip(filter_rect, chips)
         visible_cells = rail.cells_visible
         if mobile_compact:
             visible_cells = max(
@@ -1290,6 +1523,9 @@ class ConquerTacticsRail:
         if selected_detail_rect.height > 0:
             self._draw_selected_detail(selected_detail_rect)
         self._draw_action_tray(action_tray_rect)
+        # The banner floats over the bottom of the list: a layout-consuming
+        # banner used to shrink the hand mid-interaction.
+        self._draw_result_banner(hand_list_rect)
         # The All Seeing Eye gamble preview takes over the whole hand +
         # detail region so the two forecast cards have room to be legible.
         self._draw_gamble_preview_overlay(
@@ -1410,65 +1646,37 @@ class ConquerTacticsRail:
         self.window.blit(cta, (cta_pill.centerx - cta.get_width() // 2,
                                cta_pill.centery - cta.get_height() // 2))
 
-    def _measure_top_strip_height(self, width: int) -> int:
-        """Compute the pixel height required to render the top strip.
-
-        Returns the natural fit; ``draw()`` decides whether/how to grow
-        the strip into the hand list.
-        """
-        font = settings.get_font(max(settings.FS_CONQUER_LABEL, int(settings.FS_SMALL * 0.95)), bold=True)
-        sub = settings.get_font(max(settings.FS_CONQUER_LABEL, int(settings.FS_TINY * 0.95)))
-        avail = max(1, width - 16)
-        if self._result_banner:
-            text = self._result_banner.get('text', '')
-            lines = self._wrap_text(text, font, avail)
-            hint_h = settings.get_font(
-                max(settings.FS_CONQUER_META, int(settings.FS_TINY * 0.8))).get_height()
-            return 4 + len(lines) * (font.get_height() + 1) + hint_h + 7
-        if settings.TOUCH_TARGET_MIN > 0:
-            # Mobile uses one deliberately compact summary row.  Returning
-            # the natural single-line height prevents ordinary status text
-            # from stealing space from the hand list.
-            return font.get_height() + 8
-        game = getattr(self._parent.state, 'game', None)
-        hand_count = len(self._hand_moves())
-        word = 'battle move' if hand_count == 1 else 'battle moves'
-        line1 = f'{hand_count} {word}'
-        gamble_text, _ = self._gamble_status_for_strip(game)
-        line2 = gamble_text
-        l1 = self._wrap_text(line1, font, avail)
-        l2 = self._wrap_text(line2, sub, avail)
-        return (4 + len(l1) * (font.get_height() + 1)
-                + 2 + len(l2) * (sub.get_height() + 1) + 4)
-
     # -- top strip
     def _draw_top_strip(self, rect: pygame.Rect):
-        if self._result_banner:
-            self._draw_result_banner(rect)
-            return
         if settings.TOUCH_TARGET_MIN > 0:
             self._draw_mobile_top_strip(rect)
             return
-        # Two-row strip: tactics-in-hand count + gamble status. The
-        # "Action pending" hint and Round X/3 line were removed -- the
-        # ledger and timeline communicate round / turn already.
-        hand_count = len(self._hand_moves())
-        word = 'battle move' if hand_count == 1 else 'battle moves'
-        line1 = f'{hand_count} {word}'
+        # Tactics-in-hand count + gamble status. The count line is dropped
+        # when the filter strip is showing: its chips already carry per-family
+        # counts, and the "All" chip carries the total.
         game = getattr(self._parent.state, 'game', None)
         gamble_text, gamble_state = self._gamble_status_for_strip(game)
         line2 = gamble_text
         font = settings.get_font(max(settings.FS_CONQUER_LABEL, int(settings.FS_SMALL * 0.95)), bold=True)
         sub = settings.get_font(max(settings.FS_CONQUER_LABEL, int(settings.FS_TINY * 0.95)))
-        avail = max(1, rect.width - 16)
+        # The pip cluster lives in the strip's top-right corner; text has to
+        # stop short of it or the two overprint each other.
+        avail = max(1, rect.width - 16 - self._gamble_pip_span(rect))
+        if sub.size(line2)[0] > avail:
+            # Narrow strip (chips + pips took the room): the compact wording
+            # beats wrapping a status line onto a second row that has no space.
+            line2 = line2.replace(' this round', '').replace(' of the battle', '')
         y = rect.y + 4
-        for line in self._wrap_text(line1, font, avail):
-            if y + font.get_height() > rect.bottom:
-                break
-            surf = font.render(line, True, _TEXT_PRIMARY)
-            self.window.blit(surf, (rect.x + 8, y))
-            y += font.get_height() + 1
-        y += 2
+        if not self._family_filter_chips():
+            hand_count = len(self._hand_moves())
+            word = 'battle move' if hand_count == 1 else 'battle moves'
+            for line in self._wrap_text(f'{hand_count} {word}', font, avail):
+                if y + font.get_height() > rect.bottom:
+                    break
+                surf = font.render(line, True, _TEXT_PRIMARY)
+                self.window.blit(surf, (rect.x + 8, y))
+                y += font.get_height() + 1
+            y += 2
         # Muted grey when the player has already gambled this round; warm
         # ember for the final remaining gamble.
         if gamble_state == 'used':
@@ -1559,6 +1767,210 @@ class ConquerTacticsRail:
             1,
         )
 
+    # -- family filter strip
+    FILTER_CHIP_MIN_W = 26
+
+    def _filter_strip_height(self) -> int:
+        """One row of chips, tall enough for family art above its count.
+
+        The mobile hand list runs with ~20 px of slack (four 48 px rows in a
+        212 px viewport), so the extra height here costs no tactic row.
+        """
+        if settings.TOUCH_TARGET_MIN > 0:
+            return max(settings.TOUCH_COMPACT_MIN + 8, 38)
+        return 34
+
+    def _family_icon(self, family_name: str, size: int):
+        """One family's artwork at ``size`` px, or ``None`` if unavailable.
+
+        ``_conquer_battle_move_icon_assets`` scales its icons to
+        ``requested - 6``, so ask for the extra pixels rather than getting a
+        sliver back.
+        """
+        if not family_name or size <= 0:
+            return None
+        try:
+            _glow, icon_cache, _frame, _suit, _font = (
+                self._parent._conquer_battle_move_icon_assets(size + 6))
+        except Exception:
+            return None
+        return icon_cache.get(family_name)
+
+    # A fan of three battle-move figures needs roughly this much room before
+    # the individual silhouettes survive; below it the overlap is mush and a
+    # single emblem reads far better.
+    COMPOSITE_ICON_MIN_PX = 34
+
+    # Which member family stands for a multi-family group on a chip too small
+    # to fan them. First one the player actually holds wins, so the chip never
+    # advertises a tactic that is not in the hand.
+    GROUP_EMBLEM_PREFERENCE = {
+        'Call': ('Call King', 'Call Military', 'Call Villager'),
+        'Dagger': ('Dagger', 'Double Dagger'),
+    }
+
+    def _filter_chip_icon(self, chip: Dict[str, Any], size: int):
+        """Artwork for a chip, composited where the space allows it.
+
+        A group like ``Call`` covers three server families (Villager /
+        Military / King), and borrowing whichever one happened to be
+        strongest made the chip change picture between hands. Wide chips fan
+        all members into one icon; narrow ones fall back to a fixed emblem.
+        """
+        families = [name for name in (chip.get('icon_families') or []) if name]
+        if not families or size <= 0:
+            return None
+        if len(families) == 1:
+            return self._family_icon(families[0], size)
+        if size >= self.COMPOSITE_ICON_MIN_PX:
+            composite = self._composite_family_icon(families, size)
+            if composite is not None:
+                return composite
+        for name in self.GROUP_EMBLEM_PREFERENCE.get(chip.get('key'), ()):
+            if name in families:
+                icon = self._family_icon(name, size)
+                if icon is not None:
+                    return icon
+        return self._family_icon(families[0], size)
+
+    def _composite_family_icon(self, families: List[str], size: int):
+        """Fan a group's family icons into one ``size``-square surface."""
+        cache = getattr(self, '_chip_icon_cache', None)
+        if cache is None:
+            cache = {}
+            self._chip_icon_cache = cache
+        key = (tuple(families), int(size))
+        if key in cache:
+            return cache[key]
+
+        step = max(3, size // 6)
+        # Each extra layer shrinks every icon, so stop stacking once the
+        # members would drop below the size where they read at all.
+        families = families[:max(2, (size - self.COMPOSITE_ICON_MIN_PX // 2) // step)]
+        side = max(8, size - step * (len(families) - 1))
+        icons = [icon for icon in
+                 (self._family_icon(name, side) for name in families)
+                 if icon is not None]
+        if not icons:
+            cache[key] = None
+            return None
+        surface = pygame.Surface((size, size), pygame.SRCALPHA)
+        x = max(0, (size - (side + step * (len(icons) - 1))) // 2)
+        y = max(0, (size - side) // 2)
+        for icon in icons:
+            if icon.get_size() != (side, side):
+                icon = pygame.transform.smoothscale(icon, (side, side))
+            surface.blit(icon, (x, y))
+            x += step
+        cache[key] = surface
+        return surface
+
+    # Text fallback when a family has no artwork (or in headless tests).
+    FILTER_CHIP_ABBREVIATIONS = {
+        'Dagger': 'DAG',
+        'Block': 'BLK',
+        'Call': 'CALL',
+        'Buff': 'BUF',
+    }
+
+    @classmethod
+    def _filter_chip_label(cls, chip: Dict[str, Any], font=None,
+                           max_width: int = 0) -> str:
+        """Shortest label that still fits: 'CALL' → 'CAL' → 'CA' → 'C'."""
+        if chip['key'] == cls.FILTER_ALL:
+            return 'ALL'
+        label = str(chip.get('label') or '')
+        text = cls.FILTER_CHIP_ABBREVIATIONS.get(label, label[:3].upper())
+        if font is None or max_width <= 0:
+            return text
+        while len(text) > 1 and font.size(text)[0] > max_width:
+            text = text[:-1]
+        return text
+
+    def _draw_filter_strip(self, rect: pygame.Rect,
+                           chips: List[Dict[str, Any]]) -> None:
+        """Draw one chip per family (plus ``All``) and record tap rects.
+
+        Chips share the strip width evenly.  When ``All`` would squeeze the
+        family chips below a tappable width it is dropped — the active chip
+        then toggles back to the full hand, and an emptied family resets the
+        filter automatically.
+        """
+        chips = list(chips)
+        gap = 3
+        if settings.TOUCH_TARGET_MIN > 0:
+            # Run the strip out to the rail edge like a tab bar: on a 137 px
+            # rail those few pixels are the difference between a 27 px and a
+            # 33 px chip.
+            try:
+                rail_rect = pygame.Rect(*self._ensure_layout().tactics_rail.rect)
+                rect = pygame.Rect(rail_rect.left + 3, rect.y,
+                                   rail_rect.width - 6, rect.height)
+            except Exception:
+                pass
+        usable = rect.width - 4
+        while (len(chips) > 1
+               and (usable - gap * (len(chips) - 1)) // len(chips)
+               < self.FILTER_CHIP_MIN_W
+               and chips[0]['key'] == self.FILTER_ALL):
+            chips = chips[1:]
+        count = max(1, len(chips))
+        chip_w = max(1, (usable - gap * (count - 1)) // count)
+        chip_h = max(1, rect.height - 4)
+        label_font = settings.get_font(
+            max(settings.FS_CONQUER_META, int(settings.FS_TINY * 0.78)), bold=True)
+        count_font = settings.get_font(
+            max(settings.FS_CONQUER_META, int(settings.FS_TINY * 0.72)), bold=True)
+        x = rect.x + 2
+        y = rect.y + 2
+        for index, chip in enumerate(chips):
+            width = (rect.right - 2 - x) if index == count - 1 else chip_w
+            chip_rect = pygame.Rect(x, y, max(1, width), chip_h)
+            is_all = chip['key'] == self.FILTER_ALL
+            active = ((self._active_family is None and is_all)
+                      or (self._active_family == chip['key'] and not is_all))
+            fill = (58, 92, 88) if active else (44, 36, 28)
+            border = _SELECTED_RGBA if active else (108, 88, 58)
+            pygame.draw.rect(self.window, fill, chip_rect, 0, border_radius=5)
+            pygame.draw.rect(self.window, border, chip_rect,
+                             2 if active else 1, border_radius=5)
+            fg = (226, 246, 242) if active else _TEXT_SECONDARY
+            count_surf = count_font.render(
+                str(chip['count']), True, fg if active else _TEXT_MUTED)
+            icon_size = max(0, min(chip_rect.width - 8,
+                                   chip_rect.height - count_surf.get_height() - 4))
+            icon = None if is_all else self._filter_chip_icon(chip, icon_size)
+            # Family art beats a clipped word: at 30 px the legibility floor
+            # turns "DAG" into "D…", while the icon matches the row art the
+            # player is already reading.
+            head = icon
+            if head is None:
+                name = self._filter_chip_label(
+                    chip, label_font, chip_rect.width - 4)
+                head = label_font.render(name, True, fg)
+            total_h = head.get_height() + count_surf.get_height() - 1
+            top = chip_rect.centery - total_h // 2
+            self.window.blit(head, head.get_rect(
+                midtop=(chip_rect.centerx, top)))
+            self.window.blit(count_surf, count_surf.get_rect(
+                midtop=(chip_rect.centerx, top + head.get_height() - 1)))
+            # Hit rects meet in the middle of the gap so the strip has no
+            # dead zones, but never overlap a neighbour.
+            self._filter_chip_rects.append(
+                (chip['key'], chip_rect.inflate(gap, 0)))
+            x = chip_rect.right + gap
+
+    @classmethod
+    def _gamble_pip_size(cls, rect: pygame.Rect) -> int:
+        return max(4, int(rect.height * 0.14))
+
+    @classmethod
+    def _gamble_pip_span(cls, rect: pygame.Rect) -> int:
+        """Horizontal room the pip cluster needs on the strip's right edge."""
+        size = cls._gamble_pip_size(rect)
+        gap = size * 2 + 4
+        return 10 + size + gap * (cls.GAMBLE_PER_BATTLE_LIMIT - 1) + size
+
     def _draw_gamble_pips(self, rect: pygame.Rect, game) -> None:
         """Three diamond pips, top-right of the strip: remaining gambles.
 
@@ -1571,7 +1983,7 @@ class ConquerTacticsRail:
         used, _rounds = self._gamble_counts_state(game)
         used = max(0, min(self.GAMBLE_PER_BATTLE_LIMIT, used))
         remaining = self.GAMBLE_PER_BATTLE_LIMIT - used
-        size = max(4, int(rect.height * 0.14))
+        size = self._gamble_pip_size(rect)
         gap = size * 2 + 4
         cy = rect.y + 6 + size
         cx = rect.right - 10 - size
@@ -1627,75 +2039,44 @@ class ConquerTacticsRail:
             ('Gamble ready this round', 'ready')
         )
 
-    def _top_strip_subtitle(self, game) -> str:
-        hint = self._opponent_intent_hint(game)
-        counts = self._top_strip_count_text(game)
-        return f'{hint} · {counts}' if counts else hint
+    def _draw_result_banner(self, list_rect: pygame.Rect):
+        """Float the sticky banner over the bottom of the hand list.
 
-    def _top_strip_count_text(self, game) -> str:
-        if game is None:
-            return ''
-        tactics_remaining = len(self._hand_moves())
-        counts = getattr(game, 'battle_gamble_counts', None) or {}
-        my_id = getattr(game, 'player_id', None)
-        state = counts.get(str(my_id), 0)
-        if isinstance(state, dict):
-            try:
-                used = int(state.get('count', 0) or 0)
-            except (TypeError, ValueError):
-                used = 0
-        else:
-            try:
-                used = int(state or 0)
-            except (TypeError, ValueError):
-                used = 0
-        try:
-            current_round = int(getattr(game, 'battle_round', 0) or 0)
-        except (TypeError, ValueError):
-            current_round = 0
-        round_used = isinstance(state, dict) and current_round in {
-            int(round_value) for round_value in (state.get('rounds', []) or [])
-            if str(round_value).lstrip('-').isdigit()
-        }
-        if round_used:
-            gamble_text = 'Gamble used this round'
-        elif used >= self.GAMBLE_PER_BATTLE_LIMIT:
-            gamble_text = 'Gamble limit reached'
-        else:
-            gamble_text = 'Gamble ready this round'
-        tactic_word = 'tactic' if tactics_remaining == 1 else 'tactics'
-        return f'{tactics_remaining} {tactic_word} · {gamble_text}'
-
-    def _opponent_intent_hint(self, game) -> str:
-        opp_id = getattr(game, 'battle_turn_player_id', None)
-        if opp_id is None or opp_id == getattr(game, 'player_id', None):
-            return 'Action pending'
-        return 'Opponent action hidden'
-
-    def _draw_result_banner(self, rect: pygame.Rect):
-        banner = self._result_banner or {}
+        The banner used to own a layout band, so every confirmation prompt
+        stole a tactic row from an already short list.  As an overlay it
+        costs nothing permanent and disappears on the next tap.
+        """
+        self._banner_rect = None
+        if not self._result_banner or list_rect.height <= 0:
+            return
+        banner = self._result_banner
         text = banner.get('text', '')
         color = banner.get('color', _TEXT_PRIMARY)
-        # Background — slightly brighter than the rail header so it pops.
-        bg = pygame.Surface(rect.size, pygame.SRCALPHA)
-        bg.fill((58, 44, 28, 232))
-        self.window.blit(bg, rect.topleft)
-        pygame.draw.rect(self.window, color, rect, 2, border_radius=4)
         sub = settings.get_font(max(settings.FS_CONQUER_META, int(settings.FS_TINY * 0.8)))
-        avail = max(1, rect.width - 16)
+        avail = max(1, list_rect.width - 16)
         base_size = max(settings.FS_CONQUER_LABEL, int(settings.FS_SMALL * 0.95))
         min_size = max(settings.FS_CONQUER_META, int(settings.FS_TINY * 0.72))
-        font = settings.get_font(base_size, bold=True)
+        max_h = max(24, int(list_rect.height * 0.75))
+        font = settings.get_font(min_size, bold=True)
         lines = self._wrap_text(text, font, avail)
         for size in range(base_size, min_size - 1, -1):
             candidate = settings.get_font(size, bold=True)
             candidate_lines = self._wrap_text(text, candidate, avail)
-            needed = (4 + len(candidate_lines) * (candidate.get_height() + 1)
+            needed = (5 + len(candidate_lines) * (candidate.get_height() + 1)
                       + sub.get_height() + 7)
-            if needed <= rect.height:
+            if needed <= max_h:
                 font = candidate
                 lines = candidate_lines
                 break
+        height = min(max_h,
+                     5 + len(lines) * (font.get_height() + 1)
+                     + sub.get_height() + 7)
+        rect = pygame.Rect(list_rect.x, list_rect.bottom - height,
+                           list_rect.width, height)
+        bg = pygame.Surface(rect.size, pygame.SRCALPHA)
+        bg.fill((58, 44, 28, 244))
+        self.window.blit(bg, rect.topleft)
+        pygame.draw.rect(self.window, color, rect, 2, border_radius=4)
         y = rect.y + 4
         for line in lines:
             if y + font.get_height() > rect.bottom - sub.get_height() - 4:
@@ -1703,23 +2084,12 @@ class ConquerTacticsRail:
             surf = font.render(line, True, color)
             self.window.blit(surf, (rect.x + 8, y))
             y += font.get_height() + 1
-        hint = sub.render('(click anywhere to dismiss)', True, _TEXT_MUTED)
+        hint = sub.render('(tap to dismiss)' if settings.TOUCH_TARGET_MIN > 0
+                          else '(click anywhere to dismiss)', True, _TEXT_MUTED)
         self.window.blit(hint, (rect.x + 8, rect.bottom - sub.get_height() - 3))
+        self._banner_rect = rect
 
     # -- hand list
-    HEADER_H = 14
-
-    def _draw_family_header(self, rect: pygame.Rect, label: str) -> None:
-        bg = pygame.Surface(rect.size, pygame.SRCALPHA)
-        bg.fill((26, 22, 18, 210))
-        self.window.blit(bg, rect.topleft)
-        pygame.draw.line(self.window, _BORDER_RGBA,
-                         (rect.left + 2, rect.bottom - 1),
-                         (rect.right - 2, rect.bottom - 1), 1)
-        font = settings.get_font(max(settings.FS_CONQUER_META, int(settings.FS_TINY * 0.85)), bold=True)
-        s = font.render(label, True, _TEXT_SECONDARY)
-        self.window.blit(s, (rect.left + 6, rect.top + 1))
-
     def _draw_hand_list(self, rect: pygame.Rect, cell_h: int, cells_visible: int):
         previous_clip = self.window.get_clip()
         self.window.set_clip(rect)
@@ -1729,41 +2099,35 @@ class ConquerTacticsRail:
         self._cell_move_ids = []
         self._cell_kinds = []
         self._cell_groups = []
-        self._cell_group_toggle_rects = []
         self._hovered_id = None
         if not items:
             empty_font = settings.get_font(max(settings.FS_CONQUER_LABEL, int(settings.FS_SMALL * 0.9)))
-            t = empty_font.render('— hand empty —', True, _TEXT_MUTED)
+            label = ('— hand empty —' if not self._hand_moves()
+                     else '— none in this family —')
+            t = empty_font.render(label, True, _TEXT_MUTED)
             self.window.blit(t, t.get_rect(center=rect.center))
+            self._scroll_up_rect = None
+            self._scroll_down_rect = None
             self.window.set_clip(previous_clip)
             return
+        # Spell-removed ghost cells take the top slots for their TTL.
+        ghosts = list(self._removed_ghosts.items())
+        list_top = rect.top + len(ghosts) * cell_h
+        # Pixel offset lets a touch drag follow the finger instead of
+        # jumping a whole row at a time.
+        offset = int(self._scroll_px) % max(1, cell_h)
+        first_index = int(self._scroll_px) // max(1, cell_h)
         visible_count = max(1, min(cells_visible, rect.height // max(1, cell_h)))
-        visible = items[self._scroll:self._scroll + visible_count]
-        # Draw scroll indicators if needed.
-        if self._scroll > 0:
-            up = pygame.Rect(rect.right - 18, rect.top + 2, 14, 12)
-            pygame.draw.polygon(self.window, _TEXT_PRIMARY,
-                                [(up.centerx, up.top), (up.left, up.bottom),
-                                 (up.right, up.bottom)])
-            self._scroll_up_rect = up
-        else:
-            self._scroll_up_rect = None
-        if self._scroll + visible_count < len(items):
-            dn = pygame.Rect(rect.right - 18, rect.bottom - 14, 14, 12)
-            pygame.draw.polygon(self.window, _TEXT_PRIMARY,
-                                [(dn.centerx, dn.bottom), (dn.left, dn.top),
-                                 (dn.right, dn.top)])
-            self._scroll_down_rect = dn
-        else:
-            self._scroll_down_rect = None
+        visible = items[first_index:first_index + visible_count + 1]
+        self._draw_scroll_affordance(
+            rect, first_index, visible_count, len(items))
 
         font = settings.get_font(max(settings.FS_CONQUER_LABEL, int(settings.FS_SMALL * 0.95)), bold=True)
         chip_font = settings.get_font(max(settings.FS_CONQUER_META, int(settings.FS_TINY * 0.85)), bold=True)
         mouse_pos = pygame.mouse.get_pos()
         y = rect.top
-        # Spell-removed ghost cells (#round4).
         now_ms = pygame.time.get_ticks()
-        for mid, ghost in list(self._removed_ghosts.items()):
+        for mid, ghost in ghosts:
             if y + cell_h > rect.bottom + 2:
                 break
             ghost_move = ghost.get('move') or {}
@@ -1771,47 +2135,44 @@ class ConquerTacticsRail:
             self._draw_removed_ghost_cell(ghost_rect, ghost_move, font, chip_font,
                                           expires_at=ghost.get('expires_at', now_ms))
             y += cell_h
+        y = list_top - offset
         for item in visible:
-            if y + cell_h > rect.bottom + 2:
+            if y >= rect.bottom:
                 break
             cell_rect = pygame.Rect(rect.left, y, rect.width, cell_h - 2)
+            move = item['move']
             hovered = cell_rect.collidepoint(mouse_pos)
-            if item['kind'] == 'collapsed':
-                rep = item['representative']
-                rep_id = int(rep.get('id') or 0)
-                if hovered:
-                    self._hovered_id = rep_id
-                self._draw_collapsed_group_cell(
-                    cell_rect, item, font, chip_font, hovered=hovered)
-                self._cell_rects.append(cell_rect)
-                self._cell_move_ids.append(rep_id)
-                self._cell_kinds.append('collapsed')
-                self._cell_groups.append(item['group'])
-                self._cell_group_toggle_rects.append(None)
-            else:
-                move = item['move']
-                if hovered:
-                    self._hovered_id = int(move.get('id') or 0)
-                meta_reserve = 42 if (
-                    settings.TOUCH_TARGET_MIN > 0
-                    and item.get('can_collapse')
-                    and item.get('group_first')
-                ) else 0
-                self._draw_hand_cell(
-                    cell_rect, move, font, chip_font,
-                    hovered=hovered,
-                    meta_trailing_reserve=meta_reserve,
-                )
-                toggle_rect = None
-                if item.get('can_collapse') and item.get('group_first'):
-                    toggle_rect = self._draw_expanded_group_toggle(
-                        cell_rect, item, chip_font, hovered=hovered)
+            if hovered:
+                self._hovered_id = int(move.get('id') or 0)
+            self._draw_hand_cell(cell_rect, move, font, chip_font, hovered=hovered)
+            # A row scrolled halfway out of view must not accept taps meant
+            # for its neighbour: only register rows that are fully visible.
+            if cell_rect.top >= rect.top - 1 and cell_rect.bottom <= rect.bottom + 2:
                 self._cell_rects.append(cell_rect)
                 self._cell_move_ids.append(int(move.get('id') or 0))
                 self._cell_kinds.append('move')
                 self._cell_groups.append(item['group'])
-                self._cell_group_toggle_rects.append(toggle_rect)
             y += cell_h
+        # A row peeking out of the bottom edge is the clearest "there is more
+        # below" cue on touch, but a hard clip reads as a glitch — fade it.
+        if first_index + visible_count < len(items):
+            fade_h = min(14, max(4, rect.height // 12))
+            fade = pygame.Surface((rect.width, fade_h), pygame.SRCALPHA)
+            for row in range(fade_h):
+                alpha = int(190 * (row + 1) / float(fade_h))
+                pygame.draw.line(fade, (24, 18, 14, alpha),
+                                 (0, row), (rect.width, row))
+            self.window.blit(fade, (rect.left, rect.bottom - fade_h))
+        # Filtered view: say how much of the hand is out of sight, so an
+        # empty-looking rail never reads as "that's all you have".
+        hidden = len(self._hand_moves()) - len(items)
+        if self._active_family is not None and hidden > 0 and y < rect.bottom - 4:
+            hint_font = settings.get_font(
+                max(settings.FS_CONQUER_META, int(settings.FS_TINY * 0.78)))
+            hint = hint_font.render(f'+{hidden} more in ALL', True, _TEXT_MUTED)
+            hint_rect = hint.get_rect(
+                midtop=(rect.centerx, min(y + 4, rect.bottom - hint.get_height() - 2)))
+            self.window.blit(hint, hint_rect)
         # Drag ghost (#8b) — drawn last so it floats over cells.
         if self._drag_active and self._drag_origin_id is not None and self._drag_pos:
             origin_move = next((m for m in self._hand_moves()
@@ -1820,111 +2181,44 @@ class ConquerTacticsRail:
                 self._draw_drag_ghost(origin_move, self._drag_pos)
         self.window.set_clip(previous_clip)
 
-    def _draw_expanded_group_toggle(self, rect: pygame.Rect, item: Dict[str, Any],
-                                    chip_font, *, hovered: bool = False) -> pygame.Rect:
-        count = int(item.get('group_count') or 1)
-        if settings.TOUCH_TARGET_MIN > 0:
-            return self._draw_mobile_group_chip(
-                rect, count, chip_font, expanded=True, hovered=hovered)
-        pill_text = f'×{count}'
-        pill_surf = chip_font.render(pill_text, True, (24, 18, 12))
-        pill_w = pill_surf.get_width() + 24
-        pill_h = pill_surf.get_height() + 5
-        pill_rect = pygame.Rect(0, 0, pill_w, pill_h)
-        pill_rect.right = rect.right - 6
-        pill_rect.centery = rect.centery
-        bg = pygame.Surface(pill_rect.size, pygame.SRCALPHA)
-        fill = (220, 185, 92, 245) if hovered else (194, 150, 64, 226)
-        pygame.draw.rect(bg, fill, bg.get_rect(), border_radius=pill_h // 2)
-        self.window.blit(bg, pill_rect.topleft)
-        self.window.blit(pill_surf, pill_surf.get_rect(
-            midleft=(pill_rect.left + 7, pill_rect.centery)))
-        cx = pill_rect.right - 10
-        cy = pill_rect.centery
-        pygame.draw.polygon(
-            self.window,
-            (40, 30, 18),
-            [(cx - 5, cy + 3), (cx + 5, cy + 3), (cx, cy - 4)],
-        )
-        return pill_rect
+    def _draw_scroll_affordance(self, rect: pygame.Rect, first_index: int,
+                                visible_count: int, total: int) -> None:
+        """Show where the list is.
 
-    def _draw_mobile_group_chip(self, rect: pygame.Rect, count: int,
-                                chip_font, *, expanded: bool,
-                                hovered: bool = False) -> pygame.Rect:
-        """Keep the group count in the metadata lane, below the name."""
-        pill_text = f'×{count}'
-        pill_surf = chip_font.render(pill_text, True, (28, 22, 14))
-        pill_w = pill_surf.get_width() + 22
-        pill_h = pill_surf.get_height() + 4
-        pill_rect = pygame.Rect(0, 0, pill_w, pill_h)
-        pill_rect.right = rect.right - 5
-        pill_rect.bottom = rect.bottom - 4
-        fill = (220, 185, 92) if hovered else (196, 154, 68)
-        pygame.draw.rect(
-            self.window, fill, pill_rect,
-            border_radius=max(3, pill_h // 2),
-        )
-        self.window.blit(
-            pill_surf,
-            pill_surf.get_rect(midleft=(pill_rect.left + 6, pill_rect.centery)),
-        )
-        cx = pill_rect.right - 8
-        cy = pill_rect.centery
-        if expanded:
-            points = [(cx - 4, cy + 2), (cx + 4, cy + 2), (cx, cy - 3)]
-        else:
-            points = [(cx - 4, cy - 2), (cx + 4, cy - 2), (cx, cy + 3)]
-        pygame.draw.polygon(self.window, (42, 31, 18), points)
-        return pill_rect
-
-    def _draw_collapsed_group_cell(self, rect: pygame.Rect, item: Dict[str, Any],
-                                    font, chip_font, *, hovered: bool = False) -> None:
-        """Render a collapsed-group cell: representative move + ×N badge.
-
-        The representative is the strongest move in the group. Click
-        anywhere on the cell toggles expansion (handled in
-        ``_handle_cell_click``).
+        Desktop keeps clickable arrows.  Touch gets a passive scrollbar
+        instead: an arrow drawn over the first/last row inflates into a
+        33 px hit target that swallowed taps meant for that tactic, and
+        grab-scrolling has made it redundant.
         """
-        rep = item['representative']
-        count = int(item.get('count') or 1)
-        # Reuse the regular hand-cell renderer for the representative —
-        # this keeps glow/animation behaviour consistent.
-        self._draw_hand_cell(
-            rect, rep, font, chip_font,
-            hovered=hovered,
-            meta_trailing_reserve=(42 if settings.TOUCH_TARGET_MIN > 0 else 0),
-        )
-        # Overlay the "×N" pill on the right edge, plus a chevron glyph
-        # marking this row as expandable.
-        previous_clip = self.window.get_clip()
-        self.window.set_clip(rect)
-        pill_font = settings.get_font(max(settings.FS_CONQUER_META, int(settings.FS_TINY * 0.85)), bold=True)
-        if settings.TOUCH_TARGET_MIN > 0:
-            self._draw_mobile_group_chip(
-                rect, count, pill_font, expanded=False, hovered=hovered)
-            self.window.set_clip(previous_clip)
+        self._scroll_up_rect = None
+        self._scroll_down_rect = None
+        if total <= visible_count:
             return
-        pill_text = f'×{count}'
-        pill_surf = pill_font.render(pill_text, True, (24, 18, 12))
-        pill_w = pill_surf.get_width() + 10
-        pill_h = pill_surf.get_height() + 4
-        pill_rect = pygame.Rect(0, 0, pill_w, pill_h)
-        pill_rect.right = rect.right - 22  # leave space for chevron
-        pill_rect.centery = rect.centery
-        bg = pygame.Surface(pill_rect.size, pygame.SRCALPHA)
-        pygame.draw.rect(bg, (210, 168, 72, 240), bg.get_rect(),
-                         border_radius=pill_h // 2)
-        self.window.blit(bg, pill_rect.topleft)
-        self.window.blit(pill_surf, pill_surf.get_rect(center=pill_rect.center))
-        # Down-chevron marking expand affordance.
-        chev_color = (220, 196, 130) if hovered else _TEXT_SECONDARY
-        cx = rect.right - 10
-        cy = rect.centery
-        pygame.draw.polygon(
-            self.window, chev_color,
-            [(cx - 5, cy - 3), (cx + 5, cy - 3), (cx, cy + 4)])
-        self.window.set_clip(previous_clip)
-
+        if settings.TOUCH_TARGET_MIN > 0:
+            track = pygame.Rect(rect.right - 5, rect.top + 2, 3,
+                                max(6, rect.height - 4))
+            pygame.draw.rect(self.window, (70, 58, 42), track,
+                             border_radius=2)
+            thumb_h = max(12, int(track.height * visible_count / float(total)))
+            span = max(1, total - visible_count)
+            travel = max(0, track.height - thumb_h)
+            offset = int(travel * min(1.0, first_index / float(span)))
+            thumb = pygame.Rect(track.x, track.y + offset, track.width, thumb_h)
+            pygame.draw.rect(self.window, (196, 154, 68), thumb,
+                             border_radius=2)
+            return
+        if first_index > 0:
+            up = pygame.Rect(rect.right - 18, rect.top + 2, 14, 12)
+            pygame.draw.polygon(self.window, _TEXT_PRIMARY,
+                                [(up.centerx, up.top), (up.left, up.bottom),
+                                 (up.right, up.bottom)])
+            self._scroll_up_rect = up
+        if first_index + visible_count < total:
+            dn = pygame.Rect(rect.right - 18, rect.bottom - 14, 14, 12)
+            pygame.draw.polygon(self.window, _TEXT_PRIMARY,
+                                [(dn.centerx, dn.bottom), (dn.left, dn.top),
+                                 (dn.right, dn.top)])
+            self._scroll_down_rect = dn
 
     def _draw_drag_ghost(self, move: Dict[str, Any], pos: tuple) -> None:
         size = 28
@@ -2018,18 +2312,48 @@ class ConquerTacticsRail:
         self.window.set_clip(previous_clip)
 
     def _draw_hand_cell(self, rect: pygame.Rect, move: Dict[str, Any], font, chip_font,
-                        *, hovered: bool = False,
-                        meta_trailing_reserve: int = 0):
+                        *, hovered: bool = False):
         previous_clip = self.window.get_clip()
         self.window.set_clip(rect)
         is_selected = move.get('id') == self._selected_id
         is_partner = move.get('id') == self._combine_partner_id and self._combine_pending
-        bg_col = (52, 40, 30, 240) if is_selected else (38, 32, 25, 224) if hovered else (32, 24, 18, 200)
+        pending = self._server_action_pending or {}
+        try:
+            is_pending = int(pending.get('move_id') or -1) == int(move.get('id') or -2)
+        except (TypeError, ValueError):
+            is_pending = False
+        bg_col = (_SELECTED_BG_RGBA if is_selected
+                  else (38, 32, 25, 224) if hovered
+                  else (32, 24, 18, 200))
         bg = pygame.Surface(rect.size, pygame.SRCALPHA)
         bg.fill(bg_col)
         self.window.blit(bg, rect.topleft)
-        border_col = _SELECTED_RGBA if is_selected else (190, 178, 120) if hovered else (_BORDER_RGBA if not is_partner else (130, 200, 250))
-        pygame.draw.rect(self.window, border_col, rect, 2, border_radius=4)
+        border_col = (_SELECTED_RGBA if is_selected
+                      else (130, 200, 250) if is_pending or is_partner
+                      else (190, 178, 120) if hovered
+                      else _BORDER_RGBA)
+        pygame.draw.rect(
+            self.window, border_col, rect,
+            3 if is_selected else 2, border_radius=4)
+        if is_selected:
+            # Selection owns a dedicated teal language: dark tint, stronger
+            # border, and a solid leading bar. Gold remains reserved for
+            # strongest/new-card feedback.
+            pygame.draw.rect(
+                self.window, _SELECTED_RGBA,
+                pygame.Rect(rect.left + 2, rect.top + 4, 4, rect.height - 8),
+                border_radius=2,
+            )
+        if is_pending:
+            phase = (pygame.time.get_ticks() % 600) / 600.0
+            pulse = 110 + int(100 * (1.0 - abs(0.5 - phase) * 2.0))
+            pending_surf = pygame.Surface(rect.size, pygame.SRCALPHA)
+            pygame.draw.rect(
+                pending_surf, (130, 200, 250, pulse),
+                pending_surf.get_rect().inflate(-4, -4), 2,
+                border_radius=4,
+            )
+            self.window.blit(pending_surf, rect.topleft)
 
         # New-move glow (#round5) — stronger pulse + outer halo + corner
         # NEW ribbon for ``NEW_MOVE_GLOW_MS`` after a new move appears.
@@ -2149,21 +2473,41 @@ class ConquerTacticsRail:
         name = move.get('family_name', '?')
         if self._is_double_dagger(move):
             name = 'Double Dagger'
+        elif (self._active_family == 'Call' and name.startswith('Call ')):
+            # The chip already says CALL; dropping the prefix is what stops
+            # "Call Villager" and "Call Military" from both clipping to
+            # "Call ..." on a 123 px rail.
+            name = name[len('Call '):]
 
         # Power is already rendered inside the battle-move icon itself, so
         # we omit the duplicate right-edge number to free horizontal
         # space for the move name + rank chip (#round5).
-        max_text_w = max(24, rect.right - text_x - 8)
+        # The mobile check is only 14 px wide. Keep a small safety gap without
+        # needlessly truncating short family names such as "Dagger".
+        selected_reserve = (
+            15 if is_selected and settings.TOUCH_TARGET_MIN > 0
+            else 19 if is_selected
+            else 0
+        )
+        max_text_w = max(24, rect.right - text_x - 8 - selected_reserve)
 
         name_surf = font.render(self._fit_text(name, font, max_text_w), True, _TEXT_PRIMARY)
         name_y = rect.top + (4 if settings.TOUCH_TARGET_MIN > 0 else 6)
         self.window.blit(name_surf, (text_x, name_y))
 
+        # Rank + suit pip.  A filtered list is mostly one family, so the name
+        # repeats down the column and the rank/suit pair becomes the thing
+        # the player actually reads to tell two rows apart.
         chip_text = str(move.get('rank', '?'))
-        meta_text_w = max(12, max_text_w - max(0, meta_trailing_reserve))
-        chip_surf = chip_font.render(
-            self._fit_text(chip_text, chip_font, meta_text_w),
-            True,
+        suit = move.get('suit')
+        suit_b = move.get('suit_b')
+        if suit:
+            chip_text = f'{chip_text} {suit}'
+        if suit_b and suit_b != suit:
+            chip_text = f'{chip_text} {suit_b}'
+        chip_surf = render_suit_text(
+            fit_suit_text(chip_text, chip_font, max_text_w),
+            chip_font,
             _TEXT_SECONDARY,
         )
         chip_y = (rect.bottom - chip_surf.get_height() - 5
@@ -2176,6 +2520,21 @@ class ConquerTacticsRail:
         # could render a missing-character box in this corner.
         if mid == self._strongest_move_id():
             self._draw_strongest_marker(self.window, rect)
+
+        glow_active = bool(glow_until and glow_until > now)
+        if is_selected and not glow_active:
+            # Vector checkmark: browser fonts are not guaranteed to contain a
+            # reliable check glyph at this scale.
+            center = (rect.right - 10, rect.top + 11)
+            pygame.draw.circle(self.window, (18, 48, 46), center, 7)
+            pygame.draw.circle(self.window, _SELECTED_RGBA, center, 7, 2)
+            pygame.draw.lines(
+                self.window, _SELECTED_RGBA, False,
+                [(center[0] - 3, center[1]),
+                 (center[0] - 1, center[1] + 3),
+                 (center[0] + 4, center[1] - 3)],
+                2,
+            )
 
         # Combine-flow position indicator (#3.2). Show "1/2" on the
         # origin and "2/2" on the partner so the player understands the
@@ -2327,9 +2686,18 @@ class ConquerTacticsRail:
             specs.append((ACTION_PLAY, 'Play'))
         gamble_reason = self._gamble_block_reason()
         if not gamble_reason:
-            gamble_label = ('Sure?'
-                            if sel is not None and self._gamble_armed_for(sel.get('id'))
-                            else 'Gamble')
+            if sel is not None and self._gamble_armed_for(sel.get('id')):
+                gamble_label = 'Sure?'
+            else:
+                # The mobile top strip that used to carry the gamble budget
+                # is now the filter strip, so the remaining count rides on
+                # the button that spends it.
+                gamble_label = 'Gamble'
+                if settings.TOUCH_TARGET_MIN > 0:
+                    used, _rounds = self._gamble_counts_state(
+                        getattr(self._parent.state, 'game', None))
+                    remaining = max(0, self.GAMBLE_PER_BATTLE_LIMIT - used)
+                    gamble_label = f'Gamble ×{remaining}'
             specs.append((ACTION_GAMBLE, gamble_label))
         elif gamble_reason not in ('Not your battle turn',
                                    'Gamble only during active battle rounds',
@@ -2366,15 +2734,27 @@ class ConquerTacticsRail:
             for spec in specs
         ]
 
-    def _preferred_action_tray_height(self, width: int) -> int:
-        specs = self._normalized_action_specs()
-        if not specs:
-            return 0
+    def _reserved_action_tray_height(self, width: int) -> int:
+        """Worst-case tray height, independent of the current selection.
+
+        Sizing the tray from the *current* actions made the hand list
+        breathe: selecting a tactic added a row of buttons and pushed a
+        tactic out of view — including, at the bottom of the list, the one
+        just selected.  Reserving the maximum keeps the viewport still.
+        """
         target_h = max(30, settings.TOUCH_COMPACT_MIN)
-        if self._action_tray_uses_column_layout(width, specs):
+        # The richest tray is Play + Gamble + Combine/Dismantle: one primary
+        # plus two secondaries (Combine and Dismantle are mutually
+        # exclusive — single vs. double Dagger).
+        worst_case = [
+            (ACTION_PLAY, 'Play', ''),
+            (ACTION_GAMBLE, 'Gamble', ''),
+            (ACTION_COMBINE, 'Combine', ''),
+        ]
+        if self._action_tray_uses_column_layout(width, worst_case):
             row_h = max(28, min(target_h, int(width * 0.24)))
-            return row_h * len(specs) + 5 * (len(specs) - 1) + 4
-        if self._action_tray_uses_stacked_layout(width, specs):
+            return row_h * len(worst_case) + 5 * (len(worst_case) - 1) + 4
+        if self._action_tray_uses_stacked_layout(width, worst_case):
             return target_h * 2 + 9
         return target_h + 4
 
@@ -2394,7 +2774,9 @@ class ConquerTacticsRail:
     @staticmethod
     def _action_label_candidates(key: str, label: str) -> tuple:
         if key == ACTION_GAMBLE:
-            return (label, 'Swap')
+            # 'Gamble ×2' → 'Gamble' → 'Swap' as the button narrows.
+            base = label.split(' ×')[0]
+            return (label, base, 'Swap') if base != label else (label, 'Swap')
         if key == ACTION_COMBINE:
             return (label, 'Join')
         if key == ACTION_DISMANTLE:
@@ -2577,6 +2959,12 @@ class ConquerTacticsRail:
 
     def _draw_action_button(self, base_rect: pygame.Rect, key: str, label: str,
                             role: str, hovered: bool, is_disabled: bool) -> None:
+        # 'Gamble ×2' never fits a compact secondary button, and dropping the
+        # suffix would lose the budget the mobile top strip used to show.
+        # Render it as a corner badge instead.
+        badge_text = ''
+        if key == ACTION_GAMBLE and ' ×' in label:
+            label, _, badge_text = label.partition(' ×')
         draw_rect = base_rect.move(0, -2) if (hovered and not is_disabled) else base_rect
         shadow = pygame.Rect(base_rect.left, base_rect.bottom - 2, base_rect.width, 4)
         shadow_surf = pygame.Surface(shadow.size, pygame.SRCALPHA)
@@ -2600,6 +2988,8 @@ class ConquerTacticsRail:
             fg = _TEXT_PRIMARY
         pygame.draw.rect(self.window, colour, draw_rect, 0, border_radius=6)
         pygame.draw.rect(self.window, border, draw_rect, 1, border_radius=6)
+        if badge_text and not is_disabled:
+            self._draw_button_corner_badge(draw_rect, badge_text)
         compact = role == 'secondary' and draw_rect.width < 68
         if compact:
             icon_size = min(13, max(9, draw_rect.height // 2 - 1))
@@ -2631,6 +3021,17 @@ class ConquerTacticsRail:
             settings.FS_CONQUER_META if settings.TOUCH_TARGET_MIN > 0 else 8)
         text = font.render(fitted, True, fg)
         self.window.blit(text, text.get_rect(center=label_rect.center))
+
+    def _draw_button_corner_badge(self, rect: pygame.Rect, text: str) -> None:
+        """Small count pill in a button's top-right corner (gambles left)."""
+        font = settings.get_font(
+            max(settings.FS_CONQUER_META, int(settings.FS_TINY * 0.68)), bold=True)
+        surf = font.render(str(text), True, (28, 22, 14))
+        pill = surf.get_rect().inflate(7, 3)
+        pill.topright = (rect.right - 2, rect.top + 1)
+        pygame.draw.rect(self.window, (200, 164, 76), pill,
+                         border_radius=max(3, pill.height // 2))
+        self.window.blit(surf, surf.get_rect(center=pill.center))
 
     def _draw_action_tooltip(self, anchor_rect: pygame.Rect, text: str) -> None:
         if not text:

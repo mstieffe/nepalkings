@@ -16,6 +16,14 @@ class _Response:
             raise AssertionError('raise_for_status should not hide JSON errors')
 
 
+class _NonJsonResponse:
+    def __init__(self, status_code):
+        self.status_code = status_code
+
+    def json(self):
+        raise ValueError('Expecting value: line 1 column 1 (char 0)')
+
+
 def test_create_game_preserves_server_error_message(monkeypatch):
     from utils import game_service
 
@@ -52,4 +60,39 @@ def test_create_challenge_preserves_server_error_message(monkeypatch):
     assert response == {
         'success': False,
         'message': 'Opponent is no longer available',
+    }
+
+
+def test_finish_battle_reports_http_failure_instead_of_json_decode_error(
+        monkeypatch):
+    from utils import game_service
+
+    monkeypatch.setattr(
+        game_service.requests,
+        'post',
+        lambda *_args, **_kwargs: _NonJsonResponse(500),
+    )
+
+    response = game_service.finish_battle(23, 45, 0)
+
+    assert response == {
+        'success': False,
+        'message': 'Server failed to finish the battle (HTTP 500). Please try again.',
+    }
+
+
+def test_finish_battle_reports_empty_browser_error_response(monkeypatch):
+    from utils import game_service
+
+    monkeypatch.setattr(
+        game_service.requests,
+        'post',
+        lambda *_args, **_kwargs: _Response(500, {}),
+    )
+
+    response = game_service.finish_battle(24, 47, 0)
+
+    assert response == {
+        'success': False,
+        'message': 'Server failed to finish the battle (HTTP 500). Please try again.',
     }

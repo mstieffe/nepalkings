@@ -571,7 +571,8 @@ class GuideBookScreen(SubScreen):
                     }},
                     '',
                     {'heading': 'Temples & Manufactories'},
-                    'Temples block the opponent\'s support bonus in battle. '
+                    'Temples block the opponent\'s castle and village support bonus '
+                    'in battle (not the land\'s suit bonus). '
                     'They can be upgraded to Manufactories that produce armour.',
                     '',
                     {'table': {
@@ -757,9 +758,10 @@ class GuideBookScreen(SubScreen):
                      'number card value. (Wall)'},
                     '',
                     {'icon_text': _sk + 'block.png',
-                     'text': 'Blocks Bonus: blocks the support bonus of '
-                     'the opponent\'s battle figure whose suit this figure '
-                     'has an advantage over. (Temples)'},
+                     'text': 'Blocks Bonus: blocks the castle and village support '
+                     'bonus (only) of the opponent\'s battle figure whose suit this '
+                     'figure has an advantage over. The land\'s suit bonus is not '
+                     'blocked. (Temples)'},
                     '',
                     {'separator': True},
                     '',

@@ -482,7 +482,18 @@ def _kingdom_config_or_404(kingdom_id):
 
 def _serialize_land_context(land):
     from kingdom_service import serialize_land_with_kingdom_context
-    return serialize_land_with_kingdom_context(land)
+    data = serialize_land_with_kingdom_context(land)
+    if data is not None:
+        # Config screens render battle strength before a Game exists.  Expose
+        # the same home-ground settings serialized by Game.serialize() so the
+        # attack preview can mirror the authoritative server calculation.
+        data.update({
+            'land_home_ground_asymmetry_enabled': bool(getattr(
+                config, 'LAND_HOME_GROUND_ASYMMETRY_ENABLED', False)),
+            'land_home_ground_attacker_factor': float(getattr(
+                config, 'LAND_HOME_GROUND_ATTACKER_BONUS_FACTOR', 1.0)),
+        })
+    return data
 
 
 def _kingdom_style_updates_from_payload(data):

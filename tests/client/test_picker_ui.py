@@ -54,8 +54,8 @@ def _assert_footer_geometry():
     assert action_rail.right < status_rail.left
 
     for label, align in (
-            ('Add to Attack', 'left'),
-            ('Set Prelude', 'left'),
+            ('Add to Attack', 'center'),
+            ('Set Prelude', 'center'),
             ('Ready for Battle', 'right')):
         button = pygame.Rect(
             *footer_button_geometry(subscreen, label, align=align))
@@ -63,6 +63,8 @@ def _assert_footer_geometry():
         owning_rail = status_rail if align == 'right' else action_rail
         assert owning_rail.contains(button), (
             label, tuple(owning_rail), tuple(button))
+        if align == 'center':
+            assert button.centerx == owning_rail.centerx
 
     content_bottoms = (
         settings.BUILD_FIGURE_INFO_BOX_Y
@@ -153,7 +155,7 @@ def test_build_resources_share_footer_without_covering_action():
     screen._sx = lambda value: value
     screen._sy = lambda value: value
     button_rect = pygame.Rect(*footer_button_geometry(
-        screen, 'Add to Attack', align='left'))
+        screen, 'Add to Attack', align='center'))
     screen.confirm_button = SimpleNamespace(rect=button_rect)
 
     resource_rect = BuildFigureScreen._resource_strip_rect(screen)

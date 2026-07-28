@@ -276,7 +276,13 @@ def test_conquer_tactics_total_diff_counts_block_and_double_dagger(db):
     assert breakdown['round_diff'] == 8
 
 
-def test_conquer_tactics_total_diff_counts_call_figure_support_and_land_bonus(db):
+def test_conquer_tactics_total_diff_counts_call_figure_support_and_land_bonus(
+        db, monkeypatch):
+    # Pin to symmetric land bonus so this test focuses on "land bonus is
+    # counted"; home-ground asymmetry scaling is covered separately.
+    import routes.games as games_routes
+    monkeypatch.setattr(games_routes.settings,
+                        'LAND_HOME_GROUND_ASYMMETRY_ENABLED', False)
     game, attacker, defender, _attacker_fig, _defender_fig = _setup_tactics_battle(
         db.session,
         land_bonus=True,
@@ -629,7 +635,13 @@ def test_finish_battle_pick_card_handles_played_conquer_tactic_card_fate(app, db
     assert LandAttackLog.query.filter_by(land_id=game.land_id).count() == 1
 
 
-def test_finish_battle_win_response_includes_figure_tactic_breakdown(app, db):
+def test_finish_battle_win_response_includes_figure_tactic_breakdown(
+        app, db, monkeypatch):
+    # Pin to symmetric land bonus so the asserted breakdown reflects the full
+    # invader land bonus; asymmetry scaling is covered separately.
+    import routes.games as games_routes
+    monkeypatch.setattr(games_routes.settings,
+                        'LAND_HOME_GROUND_ASYMMETRY_ENABLED', False)
     client = app.test_client()
     game, attacker, defender, _attacker_fig, _defender_fig = _setup_tactics_battle(
         db.session, land_bonus=True)
@@ -679,6 +691,64 @@ def test_finish_battle_win_response_includes_figure_tactic_breakdown(app, db):
     assert defender_state.get_json()['battle_total_diff'] == -6
     assert defender_state.get_json()['total_diff'] == -6
     assert defender_state.get_json()['battle_score_player_id'] == attacker.id
+
+
+def test_finish_battle_detaches_spell_target_before_destroying_loser(app, db):
+    """PostgreSQL must not reject a battle figure targeted by a spell.
+
+    Targeted Conquer preludes/counter-spells leave an ``ActiveSpell`` row
+    pointing at the battle figure.  The result remains useful for replay, but
+    its live foreign-key target must be detached before the losing figure is
+    deleted.
+    """
+    client = app.test_client()
+    game, attacker, _defender, _attacker_fig, defender_fig = (
+        _setup_tactics_battle(db.session, land_bonus=True)
+    )
+    _add_tactic(
+        db.session,
+        game,
+        attacker,
+        family_name='Dagger',
+        rank='10',
+        value=10,
+        played_round=0,
+        status='played',
+    )
+    spell = ActiveSpell(
+        game_id=game.id,
+        player_id=attacker.id,
+        spell_name='Poison',
+        spell_type='enchantment',
+        spell_family_name='Poison',
+        suit='Spades',
+        target_figure_id=defender_fig.id,
+        cast_round=0,
+        duration=3,
+        is_active=True,
+        effect_data={
+            'power_modifier': -1,
+            'target_figure_id': defender_fig.id,
+        },
+    )
+    db.session.add(spell)
+    db.session.commit()
+    spell_id = spell.id
+    destroyed_figure_id = defender_fig.id
+
+    resp = client.post(
+        '/games/finish_battle',
+        json={'game_id': game.id, 'player_id': attacker.id, 'total_diff': 0},
+        headers=_auth_headers(attacker.user_id),
+    )
+
+    assert resp.status_code == 200, resp.get_json()
+    assert resp.get_json()['conquer_result'] == 'attacker_won'
+    assert db.session.get(Figure, destroyed_figure_id) is None
+    persisted_spell = db.session.get(ActiveSpell, spell_id)
+    assert persisted_spell is not None
+    assert persisted_spell.target_figure_id is None
+    assert persisted_spell.effect_data['target_figure_id'] == destroyed_figure_id
 
 
 def test_finish_battle_draw_response_includes_figure_tactic_breakdown(app, db):

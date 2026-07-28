@@ -412,6 +412,25 @@ LAND_SUIT_BONUS_RANGES = {                  # Suit combat bonus (min, max) per t
     5: (10, 14),
     6: (14, 20),
 }
+
+# ── Conquer land: home-ground advantage (asymmetry) ─────────────────
+# The land's suit combat bonus is applied to every battle figure matching
+# the land suit.  It is UNBLOCKABLE — a Temple (blocks_bonus) only nullifies
+# figure-to-figure castle/village support, never the land's own tier bonus.
+#
+# With asymmetry enabled the DEFENDER (land owner / home side) keeps the full
+# bonus while the ATTACKER (invader) receives only a scaled share, making
+# high-tier lands meaningfully harder to conquer.  Toggle the flag off — or
+# set the factor to 1.0 — to restore fully symmetric behaviour for testing.
+LAND_HOME_GROUND_ASYMMETRY_ENABLED = os.getenv(
+    'LAND_HOME_GROUND_ASYMMETRY_ENABLED', 'true'
+).lower() == 'true'
+# Fraction of the land bonus the ATTACKER (invader) receives when asymmetry
+# is enabled.  1.0 == symmetric, 0.0 == attacker gets no land bonus (the
+# land's tier advantage belongs entirely to the home defender).
+LAND_HOME_GROUND_ATTACKER_BONUS_FACTOR = float(
+    os.getenv('LAND_HOME_GROUND_ATTACKER_BONUS_FACTOR', '0.0')
+)
 CONQUER_COOLDOWN_SECONDS = int(os.getenv('CONQUER_COOLDOWN_SECONDS', str(900)))#str(6 * 3600)))
 LAND_CONQUER_PROTECTION_SECONDS = int(
     os.getenv('LAND_CONQUER_PROTECTION_SECONDS', str(5 * 60))
