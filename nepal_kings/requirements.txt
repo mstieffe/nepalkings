@@ -1,5 +1,5 @@
 # Client (pygame) requirements. Used for the desktop / pygbag web build.
-pygame==2.4.0
+pygame==2.6.1
 requests==2.31.0
 certifi==2023.5.7
 charset-normalizer==3.1.0
